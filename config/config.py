@@ -7,6 +7,7 @@ class ModelType(Enum):
     """Supported model types."""
     OPENAI = "openai"
     GEMINI = "gemini"
+    DEEPSEEK = "deepseek"
 
 class Config:
     """Configuration management for the application."""
@@ -21,16 +22,20 @@ class Config:
         # API Configuration
         self.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
         self.GOOGLE_GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
-        
+        self.DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+
         # Model Configuration
         self.MODEL_TYPE = os.getenv('MODEL_TYPE', ModelType.OPENAI.value)
         self.DEFAULT_OPENAI_MODEL = os.getenv('DEFAULT_OPENAI_MODEL')
         self.DEFAULT_GEMINI_MODEL = os.getenv('DEFAULT_GEMINI_MODEL')
+        self.DEFAULT_DEEPSEEK_MODEL = os.getenv('DEFAULT_DEEPSEEK_MODEL')
 
         if self.MODEL_TYPE == ModelType.OPENAI.value:
             self.DEFAULT_MODEL = self.DEFAULT_OPENAI_MODEL or os.getenv('DEFAULT_MODEL', 'gpt-3.5-turbo')
         elif self.MODEL_TYPE == ModelType.GEMINI.value:
             self.DEFAULT_MODEL = self.DEFAULT_GEMINI_MODEL or os.getenv('DEFAULT_MODEL', 'gemini-1.5-flash')
+        elif self.MODEL_TYPE == ModelType.DEEPSEEK.value:
+            self.DEFAULT_MODEL = self.DEFAULT_DEEPSEEK_MODEL or os.getenv('DEFAULT_MODEL', 'deepseek-chat')
         else:
             self.DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'gpt-3.5-turbo')
         
@@ -49,6 +54,10 @@ class Config:
             if not self.GOOGLE_GEMINI_API_KEY:
                 print("Error: GOOGLE_GEMINI_API_KEY is not set. Please set it in the .env file.")
                 return False
+        elif self.MODEL_TYPE == ModelType.DEEPSEEK.value:
+            if not self.DEEPSEEK_API_KEY:
+                print("Error: DEEPSEEK_API_KEY is not set. Please set it in the .env file.")
+                return False
         else:
             print(f"Error: Unknown MODEL_TYPE '{self.MODEL_TYPE}'. Must be one of: {', '.join([e.value for e in ModelType])}")
             return False
@@ -66,4 +75,6 @@ class Config:
             return f"OpenAI ({self.DEFAULT_MODEL})"
         elif self.MODEL_TYPE == ModelType.GEMINI.value:
             return f"Google Gemini ({self.DEFAULT_MODEL})"
+        elif self.MODEL_TYPE == ModelType.DEEPSEEK.value:
+            return f"DeepSeek ({self.DEFAULT_MODEL})"
         return "Unknown"

@@ -11,56 +11,91 @@ load_dotenv()
 # Import clients based on configuration
 MODEL_TYPE = os.getenv('MODEL_TYPE', 'openai').lower()
 
-# Import the base client and token tracker
+# Import the base client, token tracker, and cost calculator
 from api.base_client import BaseAIClient
 from utils.token_tracker import TokenTracker
+from utils.cost_calculator import CostCalculator
 
-def initialize_client(model_type: str) -> BaseAIClient:
+def initialize_client(model_type: str) -> tuple[BaseAIClient, str]:
     """
     Initialize the appropriate AI client based on the model type.
-    
+
     Args:
-        model_type: The type of model to initialize ('openai' or 'gemini')
-        
+        model_type: The type of model to initialize ('openai', 'gemini', 'deepseek', or 'grok')
+
     Returns:
-        An instance of the appropriate AI client
-        
+        A tuple containing:
+            - An instance of the appropriate AI client
+            - The model name being used
+
     Raises:
         ValueError: If the model type is unsupported or required environment variables are missing
     """
     model_type = model_type.lower()
-    
+
     if model_type == 'openai':
         from api.openai_client import OpenAIClient
-        
+
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
-            
+
         model_name = os.getenv('DEFAULT_OPENAI_MODEL', 'gpt-3.5-turbo')
         client = OpenAIClient(api_key=api_key, model_name=model_name)
         print(f"Initialized OpenAI client with model: {model_name}")
-        
+
     elif model_type == 'gemini':
         from api.google_gemini_client import GeminiClient
-        
+
         api_key = os.getenv('GOOGLE_GEMINI_API_KEY')
         if not api_key:
             raise ValueError("GOOGLE_GEMINI_API_KEY not found in environment variables")
-            
+
         model_name = os.getenv('DEFAULT_GEMINI_MODEL', 'gemini-2.5-flash-lite')
-        
+
         # List available models (one-time operation before initializing main client)
         GeminiClient.list_available_models(api_key=api_key, current_model=model_name)
-        
+
         # Initialize the main client for chat functionality
         client = GeminiClient(api_key=api_key, model_name=model_name)
         print(f"\nInitialized Gemini client with model: {model_name}")
-        
+
+    elif model_type == 'deepseek':
+        from api.deepseek_client import DeepSeekClient
+
+        api_key = os.getenv('DEEPSEEK_API_KEY')
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY not found in environment variables")
+
+        model_name = os.getenv('DEFAULT_DEEPSEEK_MODEL', 'deepseek-chat')
+
+        # List available models (one-time operation before initializing main client)
+        DeepSeekClient.list_available_models(api_key=api_key, current_model=model_name)
+
+        # Initialize the main client for chat functionality
+        client = DeepSeekClient(api_key=api_key, model_name=model_name)
+        print(f"\nInitialized DeepSeek client with model: {model_name}")
+
+    elif model_type == 'grok':
+        from api.grok_client import GrokClient
+
+        api_key = os.getenv('GROK_API_KEY')
+        if not api_key:
+            raise ValueError("GROK_API_KEY not found in environment variables")
+
+        model_name = os.getenv('DEFAULT_GROK_MODEL', 'grok-4-latest')
+
+        # List available models (one-time operation before initializing main client)
+        GrokClient.list_available_models(api_key=api_key, current_model=model_name)
+
+        # Initialize the main client for chat functionality
+        client = GrokClient(api_key=api_key, model_name=model_name)
+        print(f"\nInitialized Grok client with model: {model_name}")
+
     else:
-        raise ValueError(f"Unsupported MODEL_TYPE: {model_type}. Must be 'openai' or 'gemini'")
-    
-    return client
+        raise ValueError(f"Unsupported MODEL_TYPE: {model_type}. Must be 'openai', 'gemini', 'deepseek', or 'grok'")
+
+    return client, model_name
 
 
 def show_loading_animation(stop_event: threading.Event) -> None:
@@ -84,13 +119,18 @@ def show_loading_animation(stop_event: threading.Event) -> None:
 
 
 def main():
-    # Initialize token tracker
-    token_tracker = TokenTracker()
-    
+    # Initialize variables to None for proper cleanup in finally block
+    token_tracker = None
+    cost_calculator = None
+
     try:
         # Initialize the appropriate client
-        client = initialize_client(MODEL_TYPE)
-        
+        client, model_name = initialize_client(MODEL_TYPE)
+
+        # Initialize token tracker and cost calculator
+        token_tracker = TokenTracker(model_type=MODEL_TYPE, model_name=model_name)
+        cost_calculator = CostCalculator(model_type=MODEL_TYPE, model_name=model_name)
+
         # Start the chat interface
         print("\n=== AI Chat ===")
         print("Type 'exit' to quit, 'stats' to see token usage, or 'help' for commands\n")
@@ -108,9 +148,10 @@ def main():
                     break
                     
                 if user_input.lower() == 'stats':
-                    print("\n=== Token Usage ===")
+                    print("\n=== Session Statistics ===")
                     print(token_tracker.format_summary())
-                    print(f"Last updated: {token_tracker.get_summary()['timestamp']}\n")
+                    print(f"\n{cost_calculator.format_summary()}")
+                    print(f"\nLast updated: {token_tracker.get_summary()['timestamp']}\n")
                     continue
                     
                 if user_input.lower() == 'help':
@@ -137,8 +178,22 @@ def main():
                     if response:
                         print(f"\nAI: {response}")
                         if usage:
+                            # Update token tracker
                             token_tracker.update(usage)
-                            print(f"[Tokens used: {usage.get('total_tokens', 'N/A')}]\n")
+
+                            # Update cost calculator
+                            cost_calculator.update_cumulative_cost(
+                                usage.get('prompt_tokens', 0),
+                                usage.get('completion_tokens', 0)
+                            )
+
+                            # Calculate cost for this specific request
+                            request_cost = cost_calculator.calculate_cost(
+                                usage.get('prompt_tokens', 0),
+                                usage.get('completion_tokens', 0)
+                            )
+
+                            print(f"[Tokens: {usage.get('total_tokens', 'N/A')} | Cost: {cost_calculator.format_cost(request_cost['total_cost'])}]\n")
                 except Exception as e:
                     # Ensure loading is stopped even if there's an error
                     stop_animation.set()
@@ -156,10 +211,12 @@ def main():
         print(f"Error initializing client: {str(e)}")
         return
     finally:
-        # Print final token usage if any requests were made
-        if token_tracker.requests > 0:
-            print("\n=== Final Token Usage ===")
+        # Print final session statistics if any requests were made
+        if token_tracker and token_tracker.requests > 0:
+            print("\n=== Final Session Statistics ===")
             print(token_tracker.format_summary())
+            if cost_calculator:
+                print(f"\n{cost_calculator.format_summary()}")
 
 
 if __name__ == "__main__":

@@ -6,9 +6,17 @@ class TokenTracker:
     A class to track token usage across multiple API calls for any model.
     This is model-agnostic and can be used with any API that provides token usage information.
     """
-    
-    def __init__(self):
-        """Initialize a new TokenTracker instance with zeroed counters."""
+
+    def __init__(self, model_type: Optional[str] = None, model_name: Optional[str] = None):
+        """
+        Initialize a new TokenTracker instance with zeroed counters.
+
+        Args:
+            model_type: Optional model type for tracking purposes
+            model_name: Optional model name for tracking purposes
+        """
+        self.model_type = model_type
+        self.model_name = model_name
         self.reset()
     
     def reset(self) -> None:

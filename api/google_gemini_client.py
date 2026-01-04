@@ -3,6 +3,9 @@ from typing import Optional, Dict, Any, Tuple
 
 from google import genai
 from .base_client import BaseAIClient
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class GeminiClient(BaseAIClient):
@@ -77,7 +80,10 @@ class GeminiClient(BaseAIClient):
             return text, usage
 
         except Exception as e:
-            print(f"Error getting completion from Gemini: {str(e)}")
+            logger.error(
+                f"Error getting completion from Gemini: {str(e)}",
+                extra={"extra_fields": {"model": model_name, "error_type": type(e).__name__}}
+            )
             return None, None
 
     @classmethod
@@ -92,6 +98,7 @@ class GeminiClient(BaseAIClient):
         """
         try:
             if not api_key:
+                logger.warning("API key not provided for listing Gemini models")
                 print("API key not provided. Cannot list available models.")
                 return
 
@@ -101,8 +108,14 @@ class GeminiClient(BaseAIClient):
             # Get the list of available models
             models = client.models.list()
 
+            model_list = list(models)
+            logger.info(
+                "Listed available Gemini models",
+                extra={"extra_fields": {"model_count": len(model_list), "current_model": current_model}}
+            )
+
             print("\n=== Available Gemini Models ===")
-            for model in models:
+            for model in model_list:
                 # Check if model supports content generation
                 if hasattr(model, 'supported_generation_methods') and 'generateContent' in model.supported_generation_methods:
                     prefix = "* " if model.name == current_model else "  "
@@ -114,6 +127,10 @@ class GeminiClient(BaseAIClient):
             print("* = currently selected\n")
 
         except Exception as e:
+            logger.error(
+                f"Error listing available Gemini models: {str(e)}",
+                extra={"extra_fields": {"error_type": type(e).__name__}}
+            )
             print(f"Error listing available models: {str(e)}")
 
 

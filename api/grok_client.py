@@ -1,6 +1,9 @@
 import openai
 from typing import Optional, Dict, Any, Tuple
 from .base_client import BaseAIClient
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class GrokClient(BaseAIClient):
@@ -66,7 +69,10 @@ class GrokClient(BaseAIClient):
             return response.choices[0].message.content, usage
 
         except Exception as e:
-            print(f"Error getting completion from Grok: {str(e)}")
+            logger.error(
+                f"Error getting completion from Grok: {str(e)}",
+                extra={"extra_fields": {"model": model, "error_type": type(e).__name__}}
+            )
             return None, None
 
     @classmethod
@@ -81,6 +87,7 @@ class GrokClient(BaseAIClient):
         """
         try:
             if not api_key:
+                logger.warning("API key not provided for listing Grok models")
                 print("API key not provided. Cannot list available models.")
                 return
 
@@ -93,6 +100,11 @@ class GrokClient(BaseAIClient):
             # Get the list of available models
             models = client.models.list()
 
+            logger.info(
+                "Listed available Grok models",
+                extra={"extra_fields": {"model_count": len(models.data), "current_model": current_model}}
+            )
+
             print("\n=== Available Grok Models ===")
             for model in sorted(models.data, key=lambda x: x.id):
                 prefix = "* " if model.id == current_model else "  "
@@ -104,4 +116,8 @@ class GrokClient(BaseAIClient):
             print("* = currently selected\n")
 
         except Exception as e:
+            logger.error(
+                f"Error listing available Grok models: {str(e)}",
+                extra={"extra_fields": {"error_type": type(e).__name__}}
+            )
             print(f"Error listing available models: {str(e)}")

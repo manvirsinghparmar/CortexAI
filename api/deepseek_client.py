@@ -1,6 +1,9 @@
 import openai
 from typing import Optional, Dict, Any, Tuple
 from .base_client import BaseAIClient
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DeepSeekClient(BaseAIClient):
@@ -69,7 +72,10 @@ class DeepSeekClient(BaseAIClient):
             return response.choices[0].message.content, usage
 
         except Exception as e:
-            print(f"Error getting completion from DeepSeek: {str(e)}")
+            logger.error(
+                f"Error getting completion from DeepSeek: {str(e)}",
+                extra={"extra_fields": {"model": model, "error_type": type(e).__name__}}
+            )
             return None, None
 
     @classmethod
@@ -84,6 +90,7 @@ class DeepSeekClient(BaseAIClient):
         """
         try:
             if not api_key:
+                logger.warning("API key not provided for listing DeepSeek models")
                 print("API key not provided. Cannot list available models.")
                 return
 
@@ -95,6 +102,11 @@ class DeepSeekClient(BaseAIClient):
 
             # Get the list of available models
             models = client.models.list()
+
+            logger.info(
+                "Listed available DeepSeek models",
+                extra={"extra_fields": {"model_count": len(models.data), "current_model": current_model}}
+            )
 
             print("\n=== Available DeepSeek Models ===")
             for model in sorted(models.data, key=lambda x: x.id):
@@ -109,4 +121,8 @@ class DeepSeekClient(BaseAIClient):
             print("* = currently selected\n")
 
         except Exception as e:
+            logger.error(
+                f"Error listing available DeepSeek models: {str(e)}",
+                extra={"extra_fields": {"error_type": type(e).__name__}}
+            )
             print(f"Error listing available models: {str(e)}")

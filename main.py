@@ -195,47 +195,78 @@ def main():
                 loading_thread.start()
                 
                 try:
-                    # Get completion with token tracking
+                    # Get completion - now returns UnifiedResponse
                     logger.debug(f"User query length: {len(user_input)} characters")
-                    response, usage = client.get_completion(user_input, return_usage=True)
+                    resp = client.get_completion(user_input)
 
                     # Stop the loading animation
                     stop_animation.set()
                     loading_thread.join()
 
-                    if response:
-                        print(f"\nAI: {response}")
-                        if usage:
-                            # Update token tracker
-                            token_tracker.update(usage)
+                    # Handle error responses
+                    if resp.is_error:
+                        print(f"\n[ERROR] {resp.error.code.upper()}: {resp.error.message}")
+                        if resp.error.retryable:
+                            print("(This error may be retryable)")
+                        print()
+                        logger.error(
+                            f"Completion failed: {resp.error.code}",
+                            extra={"extra_fields": {
+                                "request_id": resp.request_id,
+                                "error_code": resp.error.code,
+                                "error_message": resp.error.message,
+                                "retryable": resp.error.retryable
+                            }}
+                        )
+                        continue
 
-                            # Update cost calculator
-                            cost_calculator.update_cumulative_cost(
-                                usage.get('prompt_tokens', 0),
-                                usage.get('completion_tokens', 0)
-                            )
+                    # Success - display response
+                    if resp.text:
+                        print(f"\nAI: {resp.text}")
 
-                            # Calculate cost for this specific request
-                            request_cost = cost_calculator.calculate_cost(
-                                usage.get('prompt_tokens', 0),
-                                usage.get('completion_tokens', 0)
-                            )
+                        # Update token tracker (using UnifiedResponse)
+                        usage_dict = {
+                            'prompt_tokens': resp.token_usage.prompt_tokens,
+                            'completion_tokens': resp.token_usage.completion_tokens,
+                            'total_tokens': resp.token_usage.total_tokens
+                        }
+                        token_tracker.update(usage_dict)
 
-                            logger.info(
-                                "Completion successful",
-                                extra={"extra_fields": {
-                                    "prompt_tokens": usage.get('prompt_tokens', 0),
-                                    "completion_tokens": usage.get('completion_tokens', 0),
-                                    "total_tokens": usage.get('total_tokens', 0),
-                                    "cost": request_cost['total_cost']
-                                }}
-                            )
+                        # Update cost calculator
+                        cost_calculator.update_cumulative_cost(
+                            resp.token_usage.prompt_tokens,
+                            resp.token_usage.completion_tokens
+                        )
 
-                            print(f"[Tokens: {usage.get('total_tokens', 'N/A')} | Cost: {cost_calculator.format_cost(request_cost['total_cost'])}]\n")
+                        logger.info(
+                            "Completion successful",
+                            extra={"extra_fields": {
+                                "request_id": resp.request_id,
+                                "provider": resp.provider,
+                                "model": resp.model,
+                                "latency_ms": resp.latency_ms,
+                                "prompt_tokens": resp.token_usage.prompt_tokens,
+                                "completion_tokens": resp.token_usage.completion_tokens,
+                                "total_tokens": resp.token_usage.total_tokens,
+                                "cost": resp.estimated_cost,
+                                "finish_reason": resp.finish_reason
+                            }}
+                        )
+
+                        # Display stats (cost is already calculated in UnifiedResponse)
+                        print(f"[Tokens: {resp.token_usage.total_tokens} | "
+                              f"Cost: {cost_calculator.format_cost(resp.estimated_cost)} | "
+                              f"Latency: {resp.latency_ms}ms]\n")
+
                 except Exception as e:
-                    # Ensure loading is stopped even if there's an error
+                    # Ensure loading is stopped even if there's an unexpected error
+                    # (Note: provider errors should be caught and returned as UnifiedResponse)
                     stop_animation.set()
                     loading_thread.join()
+                    logger.error(
+                        f"Unexpected error in main loop: {str(e)}",
+                        extra={"extra_fields": {"error_type": type(e).__name__}}
+                    )
                     raise e
                 
             except KeyboardInterrupt:

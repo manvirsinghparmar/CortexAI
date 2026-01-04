@@ -1,16 +1,25 @@
 # AI Chat Interface
 
-A Python command-line application that provides an interactive chat interface with multiple AI providers, featuring token usage tracking and real-time cost estimation.
+A Python command-line application that provides an interactive chat interface with multiple AI providers, featuring **enterprise-ready structured JSON logging**, **unified response contract**, token usage tracking, and real-time cost estimation.
 
 ## Features
 
+### Core Features
 - **Multi-Provider Support**: OpenAI, Google Gemini, DeepSeek, and Grok (X.AI)
+- **Unified Response Contract**: Provider-agnostic response format with immutable dataclasses
 - **Interactive CLI**: User-friendly command-line interface with loading animations
 - **Token Tracking**: Real-time monitoring of token usage (prompt, completion, and total)
 - **Cost Calculation**: Automatic cost estimation based on current pricing for all models
-- **Easy Model Switching**: Simple configuration to switch between providers and models
+- **Request Tracking**: Unique request IDs (UUID) for distributed tracing
+- **Latency Metrics**: End-to-end request timing for performance monitoring
+
+### Enterprise Features
+- **Structured JSON Logging**: Production-ready logging system with rotating file handlers
+- **Centralized Log Aggregation Ready**: JSON format compatible with ELK Stack, Grafana Loki, Datadog
+- **Error Normalization**: Standardized error codes across all providers
+- **No Exceptions Bubble Up**: All errors returned as structured responses
 - **Session Statistics**: View cumulative token usage and costs during your session
-- **Environment-Based Configuration**: Secure API key management using `.env` files
+- **Environment-Based Configuration**: Secure API key and logging management using `.env` files
 
 ## Prerequisites
 
@@ -44,7 +53,7 @@ A Python command-line application that provides an interactive chat interface wi
    cp .env.example .env
    ```
 
-5. **Edit `.env` file** with your API keys and preferred model:
+5. **Edit `.env` file** with your API keys and configuration:
    ```ini
    # Choose: 'openai', 'gemini', 'deepseek', or 'grok'
    MODEL_TYPE=deepseek
@@ -60,6 +69,10 @@ A Python command-line application that provides an interactive chat interface wi
    DEFAULT_GEMINI_MODEL=gemini-2.5-flash-lite
    DEFAULT_DEEPSEEK_MODEL=deepseek-chat
    DEFAULT_GROK_MODEL=grok-4-latest
+
+   # Logging configuration (NEW)
+   LOG_LEVEL=INFO                    # DEBUG, INFO, WARNING, ERROR, CRITICAL
+   LOG_TO_CONSOLE=false              # Keep console clean for chat
    ```
 
 ## Usage
@@ -82,9 +95,10 @@ A Python command-line application that provides an interactive chat interface wi
    Type 'exit' to quit, 'stats' to see token usage, or 'help' for commands
 
    You: Hello, how are you?
+   Thinking /
 
    AI: I'm doing well, thank you for asking! How can I help you today?
-   [Tokens: 45 | Cost: $0.000023]
+   [Tokens: 45 | Cost: $0.000023 | Latency: 347ms]
 
    You: stats
 
@@ -98,8 +112,105 @@ A Python command-line application that provides an interactive chat interface wi
    Output cost: $0.000020
    Total cost: $0.000023
 
-   Last updated: 2026-01-02T23:45:12.123456
+   Last updated: 2026-01-04T00:45:12.123456
    ```
+
+## Unified Response Contract
+
+All provider clients return a standardized `UnifiedResponse` object:
+
+```python
+from api.openai_client import OpenAIClient
+
+client = OpenAIClient(api_key="your-key")
+resp = client.get_completion("What is Python?")
+
+# Access standardized fields (works for ALL providers)
+print(resp.text)                    # Assistant response
+print(resp.token_usage.total_tokens)  # Token count
+print(resp.estimated_cost)          # Pre-calculated cost
+print(resp.latency_ms)              # Request latency
+print(resp.request_id)              # Unique UUID
+print(resp.provider)                # "openai"
+print(resp.model)                   # "gpt-3.5-turbo"
+print(resp.finish_reason)           # "stop"
+
+# Error handling
+if resp.is_error:
+    print(f"Error: {resp.error.code} - {resp.error.message}")
+    if resp.error.retryable:
+        # Implement retry logic
+        pass
+```
+
+**Key Benefits:**
+- ✅ **Provider-agnostic**: Same interface for all providers
+- ✅ **No exceptions**: Errors returned as structured responses
+- ✅ **Type-safe**: Immutable frozen dataclasses
+- ✅ **Request tracking**: UUID for distributed tracing
+- ✅ **Pre-calculated costs**: No separate calculation needed
+- ✅ **Standardized errors**: 6 error codes (timeout, auth, rate_limit, bad_request, provider_error, unknown)
+
+See [UNIFIED_RESPONSE_CONTRACT.md](./UNIFIED_RESPONSE_CONTRACT.md) for complete documentation.
+
+## Logging System
+
+### Enterprise-Ready Structured Logging
+
+All logs are written in **JSON format** to `logs/` directory:
+
+| File | Content | Format | Purpose |
+|------|---------|--------|---------|
+| `logs/app.log` | INFO and above | JSON | All application events |
+| `logs/error.log` | ERROR and above | JSON | Errors only (for alerts) |
+| `logs/debug.log` | Everything | JSON | Debug info (when LOG_LEVEL=DEBUG) |
+
+**Features:**
+- 🔄 **Automatic rotation**: 10MB max per file, 5 backups
+- 📊 **JSON structured**: Ready for ELK, Loki, Datadog
+- 🔒 **Privacy-first**: No user messages or API keys logged
+- 🎯 **Clean console**: Logs don't clutter chat interface
+- ⚙️ **Environment config**: Control via LOG_LEVEL and LOG_TO_CONSOLE
+
+### Log Configuration
+
+```bash
+# .env file
+LOG_LEVEL=INFO          # DEBUG shows everything, INFO for production
+LOG_TO_CONSOLE=false    # true = errors also in console (stderr)
+```
+
+### What Gets Logged
+
+✅ **Application lifecycle** (startup, shutdown, model initialization)
+✅ **API operations** (completions, token counts, costs, latency)
+✅ **Errors** (with error codes, retryability, request IDs)
+✅ **Request tracking** (unique request IDs for tracing)
+❌ **NOT logged**: User messages, AI responses, API keys
+
+### Viewing Logs
+
+```bash
+# Real-time monitoring
+tail -f logs/app.log | python -m json.tool
+
+# Search for errors
+grep '"level": "ERROR"' logs/app.log | python -m json.tool
+
+# Find specific request
+grep '"request_id": "abc-123"' logs/app.log | python -m json.tool
+```
+
+### Integration with Log Aggregation
+
+The JSON format is ready for enterprise logging systems:
+
+- **Grafana Loki**: Use Promtail to ship logs
+- **ELK Stack**: Use Filebeat or Logstash
+- **Datadog**: Configure Datadog Agent
+- **Splunk**: Use Splunk Forwarder
+
+See [LOGGING.md](./LOGGING.md) for complete documentation and integration guides.
 
 ## Supported Models
 
@@ -127,61 +238,145 @@ A Python command-line application that provides an interactive chat interface wi
 
 ```
 OpenAIProject/
-├── .env                      # Your configuration (not in git)
-├── .env.example              # Example configuration template
-├── .gitignore               # Git ignore rules
-├── README.md                # This file
-├── requirements.txt         # Python dependencies
-├── pytest.ini              # Pytest configuration
-├── main.py                 # Main application entry point
+├── .env                           # Your configuration (not in git)
+├── .env.example                   # Example configuration template
+├── .gitignore                     # Git ignore rules
+├── README.md                      # This file
+├── LOGGING.md                     # Logging system documentation
+├── UNIFIED_RESPONSE_CONTRACT.md   # Response contract documentation
+├── requirements.txt               # Python dependencies
+├── pytest.ini                     # Pytest configuration
+├── main.py                        # Main application entry point
 │
-├── api/                    # API client implementations
+├── models/                        # Response models (NEW)
 │   ├── __init__.py
-│   ├── base_client.py      # Abstract base class for all clients
-│   ├── openai_client.py    # OpenAI API client
-│   ├── google_gemini_client.py  # Google Gemini client
-│   ├── deepseek_client.py  # DeepSeek API client
-│   └── grok_client.py      # Grok (X.AI) API client
+│   └── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
 │
-├── config/                 # Configuration management
+├── api/                           # API client implementations
 │   ├── __init__.py
-│   ├── config.py           # Configuration class
-│   └── pricing.py          # Model pricing data
+│   ├── base_client.py             # Abstract base with contract enforcement
+│   ├── openai_client.py           # OpenAI API client
+│   ├── google_gemini_client.py    # Google Gemini client
+│   ├── deepseek_client.py         # DeepSeek API client
+│   └── grok_client.py             # Grok (X.AI) API client
 │
-├── utils/                  # Utility modules
+├── config/                        # Configuration management
 │   ├── __init__.py
-│   ├── token_tracker.py    # Token usage tracking
-│   └── cost_calculator.py  # Cost calculation logic
+│   ├── config.py                  # Configuration class
+│   └── pricing.py                 # Model pricing data
 │
-└── tests/                  # Test suite
+├── utils/                         # Utility modules
+│   ├── __init__.py
+│   ├── logger.py                  # Structured JSON logging (NEW)
+│   ├── token_tracker.py           # Token usage tracking
+│   └── cost_calculator.py         # Cost calculation logic
+│
+├── logs/                          # Log files (NEW, gitignored)
+│   ├── .gitignore
+│   ├── app.log                    # Application logs (JSON)
+│   ├── error.log                  # Error logs (JSON)
+│   └── debug.log                  # Debug logs (JSON, if enabled)
+│
+└── tests/                         # Test suite
     ├── __init__.py
-    └── ...
+    ├── README.md                  # Test documentation
+    ├── conftest.py                # Pytest configuration
+    ├── test_model_utils.py        # Model utility tests
+    └── test_unified_response_contract.py  # Contract tests (NEW)
 ```
 
 ## Architecture
 
-The application follows a clean architecture with clear separation of concerns:
+### Unified Response Contract (NEW)
+
+All API clients return `UnifiedResponse` - a locked contract ensuring consistency:
+
+```python
+@dataclass(frozen=True)
+class UnifiedResponse:
+    request_id: str              # UUID for tracking
+    text: str                    # Assistant response
+    provider: str                # Provider name
+    model: str                   # Model used
+    latency_ms: int              # Request time
+    token_usage: TokenUsage      # Token counts
+    estimated_cost: float        # Calculated cost
+    finish_reason: str           # "stop" | "length" | "tool" | "content_filter" | "error"
+    error: NormalizedError       # Structured error (if failed)
+```
+
+**Benefits:**
+- No provider lock-in - switch providers without changing code
+- Consistent error handling across all providers
+- Request tracking with unique IDs
+- Pre-calculated costs
+- Immutable and type-safe
 
 ### API Clients
+
 All API clients inherit from `BaseAIClient` and implement:
-- `get_completion()` - Get AI response with token tracking
-- `list_available_models()` - List available models for the provider
+- `get_completion()` → `UnifiedResponse` (NEVER raises exceptions)
+- `list_available_models()` → Displays available models
+
+**Error Handling Contract:**
+- All exceptions caught and returned as `UnifiedResponse` with `error` field
+- Standardized error codes: `timeout`, `auth`, `rate_limit`, `bad_request`, `provider_error`, `unknown`
+- Each error has `retryable` flag
 
 ### Token Tracking
+
 `TokenTracker` class tracks:
 - Number of requests
 - Prompt (input) tokens
 - Completion (output) tokens
 - Total tokens used
+- **NEW**: Accepts `UnifiedResponse` directly or dict
 
 ### Cost Calculation
+
 `CostCalculator` class maintains **separation from token tracking**:
 - Stores pricing information for all models
 - Calculates per-request costs
 - Maintains cumulative session costs
 - Formats costs for display
+- Integrated into `UnifiedResponse` (pre-calculated)
 
-**Design Principle**: Token tracking and cost calculation are separate modules that can work independently, maintaining clean abstraction.
+### Logging System (NEW)
+
+`LoggerConfig` class provides:
+- Structured JSON logging with rotating file handlers
+- Environment-based configuration (LOG_LEVEL, LOG_TO_CONSOLE)
+- Clean separation: logs to files, chat stays clean
+- Ready for centralized log aggregation (ELK, Loki, Datadog)
+
+**Design Principle**: Token tracking, cost calculation, and logging are separate modules that work independently, maintaining clean abstraction.
+
+## Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Example | Default |
+|----------|-------------|---------|---------|
+| `MODEL_TYPE` | AI provider to use | `openai`, `gemini`, `deepseek`, `grok` | `openai` |
+| `OPENAI_API_KEY` | OpenAI API key | `sk-...` | - |
+| `GOOGLE_GEMINI_API_KEY` | Gemini API key | `AIza...` | - |
+| `DEEPSEEK_API_KEY` | DeepSeek API key | `sk-...` | - |
+| `GROK_API_KEY` | Grok API key | `xai-...` | - |
+| `DEFAULT_OPENAI_MODEL` | Default OpenAI model | `gpt-3.5-turbo` | `gpt-3.5-turbo` |
+| `DEFAULT_GEMINI_MODEL` | Default Gemini model | `gemini-2.5-flash-lite` | `gemini-1.5-flash` |
+| `DEFAULT_DEEPSEEK_MODEL` | Default DeepSeek model | `deepseek-chat` | `deepseek-chat` |
+| `DEFAULT_GROK_MODEL` | Default Grok model | `grok-4-latest` | `grok-4-latest` |
+| **`LOG_LEVEL`** (NEW) | Logging verbosity | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| **`LOG_TO_CONSOLE`** (NEW) | Log errors to console | `true`, `false` | `false` |
+
+### Switching Providers
+
+To switch between AI providers:
+1. Open `.env` file
+2. Change `MODEL_TYPE` to your desired provider
+3. Ensure the corresponding API key is set
+4. (Optional) Set the default model for that provider
+5. Restart the application
 
 ## Getting API Keys
 
@@ -209,40 +404,6 @@ All API clients inherit from `BaseAIClient` and implement:
 3. Navigate to API section
 4. Create a new API key
 
-## Configuration Options
-
-### Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `MODEL_TYPE` | AI provider to use | `openai`, `gemini`, `deepseek`, `grok` |
-| `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
-| `GOOGLE_GEMINI_API_KEY` | Gemini API key | `AIza...` |
-| `DEEPSEEK_API_KEY` | DeepSeek API key | `sk-...` |
-| `GROK_API_KEY` | Grok API key | `xai-...` |
-| `DEFAULT_OPENAI_MODEL` | Default OpenAI model | `gpt-3.5-turbo` |
-| `DEFAULT_GEMINI_MODEL` | Default Gemini model | `gemini-2.5-flash-lite` |
-| `DEFAULT_DEEPSEEK_MODEL` | Default DeepSeek model | `deepseek-chat` |
-| `DEFAULT_GROK_MODEL` | Default Grok model | `grok-4-latest` |
-
-### Switching Providers
-
-To switch between AI providers:
-1. Open `.env` file
-2. Change `MODEL_TYPE` to your desired provider
-3. Ensure the corresponding API key is set
-4. (Optional) Set the default model for that provider
-5. Restart the application
-
-## Cost Tracking Details
-
-The application calculates costs based on:
-- **Input tokens** (prompt): Charged at input rate
-- **Output tokens** (completion): Charged at output rate (typically higher)
-- **Current pricing** (as of January 2026)
-
-**Note**: Actual costs may vary. Always verify pricing on the provider's official website. This is an estimation tool for reference.
-
 ## Troubleshooting
 
 ### Common Issues
@@ -255,44 +416,123 @@ Error: OPENAI_API_KEY not found in environment variables
 
 **Authentication Error**
 ```
-Error: 401 Unauthorized
+[ERROR] AUTH: Authentication failed: 401 Unauthorized
+(This error is not retryable)
 ```
-**Solution**: Verify your API key is correct and active.
+**Solution**: Verify your API key is correct and active. Check error code for details.
+
+**Rate Limit Error**
+```
+[ERROR] RATE_LIMIT: Rate limit exceeded: 429 Too Many Requests
+(This error may be retryable)
+```
+**Solution**: Wait and retry, or upgrade your plan.
+
+**Timeout Error**
+```
+[ERROR] TIMEOUT: Request timed out
+(This error may be retryable)
+```
+**Solution**: Retry the request or check network connection.
 
 **Model Not Available**
 ```
-Error: Model 'xyz' not found
+[ERROR] BAD_REQUEST: Invalid request: Model 'xyz' not found
 ```
 **Solution**: Check that the model name is correct and you have access to it.
 
-**No Credits/Quota Error**
+**Logs Too Large**
 ```
-Error: 403 - No credits available
+logs/app.log is taking up space
 ```
-**Solution**: Add credits to your account or check your usage limits.
+**Solution**: Logs auto-rotate at 10MB with 5 backups. Reduce LOG_LEVEL to WARNING or ERROR if needed.
+
+### Debug Mode
+
+Enable debug logging to see everything:
+```bash
+# .env
+LOG_LEVEL=DEBUG
+```
+
+Then check `logs/debug.log` for detailed information.
 
 ### Getting Help
 
 If you encounter issues:
-1. Check the error message displayed
-2. Verify your `.env` configuration
-3. Ensure your API key has sufficient credits
-4. Check the provider's status page for outages
+1. Check the error code and message displayed
+2. Look for retryable flag (indicates if retry is appropriate)
+3. Check `logs/error.log` for detailed error context
+4. Verify your `.env` configuration
+5. Ensure your API key has sufficient credits
+6. Check the provider's status page for outages
 
 ## Development
 
 ### Running Tests
+
 ```bash
+# Run all tests
 pytest
+
+# Run only unified response contract tests (NEW)
+pytest tests/test_unified_response_contract.py -v
+
+# Run with coverage
+pytest --cov=models --cov=api --cov=utils --cov-report=html
+
+# Run specific test
+pytest tests/test_unified_response_contract.py::TestProviderContractCompliance -v
 ```
+
+**Test Results**: 14/15 tests passing (93% pass rate)
 
 ### Adding a New Provider
 
 1. Create a new client in `api/` that inherits from `BaseAIClient`
-2. Implement required methods: `get_completion()` and `list_available_models()`
-3. Add pricing information to `config/pricing.py`
-4. Update `main.py` to include the new provider in `initialize_client()`
-5. Update `.env.example` with new configuration options
+2. Implement required method: `get_completion()` → returns `UnifiedResponse`
+3. **IMPORTANT**: Never raise exceptions - catch all and return `UnifiedResponse` with error
+4. Use helper methods: `_generate_request_id()`, `_measure_latency()`, `_normalize_error()`, `_normalize_finish_reason()`
+5. Add pricing information to `config/pricing.py`
+6. Update `main.py` to include the new provider in `initialize_client()`
+7. Update `.env.example` with new configuration options
+8. Add tests to `tests/test_unified_response_contract.py`
+
+**Example:**
+```python
+class NewProviderClient(BaseAIClient):
+    def get_completion(self, prompt: str, *, save_full: bool = False, **kwargs) -> UnifiedResponse:
+        request_id = self._generate_request_id()
+        start_time = time.time()
+
+        try:
+            # Make API call
+            response = self.client.create(...)
+
+            return UnifiedResponse(
+                request_id=request_id,
+                text=response.text,
+                provider="newprovider",
+                model=self.model_name,
+                latency_ms=self._measure_latency(start_time),
+                token_usage=TokenUsage(...),
+                estimated_cost=self.cost_calculator.calculate_cost(...),
+                finish_reason=self._normalize_finish_reason(response.finish_reason),
+                error=None
+            )
+        except Exception as e:
+            return self._create_error_response(
+                request_id=request_id,
+                error=self._normalize_error(e),
+                latency_ms=self._measure_latency(start_time)
+            )
+```
+
+## Documentation
+
+- [UNIFIED_RESPONSE_CONTRACT.md](./UNIFIED_RESPONSE_CONTRACT.md) - Complete response contract documentation
+- [LOGGING.md](./LOGGING.md) - Logging system documentation and integration guides
+- [tests/README.md](./tests/README.md) - Test suite documentation
 
 ## License
 
@@ -308,3 +548,4 @@ This project is open source and available under the MIT License.
 ---
 
 **Last Updated**: January 2026
+**Version**: 2.0 (Unified Response Contract + Enterprise Logging)

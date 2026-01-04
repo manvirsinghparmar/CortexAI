@@ -1,6 +1,9 @@
 import openai
-from typing import Optional, Dict, Any, Tuple
+import time
+from typing import Optional
 from .base_client import BaseAIClient
+from models.unified_response import UnifiedResponse, TokenUsage
+from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -8,8 +11,10 @@ logger = get_logger(__name__)
 
 class GrokClient(BaseAIClient):
     """
-    A client for interacting with the Grok API (X.AI).
+    Grok API client returning UnifiedResponse.
+
     Uses OpenAI SDK with custom base URL since Grok API is OpenAI-compatible.
+    All responses are normalized to UnifiedResponse format.
     """
 
     def __init__(self, api_key: str, model_name: str = "grok-4-latest", **kwargs):
@@ -21,34 +26,43 @@ class GrokClient(BaseAIClient):
             model_name: The name of the model to use (default: grok-4-latest)
             **kwargs: Additional keyword arguments
         """
-        super().__init__(api_key, **kwargs)
-        # Initialize OpenAI client with Grok endpoint
+        super().__init__(api_key, model_name=model_name, **kwargs)
         self.client = openai.OpenAI(
             api_key=api_key,
             base_url="https://api.x.ai/v1"
         )
         self.model_name = model_name
+        self.cost_calculator = CostCalculator(model_type='grok', model_name=model_name)
 
-    def get_completion(self, prompt: str, **kwargs) -> Tuple[Optional[str], Optional[Dict[str, int]]]:
+    def get_completion(
+        self,
+        prompt: str,
+        *,
+        save_full: bool = False,
+        **kwargs
+    ) -> UnifiedResponse:
         """
-        Get a completion from the Grok API with token usage tracking.
+        Get a completion from the Grok API.
 
         Args:
             prompt: The input prompt to send to the model
-            **kwargs: Additional parameters for the API call
+            save_full: If True, include raw provider response in response.raw
+            **kwargs: Additional parameters:
                 - model: Override the default model for this call
                 - temperature: Controls randomness (0.0 to 2.0)
                 - max_tokens: Maximum number of tokens to generate
-                - return_usage: If True, returns token usage information
 
         Returns:
-            A tuple of (response_text, usage_dict) where usage_dict contains
-            token usage information (prompt_tokens, completion_tokens, total_tokens)
+            UnifiedResponse: Normalized response object
+
+        IMPORTANT: Never raises exceptions - returns UnifiedResponse with error instead
         """
+        request_id = self._generate_request_id()
+        start_time = time.time()
+
         model = kwargs.get('model', self.model_name)
         temperature = kwargs.get('temperature', 0.7)
         max_tokens = kwargs.get('max_tokens', 2048)
-        return_usage = kwargs.get('return_usage', True)
 
         try:
             response = self.client.chat.completions.create(
@@ -58,22 +72,103 @@ class GrokClient(BaseAIClient):
                 max_tokens=max_tokens
             )
 
-            usage = None
-            if return_usage and hasattr(response, 'usage'):
-                usage = {
-                    'prompt_tokens': response.usage.prompt_tokens,
-                    'completion_tokens': response.usage.completion_tokens,
-                    'total_tokens': response.usage.total_tokens
+            latency_ms = self._measure_latency(start_time)
+
+            # Extract text
+            text = response.choices[0].message.content or ""
+
+            # Extract token usage
+            token_usage = TokenUsage(
+                prompt_tokens=response.usage.prompt_tokens if hasattr(response, 'usage') else 0,
+                completion_tokens=response.usage.completion_tokens if hasattr(response, 'usage') else 0,
+                total_tokens=response.usage.total_tokens if hasattr(response, 'usage') else 0
+            )
+
+            # Calculate cost
+            cost = self.cost_calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens
+            )
+            estimated_cost = cost['total_cost']
+
+            # Normalize finish reason
+            finish_reason = self._normalize_finish_reason(
+                response.choices[0].finish_reason if response.choices else None,
+                provider='grok'
+            )
+
+            # Build raw response if requested
+            raw = None
+            if save_full:
+                raw = {
+                    "id": response.id,
+                    "object": response.object,
+                    "created": response.created,
+                    "model": response.model,
+                    "choices": [
+                        {
+                            "index": choice.index,
+                            "message": {
+                                "role": choice.message.role,
+                                "content": choice.message.content
+                            },
+                            "finish_reason": choice.finish_reason
+                        }
+                        for choice in response.choices
+                    ],
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens
+                    } if hasattr(response, 'usage') else None
                 }
 
-            return response.choices[0].message.content, usage
+            logger.info(
+                "Grok completion successful",
+                extra={"extra_fields": {
+                    "request_id": request_id,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "tokens": token_usage.total_tokens,
+                    "cost": estimated_cost
+                }}
+            )
+
+            return UnifiedResponse(
+                request_id=request_id,
+                text=text,
+                provider="grok",
+                model=model,
+                latency_ms=latency_ms,
+                token_usage=token_usage,
+                estimated_cost=estimated_cost,
+                finish_reason=finish_reason,
+                error=None,
+                metadata={},
+                raw=raw
+            )
 
         except Exception as e:
+            latency_ms = self._measure_latency(start_time)
+            error = self._normalize_error(e, provider='grok')
+
             logger.error(
-                f"Error getting completion from Grok: {str(e)}",
-                extra={"extra_fields": {"model": model, "error_type": type(e).__name__}}
+                f"Grok completion failed: {error.code}",
+                extra={"extra_fields": {
+                    "request_id": request_id,
+                    "model": model,
+                    "error_code": error.code,
+                    "error_message": error.message,
+                    "retryable": error.retryable
+                }}
             )
-            return None, None
+
+            return self._create_error_response(
+                request_id=request_id,
+                error=error,
+                latency_ms=latency_ms,
+                model=model
+            )
 
     @classmethod
     def list_available_models(cls, api_key: str = None, **kwargs) -> None:

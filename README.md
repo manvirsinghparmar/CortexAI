@@ -408,6 +408,56 @@ To switch between AI providers:
 
 ### Common Issues
 
+**ModuleNotFoundError: No module named 'dotenv'**
+```
+ModuleNotFoundError: No module named 'dotenv'
+```
+**Solution**: Install the required packages:
+```bash
+pip install -r requirements.txt
+```
+
+**Python 3.14 Compatibility Error (proxies)**
+```
+Client.__init__() got an unexpected keyword argument 'proxies'
+```
+**Cause**: The `openai` package version 1.3.0 is incompatible with Python 3.14 and newer `httpx` versions.
+**Solution**: Upgrade the OpenAI package:
+```bash
+pip install --upgrade openai
+```
+
+**Missing Google Module**
+```
+No module named 'google'
+```
+**Cause**: Google API packages are not installed (required for Gemini models).
+**Solution**: Install the Google packages:
+```bash
+pip install google-genai google-api-python-client google-auth
+```
+
+**Virtual Environment Sync Issues (Multiple IDEs)**
+
+If code works in one IDE (e.g., PyCharm) but fails in another (e.g., VS Code terminal), you likely have **multiple virtual environments** with different packages installed.
+
+**Diagnosis**: Check which venv each IDE is using:
+```bash
+# Check Python version and location
+python --version
+where python  # Windows
+which python  # Linux/Mac
+```
+
+**Solution**: Either:
+1. Use the same virtual environment in all IDEs, or
+2. Sync packages between environments:
+```bash
+pip install -r requirements.txt
+```
+
+---
+
 **Missing API Key Error**
 ```
 Error: OPENAI_API_KEY not found in environment variables

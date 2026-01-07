@@ -1,4 +1,4 @@
-# AI Chat Interface
+READ# AI Chat Interface
 
 A Python command-line application that provides an interactive chat interface with multiple AI providers, featuring **enterprise-ready structured JSON logging**, **unified response contract**, token usage tracking, and real-time cost estimation.
 
@@ -244,16 +244,19 @@ OpenAIProject/
 ├── README.md                      # This file
 ├── LOGGING.md                     # Logging system documentation
 ├── UNIFIED_RESPONSE_CONTRACT.md   # Response contract documentation
+├── BILLING_ARCHITECTURE.md        # Billing system design (future feature)
+├── PROJECT_MAP.md                 # Project overview map
+├── CHANGELOG.md                   # Version history and changes
 ├── requirements.txt               # Python dependencies
 ├── pytest.ini                     # Pytest configuration
 ├── main.py                        # Main application entry point
+├── test_conversation.py           # Conversation testing utility
 │
-├── models/                        # Response models (NEW)
+├── models/                        # Response models
 │   ├── __init__.py
 │   └── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
 │
 ├── api/                           # API client implementations
-│   ├── __init__.py
 │   ├── base_client.py             # Abstract base with contract enforcement
 │   ├── openai_client.py           # OpenAI API client
 │   ├── google_gemini_client.py    # Google Gemini client
@@ -265,13 +268,19 @@ OpenAIProject/
 │   ├── config.py                  # Configuration class
 │   └── pricing.py                 # Model pricing data
 │
+├── context/                       # Context management
+│   ├── __init__.py
+│   └── conversation_manager.py    # Conversation history management
+│
 ├── utils/                         # Utility modules
 │   ├── __init__.py
-│   ├── logger.py                  # Structured JSON logging (NEW)
+│   ├── logger.py                  # Structured JSON logging
 │   ├── token_tracker.py           # Token usage tracking
-│   └── cost_calculator.py         # Cost calculation logic
+│   ├── cost_calculator.py         # Cost calculation logic
+│   ├── model_utils.py             # Model utility functions
+│   └── GeminiAvailableModels.py   # Gemini model listing utility
 │
-├── logs/                          # Log files (NEW, gitignored)
+├── logs/                          # Log files (gitignored)
 │   ├── .gitignore
 │   ├── app.log                    # Application logs (JSON)
 │   ├── error.log                  # Error logs (JSON)
@@ -282,7 +291,7 @@ OpenAIProject/
     ├── README.md                  # Test documentation
     ├── conftest.py                # Pytest configuration
     ├── test_model_utils.py        # Model utility tests
-    └── test_unified_response_contract.py  # Contract tests (NEW)
+    └── test_unified_response_contract.py  # Contract tests
 ```
 
 ## Architecture
@@ -582,6 +591,9 @@ class NewProviderClient(BaseAIClient):
 
 - [UNIFIED_RESPONSE_CONTRACT.md](./UNIFIED_RESPONSE_CONTRACT.md) - Complete response contract documentation
 - [LOGGING.md](./LOGGING.md) - Logging system documentation and integration guides
+- [BILLING_ARCHITECTURE.md](./BILLING_ARCHITECTURE.md) - Billing system architecture design (future feature)
+- [PROJECT_MAP.md](./PROJECT_MAP.md) - Project overview and quick reference map
+- [CHANGELOG.md](./CHANGELOG.md) - Version history and change log
 - [tests/README.md](./tests/README.md) - Test suite documentation
 
 ## License

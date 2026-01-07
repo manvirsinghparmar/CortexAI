@@ -10,6 +10,7 @@ load_dotenv()
 
 # Import clients based on configuration
 MODEL_TYPE = os.getenv('MODEL_TYPE', 'openai').lower()
+COMPARE_MODE = os.getenv('COMPARE_MODE', 'false').lower() == 'true'
 
 # Import the base client, token tracker, cost calculator, logger, and conversation manager
 from api.base_client import BaseAIClient
@@ -17,6 +18,8 @@ from utils.token_tracker import TokenTracker
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 from context.conversation_manager import ConversationManager
+from config.config import COMPARE_TARGETS
+from orchestrator.multi_orchestrator import MultiModelOrchestrator
 
 logger = get_logger(__name__)
 
@@ -123,10 +126,71 @@ def initialize_client(model_type: str) -> tuple[BaseAIClient, str]:
     return client, model_name
 
 
+def initialize_compare_clients():
+    """
+    Initialize clients for compare mode based on COMPARE_TARGETS configuration.
+
+    Returns:
+        List of initialized BaseAIClient instances, or empty list if initialization fails
+    """
+    from api.openai_client import OpenAIClient
+    from api.google_gemini_client import GeminiClient
+    from api.deepseek_client import DeepSeekClient
+    from api.grok_client import GrokClient
+
+    clients = []
+
+    for target in COMPARE_TARGETS:
+        provider = target["provider"].lower()
+        model = target["model"]
+
+        try:
+            if provider == "openai":
+                api_key = os.getenv('OPENAI_API_KEY')
+                if api_key:
+                    client = OpenAIClient(api_key=api_key, model_name=model)
+                    clients.append(client)
+                else:
+                    logger.warning(f"Skipping OpenAI ({model}): OPENAI_API_KEY not set")
+
+            elif provider == "gemini":
+                api_key = os.getenv('GOOGLE_GEMINI_API_KEY')
+                if api_key:
+                    client = GeminiClient(api_key=api_key, model_name=model)
+                    clients.append(client)
+                else:
+                    logger.warning(f"Skipping Gemini ({model}): GOOGLE_GEMINI_API_KEY not set")
+
+            elif provider == "deepseek":
+                api_key = os.getenv('DEEPSEEK_API_KEY')
+                if api_key:
+                    client = DeepSeekClient(api_key=api_key, model_name=model)
+                    clients.append(client)
+                else:
+                    logger.warning(f"Skipping DeepSeek ({model}): DEEPSEEK_API_KEY not set")
+
+            elif provider == "grok":
+                api_key = os.getenv('GROK_API_KEY')
+                if api_key:
+                    client = GrokClient(api_key=api_key, model_name=model)
+                    clients.append(client)
+                else:
+                    logger.warning(f"Skipping Grok ({model}): GROK_API_KEY not set")
+
+            else:
+                logger.warning(f"Unknown provider in COMPARE_TARGETS: {provider}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize {provider}/{model}: {e}")
+
+    logger.info(f"Initialized {len(clients)} clients for compare mode")
+    return clients
+
+
 def show_loading_animation(stop_event: threading.Event) -> None:
     """
     Show a loading animation in the console.
-    
+
     Args:
         stop_event: A threading.Event that will be set to stop the animation
     """
@@ -137,7 +201,7 @@ def show_loading_animation(stop_event: threading.Event) -> None:
             sys.stdout.write(f'\r\033[93mThinking {char}\033[0m')
             sys.stdout.flush()
             time.sleep(0.1)
-    
+
     # Clear the loading line
     sys.stdout.write('\r' + ' ' * 20 + '\r')
     sys.stdout.flush()
@@ -148,12 +212,30 @@ def main():
     token_tracker = None
     cost_calculator = None
     conversation = None
+    compare_clients = None
 
-    logger.info("Application starting", extra={"extra_fields": {"model_type": MODEL_TYPE}})
+    logger.info(
+        "Application starting",
+        extra={"extra_fields": {"model_type": MODEL_TYPE, "compare_mode": COMPARE_MODE}}
+    )
 
     try:
-        # Initialize the appropriate client
-        client, model_name = initialize_client(MODEL_TYPE)
+        # Initialize clients based on mode
+        if COMPARE_MODE:
+            # In compare mode, initialize multiple clients
+            compare_clients = initialize_compare_clients()
+            if not compare_clients:
+                print("ERROR: COMPARE_MODE=true but no API keys configured.")
+                print("Please configure at least one API key in .env file.\n")
+                return
+
+            # Still initialize single client for reference (using MODEL_TYPE)
+            client, model_name = initialize_client(MODEL_TYPE)
+            print(f"\n=== Compare Mode Active ===")
+            print(f"Queries will be sent to {len(compare_clients)} models simultaneously")
+        else:
+            # Single mode - initialize only the selected client
+            client, model_name = initialize_client(MODEL_TYPE)
 
         # Initialize token tracker, cost calculator, and conversation manager
         token_tracker = TokenTracker(model_type=MODEL_TYPE, model_name=model_name)
@@ -163,14 +245,16 @@ def main():
         logger.info(
             "Initialized conversation manager",
             extra={"extra_fields": {
-                "max_messages": conversation.max_messages
+                "max_messages": conversation.max_messages,
+                "compare_mode": COMPARE_MODE
             }}
         )
 
-        # Start the chat interface
-        print("\n=== AI Chat (Multi-turn Context Enabled) ===")
+        # Start the chat interface with appropriate header
+        mode_text = "Compare Mode" if COMPARE_MODE else "Single Model"
+        print(f"\n=== AI Chat ({mode_text}, Multi-turn Context Enabled) ===")
         print("Type 'exit' to quit, 'stats' to see token usage, or 'help' for commands\n")
-        
+
         while True:
             try:
                 user_input = input("You: ").strip()
@@ -204,13 +288,20 @@ def main():
 
                 if user_input.lower() == 'help':
                     print("\n=== Available Commands ===")
-                    print("help       - Show this help message")
-                    print("stats      - Show token usage statistics")
-                    print("/reset     - Clear conversation history")
-                    print("/history   - Show recent conversation")
-                    print("exit/quit  - Exit the program\n")
+                    print("help          - Show this help message")
+                    print("stats         - Show token usage statistics")
+                    print("/reset        - Clear conversation history")
+                    print("/history      - Show recent conversation")
+                    print("exit/quit     - Exit the program")
+                    if COMPARE_MODE:
+                        print("\nCurrent Mode: Compare Mode (COMPARE_MODE=true)")
+                        print("All prompts are sent to multiple models for comparison")
+                    else:
+                        print(f"\nCurrent Mode: Single Model ({MODEL_TYPE.upper()})")
+                        print("Set COMPARE_MODE=true in .env to enable multi-model comparison")
+                    print()
                     continue
-                
+
                 # Add user message to conversation
                 conversation.add_user(user_input)
 
@@ -221,90 +312,167 @@ def main():
                 loading_thread.start()
 
                 try:
-                    # Get completion with full conversation context
-                    logger.debug(
-                        f"User query length: {len(user_input)} characters",
-                        extra={"extra_fields": {
-                            "conversation_length": conversation.get_message_count()
-                        }}
-                    )
-                    resp = client.get_completion(messages=conversation.get_messages())
-
-                    # Stop the loading animation
-                    stop_animation.set()
-                    loading_thread.join()
-
-                    # Handle error responses
-                    if resp.is_error:
-                        # Remove the user message that caused the error
-                        conversation.pop_last_user()
-
-                        print(f"\n[ERROR] {resp.error.code.upper()}: {resp.error.message}")
-                        if resp.error.retryable:
-                            print("(This error may be retryable)")
-                        print()
-                        logger.error(
-                            f"Completion failed: {resp.error.code}",
-                            extra={"extra_fields": {
-                                "request_id": resp.request_id,
-                                "error_code": resp.error.code,
-                                "error_message": resp.error.message,
-                                "retryable": resp.error.retryable
-                            }}
+                    # Route based on COMPARE_MODE
+                    if COMPARE_MODE:
+                        # ===== COMPARE MODE =====
+                        orchestrator = MultiModelOrchestrator()
+                        multi_resp = orchestrator.get_comparisons_sync(
+                            prompt=user_input,
+                            clients=compare_clients,
+                            messages=conversation.get_messages()
                         )
-                        continue
 
-                    # Success - display response and add to conversation
-                    if resp.text:
-                        print(f"\nAI: {resp.text}")
+                        stop_animation.set()
+                        loading_thread.join()
 
-                        # Add assistant response to conversation
-                        conversation.add_assistant(resp.text)
+                        # Check if all responses failed
+                        if multi_resp.success_count == 0:
+                            print("\n=== All Models Failed ===\n")
+                            for i, resp in enumerate(multi_resp.responses, 1):
+                                print(f"[{i}] {resp.provider.upper()}/{resp.model}")
+                                print(f"    [ERROR] {resp.error.code}: {resp.error.message}\n")
 
-                        # Update token tracker (using UnifiedResponse)
-                        usage_dict = {
-                            'prompt_tokens': resp.token_usage.prompt_tokens,
-                            'completion_tokens': resp.token_usage.completion_tokens,
-                            'total_tokens': resp.token_usage.total_tokens
-                        }
-                        token_tracker.update(usage_dict)
+                            conversation.pop_last_user()
+                            continue
 
-                        # Update cost calculator
-                        cost_calculator.update_cumulative_cost(
-                            resp.token_usage.prompt_tokens,
-                            resp.token_usage.completion_tokens
-                        )
+                        # Display results
+                        print("\n=== Comparison Results ===\n")
+
+                        first_successful_response = None
+
+                        for i, resp in enumerate(multi_resp.responses, 1):
+                            print(f"[{i}] {resp.provider.upper()}/{resp.model}")
+                            print(f"    Latency: {resp.latency_ms}ms | Tokens: {resp.token_usage.total_tokens} | Cost: ${resp.estimated_cost:.6f}")
+
+                            if resp.is_error:
+                                print(f"    [ERROR] {resp.error.code}: {resp.error.message}\n")
+                            else:
+                                if first_successful_response is None:
+                                    first_successful_response = resp.text
+
+                                text_preview = resp.text if len(resp.text) <= 200 else resp.text[:200] + "..."
+                                print(f"    Response: {text_preview}\n")
+
+                                usage_dict = {
+                                    'prompt_tokens': resp.token_usage.prompt_tokens,
+                                    'completion_tokens': resp.token_usage.completion_tokens,
+                                    'total_tokens': resp.token_usage.total_tokens
+                                }
+                                token_tracker.update(usage_dict)
+                                cost_calculator.update_cumulative_cost(
+                                    resp.token_usage.prompt_tokens,
+                                    resp.token_usage.completion_tokens
+                                )
+
+                        if first_successful_response:
+                            conversation.add_assistant(first_successful_response)
+
+                        print("=== Summary ===")
+                        print(f"Successful: {multi_resp.success_count}/{len(multi_resp.responses)}")
+                        print(f"Failed: {multi_resp.error_count}/{len(multi_resp.responses)}")
+                        print(f"Total Tokens: {multi_resp.total_tokens}")
+                        print(f"Total Cost: ${multi_resp.total_cost:.6f}")
+                        print(f"Session Total Cost: ${cost_calculator.total_cost:.6f}\n")
 
                         logger.info(
-                            "Completion successful",
+                            "Compare mode completed",
                             extra={"extra_fields": {
-                                "request_id": resp.request_id,
-                                "provider": resp.provider,
-                                "model": resp.model,
-                                "latency_ms": resp.latency_ms,
-                                "prompt_tokens": resp.token_usage.prompt_tokens,
-                                "completion_tokens": resp.token_usage.completion_tokens,
-                                "total_tokens": resp.token_usage.total_tokens,
-                                "cost": resp.estimated_cost,
-                                "finish_reason": resp.finish_reason
+                                "request_group_id": multi_resp.request_group_id,
+                                "success_count": multi_resp.success_count,
+                                "error_count": multi_resp.error_count,
+                                "total_tokens": multi_resp.total_tokens,
+                                "total_cost": multi_resp.total_cost,
+                                "conversation_length": conversation.get_message_count()
                             }}
                         )
 
-                        # Display stats (cost is already calculated in UnifiedResponse)
-                        print(f"[Tokens: {resp.token_usage.total_tokens} | "
-                              f"Cost: {cost_calculator.format_cost(resp.estimated_cost)} | "
-                              f"Latency: {resp.latency_ms}ms]\n")
+                    else:
+                        # ===== SINGLE MODE =====
+                        # Get completion with full conversation context
+                        logger.debug(
+                            f"User query length: {len(user_input)} characters",
+                            extra={"extra_fields": {
+                                "conversation_length": conversation.get_message_count()
+                            }}
+                        )
+                        resp = client.get_completion(messages=conversation.get_messages())
+
+                        # Stop the loading animation
+                        stop_animation.set()
+                        loading_thread.join()
+
+                        # Handle error responses
+                        if resp.is_error:
+                            # Remove the user message that caused the error
+                            conversation.pop_last_user()
+
+                            print(f"\n[ERROR] {resp.error.code.upper()}: {resp.error.message}")
+                            if resp.error.retryable:
+                                print("(This error may be retryable)")
+                            print()
+                            logger.error(
+                                f"Completion failed: {resp.error.code}",
+                                extra={"extra_fields": {
+                                    "request_id": resp.request_id,
+                                    "error_code": resp.error.code,
+                                    "error_message": resp.error.message,
+                                    "retryable": resp.error.retryable
+                                }}
+                            )
+                            continue
+
+                        # Success - display response and add to conversation
+                        if resp.text:
+                            print(f"\nAI: {resp.text}")
+
+                            # Add assistant response to conversation
+                            conversation.add_assistant(resp.text)
+
+                            # Update token tracker (using UnifiedResponse)
+                            usage_dict = {
+                                'prompt_tokens': resp.token_usage.prompt_tokens,
+                                'completion_tokens': resp.token_usage.completion_tokens,
+                                'total_tokens': resp.token_usage.total_tokens
+                            }
+                            token_tracker.update(usage_dict)
+
+                            # Update cost calculator
+                            cost_calculator.update_cumulative_cost(
+                                resp.token_usage.prompt_tokens,
+                                resp.token_usage.completion_tokens
+                            )
+
+                            logger.info(
+                                "Completion successful",
+                                extra={"extra_fields": {
+                                    "request_id": resp.request_id,
+                                    "provider": resp.provider,
+                                    "model": resp.model,
+                                    "latency_ms": resp.latency_ms,
+                                    "prompt_tokens": resp.token_usage.prompt_tokens,
+                                    "completion_tokens": resp.token_usage.completion_tokens,
+                                    "total_tokens": resp.token_usage.total_tokens,
+                                    "cost": resp.estimated_cost,
+                                    "finish_reason": resp.finish_reason
+                                }}
+                            )
+
+                            # Display stats (cost is already calculated in UnifiedResponse)
+                            print(f"[Tokens: {resp.token_usage.total_tokens} | "
+                                  f"Cost: {cost_calculator.format_cost(resp.estimated_cost)} | "
+                                  f"Latency: {resp.latency_ms}ms]\n")
 
                 except Exception as e:
                     # Ensure loading is stopped even if there's an unexpected error
-                    # (Note: provider errors should be caught and returned as UnifiedResponse)
                     stop_animation.set()
                     loading_thread.join()
+                    conversation.pop_last_user()
                     logger.error(
                         f"Unexpected error in main loop: {str(e)}",
                         extra={"extra_fields": {"error_type": type(e).__name__}}
                     )
-                    raise e
+                    print(f"\nError: {str(e)}\n")
+                    continue
                 
             except KeyboardInterrupt:
                 logger.info("User interrupted session with Ctrl+C")

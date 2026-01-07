@@ -3,6 +3,15 @@ from dotenv import load_dotenv
 from pathlib import Path
 from enum import Enum
 
+# Compare mode target configurations
+# Each entry is treated as unique (same provider with different models allowed)
+COMPARE_TARGETS = [
+    {"provider": "openai", "model": "gpt-4o-mini"},
+    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+    {"provider": "deepseek", "model": "deepseek-chat"},
+    {"provider": "grok", "model": "grok-4-latest"},
+]
+
 class ModelType(Enum):
     """Supported model types."""
     OPENAI = "openai"

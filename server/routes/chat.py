@@ -1,16 +1,15 @@
 """Chat endpoint for single AI model requests."""
 
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from orchestrator.core import CortexOrchestrator
 from models.user_context import UserContext
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.dependencies import get_api_key, get_orchestrator
-from utils.logger import get_logger
+from server.utils import validate_and_trim_context, clamp_max_tokens
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
-logger = get_logger(__name__)
 
 
 def _build_user_context(context_req):
@@ -38,30 +37,23 @@ async def chat(
     api_key: str = Depends(get_api_key)
 ):
     """Send a prompt to a single AI model and get a response."""
-    try:
-        context = _build_user_context(request.context)
+    request.context = validate_and_trim_context(request.context)
+    context = _build_user_context(request.context)
 
-        kwargs = {}
-        if request.temperature is not None:
-            kwargs["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
+    kwargs = {}
+    if request.temperature is not None:
+        kwargs["temperature"] = request.temperature
+    if request.max_tokens is not None:
+        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
 
-        response = await asyncio.to_thread(
-            orchestrator.ask,
-            prompt=request.prompt,
-            model_type=request.provider,
-            context=context,
-            model_name=request.model,
-            token_tracker=None,
-            **kwargs
-        )
+    response = await asyncio.to_thread(
+        orchestrator.ask,
+        prompt=request.prompt,
+        model_type=request.provider,
+        context=context,
+        model_name=request.model,
+        token_tracker=None,
+        **kwargs
+    )
 
-        return ChatResponseDTO.from_unified_response(response)
-
-    except Exception as e:
-        logger.exception("Chat endpoint error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
+    return ChatResponseDTO.from_unified_response(response)

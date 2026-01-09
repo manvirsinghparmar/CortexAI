@@ -7,10 +7,9 @@ from models.user_context import UserContext
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import CompareResponseDTO
 from server.dependencies import get_api_key, get_orchestrator
-from utils.logger import get_logger
+from server.utils import validate_and_trim_context, clamp_max_tokens
 
 router = APIRouter(prefix="/v1", tags=["Compare"])
-logger = get_logger(__name__)
 
 MAX_COMPARE_TARGETS = 4
 
@@ -46,35 +45,34 @@ async def compare(
             detail=f"Maximum {MAX_COMPARE_TARGETS} targets allowed"
         )
 
-    try:
-        context = _build_user_context(request.context)
-
-        models_list = [
-            {"provider": t.provider, "model": t.model or ""}
-            for t in request.targets
-        ]
-
-        kwargs = {}
-        if request.temperature is not None:
-            kwargs["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
-
-        response = await asyncio.to_thread(
-            orchestrator.compare,
-            prompt=request.prompt,
-            models_list=models_list,
-            context=context,
-            timeout_s=request.timeout_s,
-            token_tracker=None,
-            **kwargs
-        )
-
-        return CompareResponseDTO.from_multi_unified_response(response)
-
-    except Exception as e:
-        logger.exception("Compare endpoint error")
+    if request.context and len(request.targets) > 2:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Context not allowed with more than 2 targets"
         )
+
+    request.context = validate_and_trim_context(request.context)
+    context = _build_user_context(request.context)
+
+    models_list = [
+        {"provider": t.provider, "model": t.model or ""}
+        for t in request.targets
+    ]
+
+    kwargs = {}
+    if request.temperature is not None:
+        kwargs["temperature"] = request.temperature
+    if request.max_tokens is not None:
+        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+
+    response = await asyncio.to_thread(
+        orchestrator.compare,
+        prompt=request.prompt,
+        models_list=models_list,
+        context=context,
+        timeout_s=request.timeout_s,
+        token_tracker=None,
+        **kwargs
+    )
+
+    return CompareResponseDTO.from_multi_unified_response(response)

@@ -8,6 +8,7 @@ A Python command-line application that provides an interactive chat interface wi
 - **Multi-Provider Support**: OpenAI, Google Gemini, DeepSeek, and Grok (X.AI)
 - **Unified Response Contract**: Provider-agnostic response format with immutable dataclasses
 - **Interactive CLI**: User-friendly command-line interface with loading animations
+- **FastAPI Integration**: RESTful HTTP API with authentication and request tracking
 - **Token Tracking**: Real-time monitoring of token usage (prompt, completion, and total)
 - **Cost Calculation**: Automatic cost estimation based on current pricing for all models
 - **Request Tracking**: Unique request IDs (UUID) for distributed tracing
@@ -114,6 +115,61 @@ A Python command-line application that provides an interactive chat interface wi
 
    Last updated: 2026-01-04T00:45:12.123456
    ```
+
+## FastAPI Server (NEW)
+
+### Quick Start
+
+```bash
+# Start server
+python run_server.py --reload
+
+# Test endpoints
+curl http://localhost:8000/health
+```
+
+### API Endpoints
+
+**POST /v1/chat** - Single model request
+```bash
+curl -X POST http://localhost:8000/v1/chat \
+  -H "X-API-Key: dev-key-1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "What is Python?",
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  }'
+```
+
+**POST /v1/compare** - Multi-model comparison (max 4 providers)
+```bash
+curl -X POST http://localhost:8000/v1/compare \
+  -H "X-API-Key: dev-key-1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Explain async/await",
+    "targets": [
+      {"provider": "openai"},
+      {"provider": "gemini"}
+    ]
+  }'
+```
+
+**GET /health** - Health check (no auth required)
+
+### API Features
+- ✅ API key authentication via `X-API-Key` header
+- ✅ Request ID tracking via `X-Request-ID` header
+- ✅ Async execution with `asyncio.to_thread()`
+- ✅ Pydantic request/response validation
+- ✅ OpenAPI docs at `/docs`
+- ✅ Token/cost guardrails:
+  - Context limited to 10 messages, 8000 chars
+  - Output capped at 1024 tokens
+  - Compare: 2-4 targets, context only with ≤2 targets
+
+See [FASTAPI_README.md](./FASTAPI_README.md) for complete API documentation.
 
 ## Unified Response Contract
 
@@ -242,6 +298,7 @@ OpenAIProject/
 ├── .env.example                   # Example configuration template
 ├── .gitignore                     # Git ignore rules
 ├── README.md                      # This file
+├── FASTAPI_README.md              # FastAPI documentation (NEW)
 ├── LOGGING.md                     # Logging system documentation
 ├── UNIFIED_RESPONSE_CONTRACT.md   # Response contract documentation
 ├── BILLING_ARCHITECTURE.md        # Billing system design (future feature)
@@ -249,8 +306,22 @@ OpenAIProject/
 ├── CHANGELOG.md                   # Version history and changes
 ├── requirements.txt               # Python dependencies
 ├── pytest.ini                     # Pytest configuration
-├── main.py                        # Main application entry point
+├── main.py                        # CLI entry point
+├── run_server.py                  # FastAPI server entry point (NEW)
+├── test_api.py                    # API test script (NEW)
 ├── test_conversation.py           # Conversation testing utility
+│
+├── server/                        # FastAPI application (NEW)
+│   ├── app.py                     # FastAPI app factory
+│   ├── middleware.py              # Request ID middleware
+│   ├── dependencies.py            # Auth & orchestrator dependencies
+│   ├── schemas/
+│   │   ├── requests.py            # Pydantic request models
+│   │   └── responses.py           # Pydantic response DTOs
+│   └── routes/
+│       ├── health.py              # Health check endpoint
+│       ├── chat.py                # Single chat endpoint
+│       └── compare.py             # Multi-model compare endpoint
 │
 ├── models/                        # Response models
 │   ├── __init__.py

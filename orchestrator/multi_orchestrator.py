@@ -112,21 +112,35 @@ class MultiModelOrchestrator:
     ) -> UnifiedResponse:
         """
         Safely call a client with timeout handling.
-        
+
         Wraps the synchronous get_completion in an executor and applies timeout.
         Returns UnifiedResponse with error on timeout or unexpected exception.
+
+        Note: If 'messages' is present in kwargs, it will be used instead of 'prompt'.
         """
         request_id = str(uuid.uuid4())
         start_time = asyncio.get_event_loop().time()
 
         try:
+            # Extract messages from kwargs if present
+            messages = kwargs.get("messages")
+
+            # Determine which call pattern to use
+            if messages is not None:
+                # Use messages directly (for research-injected context or conversation history)
+                kwargs2 = dict(kwargs)
+                kwargs2.pop("messages", None)
+
+                # DO NOT pass prompt= when using messages
+                call_fn = lambda: client.get_completion(messages=messages, **kwargs2)
+            else:
+                # Use prompt (original behavior)
+                call_fn = lambda: client.get_completion(prompt=prompt, **kwargs)
+
             # Run sync get_completion in thread pool
             loop = asyncio.get_event_loop()
             response = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: client.get_completion(prompt=prompt, **kwargs)
-                ),
+                loop.run_in_executor(None, call_fn),
                 timeout=timeout_s
             )
             return response

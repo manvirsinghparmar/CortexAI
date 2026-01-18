@@ -49,6 +49,11 @@ class TestModelUtilsUnit:
 
         # Execute
         ModelUtils.list_available_models('test-key', 'gemini-2.0-pro')
+        ModelUtils.list_available_models(
+            api_key="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",
+            current_model="gpt-4o",
+            provider="openai"
+        )
 
         # Verify output
         output = mock_stdout.getvalue()

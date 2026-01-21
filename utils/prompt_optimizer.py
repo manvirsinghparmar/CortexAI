@@ -1,14 +1,17 @@
 """
 Prompt Optimizer Module
 
-This module provides functionality to optimize user-provided text prompts using OpenAI APIs.
+This module provides functionality to optimize user-provided text prompts using AI APIs.
+Supports multiple providers: OpenAI and Google Gemini.
 It accepts structured input and returns detailed JSON output with optimization data.
 """
 
 import json
 import time
+import os
 from typing import Dict, Any, Optional, List
 from api.openai_client import OpenAIClient
+from api.google_gemini_client import GeminiClient
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,10 +19,12 @@ logger = get_logger(__name__)
 
 class PromptOptimizer:
     """
-    Optimizes text prompts using OpenAI APIs.
+    Optimizes text prompts using AI APIs (OpenAI or Gemini).
     
     Provides multi-stage validation, self-correction mechanisms, and structured output
     conforming to a strict JSON schema.
+    
+    Supports multiple providers with automatic selection and fallback.
     """
     
     # Output JSON schema definition
@@ -50,34 +55,60 @@ class PromptOptimizer:
     
     def __init__(
         self,
+        provider: str = "auto",
         api_key: Optional[str] = None,
-        model: str = "gpt-4o-mini",
+        model: Optional[str] = None,
         max_retries: int = 3
     ):
         """
         Initialize the PromptOptimizer.
         
         Args:
-            api_key: OpenAI API key (if None, will use from environment)
-            model: OpenAI model to use for optimization (default: gpt-4o-mini)
+            provider: AI provider to use ('openai', 'gemini', or 'auto')
+                     'auto' will use environment variable or default to openai
+            api_key: API key (if None, will use from environment)
+            model: Model to use (if None, uses provider default)
             max_retries: Maximum number of retry attempts for API calls
         """
-        # Import config to get API key if not provided
-        if api_key is None:
-            from config.config import Config
-            config = Config()
-            api_key = config.OPENAI_API_KEY
-            
-        if not api_key:
-            raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY in .env or pass api_key parameter.")
+        from config.config import Config
+        config = Config()
         
-        self.client = OpenAIClient(api_key=api_key, model_name=model)
-        self.model = model
+        # Determine provider
+        if provider == "auto":
+            provider = os.getenv("PROMPT_OPTIMIZER_PROVIDER", "openai").lower()
+        
+        self.provider = provider
         self.max_retries = max_retries
+        
+        # Initialize client based on provider
+        if provider == "openai":
+            if api_key is None:
+                api_key = config.OPENAI_API_KEY
+            if not api_key:
+                raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY in .env or pass api_key parameter.")
+            
+            self.model = model or os.getenv("PROMPT_OPTIMIZER_MODEL", "gpt-4o-mini")
+            self.client = OpenAIClient(api_key=api_key, model_name=self.model)
+            
+        elif provider == "gemini":
+            if api_key is None:
+                api_key = config.GOOGLE_GEMINI_API_KEY
+            if not api_key:
+                raise ValueError("Gemini API key is required. Set GOOGLE_GEMINI_API_KEY in .env or pass api_key parameter.")
+            
+            self.model = model or os.getenv("PROMPT_OPTIMIZER_GEMINI_MODEL", "gemini-2.0-flash-exp")
+            self.client = GeminiClient(api_key=api_key, model_name=self.model)
+            
+        else:
+            raise ValueError(f"Unknown provider: {provider}. Use 'openai' or 'gemini'.")
         
         logger.info(
             "PromptOptimizer initialized",
-            extra={"extra_fields": {"model": model, "max_retries": max_retries}}
+            extra={"extra_fields": {
+                "provider": self.provider,
+                "model": self.model,
+                "max_retries": max_retries
+            }}
         )
     
     def optimize_prompt(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,10 +150,10 @@ class PromptOptimizer:
             }}
         )
         
-        # Stage 2: Optimize with OpenAI API (with retries)
+        # Stage 2: Optimize with AI API (with retries)
         for attempt in range(1, self.max_retries + 1):
             try:
-                result = self._call_openai_for_optimization(prompt, settings, attempt)
+                result = self._call_ai_for_optimization(prompt, settings, attempt)
                 
                 # Stage 3: Validate output
                 if self._is_valid_output(result):
@@ -250,14 +281,14 @@ class PromptOptimizer:
         
         return None  # Valid input
     
-    def _call_openai_for_optimization(
+    def _call_ai_for_optimization(
         self,
         prompt: str,
         settings: Dict[str, Any],
         attempt: int
     ) -> Dict[str, Any]:
         """
-        Call OpenAI API to optimize the prompt.
+        Call AI API to optimize the prompt.
         
         Args:
             prompt: The prompt to optimize
@@ -268,7 +299,7 @@ class PromptOptimizer:
             Dictionary with optimization results
         
         Raises:
-            Exception: If OpenAI API call fails
+            Exception: If AI API call fails
         """
         # Build the system message with instructions
         system_message = self._build_system_message(attempt)
@@ -276,7 +307,7 @@ class PromptOptimizer:
         # Build the user message
         user_message = self._build_user_message(prompt, settings)
         
-        # Call OpenAI API
+        # Call AI API (works for both OpenAI and Gemini via UnifiedResponse)
         response = self.client.get_completion(
             messages=[
                 {"role": "system", "content": system_message},
@@ -288,10 +319,11 @@ class PromptOptimizer:
         
         # Check for API errors
         if response.is_error:
-            error_msg = f"OpenAI API error: {response.error.code} - {response.error.message}"
+            error_msg = f"{self.provider.upper()} API error: {response.error.code} - {response.error.message}"
             logger.error(
                 error_msg,
                 extra={"extra_fields": {
+                    "provider": self.provider,
                     "error_code": response.error.code,
                     "retryable": response.error.retryable
                 }}
@@ -299,7 +331,7 @@ class PromptOptimizer:
             raise Exception(error_msg)
         
         # Parse the response
-        return self._parse_openai_response(response.text, prompt)
+        return self._parse_ai_response(response.text, prompt)
     
     def _build_system_message(self, attempt: int) -> str:
         """
@@ -354,12 +386,12 @@ CRITICAL: Your response must be ONLY the JSON object, with no additional text be
         
         return message
     
-    def _parse_openai_response(self, response_text: str, original_prompt: str) -> Dict[str, Any]:
+    def _parse_ai_response(self, response_text: str, original_prompt: str) -> Dict[str, Any]:
         """
-        Parse OpenAI response into structured output.
+        Parse AI response into structured output.
         
         Args:
-            response_text: Raw text response from OpenAI
+            response_text: Raw text response from AI
             original_prompt: Original prompt (fallback)
         
         Returns:
@@ -394,17 +426,21 @@ CRITICAL: Your response must be ONLY the JSON object, with no additional text be
             
         except json.JSONDecodeError as e:
             logger.error(
-                "Failed to parse OpenAI response as JSON",
+                f"Failed to parse {self.provider} response as JSON",
                 extra={"extra_fields": {
+                    "provider": self.provider,
                     "error": str(e),
                     "response_preview": response_text[:200]
                 }}
             )
-            raise Exception(f"Invalid JSON response from OpenAI: {e}")
+            raise Exception(f"Invalid JSON response from {self.provider}: {e}")
         except Exception as e:
             logger.error(
-                "Failed to process OpenAI response",
-                extra={"extra_fields": {"error": str(e)}}
+                f"Failed to process {self.provider} response",
+                extra={"extra_fields": {
+                    "provider": self.provider,
+                    "error": str(e)
+                }}
             )
             raise
     

@@ -53,6 +53,7 @@ async def chat(
         context=context,
         model_name=request.model,
         token_tracker=None,
+        research_mode=request.research_mode,
         **kwargs
     )
 

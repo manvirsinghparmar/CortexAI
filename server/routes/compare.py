@@ -72,6 +72,7 @@ async def compare(
         context=context,
         timeout_s=request.timeout_s,
         token_tracker=None,
+        research_mode=request.research_mode,
         **kwargs
     )
 

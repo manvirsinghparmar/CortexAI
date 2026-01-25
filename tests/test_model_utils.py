@@ -49,6 +49,11 @@ class TestModelUtilsUnit:
 
         # Execute
         ModelUtils.list_available_models('test-key', 'gemini-2.0-pro')
+        ModelUtils.list_available_models(
+            api_key="enter your own key here to run the test",
+            current_model="gpt-4o",
+            provider="openai"
+        )
 
         # Verify output
         output = mock_stdout.getvalue()

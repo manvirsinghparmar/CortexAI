@@ -10,6 +10,7 @@ load_dotenv()
 # Import configuration
 MODEL_TYPE = os.getenv('MODEL_TYPE', 'openai').lower()
 COMPARE_MODE = os.getenv('COMPARE_MODE', 'false').lower() == 'true'
+RESEARCH_MODE = os.getenv('RESEARCH_MODE', 'auto').lower()  # Default to 'auto'
 
 # Import orchestrator and utilities
 from orchestrator.core import CortexOrchestrator
@@ -27,6 +28,62 @@ def _convert_to_user_context(conversation: ConversationManager) -> UserContext:
     Convert ConversationManager to UserContext for orchestrator.
     """
     return UserContext(conversation_history=conversation.get_messages())
+
+
+def prompt_research_mode() -> str:
+    """
+    Prompt user to select research mode.
+    Returns: 'off' or 'on'
+    """
+    print("\n=== Select Research Mode ===")
+    print("1. off - No web research (fastest, cheapest)")
+    print("2. on  - Always use web research (recommended)")
+    print()
+
+    while True:
+        choice = input("Enter your choice (1/2) or press Enter for default [on]: ").strip()
+
+        if not choice:
+            return "on"
+
+        if choice == "1":
+            return "off"
+        elif choice == "2":
+            return "on"
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+
+
+def display_research_info(response) -> None:
+    """
+    Display research metadata if research was used.
+    """
+    if not response.metadata:
+        return
+
+    research_used = response.metadata.get("research_used", False)
+    research_reused = response.metadata.get("research_reused", False)
+    sources = response.metadata.get("sources", [])
+    research_error = response.metadata.get("research_error")
+    research_topic = response.metadata.get("research_topic")
+
+    # Only show error if search failed (not for mode_off or service_not_configured in normal flow)
+    if research_error and research_error not in ["service_not_configured"]:
+        if research_error != "invalid_query":  # Don't show blocked garbage queries to user
+            print(f"\033[93m[Research Error: {research_error}]\033[0m")
+        return
+
+    if research_used and sources:
+        reuse_label = " (reused)" if research_reused else ""
+        print(f"\033[92m[✓ Web Research Used{reuse_label}]\033[0m")
+        if research_topic:
+            print(f"\033[92m[Topic: {research_topic}]\033[0m")
+        print(f"\033[92m[Found {len(sources)} sources]\033[0m")
+        print("\n📚 Sources:")
+        for source in sources:
+            print(f"  [{source['id']}] {source['title']}")
+            print(f"      {source['url']}")
+        print()
 
 
 def show_loading_animation(stop_event: threading.Event) -> None:
@@ -83,6 +140,10 @@ def main():
             extra={"extra_fields": {"max_messages": conversation.max_messages, "compare_mode": COMPARE_MODE}}
         )
 
+        # Prompt user for research mode preference
+        selected_research_mode = prompt_research_mode()
+        print(f"\033[92m✓ Research Mode: {selected_research_mode}\033[0m")
+
         mode_text = "Compare Mode" if COMPARE_MODE else f"Single Model ({MODEL_TYPE.upper()})"
         print(f"\n=== CortexAI CLI ({mode_text}) ===")
         print("Type 'exit' to quit, 'stats' for session stats, 'help' for commands\n")
@@ -136,6 +197,10 @@ def main():
                     else:
                         print(f"\nCurrent Mode: Single Model ({MODEL_TYPE.upper()})")
                         print("Set COMPARE_MODE=true in .env to enable multi-model comparison")
+                    print(f"\nResearch Mode: {selected_research_mode}")
+                    print("  - off  : No web research")
+                    print("  - auto : Research for current events/news (keywords: latest, recent, 2026, etc.)")
+                    print("  - on   : Always research")
                     print()
                     continue
 
@@ -157,7 +222,8 @@ def main():
                             prompt=user_input,
                             models_list=COMPARE_TARGETS,
                             context=context,
-                            token_tracker=token_tracker
+                            token_tracker=token_tracker,
+                            research_mode=selected_research_mode
                         )
 
                         stop_animation.set()
@@ -173,6 +239,10 @@ def main():
                             continue
 
                         print("\n=== Comparison Results ===\n")
+
+                        # Display research info (from first response, as all share same research)
+                        if multi_resp.responses:
+                            display_research_info(multi_resp.responses[0])
 
                         first_successful_response = None
 
@@ -226,7 +296,8 @@ def main():
                             prompt=user_input,
                             model_type=MODEL_TYPE,
                             context=context,
-                            token_tracker=token_tracker
+                            token_tracker=token_tracker,
+                            research_mode=selected_research_mode
                         )
 
                         stop_animation.set()
@@ -250,7 +321,11 @@ def main():
                             continue
 
                         if resp.text:
-                            print(f"\nAI: {resp.text}")
+                            print(f"\nAI: {resp.text}\n")
+
+                            # Display research info if available
+                            display_research_info(resp)
+
                             conversation.add_assistant(resp.text)
 
                             # Single-mode cost tracking (CostCalculator is single-provider)

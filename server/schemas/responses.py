@@ -30,10 +30,16 @@ class ChatResponseDTO(BaseModel):
     finish_reason: Optional[str] = None
     error: Optional[ErrorDTO] = None
     timestamp: str
+    research_used: bool = False
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
+    research_error: Optional[str] = None
 
     @classmethod
     def from_unified_response(cls, ur):
         """Convert UnifiedResponse to DTO."""
+        # Extract research metadata (handle None case)
+        md = ur.metadata or {}
+
         return cls(
             request_id=ur.request_id,
             text=ur.text,
@@ -55,7 +61,10 @@ class ChatResponseDTO(BaseModel):
                 retryable=ur.error.retryable,
                 details=ur.error.details
             ) if ur.error else None,
-            timestamp=ur.timestamp
+            timestamp=ur.timestamp,
+            research_used=md.get("research_used", False),
+            sources=md.get("sources", []),
+            research_error=md.get("research_error")
         )
 
 

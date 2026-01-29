@@ -21,6 +21,7 @@ from models.user_context import UserContext
 from utils.token_tracker import TokenTracker
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
+from utils.prompt_optimizer import PromptOptimizer
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
@@ -41,6 +42,17 @@ class CortexOrchestrator:
         self._client_cache: Dict[str, BaseAIClient] = {}
         self._research_states: Dict[str, Any] = {}  # session_id -> ResearchState
         self._research_lock = threading.Lock()  # thread-safe access to states
+
+        # Initialize prompt optimizer (optional - controlled by env var)
+        self._prompt_optimizer = None
+        if os.getenv('ENABLE_PROMPT_OPTIMIZATION', 'false').lower() == 'true':
+            try:
+                provider = os.getenv('PROMPT_OPTIMIZER_PROVIDER', 'gemini')
+                self._prompt_optimizer = PromptOptimizer(provider=provider)
+                logger.info(f"Prompt optimizer initialized with provider: {provider}")
+            except Exception as e:
+                logger.warning(f"Prompt optimizer initialization failed: {e}")
+                self._prompt_optimizer = None
 
         # Initialize research service (optional - gracefully handle if not configured)
         try:
@@ -237,6 +249,40 @@ These rules prevent misinformation. Follow them carefully."""
         if context and hasattr(context, 'session_id') and context.session_id:
             return context.session_id
         return self._generate_session_id(messages)
+
+    def _optimize_prompt_if_enabled(self, prompt: str) -> tuple[str, dict]:
+        """
+        Optimize prompt if optimization is enabled.
+        
+        Returns:
+            tuple: (optimized_prompt, metadata)
+            - If optimization disabled/fails: returns (original_prompt, {})
+            - If optimization succeeds: returns (optimized_prompt, optimization_metadata)
+        """
+        if not self._prompt_optimizer:
+            return prompt, {}
+        
+        try:
+            result = self._prompt_optimizer.optimize_prompt({"prompt": prompt})
+            
+            if "error" in result and result["error"]:
+                logger.warning(f"Prompt optimization failed: {result['error']['message']}")
+                return prompt, {"optimization_error": result["error"]["message"]}
+            
+            optimized = result.get("optimized_prompt", prompt)
+            metadata = {
+                "optimization_used": True,
+                "original_prompt": prompt,
+                "optimization_steps": result.get("steps", []),
+                "optimization_metrics": result.get("metrics", {})
+            }
+            
+            logger.info(f"Prompt optimized: '{prompt[:50]}...' -> '{optimized[:50]}...'")
+            return optimized, metadata
+            
+        except Exception as e:
+            logger.error(f"Prompt optimization error: {e}")
+            return prompt, {"optimization_error": str(e)}
 
     def _get_or_create_research_state(self, session_id: str, research_mode: str) -> ResearchState:
         """
@@ -678,13 +724,18 @@ These rules prevent misinformation. Follow them carefully."""
         **kwargs,
     ) -> UnifiedResponse:
         try:
+            # Optimize prompt if enabled
+            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+            if opt_metadata.get("optimization_used"):
+                logger.debug(f"Using optimized prompt for request")
+            
             client = self._get_client(model_type, model_name)
-            messages = self._build_messages(prompt, context)
+            messages = self._build_messages(optimized_prompt, context)
 
             # Apply research if needed (and if service is configured)
             if self.research_service:
                 messages, research_metadata = self._apply_research_if_needed(
-                    prompt=prompt,
+                    prompt=optimized_prompt,
                     messages=messages,
                     research_mode=research_mode,
                     context=context
@@ -700,17 +751,17 @@ These rules prevent misinformation. Follow them carefully."""
 
             resp = client.get_completion(messages=messages, **kwargs)
 
-            # Merge research metadata into response
+            # Merge research and optimization metadata into response
             md = resp.metadata or {}
-            merged_md = {**md, **research_metadata}
+            merged_md = {**md, **research_metadata, **opt_metadata}
             resp = replace(resp, metadata=merged_md)
 
             # Check for browse disclaimer if research was used or explicitly requested
             research_used = research_metadata.get("research_used", False)
-            resp = self._check_browse_disclaimer(resp, research_used, prompt)
+            resp = self._check_browse_disclaimer(resp, research_used, optimized_prompt)
 
             # CRITICAL: Check for fabricated numbers/facts
-            resp = self._check_fabrication(resp, research_used, prompt)
+            resp = self._check_fabrication(resp, research_used, optimized_prompt)
 
             # Update token tracker here (business layer)
             if token_tracker:
@@ -741,12 +792,17 @@ These rules prevent misinformation. Follow them carefully."""
         responses: List[UnifiedResponse] = []
 
         try:
-            messages = self._build_messages(prompt, context)
+            # Optimize prompt if enabled (ONCE for all models - fair comparison)
+            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+            if opt_metadata.get("optimization_used"):
+                logger.debug(f"Using optimized prompt for comparison")
+            
+            messages = self._build_messages(optimized_prompt, context)
 
             # Apply research ONCE for all models (compare fairness)
             if self.research_service:
                 messages, research_metadata = self._apply_research_if_needed(
-                    prompt=prompt,
+                    prompt=optimized_prompt,
                     messages=messages,
                     research_mode=research_mode,
                     context=context

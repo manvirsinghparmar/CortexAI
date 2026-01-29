@@ -201,6 +201,16 @@ def main():
                     print("  - off  : No web research")
                     print("  - auto : Research for current events/news (keywords: latest, recent, 2026, etc.)")
                     print("  - on   : Always research")
+                    
+                    # Show prompt optimization status
+                    if os.getenv('ENABLE_PROMPT_OPTIMIZATION', 'false').lower() == 'true':
+                        provider = os.getenv('PROMPT_OPTIMIZER_PROVIDER', 'gemini')
+                        print(f"\nPrompt Optimization: ENABLED (using {provider.upper()})")
+                        print("  All prompts are automatically optimized before sending to AI")
+                    else:
+                        print("\nPrompt Optimization: DISABLED")
+                        print("  Set ENABLE_PROMPT_OPTIMIZATION=true in .env to enable")
+                    
                     print()
                     continue
 
@@ -322,6 +332,13 @@ def main():
 
                         if resp.text:
                             print(f"\nAI: {resp.text}\n")
+
+                            # Display optimization info if used
+                            if resp.metadata and resp.metadata.get("optimization_used"):
+                                print("\033[92m[✓ Prompt Optimized]\033[0m")
+                                if resp.metadata.get("optimization_steps"):
+                                    steps_count = len(resp.metadata["optimization_steps"])
+                                    print(f"  Optimization steps: {steps_count}")
 
                             # Display research info if available
                             display_research_info(resp)

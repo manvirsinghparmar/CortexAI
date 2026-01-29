@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     context: Optional[UserContextRequest] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
+    research_mode: Optional[str] = Field("auto", pattern="^(off|auto|on)$")
 
 
 class CompareTargetRequest(BaseModel):
@@ -35,3 +36,4 @@ class CompareRequest(BaseModel):
     timeout_s: Optional[float] = Field(None, gt=0, le=300)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
+    research_mode: Optional[str] = Field("auto", pattern="^(off|auto|on)$")

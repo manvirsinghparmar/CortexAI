@@ -189,7 +189,7 @@ class OpenAIClient(BaseAIClient):
                 print("API key not provided. Cannot list available models.")
                 return
 
-            current_model = kwargs.get('current_model', 'gpt-3.5-turbo')
+            current_model = kwargs.get('current_model', 'gpt-5.1-codex')
 
             # Get the list of available models
             models = client.models.list()

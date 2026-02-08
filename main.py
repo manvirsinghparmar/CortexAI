@@ -2,7 +2,10 @@ import os
 import threading
 import time
 import sys
+from typing import Optional
+from uuid import UUID
 from dotenv import load_dotenv
+
 
 # Load environment variables first
 load_dotenv()
@@ -20,6 +23,33 @@ from utils.logger import get_logger
 from context.conversation_manager import ConversationManager
 from config.config import COMPARE_TARGETS
 
+# Database imports (with optional support - won't crash if DB not configured)
+DB_ENABLED = False
+try:
+    from db import (
+        get_db,
+        get_or_create_cli_user,
+        create_session,
+        get_active_session,
+        get_session_messages,
+        save_message,
+        create_llm_request,
+        create_llm_response,
+        update_session_timestamp,
+        upsert_usage_daily,
+        check_usage_limit,
+        save_compare_summary,
+    )
+    # Check if DATABASE_URL is set
+    if os.getenv('DATABASE_URL'):
+        DB_ENABLED = True
+except ImportError as e:
+    # DB package not available or dependencies not installed
+    pass
+except Exception as e:
+    # DATABASE_URL not set or other configuration issue
+    pass
+
 logger = get_logger(__name__)
 
 
@@ -28,6 +58,163 @@ def _convert_to_user_context(conversation: ConversationManager) -> UserContext:
     Convert ConversationManager to UserContext for orchestrator.
     """
     return UserContext(conversation_history=conversation.get_messages())
+
+
+def _persist_single_interaction(
+    db_session,
+    user_id: UUID,
+    db_session_id: UUID,
+    user_input: str,
+    response,
+    mode: str = "ask"
+) -> None:
+    """
+    Persist a single LLM interaction to database in ONE TRANSACTION.
+
+    Args:
+        db_session: Database session
+        user_id: User ID
+        db_session_id: Session ID
+        user_input: User's prompt
+        response: UnifiedResponse object
+        mode: Mode ('ask' or 'compare')
+    """
+    if not db_session or not user_id or not db_session_id:
+        return
+
+    try:
+        # BEGIN TRANSACTION - All writes together
+        # 1. Save user message
+        save_message(db_session, db_session_id, "user", user_input)
+
+        # 2. Persist LLM request
+        llm_request_id = create_llm_request(
+            db_session,
+            user_id=user_id,
+            request_id=response.request_id,
+            route_mode=mode,
+            provider=response.provider,
+            model=response.model,
+            prompt=user_input,
+            session_id=db_session_id,
+            api_key_id=None,  # CLI has no API key
+            store_prompt=False  # Privacy
+        )
+
+        # 3. Persist LLM response
+        create_llm_response(db_session, llm_request_id, response)
+
+        # 4. Save assistant message (only if not error)
+        if not response.is_error:
+            save_message(db_session, db_session_id, "assistant", response.text)
+
+        # 5. Update session timestamp
+        update_session_timestamp(db_session, db_session_id)
+
+        # 6. Update usage stats
+        upsert_usage_daily(
+            db_session,
+            user_id=user_id,
+            total_tokens=response.token_usage.total_tokens,
+            estimated_cost=response.estimated_cost
+        )
+
+        # COMMIT - All-or-nothing
+        db_session.commit()
+
+        logger.info(
+            f"Persisted single interaction: request_id={response.request_id}, "
+            f"session_id={db_session_id}"
+        )
+
+    except Exception as e:
+        # Rollback ALL changes if any write fails
+        db_session.rollback()
+        logger.error(f"Failed to persist single interaction to database: {e}")
+
+
+def _persist_compare_interaction(
+    db_session,
+    user_id: UUID,
+    db_session_id: UUID,
+    user_input: str,
+    multi_resp,
+    mode: str = "compare"
+) -> None:
+    """
+    Persist a compare mode interaction to database in ONE TRANSACTION.
+
+    Args:
+        db_session: Database session
+        user_id: User ID
+        db_session_id: Session ID
+        user_input: User's prompt
+        multi_resp: MultiUnifiedResponse object
+        mode: Mode (default: 'compare')
+    """
+    if not db_session or not user_id or not db_session_id:
+        return
+
+    try:
+        # BEGIN TRANSACTION - All writes together
+        # 1. Save user message
+        save_message(db_session, db_session_id, "user", user_input)
+
+        # 2. Persist N LLM requests + responses (one per model)
+        for response in multi_resp.responses:
+            llm_request_id = create_llm_request(
+                db_session,
+                user_id=user_id,
+                request_id=response.request_id,
+                route_mode=mode,
+                provider=response.provider,
+                model=response.model,
+                prompt=user_input,
+                session_id=db_session_id,
+                api_key_id=None,  # CLI has no API key
+                store_prompt=False  # Privacy
+            )
+            create_llm_response(db_session, llm_request_id, response)
+
+        # 3. Save ONE assistant message (compare summary)
+        if multi_resp.success_count > 0:
+            # Find first successful response for selected index
+            selected_index = 0
+            for i, resp in enumerate(multi_resp.responses):
+                if not resp.is_error:
+                    selected_index = i
+                    break
+
+            save_compare_summary(
+                db_session,
+                db_session_id,
+                multi_resp.responses,
+                selected_model_index=selected_index
+            )
+
+        # 4. Update session timestamp
+        update_session_timestamp(db_session, db_session_id)
+
+        # 5. Update usage stats
+        upsert_usage_daily(
+            db_session,
+            user_id=user_id,
+            total_tokens=multi_resp.total_tokens,
+            estimated_cost=multi_resp.total_cost
+        )
+
+        # COMMIT - All-or-nothing
+        db_session.commit()
+
+        logger.info(
+            f"Persisted compare interaction: request_group_id={multi_resp.request_group_id}, "
+            f"session_id={db_session_id}"
+        )
+
+    except Exception as e:
+        # Rollback ALL changes if any write fails
+        db_session.rollback()
+        logger.error(f"Failed to persist compare interaction to database: {e}")
 
 
 def prompt_research_mode() -> str:
@@ -114,9 +301,18 @@ def main():
     session_total_cost = 0.0
     session_total_tokens = 0
 
+    # Database session and state
+    db_session = None
+    user_id: Optional[UUID] = None
+    db_session_id: Optional[UUID] = None
+
     logger.info(
         "Application starting",
-        extra={"extra_fields": {"model_type": MODEL_TYPE, "compare_mode": COMPARE_MODE}}
+        extra={"extra_fields": {
+            "model_type": MODEL_TYPE,
+            "compare_mode": COMPARE_MODE,
+            "db_enabled": DB_ENABLED
+        }}
     )
 
     try:
@@ -128,7 +324,52 @@ def main():
         # CostCalculator is meaningful only in Single Mode (single provider pricing)
         cost_calculator = orchestrator.create_cost_calculator(MODEL_TYPE)
 
-        conversation = ConversationManager()
+        # Initialize database if enabled
+        if DB_ENABLED:
+            try:
+                db_session = next(get_db())
+                user_id = get_or_create_cli_user(db_session, email="cli@cortexai.local", display_name="CLI User")
+                db_session.commit()
+
+                # Check for existing session
+                db_session_id = get_active_session(db_session, user_id, mode="compare" if COMPARE_MODE else "ask")
+
+                if db_session_id:
+                    # Ask user if they want to resume
+                    messages = get_session_messages(db_session, db_session_id, limit=3)
+                    if messages:
+                        print(f"\n\033[92mFound existing session with {len(messages)} messages.\033[0m")
+                        print("Last messages:")
+                        for msg in messages[-2:]:
+                            role = msg['role'].capitalize()
+                            content = str(msg['content'])[:80] + "..." if len(str(msg['content'])) > 80 else str(msg['content'])
+                            print(f"  {role}: {content}")
+
+                        resume = input("\nResume this session? (y/n): ").lower()
+                        if resume != 'y':
+                            db_session_id = None
+
+                # Create new session if needed
+                if not db_session_id:
+                    mode = "compare" if COMPARE_MODE else "ask"
+                    db_session_id = create_session(db_session, user_id, mode=mode, title="CLI Chat")
+                    db_session.commit()
+                    print(f"\033[92mCreated new database session: {str(db_session_id)[:8]}...\033[0m")
+                else:
+                    print(f"\033[92mResuming database session: {str(db_session_id)[:8]}...\033[0m")
+
+                logger.info(f"Database session initialized: user_id={user_id}, session_id={db_session_id}")
+
+            except Exception as e:
+                logger.error(f"Database initialization failed: {e}. Continuing without DB persistence.")
+                db_session = None
+                user_id = None
+                db_session_id = None
+
+        # Initialize conversation manager with DB support
+        conversation = ConversationManager(db=db_session)
+        if DB_ENABLED and db_session_id:
+            conversation.set_session(db_session_id, db_session)
 
         if COMPARE_MODE and not COMPARE_TARGETS:
             print("ERROR: COMPARE_MODE=true but no COMPARE_TARGETS configured in config.py")
@@ -184,12 +425,41 @@ def main():
                     logger.debug("User requested conversation history")
                     continue
 
+                if user_input.lower() == '/new' or user_input.lower() == 'new':
+                    if DB_ENABLED and db_session and user_id:
+                        mode = "compare" if COMPARE_MODE else "ask"
+                        db_session_id = create_session(db_session, user_id, mode=mode, title="CLI Chat")
+                        db_session.commit()
+                        conversation.reset(keep_system_prompt=True)
+                        conversation.set_session(db_session_id, db_session)
+                        print(f"\n\033[92m✓ Created new database session: {str(db_session_id)[:8]}...\033[0m\n")
+                    else:
+                        conversation.reset(keep_system_prompt=True)
+                        print("\n\033[92m✓ Created new session (DB not enabled)\033[0m\n")
+                    logger.info("User created new session")
+                    continue
+
+                if user_input.lower() == '/dbstats' and DB_ENABLED and db_session and user_id:
+                    from db.repository import get_usage_daily
+                    usage = get_usage_daily(db_session, user_id)
+                    if usage:
+                        print("\n=== Database Usage (Today) ===")
+                        print(f"Requests: {usage['total_requests']}")
+                        print(f"Tokens: {usage['total_tokens']:,}")
+                        print(f"Cost: ${float(usage['total_cost']):.6f}\n")
+                    else:
+                        print("\n\033[93mNo database usage today yet.\033[0m\n")
+                    continue
+
                 if user_input.lower() == 'help':
                     print("\n=== Available Commands ===")
                     print("help          - Show this help message")
                     print("stats         - Show token usage statistics")
                     print("/reset        - Clear conversation history")
                     print("/history      - Show recent conversation")
+                    print("/new          - Create new session")
+                    if DB_ENABLED:
+                        print("/dbstats      - Show database usage statistics")
                     print("exit/quit     - Exit the program")
                     if COMPARE_MODE:
                         print("\nCurrent Mode: Compare Mode (COMPARE_MODE=true)")
@@ -213,6 +483,25 @@ def main():
                     
                     print()
                     continue
+
+                # ========================================================================
+                # STEP 1: Usage Enforcement (Read-Only Check)
+                # ========================================================================
+                if DB_ENABLED and db_session and user_id:
+                    token_cap = os.getenv("DAILY_TOKEN_CAP")
+                    cost_cap = os.getenv("DAILY_COST_CAP")
+
+                    if token_cap or cost_cap:
+                        limit_check = check_usage_limit(
+                            db_session,
+                            user_id,
+                            token_cap=int(token_cap) if token_cap else None,
+                            cost_cap=float(cost_cap) if cost_cap else None
+                        )
+
+                        if not limit_check["allowed"]:
+                            print(f"\n\033[91m❌ {limit_check['reason']}\033[0m")
+                            continue
 
                 # Add user message to conversation
                 conversation.add_user(user_input)
@@ -238,6 +527,12 @@ def main():
 
                         stop_animation.set()
                         loading_thread.join()
+
+                        # Persist to database (compare mode)
+                        if DB_ENABLED and db_session and user_id and db_session_id:
+                            _persist_compare_interaction(
+                                db_session, user_id, db_session_id, user_input, multi_resp, mode="compare"
+                            )
 
                         if multi_resp.success_count == 0:
                             print("\n=== All Models Failed ===\n")
@@ -312,6 +607,12 @@ def main():
 
                         stop_animation.set()
                         loading_thread.join()
+
+                        # Persist to database (single mode) - even on errors for audit
+                        if DB_ENABLED and db_session and user_id and db_session_id:
+                            _persist_single_interaction(
+                                db_session, user_id, db_session_id, user_input, resp, mode="ask"
+                            )
 
                         if resp.is_error:
                             conversation.pop_last_user()
@@ -401,6 +702,14 @@ def main():
         return
 
     finally:
+        # Close database session
+        if db_session:
+            try:
+                db_session.close()
+                logger.info("Database session closed")
+            except Exception as e:
+                logger.error(f"Error closing database session: {e}")
+
         if token_tracker and token_tracker.requests > 0:
             summary = token_tracker.get_summary()
             logger.info(

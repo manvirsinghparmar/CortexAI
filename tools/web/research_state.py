@@ -51,6 +51,7 @@ class ResearchState:
     session_id: str = "default"
     mode: ResearchMode = "auto"
     ttl_seconds: int = 900  # 15 minutes default
+    topic_key: str = ""  # computed topic key for research reuse
 
     def is_expired(self, now: datetime | None = None) -> bool:
         """

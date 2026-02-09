@@ -4,8 +4,10 @@ black
 
 # Typing
 mypy
+types-requests
 
-# Testing helpers
+# Testing
+pytest
 pytest-cov
 
 # Security scanning

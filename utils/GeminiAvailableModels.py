@@ -11,7 +11,10 @@ class GeminiClient:
 
     def list_models(self) -> list[tuple[str, object]]:
         """Return (model_name, supported_methods) for debugging."""
-        out = []
+        out: list[tuple[str, object]] = []
         for m in self.client.models.list():  # Models endpoint :contentReference[oaicite:2]{index=2}
-            out.append((m.name, getattr(m, "supported_generation_methods", None)))
+            name = m.name
+            methods = getattr(m, "supported_generation_methods", None)
+            if name is not None:  # Only filter out models with no name, allow None methods
+                out.append((name, methods))
         return out

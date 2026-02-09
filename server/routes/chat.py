@@ -45,6 +45,7 @@ async def chat(
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
 
+    research_mode = request.research_mode or "off"
     response = await asyncio.to_thread(
         orchestrator.ask,
         prompt=request.prompt,
@@ -52,7 +53,7 @@ async def chat(
         context=context,
         model_name=request.model,
         token_tracker=None,
-        research_mode=request.research_mode,
+        research_mode=research_mode,
         **kwargs,
     )
 

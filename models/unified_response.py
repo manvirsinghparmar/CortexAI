@@ -114,7 +114,7 @@ class UnifiedResponse:
 class MultiUnifiedResponse:
     request_group_id: str
     prompt: str
-    responses: list[UnifiedResponse]
+    responses: list[UnifiedResponse | None]
 
     success_count: int
     error_count: int
@@ -125,14 +125,15 @@ class MultiUnifiedResponse:
 
     @classmethod
     def from_responses(
-        cls, request_group_id: str, prompt: str, responses: list[UnifiedResponse]
+        cls, request_group_id: str, prompt: str, responses: list[UnifiedResponse | None]
     ) -> "MultiUnifiedResponse":
-        success_count = sum(1 for r in responses if r and r.is_success)
-        error_count = len(responses) - success_count
-        total_tokens = sum(
-            (r.token_usage.total_tokens if r and r.token_usage else 0) for r in responses
-        )
-        total_cost = sum((r.estimated_cost if r else 0.0) for r in responses)
+        success_count: int = sum(1 for r in responses if r and r.is_success)
+        error_count: int = len(responses) - success_count
+        total_tokens_list = [
+            r.token_usage.total_tokens if r and r.token_usage else 0 for r in responses
+        ]
+        total_tokens: int = sum(total_tokens_list)
+        total_cost: float = sum(r.estimated_cost if r else 0.0 for r in responses)
 
         return cls(
             request_group_id=request_group_id,

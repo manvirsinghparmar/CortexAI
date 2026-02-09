@@ -2,10 +2,20 @@ from datetime import datetime
 from typing import Any, Union
 
 # Import UnifiedResponse for type hints (import at runtime to avoid circular deps)
-try:
-    from models.unified_response import UnifiedResponse
-except ImportError:
-    UnifiedResponse = None
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.unified_response import UnifiedResponse as _UnifiedResponse
+
+    _has_unified_response = True
+else:
+    try:
+        from models.unified_response import UnifiedResponse as _UnifiedResponse
+
+        _has_unified_response = True
+    except ImportError:
+        _UnifiedResponse = None  # type: ignore[assignment, misc]
+        _has_unified_response = False
 
 
 class TokenTracker:
@@ -33,7 +43,7 @@ class TokenTracker:
         self.total_tokens = 0
         self.requests = 0
 
-    def update(self, usage: Union[dict[str, int], "UnifiedResponse"] | None) -> None:
+    def update(self, usage: Union[dict[str, int], "_UnifiedResponse"] | None) -> None:
         """
         Update token counters with usage from an API call.
 
@@ -49,7 +59,7 @@ class TokenTracker:
             return
 
         # Handle UnifiedResponse objects
-        if UnifiedResponse and isinstance(usage, UnifiedResponse):
+        if _has_unified_response and isinstance(usage, _UnifiedResponse):
             self.requests += 1
             self.total_prompt_tokens += usage.token_usage.prompt_tokens
             self.total_completion_tokens += usage.token_usage.completion_tokens
@@ -57,10 +67,12 @@ class TokenTracker:
             return
 
         # Handle dict (backward compatibility)
-        self.requests += 1
-        self.total_prompt_tokens += usage.get("prompt_tokens", 0)
-        self.total_completion_tokens += usage.get("completion_tokens", 0)
-        self.total_tokens += usage.get("total_tokens", 0)
+        if isinstance(usage, dict):
+            self.requests += 1
+            self.total_prompt_tokens += usage.get("prompt_tokens", 0)
+            self.total_completion_tokens += usage.get("completion_tokens", 0)
+            self.total_tokens += usage.get("total_tokens", 0)
+            return
 
     def get_summary(self) -> dict[str, Any]:
         """

@@ -80,6 +80,9 @@ from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server.app import create_app
 from server.schemas.responses import CompareResponseDTO
 
+pytestmark = pytest.mark.integration
+
+
 # -------------------------------------------------------------------
 # Fake MultiUnifiedResponse (match what CompareResponseDTO expects)
 # -------------------------------------------------------------------

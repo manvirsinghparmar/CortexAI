@@ -1,6 +1,9 @@
 """Quick API test script."""
 
 import requests
+import pytest
+
+pytestmark = pytest.mark.integration
 
 BASE_URL = "http://localhost:8000"
 API_KEY = "dev-key-1"

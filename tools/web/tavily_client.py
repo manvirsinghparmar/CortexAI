@@ -11,8 +11,6 @@ This replaces Brave Search + extractor + caching.
 
 import os
 
-from tavily import TavilyClient
-
 from utils.logger import get_logger
 
 from .contracts import SourceDoc
@@ -38,6 +36,15 @@ class TavilyResearchClient:
 
         if not self.api_key:
             raise ValueError("TAVILY_API_KEY not found in environment")
+
+        # ✅ Lazy import so CI/tests don't require tavily unless Research Mode uses it
+        try:
+            from tavily import TavilyClient
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "Optional dependency 'tavily' is not installed. "
+                "Install it to enable Research Mode: pip install tavily-python"
+            ) from e
 
         self.client = TavilyClient(api_key=self.api_key)
         logger.info("Tavily client initialized")

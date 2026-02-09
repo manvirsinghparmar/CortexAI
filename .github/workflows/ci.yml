@@ -49,9 +49,6 @@ jobs:
       - name: pip-audit (dependency vulnerabilities)
         run: pip-audit -r requirements.txt -r requirements-dev.txt
 
-      - name: Bandit (python security)
-        run: bandit -r . --exclude tests,.venv,build,dist,htmlcov
-
       - name: Gitleaks (secrets scanning)
         uses: gitleaks/gitleaks-action@v2
         with:

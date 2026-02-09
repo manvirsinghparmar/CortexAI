@@ -1,6 +1,7 @@
 """Session-level research state store for follow-up handling."""
+
 import threading
-from typing import Optional, Dict
+
 from .contracts import ResearchContext
 
 
@@ -15,9 +16,9 @@ class SessionResearchStore:
     def __init__(self):
         """Initialize store with thread lock and session dict."""
         self._lock = threading.Lock()
-        self._sessions: Dict[str, ResearchContext] = {}
+        self._sessions: dict[str, ResearchContext] = {}
 
-    def get(self, session_id: str) -> Optional[ResearchContext]:
+    def get(self, session_id: str) -> ResearchContext | None:
         """
         Get last research context for a session.
 

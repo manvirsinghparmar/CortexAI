@@ -4,15 +4,14 @@ Tests for multi-model compare mode functionality.
 Tests MultiModelOrchestrator, MultiUnifiedResponse, and related components.
 """
 
-import pytest
-import asyncio
 from datetime import datetime, timezone
-from typing import List
 
-from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
-from models.multi_unified_response import MultiUnifiedResponse
-from orchestrator.multi_orchestrator import MultiModelOrchestrator
+import pytest
+
 from api.base_client import BaseAIClient
+from models.multi_unified_response import MultiUnifiedResponse
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from orchestrator.multi_orchestrator import MultiModelOrchestrator
 
 
 class FakeClient(BaseAIClient):
@@ -40,7 +39,9 @@ class FakeClient(BaseAIClient):
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
 
-    def get_completion(self, prompt: str = None, messages: List = None, **kwargs) -> UnifiedResponse:
+    def get_completion(
+        self, prompt: str = None, messages: list = None, **kwargs
+    ) -> UnifiedResponse:
         """Return a fake UnifiedResponse."""
         request_id = f"{self.provider_name}-{self.model_name}"
 
@@ -90,9 +91,7 @@ class TestMultiUnifiedResponse:
     def test_empty_responses(self):
         """Test MultiUnifiedResponse with no responses."""
         multi_resp = MultiUnifiedResponse(
-            request_group_id="test-123",
-            created_at=datetime.now(timezone.utc),
-            responses=tuple()
+            request_group_id="test-123", created_at=datetime.now(timezone.utc), responses=tuple()
         )
 
         assert len(multi_resp.responses) == 0
@@ -130,7 +129,7 @@ class TestMultiUnifiedResponse:
         multi_resp = MultiUnifiedResponse(
             request_group_id="test-123",
             created_at=datetime.now(timezone.utc),
-            responses=(resp1, resp2)
+            responses=(resp1, resp2),
         )
 
         assert len(multi_resp.responses) == 2
@@ -173,7 +172,7 @@ class TestMultiUnifiedResponse:
         multi_resp = MultiUnifiedResponse(
             request_group_id="test-123",
             created_at=datetime.now(timezone.utc),
-            responses=(error_resp, success_resp)
+            responses=(error_resp, success_resp),
         )
 
         assert len(multi_resp.responses) == 2
@@ -185,9 +184,7 @@ class TestMultiUnifiedResponse:
     def test_immutability(self):
         """Test that MultiUnifiedResponse is immutable."""
         multi_resp = MultiUnifiedResponse(
-            request_group_id="test-123",
-            created_at=datetime.now(timezone.utc),
-            responses=tuple()
+            request_group_id="test-123", created_at=datetime.now(timezone.utc), responses=tuple()
         )
 
         with pytest.raises(AttributeError):
@@ -215,8 +212,14 @@ class TestMultiModelOrchestrator:
         orchestrator = MultiModelOrchestrator()
         clients = [
             FakeClient(provider_name="openai", model_name="gpt-4", response_text="OpenAI response"),
-            FakeClient(provider_name="gemini", model_name="gemini-flash", response_text="Gemini response"),
-            FakeClient(provider_name="deepseek", model_name="deepseek-chat", response_text="DeepSeek response"),
+            FakeClient(
+                provider_name="gemini", model_name="gemini-flash", response_text="Gemini response"
+            ),
+            FakeClient(
+                provider_name="deepseek",
+                model_name="deepseek-chat",
+                response_text="DeepSeek response",
+            ),
         ]
 
         result = orchestrator.get_comparisons_sync("Test prompt", clients)
@@ -233,7 +236,12 @@ class TestMultiModelOrchestrator:
         orchestrator = MultiModelOrchestrator()
         clients = [
             FakeClient(provider_name="openai", model_name="gpt-4"),
-            FakeClient(provider_name="gemini", model_name="gemini-flash", should_error=True, error_code="timeout"),
+            FakeClient(
+                provider_name="gemini",
+                model_name="gemini-flash",
+                should_error=True,
+                error_code="timeout",
+            ),
         ]
 
         result = orchestrator.get_comparisons_sync("Test prompt", clients)
@@ -263,7 +271,6 @@ class TestMultiModelOrchestrator:
 
     def test_concurrent_execution(self):
         """Test that clients are called concurrently."""
-        import time
 
         orchestrator = MultiModelOrchestrator()
         clients = [
@@ -271,9 +278,7 @@ class TestMultiModelOrchestrator:
             for i in range(5)
         ]
 
-        start_time = time.time()
         result = orchestrator.get_comparisons_sync("Test prompt", clients)
-        elapsed = time.time() - start_time
 
         # If run sequentially, would take ~500ms (5 * 100ms)
         # Concurrent should be much faster (close to 100ms + overhead)

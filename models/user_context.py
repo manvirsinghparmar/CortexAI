@@ -5,10 +5,10 @@ This dataclass stores session-level information that allows the orchestrator
 to remain stateless while maintaining user preferences and history.
 """
 
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
-from datetime import datetime
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -27,11 +27,12 @@ class UserContext:
         conversation_history: List of conversation messages
         created_at: Session creation timestamp
     """
+
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: Optional[str] = None
-    preferences: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    user_id: str | None = None
+    preferences: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    conversation_history: list[dict[str, str]] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     def add_message(self, role: str, content: str) -> "UserContext":
@@ -54,7 +55,7 @@ class UserContext:
             preferences=self.preferences.copy(),
             metadata=self.metadata.copy(),
             conversation_history=new_history,
-            created_at=self.created_at
+            created_at=self.created_at,
         )
 
     def clear_history(self, keep_system: bool = True) -> "UserContext":
@@ -69,10 +70,7 @@ class UserContext:
         """
         new_history = []
         if keep_system:
-            new_history = [
-                msg for msg in self.conversation_history
-                if msg.get("role") == "system"
-            ]
+            new_history = [msg for msg in self.conversation_history if msg.get("role") == "system"]
 
         return UserContext(
             session_id=self.session_id,
@@ -80,10 +78,10 @@ class UserContext:
             preferences=self.preferences.copy(),
             metadata=self.metadata.copy(),
             conversation_history=new_history,
-            created_at=self.created_at
+            created_at=self.created_at,
         )
 
-    def get_messages(self) -> List[Dict[str, str]]:
+    def get_messages(self) -> list[dict[str, str]]:
         """
         Get conversation messages in API format.
 

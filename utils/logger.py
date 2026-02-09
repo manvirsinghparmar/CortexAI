@@ -9,14 +9,14 @@ This module provides structured JSON logging with:
 - Enterprise-ready JSON format for easy integration with ELK/Loki/Datadog
 """
 
+import json
 import logging
 import logging.handlers
 import os
 import sys
-import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
 class JsonFormatter(logging.Formatter):
@@ -35,7 +35,7 @@ class JsonFormatter(logging.Formatter):
         Returns:
             JSON string representation of the log record
         """
-        log_data: Dict[str, Any] = {
+        log_data: dict[str, Any] = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
@@ -94,8 +94,7 @@ class LoggerConfig:
 
         # Console formatter (human-readable, only for errors)
         console_formatter = logging.Formatter(
-            fmt='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            fmt="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
 
         # 1. Main application log (INFO and above) - JSON format
@@ -103,7 +102,7 @@ class LoggerConfig:
             cls.LOG_DIR / "app.log",
             maxBytes=cls.MAX_BYTES,
             backupCount=cls.BACKUP_COUNT,
-            encoding='utf-8'
+            encoding="utf-8",
         )
         app_handler.setLevel(logging.INFO)
         app_handler.setFormatter(json_formatter)
@@ -114,7 +113,7 @@ class LoggerConfig:
             cls.LOG_DIR / "error.log",
             maxBytes=cls.MAX_BYTES,
             backupCount=cls.BACKUP_COUNT,
-            encoding='utf-8'
+            encoding="utf-8",
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(json_formatter)
@@ -126,7 +125,7 @@ class LoggerConfig:
                 cls.LOG_DIR / "debug.log",
                 maxBytes=cls.MAX_BYTES,
                 backupCount=cls.BACKUP_COUNT,
-                encoding='utf-8'
+                encoding="utf-8",
             )
             debug_handler.setLevel(logging.DEBUG)
             debug_handler.setFormatter(json_formatter)
@@ -145,11 +144,13 @@ class LoggerConfig:
         init_logger = logging.getLogger(__name__)
         init_logger.info(
             "Logging system initialized",
-            extra={"extra_fields": {
-                "log_level": cls.LOG_LEVEL,
-                "log_dir": str(cls.LOG_DIR),
-                "console_logging": cls.LOG_TO_CONSOLE
-            }}
+            extra={
+                "extra_fields": {
+                    "log_level": cls.LOG_LEVEL,
+                    "log_dir": str(cls.LOG_DIR),
+                    "console_logging": cls.LOG_TO_CONSOLE,
+                }
+            },
         )
 
     @classmethod

@@ -1,7 +1,8 @@
 """Pydantic response models (DTOs) for FastAPI endpoints."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
 
 
 class TokenUsageDTO(BaseModel):
@@ -15,7 +16,7 @@ class ErrorDTO(BaseModel):
     message: str
     provider: str
     retryable: bool
-    details: Dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponseDTO(BaseModel):
@@ -27,12 +28,12 @@ class ChatResponseDTO(BaseModel):
     token_usage: TokenUsageDTO
     estimated_cost: float
     cost_currency: str = "USD"
-    finish_reason: Optional[str] = None
-    error: Optional[ErrorDTO] = None
+    finish_reason: str | None = None
+    error: ErrorDTO | None = None
     timestamp: str
     research_used: bool = False
-    sources: List[Dict[str, Any]] = Field(default_factory=list)
-    research_error: Optional[str] = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    research_error: str | None = None
 
     @classmethod
     def from_unified_response(cls, ur):
@@ -49,28 +50,32 @@ class ChatResponseDTO(BaseModel):
             token_usage=TokenUsageDTO(
                 prompt_tokens=ur.token_usage.prompt_tokens,
                 completion_tokens=ur.token_usage.completion_tokens,
-                total_tokens=ur.token_usage.total_tokens
+                total_tokens=ur.token_usage.total_tokens,
             ),
             estimated_cost=ur.estimated_cost,
             cost_currency=ur.cost_currency,
             finish_reason=ur.finish_reason,
-            error=ErrorDTO(
-                code=ur.error.code,
-                message=ur.error.message,
-                provider=ur.error.provider,
-                retryable=ur.error.retryable,
-                details=ur.error.details
-            ) if ur.error else None,
+            error=(
+                ErrorDTO(
+                    code=ur.error.code,
+                    message=ur.error.message,
+                    provider=ur.error.provider,
+                    retryable=ur.error.retryable,
+                    details=ur.error.details,
+                )
+                if ur.error
+                else None
+            ),
             timestamp=ur.timestamp,
             research_used=md.get("research_used", False),
             sources=md.get("sources", []),
-            research_error=md.get("research_error")
+            research_error=md.get("research_error"),
         )
 
 
 class CompareResponseDTO(BaseModel):
     request_group_id: str
-    responses: List[ChatResponseDTO]
+    responses: list[ChatResponseDTO]
     success_count: int
     error_count: int
     total_tokens: int
@@ -87,7 +92,7 @@ class CompareResponseDTO(BaseModel):
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,
             total_cost=mur.total_cost,
-            timestamp=mur.created_at.isoformat().replace("+00:00", "Z")
+            timestamp=mur.created_at.isoformat().replace("+00:00", "Z"),
         )
 
 

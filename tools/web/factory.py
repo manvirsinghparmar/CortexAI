@@ -1,8 +1,11 @@
 """Factory for creating Tavily research service from environment configuration."""
+
 import os
+
+from utils.logger import get_logger
+
 from .cache import InMemoryTTLCache
 from .tavily_service import TavilyResearchService
-from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -38,8 +41,4 @@ def create_research_service_from_env() -> TavilyResearchService:
 
     logger.info("🚀 Using Tavily for web research (JavaScript rendering enabled)")
 
-    return TavilyResearchService(
-        api_key=tavily_api_key,
-        cache=_cache_instance,
-        max_sources=5
-    )
+    return TavilyResearchService(api_key=tavily_api_key, cache=_cache_instance, max_sources=5)

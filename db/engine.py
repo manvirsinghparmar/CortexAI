@@ -4,9 +4,8 @@ Supports local and AWS RDS/Aurora via DATABASE_URL environment variable.
 """
 
 import os
-from typing import Optional
-from sqlalchemy import create_engine, Engine
-from sqlalchemy.pool import NullPool
+
+from sqlalchemy import Engine, create_engine
 
 # Import logger
 from utils.logger import get_logger
@@ -65,9 +64,9 @@ def create_db_engine() -> Engine:
                 "pool_size": pool_size,
                 "max_overflow": max_overflow,
                 "pool_timeout": pool_timeout,
-                "ssl_enabled": "sslmode=require" in database_url
+                "ssl_enabled": "sslmode=require" in database_url,
             }
-        }
+        },
     )
 
     engine = create_engine(
@@ -83,7 +82,7 @@ def create_db_engine() -> Engine:
 
 
 # Lazy engine singleton
-_ENGINE: Optional[Engine] = None
+_ENGINE: Engine | None = None
 
 
 def get_engine() -> Engine:

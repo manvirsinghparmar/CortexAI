@@ -1,13 +1,15 @@
 """Chat endpoint for single AI model requests."""
 
 import asyncio
+
 from fastapi import APIRouter, Depends
-from orchestrator.core import CortexOrchestrator
+
 from models.user_context import UserContext
+from orchestrator.core import CortexOrchestrator
+from server.dependencies import get_api_key, get_orchestrator
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
-from server.dependencies import get_api_key, get_orchestrator
-from server.utils import validate_and_trim_context, clamp_max_tokens
+from server.utils import clamp_max_tokens, validate_and_trim_context
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
 
@@ -24,17 +26,14 @@ def _build_user_context(context_req):
             for item in context_req.conversation_history
         ]
 
-    return UserContext(
-        session_id=context_req.session_id,
-        conversation_history=history
-    )
+    return UserContext(session_id=context_req.session_id, conversation_history=history)
 
 
 @router.post("/chat", response_model=ChatResponseDTO)
 async def chat(
     request: ChatRequest,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
@@ -54,7 +53,7 @@ async def chat(
         model_name=request.model,
         token_tracker=None,
         research_mode=request.research_mode,
-        **kwargs
+        **kwargs,
     )
 
     return ChatResponseDTO.from_unified_response(response)

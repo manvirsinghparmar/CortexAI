@@ -1,5 +1,4 @@
 """Intent detection for determining when to use web research."""
-from typing import Optional
 
 
 def is_followup_meta(prompt: str) -> bool:
@@ -45,7 +44,7 @@ def is_followup_meta(prompt: str) -> bool:
         "why are you not able",
         "why u r not able",
         "why can't you fetch",
-        "why cant you fetch"
+        "why cant you fetch",
     ]
 
     for phrase in meta_phrases:
@@ -69,8 +68,16 @@ def is_same_topic_followup(prompt: str) -> bool:
 
     # Follow-up starters indicating continuation of current topic
     followup_starters = [
-        "why ", "how ", "but ", "what about", "then ", "so ",
-        "also ", "and ", "i meant", "i mean"
+        "why ",
+        "how ",
+        "but ",
+        "what about",
+        "then ",
+        "so ",
+        "also ",
+        "and ",
+        "i meant",
+        "i mean",
     ]
 
     for starter in followup_starters:
@@ -94,38 +101,93 @@ def is_explicit_web_request(prompt: str) -> bool:
 
     # Explicit web/internet search requests (with negation variants)
     web_keywords = [
-        "check internet", "search internet", "check on internet",
-        "check over internet", "search on internet", "search over internet",
-        "check the internet", "search the internet",
-        "can't you check", "can't u check", "cant you check", "cant u check",
-        "can you check", "can u check",
-        "can you search", "can u search",  # Added: explicit search requests
-        "could you search", "could u search",  # Added
-        "browse internet", "browse the internet", "browse web",
-        "look it up", "look this up", "look that up",
-        "search for it", "search for this", "search online",
-        "search using", "search with",  # Added: "search using different providers"
-        "check online", "look online", "find online",
-        "do a search", "do a fresh search", "fresh search",
-        "do it now", "do it", "go ahead and", "please do",  # Execute previous promise
-        "retrieve the", "get the", "fetch the"  # "retrieve the relevant information"
+        "check internet",
+        "search internet",
+        "check on internet",
+        "check over internet",
+        "search on internet",
+        "search over internet",
+        "check the internet",
+        "search the internet",
+        "can't you check",
+        "can't u check",
+        "cant you check",
+        "cant u check",
+        "can you check",
+        "can u check",
+        "can you search",
+        "can u search",  # Added: explicit search requests
+        "could you search",
+        "could u search",  # Added
+        "browse internet",
+        "browse the internet",
+        "browse web",
+        "look it up",
+        "look this up",
+        "look that up",
+        "search for it",
+        "search for this",
+        "search online",
+        "search using",
+        "search with",  # Added: "search using different providers"
+        "check online",
+        "look online",
+        "find online",
+        "do a search",
+        "do a fresh search",
+        "fresh search",
+        "do it now",
+        "do it",
+        "go ahead and",
+        "please do",  # Execute previous promise
+        "retrieve the",
+        "get the",
+        "fetch the",  # "retrieve the relevant information"
     ]
 
     # Time-sensitive keywords that imply need for current data
     time_keywords = [
-        "find latest", "latest", "latest development", "latest news",
-        "today", "current", "news", "update", "updates",
-        "real-time", "live", "as of", "right now", "recent",
-        "recent development", "recent news", "fresh", "new development",
-        "last year", "this year", "last month", "this month",  # Relative time
-        "last quarter", "this quarter", "year to date", "ytd"
+        "find latest",
+        "latest",
+        "latest development",
+        "latest news",
+        "today",
+        "current",
+        "news",
+        "update",
+        "updates",
+        "real-time",
+        "live",
+        "as of",
+        "right now",
+        "recent",
+        "recent development",
+        "recent news",
+        "fresh",
+        "new development",
+        "last year",
+        "this year",
+        "last month",
+        "this month",  # Relative time
+        "last quarter",
+        "this quarter",
+        "year to date",
+        "ytd",
     ]
 
     # Requests for MORE/ADDITIONAL sources (not just reuse)
     more_sources_keywords = [
-        "more sources", "more information", "more info", "additional sources",
-        "other sources", "different sources", "find more", "check more",
-        "search more", "look for more", "get more"
+        "more sources",
+        "more information",
+        "more info",
+        "additional sources",
+        "other sources",
+        "different sources",
+        "find more",
+        "check more",
+        "search more",
+        "look for more",
+        "get more",
     ]
 
     # Check for more sources request FIRST (takes precedence)
@@ -168,19 +230,37 @@ def wants_more_sources(prompt: str) -> bool:
 
     # Explicit "more sources" requests (very specific)
     more_indicators = [
-        "more sources", "more information", "more info", "additional sources",
-        "other sources", "different sources", "find more sources",
-        "get more sources", "check more sources", "look for more sources",
-        "expand sources", "broader sources",
-        "some more sources", "few more sources"
+        "more sources",
+        "more information",
+        "more info",
+        "additional sources",
+        "other sources",
+        "different sources",
+        "find more sources",
+        "get more sources",
+        "check more sources",
+        "look for more sources",
+        "expand sources",
+        "broader sources",
+        "some more sources",
+        "few more sources",
     ]
 
     # Explicit re-search commands (asking to search AGAIN, not first time)
     search_commands = [
-        "do a search", "do a fresh search", "do another search",
-        "search again", "check again for", "look again for",
-        "find updated", "get updated", "refresh the", "update the",
-        "new search", "fresh search", "another search"
+        "do a search",
+        "do a fresh search",
+        "do another search",
+        "search again",
+        "check again for",
+        "look again for",
+        "find updated",
+        "get updated",
+        "refresh the",
+        "update the",
+        "new search",
+        "fresh search",
+        "another search",
     ]
 
     # Check explicit indicators
@@ -210,8 +290,20 @@ def rewrite_query(prompt: str) -> str:
 
     # Finance index keywords
     finance_keywords = [
-        "s&p", "sp 500", "s&p 500", "spx", "nasdaq", "dow", "djia",
-        "dow jones", "index", "stock", "bitcoin", "btc", "ethereum", "eth"
+        "s&p",
+        "sp 500",
+        "s&p 500",
+        "spx",
+        "nasdaq",
+        "dow",
+        "djia",
+        "dow jones",
+        "index",
+        "stock",
+        "bitcoin",
+        "btc",
+        "ethereum",
+        "eth",
     ]
 
     # Time indicators
@@ -297,7 +389,7 @@ def is_meta_followup(prompt: str) -> bool:
         "internet access",
         "did you invent",
         "did you make that up",
-        "confirm again"
+        "confirm again",
     ]
 
     for phrase in meta_phrases:
@@ -307,7 +399,7 @@ def is_meta_followup(prompt: str) -> bool:
     return False
 
 
-def is_short_year_followup(prompt: str) -> Optional[str]:
+def is_short_year_followup(prompt: str) -> str | None:
     """
     Detect if prompt is a short year follow-up like "and in 2025" or "in 2025".
 
@@ -325,11 +417,11 @@ def is_short_year_followup(prompt: str) -> Optional[str]:
 
     # Patterns for short year follow-ups
     patterns = [
-        r'^and in (\d{4})$',
-        r'^in (\d{4})$',
-        r'^what about (\d{4})$',
-        r'^and (\d{4})$',
-        r'^for (\d{4})$'
+        r"^and in (\d{4})$",
+        r"^in (\d{4})$",
+        r"^what about (\d{4})$",
+        r"^and (\d{4})$",
+        r"^for (\d{4})$",
     ]
 
     for pattern in patterns:
@@ -353,18 +445,19 @@ def build_anchored_query(state, prompt: str) -> str:
     """
     # Import here to avoid circular dependency
     from typing import TYPE_CHECKING
+
     if TYPE_CHECKING:
-        from .research_state import ResearchState
+        pass
 
     # Check if this is a short year follow-up
     year = is_short_year_followup(prompt)
-    if year and hasattr(state, 'query') and state.query:
+    if year and hasattr(state, "query") and state.query:
         return f"{state.query} {year}"
 
     # Check if this is a meta follow-up
     if is_meta_followup(prompt):
         # Never search using meta text - reuse last search query
-        if hasattr(state, 'query') and state.query:
+        if hasattr(state, "query") and state.query:
             return state.query
 
     # Default: return prompt as-is
@@ -386,9 +479,20 @@ def normalize_topic(text: str) -> str:
 
     # Remove filler phrases
     filler_phrases = [
-        "can you", "could you", "please", "i want to know",
-        "tell me about", "what is", "what are", "how is", "how are",
-        "check", "verify", "are you sure", "confirm", "latest on"
+        "can you",
+        "could you",
+        "please",
+        "i want to know",
+        "tell me about",
+        "what is",
+        "what are",
+        "how is",
+        "how are",
+        "check",
+        "verify",
+        "are you sure",
+        "confirm",
+        "latest on",
     ]
 
     for phrase in filler_phrases:
@@ -400,7 +504,7 @@ def normalize_topic(text: str) -> str:
     return normalized
 
 
-def should_reuse_research(prompt: str, research_state: Optional[object]) -> bool:
+def should_reuse_research(prompt: str, research_state: object | None) -> bool:
     """
     Determine if existing research should be reused.
 
@@ -414,7 +518,7 @@ def should_reuse_research(prompt: str, research_state: Optional[object]) -> bool
     if not research_state:
         return False
 
-    if not hasattr(research_state, 'used') or not research_state.used:
+    if not hasattr(research_state, "used") or not research_state.used:
         return False
 
     prompt_lower = prompt.lower().strip()
@@ -433,9 +537,16 @@ def should_reuse_research(prompt: str, research_state: Optional[object]) -> bool
 
     # Meta follow-ups always reuse (but only if NOT explicit web request)
     meta_phrases = [
-        "check again", "are you sure", "verify",
-        "check once more", "confirm", "double check", "which source",
-        "what source", "why did you search", "do you have internet"
+        "check again",
+        "are you sure",
+        "verify",
+        "check once more",
+        "confirm",
+        "double check",
+        "which source",
+        "what source",
+        "why did you search",
+        "do you have internet",
     ]
 
     for phrase in meta_phrases:
@@ -443,7 +554,7 @@ def should_reuse_research(prompt: str, research_state: Optional[object]) -> bool
             return True
 
     # Check topic match using word overlap
-    if hasattr(research_state, 'topic') and research_state.topic:
+    if hasattr(research_state, "topic") and research_state.topic:
         prompt_topic = normalize_topic(prompt)
         state_topic = normalize_topic(research_state.topic)
 
@@ -472,7 +583,7 @@ def should_reuse_research(prompt: str, research_state: Optional[object]) -> bool
     return False
 
 
-def should_search(prompt: str, research_mode: str, research_state: Optional[object] = None) -> bool:
+def should_search(prompt: str, research_mode: str, research_state: object | None = None) -> bool:
     """
     Simple decision logic for whether to perform new search.
 
@@ -528,8 +639,12 @@ STOP_WORD_QUERIES = [
     "did u check",
     "did you check",
     # Meta clarification questions (asking AI to correct itself)
-    "was that", "is that", "was it", "is it",  # "was that 2020 or 2025?"
-    "or is it", "or was it"
+    "was that",
+    "is that",
+    "was it",
+    "is it",  # "was that 2020 or 2025?"
+    "or is it",
+    "or was it",
 ]
 
 # Note: Removed "go ahead", "please do", "can't u check", "can't you check"
@@ -569,12 +684,7 @@ def is_meta_clarification(prompt: str) -> bool:
     ]
 
     # Questions asking about years/dates
-    year_clarification = [
-        "what year",
-        "which year",
-        "what is the year",
-        "what's the year"
-    ]
+    year_clarification = ["what year", "which year", "what is the year", "what's the year"]
 
     # Check clarification patterns
     for pattern in clarification_patterns:
@@ -591,11 +701,14 @@ def is_meta_clarification(prompt: str) -> bool:
 
     return False
 
+
 # Note: Removed phrases like "check again", "check more", "latest on this"
 # because they might be part of valid requests like "check for latest"
 
 
-def sanitize_query(prompt: str, research_state: Optional[object] = None, last_user_message: Optional[str] = None) -> str:
+def sanitize_query(
+    prompt: str, research_state: object | None = None, last_user_message: str | None = None
+) -> str:
     """
     Sanitize query to prevent garbage search queries.
 
@@ -615,7 +728,7 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
     # SPECIAL CASE: User wants more sources on same topic
     if wants_more_sources(prompt):
         # Return previous query to search again (get more/different sources)
-        if research_state and hasattr(research_state, 'query') and research_state.query:
+        if research_state and hasattr(research_state, "query") and research_state.query:
             return research_state.query
         # No previous query - can't get "more" of nothing
         return ""
@@ -629,7 +742,7 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
     for stop_phrase in STOP_WORD_QUERIES:
         if stop_phrase in prompt_lower:
             # Use previous query if available
-            if research_state and hasattr(research_state, 'query') and research_state.query:
+            if research_state and hasattr(research_state, "query") and research_state.query:
                 return research_state.query
             # Otherwise return empty (caller should handle)
             return ""
@@ -639,25 +752,28 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
         # Detect pure meta-commands like "check over internet", "search again", etc.
         # These have no actual query content after removing meta-words
         pure_meta_patterns = [
-            r'^(?:can|could|would|will|do|please)?\s*(?:you|u|ye)?\s*(?:please|pls)?\s*(?:check|search|look|find|get|fetch|retrieve)\s+(?:again|over|on|using|with|via|the|a|an)?\s*(?:internet|web|online|again)\s*$',
-            r'^(?:check|search|look)\s+(?:again|over|on|the)?\s*(?:internet|web|online)?\s*$',
+            r"^(?:can|could|would|will|do|please)?\s*(?:you|u|ye)?\s*(?:please|pls)?\s*(?:check|search|look|find|get|fetch|retrieve)\s+(?:again|over|on|using|with|via|the|a|an)?\s*(?:internet|web|online|again)\s*$",
+            r"^(?:check|search|look)\s+(?:again|over|on|the)?\s*(?:internet|web|online)?\s*$",
         ]
 
         import re
-        is_pure_meta = any(re.match(pattern, prompt_lower, re.IGNORECASE) for pattern in pure_meta_patterns)
+
+        is_pure_meta = any(
+            re.match(pattern, prompt_lower, re.IGNORECASE) for pattern in pure_meta_patterns
+        )
 
         if is_pure_meta:
             # Pure meta-command with no actual content - use previous user message
             if last_user_message and len(last_user_message.strip()) > 5:
                 return last_user_message.strip()
-            if research_state and hasattr(research_state, 'query') and research_state.query:
+            if research_state and hasattr(research_state, "query") and research_state.query:
                 return research_state.query
             return ""
 
         # Try to extract the actual query after meta-command phrases
         extraction_patterns = [
-            r'(?:can|could|would|will)?\s*(?:you|u|ye)\s*(?:please|pls)?\s*(?:check|search|look|find|get|fetch|retrieve)\s+(?:for|on|about|up)?\s*(.+)',
-            r'(?:do|perform)?\s*(?:a|an)?\s*(?:web|internet|online)?\s*(?:search|check|lookup)\s+(?:for|on|about)?\s*(.+)',
+            r"(?:can|could|would|will)?\s*(?:you|u|ye)\s*(?:please|pls)?\s*(?:check|search|look|find|get|fetch|retrieve)\s+(?:for|on|about|up)?\s*(.+)",
+            r"(?:do|perform)?\s*(?:a|an)?\s*(?:web|internet|online)?\s*(?:search|check|lookup)\s+(?:for|on|about)?\s*(.+)",
         ]
 
         for pattern in extraction_patterns:
@@ -678,12 +794,23 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
                 if is_system_meta:
                     if last_user_message and len(last_user_message.strip()) > 5:
                         return last_user_message.strip()
-                    if research_state and hasattr(research_state, 'query') and research_state.query:
+                    if research_state and hasattr(research_state, "query") and research_state.query:
                         return research_state.query
                     return ""
 
                 # Validate if extracted text has meaningful content
-                noise_words = {"again", "over", "on", "the", "internet", "web", "online", "using", "with", "it"}
+                noise_words = {
+                    "again",
+                    "over",
+                    "on",
+                    "the",
+                    "internet",
+                    "web",
+                    "online",
+                    "using",
+                    "with",
+                    "it",
+                }
                 extracted_words = extracted.split()
                 meaningful_words = [w for w in extracted_words if w not in noise_words]
 
@@ -691,7 +818,7 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
                 if len(meaningful_words) < 2:
                     if last_user_message and len(last_user_message.strip()) > 5:
                         return last_user_message.strip()
-                    if research_state and hasattr(research_state, 'query') and research_state.query:
+                    if research_state and hasattr(research_state, "query") and research_state.query:
                         return research_state.query
                     return ""
 
@@ -701,20 +828,71 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
         # If extraction failed but it's an explicit request with previous context, reuse
         if last_user_message and len(last_user_message.strip()) > 5:
             return last_user_message.strip()
-        if research_state and hasattr(research_state, 'query') and research_state.query:
+        if research_state and hasattr(research_state, "query") and research_state.query:
             return research_state.query
 
     # Check if prompt is mostly stop words or meta-commands
     words = prompt_lower.split()
-    stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-                  "have", "has", "had", "do", "does", "did", "will", "would", "should",
-                  "could", "can", "may", "might", "must", "shall", "you", "your", "it",
-                  "u", "pls", "plz", "please"}
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "should",
+        "could",
+        "can",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "you",
+        "your",
+        "it",
+        "u",
+        "pls",
+        "plz",
+        "please",
+    }
 
     # Meta-command words that don't constitute a real query
-    meta_words = {"check", "verify", "search", "look", "find", "confirm", "recheck",
-                  "internet", "online", "web", "up", "again", "once", "over",
-                  "on", "the", "this", "that", "it", "now", "go", "ahead"}
+    meta_words = {
+        "check",
+        "verify",
+        "search",
+        "look",
+        "find",
+        "confirm",
+        "recheck",
+        "internet",
+        "online",
+        "web",
+        "up",
+        "again",
+        "once",
+        "over",
+        "on",
+        "the",
+        "this",
+        "that",
+        "it",
+        "now",
+        "go",
+        "ahead",
+    }
 
     # Filter out stop words
     meaningful_words = [w for w in words if w not in stop_words]
@@ -725,7 +903,7 @@ def sanitize_query(prompt: str, research_state: Optional[object] = None, last_us
     # If < 2 non-meta words, this is likely a meta-command, not a real query
     if len(non_meta_words) < 2:
         # Use previous query if available
-        if research_state and hasattr(research_state, 'query') and research_state.query:
+        if research_state and hasattr(research_state, "query") and research_state.query:
             return research_state.query
         # Otherwise return empty (caller should handle)
         return ""

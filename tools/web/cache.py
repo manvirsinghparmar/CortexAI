@@ -1,8 +1,9 @@
 """Thread-safe TTL cache for research results."""
+
 import hashlib
 import threading
-from typing import Optional, Any, Dict, Tuple
 from datetime import datetime, timedelta
+from typing import Any
 
 
 class InMemoryTTLCache:
@@ -20,7 +21,7 @@ class InMemoryTTLCache:
         Args:
             ttl_seconds: Time to live in seconds for cached entries
         """
-        self._cache: Dict[str, Tuple[Any, datetime]] = {}
+        self._cache: dict[str, tuple[Any, datetime]] = {}
         self._lock = threading.Lock()  # Required for FastAPI concurrency
         self._ttl = timedelta(seconds=ttl_seconds)
 
@@ -28,7 +29,7 @@ class InMemoryTTLCache:
         """Generate cache key from text using sha256 hash."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
-    def get(self, text: str) -> Optional[Any]:
+    def get(self, text: str) -> Any | None:
         """
         Get cached value if exists and not expired.
 

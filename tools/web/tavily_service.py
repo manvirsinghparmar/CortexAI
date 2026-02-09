@@ -1,11 +1,12 @@
 """Tavily-based research service - replaces Brave Search + extractor pipeline."""
-from typing import Optional
-from .contracts import ResearchContext, SourceDoc
-from .tavily_client import TavilyResearchClient
-from .cache import InMemoryTTLCache
-from .research_pack import build_injected_text
-from .intent import rewrite_query
+
 from utils.logger import get_logger
+
+from .cache import InMemoryTTLCache
+from .contracts import ResearchContext
+from .intent import rewrite_query
+from .research_pack import build_injected_text
+from .tavily_client import TavilyResearchClient
 
 logger = get_logger(__name__)
 
@@ -18,12 +19,7 @@ class TavilyResearchService:
     Implements same interface as ResearchService for drop-in compatibility.
     """
 
-    def __init__(
-        self,
-        api_key: str,
-        cache: InMemoryTTLCache,
-        max_sources: int = 5
-    ):
+    def __init__(self, api_key: str, cache: InMemoryTTLCache, max_sources: int = 5):
         """
         Initialize Tavily research service.
 
@@ -67,15 +63,13 @@ class TavilyResearchService:
             sources = self.client.search(
                 query=search_query,
                 max_results=self.max_sources,
-                search_depth="advanced"  # Use advanced for better quality
+                search_depth="advanced",  # Use advanced for better quality
             )
 
             if not sources:
                 logger.warning("❌ No sources found from Tavily")
                 return ResearchContext(
-                    used=False,
-                    error="no_search_results",
-                    search_query=search_query
+                    used=False, error="no_search_results", search_query=search_query
                 )
 
             # Build injection text
@@ -87,7 +81,7 @@ class TavilyResearchService:
                 injected_text=injected_text,
                 sources=sources,
                 cache_hit=False,
-                search_query=search_query
+                search_query=search_query,
             )
 
             # Cache the result
@@ -98,8 +92,4 @@ class TavilyResearchService:
 
         except Exception as e:
             logger.error(f"❌ Tavily research failed: {e}", exc_info=True)
-            return ResearchContext(
-                used=False,
-                error=str(e),
-                search_query=prompt
-            )
+            return ResearchContext(used=False, error=str(e), search_query=prompt)

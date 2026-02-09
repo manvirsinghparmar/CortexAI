@@ -1,9 +1,9 @@
 """Build citation-formatted research injection text."""
-from typing import List
+
 from .contracts import SourceDoc
 
 
-def build_injected_text(sources: List[SourceDoc]) -> str:
+def build_injected_text(sources: list[SourceDoc]) -> str:
     """
     Build citation-formatted injection text for LLM context with STRONG grounding instructions.
 
@@ -29,7 +29,7 @@ def build_injected_text(sources: List[SourceDoc]) -> str:
         "=" * 80,
         "WEB RESEARCH SOURCES:",
         "=" * 80,
-        ""
+        "",
     ]
 
     for source in sources:
@@ -42,7 +42,9 @@ def build_injected_text(sources: List[SourceDoc]) -> str:
         lines.append("")
 
     lines.append("=" * 80)
-    lines.append("REMINDER: Answer using ONLY the information above. Cite sources as [1][2][3] (consecutive brackets).")
+    lines.append(
+        "REMINDER: Answer using ONLY the information above. Cite sources as [1][2][3] (consecutive brackets)."
+    )
     lines.append("=" * 80)
 
     return "\n".join(lines)

@@ -1,6 +1,7 @@
 """Thread-safe in-memory store for ResearchState objects."""
+
 import threading
-from typing import Optional, Dict
+
 from .research_state import ResearchState
 
 
@@ -15,9 +16,9 @@ class ResearchStateStore:
     def __init__(self):
         """Initialize store with thread lock and session dict."""
         self._lock = threading.Lock()
-        self._sessions: Dict[str, ResearchState] = {}
+        self._sessions: dict[str, ResearchState] = {}
 
-    def get(self, session_id: str) -> Optional[ResearchState]:
+    def get(self, session_id: str) -> ResearchState | None:
         """
         Get research state for a session.
 

@@ -6,8 +6,9 @@ It only reflects the schema into SQLAlchemy Table objects for querying.
 """
 
 import os
-from typing import Dict
+
 from sqlalchemy import MetaData, Table
+
 from db.engine import get_engine
 
 # Import logger
@@ -23,7 +24,7 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "public")
 metadata = MetaData()
 
 # Table cache for lazy loading
-_tables_cache: Dict[str, Table] = {}
+_tables_cache: dict[str, Table] = {}
 
 # All table names in the database
 TABLE_NAMES = [
@@ -57,7 +58,8 @@ def reflect_table(table_name: str) -> Table:
     """
     try:
         logger.debug(f"Reflecting table: {table_name} from schema: {DB_SCHEMA}")
-    except:
+    except Exception as exc:
+        logger.debug("Failed to reflect table", exc_info=exc)
         pass
 
     table = Table(
@@ -85,14 +87,13 @@ def get_table(name: str) -> Table:
     """
     if name not in TABLE_NAMES:
         raise ValueError(
-            f"Unknown table name: {name}. "
-            f"Available tables: {', '.join(TABLE_NAMES)}"
+            f"Unknown table name: {name}. " f"Available tables: {', '.join(TABLE_NAMES)}"
         )
 
     if name not in _tables_cache:
         try:
             _tables_cache[name] = reflect_table(name)
-        except Exception as e:
+        except Exception:
             logger.error(
                 f"Failed to reflect table {name}. "
                 f"Ensure DATABASE_URL is correct and table exists in PostgreSQL."
@@ -128,6 +129,5 @@ try:
     logger.info(f"Successfully reflected {len(_critical_tables)} critical tables")
 except Exception as e:
     logger.warning(
-        f"Could not pre-load critical tables: {e}. "
-        f"Tables will be loaded on first use."
+        f"Could not pre-load critical tables: {e}. " f"Tables will be loaded on first use."
     )

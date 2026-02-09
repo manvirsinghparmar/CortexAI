@@ -7,8 +7,8 @@ Can load conversation history from database for session continuity.
 """
 
 import os
-from typing import List, Dict, Optional
 from uuid import UUID
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,7 +27,7 @@ class ConversationManager:
     - Thread-safe for single-threaded CLI usage
     """
 
-    def __init__(self, max_messages: Optional[int] = None, system_prompt: Optional[str] = None, db=None):
+    def __init__(self, max_messages: int | None = None, system_prompt: str | None = None, db=None):
         """
         Initialize ConversationManager.
 
@@ -38,20 +38,24 @@ class ConversationManager:
             db: Optional database session for loading history from DB.
         """
         if max_messages is None:
-            max_messages = int(os.getenv('MAX_CONTEXT_MESSAGES', '20'))
+            max_messages = int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
 
         self.max_messages = max_messages
         self.system_prompt = system_prompt
-        self.messages: List[Dict[str, str]] = []
+        self.messages: list[dict[str, str]] = []
         self.db = db
-        self.session_id: Optional[UUID] = None
+        self.session_id: UUID | None = None
 
         # Add system prompt if provided
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
-            logger.info(f"Initialized ConversationManager with system prompt (max_messages={max_messages})")
+            logger.info(
+                f"Initialized ConversationManager with system prompt (max_messages={max_messages})"
+            )
         else:
-            logger.info(f"Initialized ConversationManager without system prompt (max_messages={max_messages})")
+            logger.info(
+                f"Initialized ConversationManager without system prompt (max_messages={max_messages})"
+            )
 
     def add_user(self, text: str) -> None:
         """
@@ -101,7 +105,7 @@ class ConversationManager:
         logger.debug(f"Added system message (total messages: {len(self.messages)})")
         self._auto_trim()
 
-    def get_messages(self) -> List[Dict[str, str]]:
+    def get_messages(self) -> list[dict[str, str]]:
         """
         Get all messages in the conversation.
 
@@ -110,7 +114,7 @@ class ConversationManager:
         """
         return self.messages.copy()
 
-    def pop_last_user(self) -> Optional[Dict[str, str]]:
+    def pop_last_user(self) -> dict[str, str] | None:
         """
         Remove and return the most recent user message.
 
@@ -170,7 +174,9 @@ class ConversationManager:
         recent_messages = self.messages[-last_n:] if last_n < len(self.messages) else self.messages
 
         lines = []
-        lines.append(f"=== Conversation History (showing last {len(recent_messages)} of {len(self.messages)} messages) ===")
+        lines.append(
+            f"=== Conversation History (showing last {len(recent_messages)} of {len(self.messages)} messages) ==="
+        )
 
         for i, msg in enumerate(recent_messages, 1):
             role = msg["role"].upper()
@@ -202,11 +208,16 @@ class ConversationManager:
 
             # Remove oldest messages (after system prompt)
             if has_system:
-                self.messages = [self.messages[0]] + self.messages[system_offset + to_remove:]
+                self.messages = [
+                    self.messages[0],
+                    *self.messages[system_offset + to_remove :],
+                ]
             else:
                 self.messages = self.messages[to_remove:]
 
-            logger.info(f"Auto-trimmed conversation: removed {to_remove} old messages (current: {len(self.messages)})")
+            logger.info(
+                f"Auto-trimmed conversation: removed {to_remove} old messages (current: {len(self.messages)})"
+            )
 
     def set_session(self, session_id: UUID, db) -> None:
         """
@@ -248,7 +259,9 @@ class ConversationManager:
             for msg in messages:
                 self.messages.append({"role": msg["role"], "content": msg["content"]})
 
-            logger.info(f"Loaded {len(messages)} messages from database for session {self.session_id}")
+            logger.info(
+                f"Loaded {len(messages)} messages from database for session {self.session_id}"
+            )
 
         except Exception as e:
             logger.error(f"Failed to load conversation history from database: {e}")

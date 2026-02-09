@@ -1,8 +1,9 @@
 """ResearchState dataclass for stateful research memory."""
+
+import hashlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Literal
-import hashlib
+from typing import Any, Literal
 
 ResearchMode = Literal["off", "auto", "on"]
 Decision = Literal["skip", "reuse", "search"]
@@ -11,6 +12,7 @@ Decision = Literal["skip", "reuse", "search"]
 @dataclass(frozen=True)
 class ResearchSource:
     """Immutable research source with citation info."""
+
     id: int
     title: str
     url: str
@@ -34,22 +36,23 @@ class ResearchState:
     - cache_hit: whether result was cached
     - error: optional error message
     """
+
     topic: str  # canonical topic
     query: str  # search query used
     injected_text: str  # system injection text
-    sources: List[ResearchSource] = field(default_factory=list)
+    sources: list[ResearchSource] = field(default_factory=list)
     created_at: str = ""  # ISO 8601 timestamp
     last_used_at: str = ""  # ISO 8601 timestamp
     used: bool = False
     cache_hit: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
     # Additional fields for compatibility
     session_id: str = "default"
     mode: ResearchMode = "auto"
     ttl_seconds: int = 900  # 15 minutes default
 
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
+    def is_expired(self, now: datetime | None = None) -> bool:
         """
         Check if research state is expired based on TTL.
 
@@ -64,7 +67,7 @@ class ResearchState:
 
         now = now or datetime.now(timezone.utc)
         try:
-            last_used = datetime.fromisoformat(self.last_used_at.replace('Z', '+00:00'))
+            last_used = datetime.fromisoformat(self.last_used_at.replace("Z", "+00:00"))
             elapsed = (now - last_used).total_seconds()
             return elapsed > self.ttl_seconds
         except (ValueError, AttributeError):
@@ -82,7 +85,7 @@ class ResearchState:
 
         return replace(self, **kwargs)
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Convert to metadata dict for UnifiedResponse.metadata merge.
 
@@ -95,14 +98,9 @@ class ResearchState:
             "research_topic": self.topic if self.topic else None,
             "research_error": self.error,
             "sources": [
-                {
-                    "id": s.id,
-                    "title": s.title,
-                    "url": s.url,
-                    "fetched_at": s.fetched_at
-                }
+                {"id": s.id, "title": s.title, "url": s.url, "fetched_at": s.fetched_at}
                 for s in self.sources
-            ]
+            ],
         }
 
 
@@ -121,9 +119,7 @@ def compute_topic_key(text: str) -> str:
 
 
 def create_initial_state(
-    session_id: str,
-    mode: ResearchMode = "auto",
-    ttl_seconds: int = 900
+    session_id: str, mode: ResearchMode = "auto", ttl_seconds: int = 900
 ) -> ResearchState:
     """
     Create a new initial ResearchState.
@@ -149,5 +145,5 @@ def create_initial_state(
         error=None,
         session_id=session_id,
         mode=mode,
-        ttl_seconds=ttl_seconds
+        ttl_seconds=ttl_seconds,
     )

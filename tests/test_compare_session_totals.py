@@ -7,8 +7,9 @@ when responses came from different providers with different pricing.
 Fix: Session totals now sum estimated_cost and total_tokens directly from
 UnifiedResponse objects, which already have correct per-provider costs.
 """
-from models.unified_response import UnifiedResponse, TokenUsage
+
 from models.multi_unified_response import MultiUnifiedResponse
+from models.unified_response import TokenUsage, UnifiedResponse
 
 
 def test_compare_session_totals_from_responses():
@@ -24,7 +25,7 @@ def test_compare_session_totals_from_responses():
         estimated_cost=0.001,
         finish_reason="stop",
         error=None,
-        metadata={}
+        metadata={},
     )
     resp2 = UnifiedResponse(
         request_id="2",
@@ -36,7 +37,7 @@ def test_compare_session_totals_from_responses():
         estimated_cost=0.0005,
         finish_reason="stop",
         error=None,
-        metadata={}
+        metadata={},
     )
 
     multi = MultiUnifiedResponse(responses=(resp1, resp2))

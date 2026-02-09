@@ -6,8 +6,10 @@ CRITICAL: Session factory must NOT call get_engine() at import time.
 Engine binding happens lazily when first session is created.
 """
 
-from typing import Generator, Callable
-from sqlalchemy.orm import sessionmaker, Session
+from collections.abc import Callable, Generator
+
+from sqlalchemy.orm import Session, sessionmaker
+
 from db.engine import get_engine
 
 

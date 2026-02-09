@@ -1,10 +1,12 @@
-import openai
 import time
-from typing import Optional
-from .base_client import BaseAIClient
-from models.unified_response import UnifiedResponse, TokenUsage
+
+import openai
+
+from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
+
+from .base_client import BaseAIClient
 
 logger = get_logger(__name__)
 
@@ -30,20 +32,17 @@ class DeepSeekClient(BaseAIClient):
             **kwargs: Additional keyword arguments
         """
         super().__init__(api_key, model_name=model_name, **kwargs)
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com/v1"
-        )
+        self.client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         self.model_name = model_name
-        self.cost_calculator = CostCalculator(model_type='deepseek', model_name=model_name)
+        self.cost_calculator = CostCalculator(model_type="deepseek", model_name=model_name)
 
     def get_completion(
         self,
-        prompt: Optional[str] = None,
+        prompt: str | None = None,
         *,
-        messages: Optional[list] = None,
+        messages: list | None = None,
         save_full: bool = False,
-        **kwargs
+        **kwargs,
     ) -> UnifiedResponse:
         """
         Get a completion from the DeepSeek API.
@@ -65,9 +64,9 @@ class DeepSeekClient(BaseAIClient):
         request_id = self._generate_request_id()
         start_time = time.time()
 
-        model = kwargs.get('model', self.model_name)
-        temperature = kwargs.get('temperature', 0.7)
-        max_tokens = kwargs.get('max_tokens', 2048)
+        model = kwargs.get("model", self.model_name)
+        temperature = kwargs.get("temperature", 0.7)
+        max_tokens = kwargs.get("max_tokens", 2048)
 
         try:
             # Normalize input to messages format
@@ -77,7 +76,7 @@ class DeepSeekClient(BaseAIClient):
                 model=model,
                 messages=normalized_messages,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
             )
 
             latency_ms = self._measure_latency(start_time)
@@ -87,22 +86,22 @@ class DeepSeekClient(BaseAIClient):
 
             # Extract token usage
             token_usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens if hasattr(response, 'usage') else 0,
-                completion_tokens=response.usage.completion_tokens if hasattr(response, 'usage') else 0,
-                total_tokens=response.usage.total_tokens if hasattr(response, 'usage') else 0
+                prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
+                completion_tokens=(
+                    response.usage.completion_tokens if hasattr(response, "usage") else 0
+                ),
+                total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
             )
 
             # Calculate cost
             cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens,
-                token_usage.completion_tokens
+                token_usage.prompt_tokens, token_usage.completion_tokens
             )
-            estimated_cost = cost['total_cost']
+            estimated_cost = cost["total_cost"]
 
             # Normalize finish reason
             finish_reason = self._normalize_finish_reason(
-                response.choices[0].finish_reason if response.choices else None,
-                provider='deepseek'
+                response.choices[0].finish_reason if response.choices else None, provider="deepseek"
             )
 
             # Build raw response if requested
@@ -118,28 +117,34 @@ class DeepSeekClient(BaseAIClient):
                             "index": choice.index,
                             "message": {
                                 "role": choice.message.role,
-                                "content": choice.message.content
+                                "content": choice.message.content,
                             },
-                            "finish_reason": choice.finish_reason
+                            "finish_reason": choice.finish_reason,
                         }
                         for choice in response.choices
                     ],
-                    "usage": {
-                        "prompt_tokens": response.usage.prompt_tokens,
-                        "completion_tokens": response.usage.completion_tokens,
-                        "total_tokens": response.usage.total_tokens
-                    } if hasattr(response, 'usage') else None
+                    "usage": (
+                        {
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "completion_tokens": response.usage.completion_tokens,
+                            "total_tokens": response.usage.total_tokens,
+                        }
+                        if hasattr(response, "usage")
+                        else None
+                    ),
                 }
 
             logger.info(
                 "DeepSeek completion successful",
-                extra={"extra_fields": {
-                    "request_id": request_id,
-                    "model": model,
-                    "latency_ms": latency_ms,
-                    "tokens": token_usage.total_tokens,
-                    "cost": estimated_cost
-                }}
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "model": model,
+                        "latency_ms": latency_ms,
+                        "tokens": token_usage.total_tokens,
+                        "cost": estimated_cost,
+                    }
+                },
             )
 
             return UnifiedResponse(
@@ -153,29 +158,28 @@ class DeepSeekClient(BaseAIClient):
                 finish_reason=finish_reason,
                 error=None,
                 metadata={},
-                raw=raw
+                raw=raw,
             )
 
         except Exception as e:
             latency_ms = self._measure_latency(start_time)
-            error = self._normalize_error(e, provider='deepseek')
+            error = self._normalize_error(e, provider="deepseek")
 
             logger.error(
                 f"DeepSeek completion failed: {error.code}",
-                extra={"extra_fields": {
-                    "request_id": request_id,
-                    "model": model,
-                    "error_code": error.code,
-                    "error_message": error.message,
-                    "retryable": error.retryable
-                }}
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "model": model,
+                        "error_code": error.code,
+                        "error_message": error.message,
+                        "retryable": error.retryable,
+                    }
+                },
             )
 
             return self._create_error_response(
-                request_id=request_id,
-                error=error,
-                latency_ms=latency_ms,
-                model=model
+                request_id=request_id, error=error, latency_ms=latency_ms, model=model
             )
 
     @classmethod
@@ -194,18 +198,20 @@ class DeepSeekClient(BaseAIClient):
                 print("API key not provided. Cannot list available models.")
                 return
 
-            client = openai.OpenAI(
-                api_key=api_key,
-                base_url="https://api.deepseek.com/v1"
-            )
-            current_model = kwargs.get('current_model', 'deepseek-chat')
+            client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+            current_model = kwargs.get("current_model", "deepseek-chat")
 
             # Get the list of available models
             models = client.models.list()
 
             logger.info(
                 "Listed available DeepSeek models",
-                extra={"extra_fields": {"model_count": len(models.data), "current_model": current_model}}
+                extra={
+                    "extra_fields": {
+                        "model_count": len(models.data),
+                        "current_model": current_model,
+                    }
+                },
             )
 
             print("\n=== Available DeepSeek Models ===")
@@ -222,7 +228,7 @@ class DeepSeekClient(BaseAIClient):
 
         except Exception as e:
             logger.error(
-                f"Error listing available DeepSeek models: {str(e)}",
-                extra={"extra_fields": {"error_type": type(e).__name__}}
+                f"Error listing available DeepSeek models: {e!s}",
+                extra={"extra_fields": {"error_type": type(e).__name__}},
             )
-            print(f"Error listing available models: {str(e)}")
+            print(f"Error listing available models: {e!s}")

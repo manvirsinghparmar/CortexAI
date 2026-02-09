@@ -23,7 +23,7 @@ def validate_and_trim_context(context_req):
     if total_chars > MAX_CONTEXT_CHARS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Conversation history exceeds {MAX_CONTEXT_CHARS} characters"
+            detail=f"Conversation history exceeds {MAX_CONTEXT_CHARS} characters",
         )
 
     context_req.conversation_history = history

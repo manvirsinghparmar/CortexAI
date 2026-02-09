@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """FastAPI server entry point for CortexAI."""
 
-import os
 import uvicorn
 from dotenv import load_dotenv
 
@@ -23,5 +22,5 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         reload=args.reload,
-        log_level="info"
+        log_level="info",
     )

@@ -5,13 +5,15 @@ These tests validate that all provider clients adhere to the "locked" UnifiedRes
 All clients must return UnifiedResponse, handle errors gracefully, and never expose provider-specific fields.
 """
 
-import pytest
 from unittest.mock import Mock, patch
-from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
-from api.openai_client import OpenAIClient
+
+import pytest
+
 from api.deepseek_client import DeepSeekClient
-from api.grok_client import GrokClient
 from api.google_gemini_client import GeminiClient
+from api.grok_client import GrokClient
+from api.openai_client import OpenAIClient
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 
 
 class TestUnifiedResponseContract:
@@ -28,7 +30,7 @@ class TestUnifiedResponseContract:
             token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
             estimated_cost=0.001,
             finish_reason="stop",
-            error=None
+            error=None,
         )
 
         assert response.request_id == "test-123"
@@ -46,10 +48,7 @@ class TestUnifiedResponseContract:
     def test_unified_response_with_error(self):
         """Test that UnifiedResponse can represent errors correctly."""
         error = NormalizedError(
-            code="timeout",
-            message="Request timed out",
-            provider="test",
-            retryable=True
+            code="timeout", message="Request timed out", provider="test", retryable=True
         )
 
         response = UnifiedResponse(
@@ -61,7 +60,7 @@ class TestUnifiedResponseContract:
             token_usage=TokenUsage(),
             estimated_cost=0.0,
             finish_reason="error",
-            error=error
+            error=error,
         )
 
         assert response.is_error
@@ -97,7 +96,7 @@ class TestUnifiedResponseContract:
             latency_ms=100,
             token_usage=TokenUsage(),
             estimated_cost=0.0,
-            finish_reason="stop"
+            finish_reason="stop",
         )
         assert response.finish_reason == "stop"
 
@@ -110,7 +109,7 @@ class TestUnifiedResponseContract:
             latency_ms=100,
             token_usage=TokenUsage(),
             estimated_cost=0.0,
-            finish_reason="invalid_reason"
+            finish_reason="invalid_reason",
         )
         assert response.finish_reason is None
 
@@ -118,7 +117,7 @@ class TestUnifiedResponseContract:
 class TestProviderContractCompliance:
     """Test that all provider clients return UnifiedResponse."""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_openai_returns_unified_response(self, mock_openai):
         """Test that OpenAI client returns UnifiedResponse."""
         # Mock successful response
@@ -140,7 +139,7 @@ class TestProviderContractCompliance:
         assert response.error is None
         assert response.is_success
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_openai_handles_errors_gracefully(self, mock_openai):
         """Test that OpenAI client returns UnifiedResponse with error on exception."""
         # Mock exception
@@ -153,11 +152,18 @@ class TestProviderContractCompliance:
         assert isinstance(response, UnifiedResponse)
         assert response.is_error
         assert response.error is not None
-        assert response.error.code in ["timeout", "auth", "rate_limit", "bad_request", "provider_error", "unknown"]
+        assert response.error.code in [
+            "timeout",
+            "auth",
+            "rate_limit",
+            "bad_request",
+            "provider_error",
+            "unknown",
+        ]
         assert response.finish_reason == "error"
         assert response.text == ""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_deepseek_returns_unified_response(self, mock_openai):
         """Test that DeepSeek client returns UnifiedResponse."""
         # Mock successful response
@@ -173,7 +179,7 @@ class TestProviderContractCompliance:
         assert response.provider == "deepseek"
         assert response.is_success
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_grok_returns_unified_response(self, mock_openai):
         """Test that Grok client returns UnifiedResponse."""
         # Mock successful response
@@ -189,16 +195,14 @@ class TestProviderContractCompliance:
         assert response.provider == "grok"
         assert response.is_success
 
-    @patch('genai.Client')
+    @patch("google.genai.Client")
     def test_gemini_returns_unified_response(self, mock_genai):
         """Test that Gemini client returns UnifiedResponse."""
         # Mock successful response
         mock_response = Mock()
         mock_response.text = "Test response"
         mock_response.usage_metadata = Mock(
-            prompt_token_count=10,
-            candidates_token_count=20,
-            total_token_count=30
+            prompt_token_count=10, candidates_token_count=20, total_token_count=30
         )
         mock_response.candidates = [Mock(finish_reason="STOP")]
         mock_genai.return_value.models.generate_content.return_value = mock_response
@@ -215,10 +219,12 @@ class TestProviderContractCompliance:
 class TestErrorHandlingContract:
     """Test that errors are handled according to contract."""
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_timeout_error_normalized(self, mock_openai):
         """Test that timeout errors are properly normalized."""
-        mock_openai.return_value.chat.completions.create.side_effect = Exception("Request timed out")
+        mock_openai.return_value.chat.completions.create.side_effect = Exception(
+            "Request timed out"
+        )
 
         client = OpenAIClient(api_key="test-key")
         response = client.get_completion("Test")
@@ -227,7 +233,7 @@ class TestErrorHandlingContract:
         assert response.error.code == "timeout"
         assert response.error.retryable is True
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_auth_error_normalized(self, mock_openai):
         """Test that auth errors are properly normalized."""
         mock_openai.return_value.chat.completions.create.side_effect = Exception("401 Unauthorized")
@@ -239,10 +245,12 @@ class TestErrorHandlingContract:
         assert response.error.code == "auth"
         assert response.error.retryable is False
 
-    @patch('openai.OpenAI')
+    @patch("openai.OpenAI")
     def test_rate_limit_error_normalized(self, mock_openai):
         """Test that rate limit errors are properly normalized."""
-        mock_openai.return_value.chat.completions.create.side_effect = Exception("429 Too Many Requests")
+        mock_openai.return_value.chat.completions.create.side_effect = Exception(
+            "429 Too Many Requests"
+        )
 
         client = OpenAIClient(api_key="test-key")
         response = client.get_completion("Test")
@@ -266,7 +274,7 @@ class TestTokenTrackerIntegration:
             model="test",
             latency_ms=100,
             token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
-            estimated_cost=0.001
+            estimated_cost=0.001,
         )
 
         tracker = TokenTracker()
@@ -281,11 +289,7 @@ class TestTokenTrackerIntegration:
         """Test that TokenTracker still accepts dicts for backward compatibility."""
         from utils.token_tracker import TokenTracker
 
-        usage_dict = {
-            'prompt_tokens': 50,
-            'completion_tokens': 100,
-            'total_tokens': 150
-        }
+        usage_dict = {"prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150}
 
         tracker = TokenTracker()
         tracker.update(usage_dict)

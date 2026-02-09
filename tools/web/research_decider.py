@@ -1,19 +1,19 @@
 """Decision logic for when to skip/reuse/search research."""
-from typing import Optional, Tuple
-from .research_state import ResearchState, ResearchMode, Decision
+
+from .research_state import Decision, ResearchMode, ResearchState
 
 
 def decide_research(
     prompt: str,
     mode: ResearchMode,
     *,
-    state: Optional[ResearchState],
+    state: ResearchState | None,
     is_meta_followup: bool,
     is_same_topic_followup: bool,
     needs_web: bool,
     topic_key: str,
-    is_explicit_web_request: bool
-) -> Tuple[Decision, str]:
+    is_explicit_web_request: bool,
+) -> tuple[Decision, str]:
     """
     Determine whether to skip, reuse, or perform new research.
 

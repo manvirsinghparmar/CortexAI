@@ -1,0 +1,42 @@
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+exclude = '''
+/(
+  \.venv
+  | build
+  | dist
+  | htmlcov
+  | \.pytest_cache
+  | \.mypy_cache
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+exclude = [".venv", "build", "dist", "htmlcov"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "UP", "RUF"]
+ignore = [
+  "E402",   # imports in entry points / tests
+  "E731",   # lambda assignment (orchestrator refactor later)
+  "B008",   # FastAPI Depends
+  "RUF012", # ClassVar for config constants
+  "RUF013", # implicit Optional
+  "UP045",  # X | None typing
+  "SIM102",
+  "SIM103",
+  "SIM105",
+  "SIM110",
+  "E501",
+]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+exclude = "(^\\.venv/|^build/|^dist/|^htmlcov/)"

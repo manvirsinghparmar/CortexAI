@@ -7,31 +7,42 @@ Key guarantees:
 - TokenTracker updates happen here (business layer)
 """
 
-import os
-import uuid
 import hashlib
+import os
 import threading
+import uuid
 from dataclasses import replace
-from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
+from typing import Any
 
 from api.base_client import BaseAIClient
-from models.unified_response import UnifiedResponse, MultiUnifiedResponse, NormalizedError, TokenUsage
+from models.unified_response import (
+    MultiUnifiedResponse,
+    NormalizedError,
+    TokenUsage,
+    UnifiedResponse,
+)
 from models.user_context import UserContext
-from utils.token_tracker import TokenTracker
-from utils.cost_calculator import CostCalculator
-from utils.logger import get_logger
-from utils.prompt_optimizer import PromptOptimizer
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
-    should_use_web, is_followup_meta, is_same_topic_followup, rewrite_query,
-    is_explicit_web_request, is_meta_followup, is_short_year_followup,
-    build_anchored_query, should_reuse_research, should_search,
-    sanitize_query, normalize_topic, wants_more_sources, is_meta_clarification
+    is_explicit_web_request,
+    normalize_topic,
+    sanitize_query,
+    should_reuse_research,
+    should_search,
+    wants_more_sources,
+)
+from tools.web.research_state import (
+    ResearchSource,
+    ResearchState,
+    create_initial_state,
 )
 from tools.web.session_state import get_session_store
-from tools.web.research_state import ResearchState, ResearchSource, create_initial_state, compute_topic_key
+from utils.cost_calculator import CostCalculator
+from utils.logger import get_logger
+from utils.prompt_optimizer import PromptOptimizer
+from utils.token_tracker import TokenTracker
 
 logger = get_logger(__name__)
 
@@ -39,15 +50,15 @@ logger = get_logger(__name__)
 class CortexOrchestrator:
     def __init__(self):
         self._multi_orchestrator = MultiModelOrchestrator()
-        self._client_cache: Dict[str, BaseAIClient] = {}
-        self._research_states: Dict[str, Any] = {}  # session_id -> ResearchState
+        self._client_cache: dict[str, BaseAIClient] = {}
+        self._research_states: dict[str, Any] = {}  # session_id -> ResearchState
         self._research_lock = threading.Lock()  # thread-safe access to states
 
         # Initialize prompt optimizer (optional - controlled by env var)
         self._prompt_optimizer = None
-        if os.getenv('ENABLE_PROMPT_OPTIMIZATION', 'false').lower() == 'true':
+        if os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true":
             try:
-                provider = os.getenv('PROMPT_OPTIMIZER_PROVIDER', 'gemini')
+                provider = os.getenv("PROMPT_OPTIMIZER_PROVIDER", "gemini")
                 self._prompt_optimizer = PromptOptimizer(provider=provider)
                 logger.info(f"Prompt optimizer initialized with provider: {provider}")
             except Exception as e:
@@ -74,7 +85,7 @@ class CortexOrchestrator:
         message: str,
         code: str = "unknown",
         retryable: bool = False,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id=str(uuid.uuid4()),
@@ -94,7 +105,7 @@ class CortexOrchestrator:
             ),
         )
 
-    def _get_client(self, model_type: str, model_name: Optional[str] = None) -> BaseAIClient:
+    def _get_client(self, model_type: str, model_name: str | None = None) -> BaseAIClient:
         model_type = (model_type or "").lower().strip()
         cache_key = f"{model_type}:{model_name or 'default'}"
         if cache_key in self._client_cache:
@@ -102,6 +113,7 @@ class CortexOrchestrator:
 
         if model_type == "openai":
             from api.openai_client import OpenAIClient
+
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OPENAI_API_KEY not found in environment variables")
@@ -110,6 +122,7 @@ class CortexOrchestrator:
 
         elif model_type == "gemini":
             from api.google_gemini_client import GeminiClient
+
             api_key = os.getenv("GOOGLE_GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GOOGLE_GEMINI_API_KEY not found in environment variables")
@@ -118,6 +131,7 @@ class CortexOrchestrator:
 
         elif model_type == "deepseek":
             from api.deepseek_client import DeepSeekClient
+
             api_key = os.getenv("DEEPSEEK_API_KEY")
             if not api_key:
                 raise ValueError("DEEPSEEK_API_KEY not found in environment variables")
@@ -126,6 +140,7 @@ class CortexOrchestrator:
 
         elif model_type == "grok":
             from api.grok_client import GrokClient
+
             api_key = os.getenv("GROK_API_KEY")
             if not api_key:
                 raise ValueError("GROK_API_KEY not found in environment variables")
@@ -142,7 +157,7 @@ class CortexOrchestrator:
         )
         return client
 
-    def _build_messages(self, prompt: str, context: Optional[UserContext]) -> List[Dict[str, str]]:
+    def _build_messages(self, prompt: str, context: UserContext | None) -> list[dict[str, str]]:
         # Build base system instruction (ALWAYS injected first)
         system_instruction = {
             "role": "system",
@@ -203,17 +218,17 @@ OTHER IMPORTANT RULES:
   If sources aren't shown above, try rephrasing with time indicators like 'latest', 'recent', '2025', 'last year'."
 • You DO have internet access (via system-provided sources) - never claim otherwise
 
-These rules prevent misinformation. Follow them carefully."""
+These rules prevent misinformation. Follow them carefully.""",
         }
 
         if context and context.conversation_history:
             msgs = context.get_messages()
             msgs.append({"role": "user", "content": prompt})
             # Inject system instruction at the beginning
-            return [system_instruction] + msgs
+            return [system_instruction, *msgs]
         return [system_instruction, {"role": "user", "content": prompt}]
 
-    def _generate_session_id(self, messages: List[Dict[str, str]]) -> str:
+    def _generate_session_id(self, messages: list[dict[str, str]]) -> str:
         """
         Generate session ID from conversation history.
 
@@ -235,7 +250,7 @@ These rules prevent misinformation. Follow them carefully."""
         session_hash = hashlib.sha256(history_str.encode()).hexdigest()[:16]
         return f"session_{session_hash}"
 
-    def _get_session_id(self, context: Optional[UserContext], messages: List[Dict[str, str]]) -> str:
+    def _get_session_id(self, context: UserContext | None, messages: list[dict[str, str]]) -> str:
         """
         Get session ID from context or generate from messages.
 
@@ -246,14 +261,14 @@ These rules prevent misinformation. Follow them carefully."""
         Returns:
             Session ID string
         """
-        if context and hasattr(context, 'session_id') and context.session_id:
+        if context and hasattr(context, "session_id") and context.session_id:
             return context.session_id
         return self._generate_session_id(messages)
 
     def _optimize_prompt_if_enabled(self, prompt: str) -> tuple[str, dict]:
         """
         Optimize prompt if optimization is enabled.
-        
+
         Returns:
             tuple: (optimized_prompt, metadata)
             - If optimization disabled/fails: returns (original_prompt, {})
@@ -261,25 +276,25 @@ These rules prevent misinformation. Follow them carefully."""
         """
         if not self._prompt_optimizer:
             return prompt, {}
-        
+
         try:
             result = self._prompt_optimizer.optimize_prompt({"prompt": prompt})
-            
-            if "error" in result and result["error"]:
+
+            if result.get("error"):
                 logger.warning(f"Prompt optimization failed: {result['error']['message']}")
                 return prompt, {"optimization_error": result["error"]["message"]}
-            
+
             optimized = result.get("optimized_prompt", prompt)
             metadata = {
                 "optimization_used": True,
                 "original_prompt": prompt,
                 "optimization_steps": result.get("steps", []),
-                "optimization_metrics": result.get("metrics", {})
+                "optimization_metrics": result.get("metrics", {}),
             }
-            
+
             logger.info(f"Prompt optimized: '{prompt[:50]}...' -> '{optimized[:50]}...'")
             return optimized, metadata
-            
+
         except Exception as e:
             logger.error(f"Prompt optimization error: {e}")
             return prompt, {"optimization_error": str(e)}
@@ -300,9 +315,7 @@ These rules prevent misinformation. Follow them carefully."""
                 # Get TTL from env, default to 900 seconds (15 minutes)
                 ttl_seconds = int(os.getenv("RESEARCH_TTL_SECONDS", "900"))
                 self._research_states[session_id] = create_initial_state(
-                    session_id=session_id,
-                    mode=research_mode,
-                    ttl_seconds=ttl_seconds
+                    session_id=session_id, mode=research_mode, ttl_seconds=ttl_seconds
                 )
             else:
                 # Update mode if it changed
@@ -316,10 +329,10 @@ These rules prevent misinformation. Follow them carefully."""
         self,
         *,
         prompt: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         research_mode: str,
-        context: Optional[UserContext] = None
-    ) -> tuple[List[Dict[str, str]], Dict[str, Any]]:
+        context: UserContext | None = None,
+    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
         """
         Apply web research if needed based on research_mode and session state.
 
@@ -350,10 +363,7 @@ These rules prevent misinformation. Follow them carefully."""
 
         if should_reuse:
             # Inject previous research
-            injected_messages = [
-                {"role": "system", "content": state.injected_text},
-                *messages
-            ]
+            injected_messages = [{"role": "system", "content": state.injected_text}, *messages]
 
             # Update last_used_at
             updated_state = state.with_update(last_used_at=datetime.now(timezone.utc).isoformat())
@@ -367,20 +377,17 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_topic": state.topic if state.topic else None,
                 "research_error": None,
                 "sources": [
-                    {
-                        "id": s.id,
-                        "title": s.title,
-                        "url": s.url,
-                        "fetched_at": s.fetched_at
-                    }
+                    {"id": s.id, "title": s.title, "url": s.url, "fetched_at": s.fetched_at}
                     for s in state.sources
-                ]
+                ],
             }
             return injected_messages, metadata
 
         # 4) Check if we should perform new search
         should_do_search = should_search(prompt, research_mode, state)
-        logger.info(f"Research decision - search: {should_do_search}, mode: {research_mode}, prompt: {prompt[:50]}...")
+        logger.info(
+            f"Research decision - search: {should_do_search}, mode: {research_mode}, prompt: {prompt[:50]}..."
+        )
 
         if not should_do_search:
             logger.info(f"No research needed (mode={research_mode})")
@@ -389,7 +396,7 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_reused": False,
                 "research_topic": None,
                 "research_error": None,
-                "sources": []
+                "sources": [],
             }
 
         # 5) Perform new search
@@ -399,13 +406,15 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_reused": False,
                 "research_topic": None,
                 "research_error": "service_not_configured",
-                "sources": []
+                "sources": [],
             }
 
         # Extract PREVIOUS user message for context (helps with meta-commands like "check again")
         # Skip the current prompt (last user message) and get the one before it
         last_user_msg = None
-        user_messages = [msg["content"] for msg in messages if msg.get("role") == "user" and msg.get("content")]
+        user_messages = [
+            msg["content"] for msg in messages if msg.get("role") == "user" and msg.get("content")
+        ]
         if len(user_messages) >= 2:
             # Get second-to-last user message (the one before current prompt)
             last_user_msg = user_messages[-2]
@@ -422,7 +431,7 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_reused": False,
                 "research_topic": None,
                 "research_error": "invalid_query",
-                "sources": []
+                "sources": [],
             }
 
         # Log if query was transformed (different from prompt)
@@ -441,11 +450,7 @@ These rules prevent misinformation. Follow them carefully."""
             # Convert SourceDoc to ResearchSource
             sources = [
                 ResearchSource(
-                    id=s.id,
-                    title=s.title,
-                    url=s.url,
-                    fetched_at=s.fetched_at,
-                    excerpt=s.excerpt
+                    id=s.id, title=s.title, url=s.url, fetched_at=s.fetched_at, excerpt=s.excerpt
                 )
                 for s in research_ctx.sources
             ]
@@ -466,7 +471,7 @@ These rules prevent misinformation. Follow them carefully."""
                 error=None,
                 session_id=session_id,
                 mode=research_mode,
-                ttl_seconds=state.ttl_seconds
+                ttl_seconds=state.ttl_seconds,
             )
 
             # Store new state (thread-safe)
@@ -476,7 +481,7 @@ These rules prevent misinformation. Follow them carefully."""
             # Inject research
             injected_messages = [
                 {"role": "system", "content": research_ctx.injected_text},
-                *messages
+                *messages,
             ]
 
             metadata = {
@@ -485,14 +490,9 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_topic": topic,
                 "research_error": None,
                 "sources": [
-                    {
-                        "id": s.id,
-                        "title": s.title,
-                        "url": s.url,
-                        "fetched_at": s.fetched_at
-                    }
+                    {"id": s.id, "title": s.title, "url": s.url, "fetched_at": s.fetched_at}
                     for s in sources
-                ]
+                ],
             }
             return injected_messages, metadata
         else:
@@ -503,10 +503,12 @@ These rules prevent misinformation. Follow them carefully."""
                 "research_reused": False,
                 "research_topic": None,
                 "research_error": research_ctx.error,
-                "sources": []
+                "sources": [],
             }
 
-    def _check_browse_disclaimer(self, response: UnifiedResponse, research_used: bool, prompt: str = "") -> UnifiedResponse:
+    def _check_browse_disclaimer(
+        self, response: UnifiedResponse, research_used: bool, prompt: str = ""
+    ) -> UnifiedResponse:
         """
         Guard against model claiming "no internet access" inappropriately.
 
@@ -596,12 +598,14 @@ These rules prevent misinformation. Follow them carefully."""
         if found_disclaimer:
             logger.warning(
                 f"Model claimed '{found_disclaimer}' despite research being provided",
-                extra={"extra_fields": {
-                    "provider": response.provider,
-                    "model": response.model,
-                    "research_used": research_used,
-                    "disclaimer_found": found_disclaimer
-                }}
+                extra={
+                    "extra_fields": {
+                        "provider": response.provider,
+                        "model": response.model,
+                        "research_used": research_used,
+                        "disclaimer_found": found_disclaimer,
+                    }
+                },
             )
 
             # Replace response text with clear error message
@@ -628,7 +632,9 @@ These rules prevent misinformation. Follow them carefully."""
 
         return response
 
-    def _check_fabrication(self, response: UnifiedResponse, research_used: bool, prompt: str = "") -> UnifiedResponse:
+    def _check_fabrication(
+        self, response: UnifiedResponse, research_used: bool, prompt: str = ""
+    ) -> UnifiedResponse:
         """
         NUCLEAR CHECK: Detect if model fabricated numbers/facts without web research.
 
@@ -651,10 +657,24 @@ These rules prevent misinformation. Follow them carefully."""
 
         # Detect queries that REQUIRE factual data
         factual_query_indicators = [
-            "how much", "what was", "what is", "what were",
-            "how many", "percentage", "percent", "return",
-            "performance", "growth", "decline", "gained", "lost",
-            "price", "value", "rate", "score", "number"
+            "how much",
+            "what was",
+            "what is",
+            "what were",
+            "how many",
+            "percentage",
+            "percent",
+            "return",
+            "performance",
+            "growth",
+            "decline",
+            "gained",
+            "lost",
+            "price",
+            "value",
+            "rate",
+            "score",
+            "number",
         ]
 
         requires_facts = any(ind in prompt_lower for ind in factual_query_indicators)
@@ -664,35 +684,38 @@ These rules prevent misinformation. Follow them carefully."""
 
         # Detect fabricated numbers/stats in response
         fabrication_patterns = [
-            r'\d+\.?\d*%',  # Percentages: "28.7%", "5%"
-            r'\$\d+',  # Dollar amounts: "$1000"
-            r'\d{4}',  # Years when talking about performance: "2025"
-            r'around \d+',  # "around 28"
-            r'approximately \d+',  # "approximately 15"
-            r'about \d+',  # "about 20"
-            r'reached .* high',  # "reached new highs" without citation
-            r'strong performance',  # Vague claims without data
-            r'record high',  # "record highs" without citation
-            r'significant growth',  # Vague claims
-            r'delivered .* return',  # "delivered X% return" without citation
+            r"\d+\.?\d*%",  # Percentages: "28.7%", "5%"
+            r"\$\d+",  # Dollar amounts: "$1000"
+            r"\d{4}",  # Years when talking about performance: "2025"
+            r"around \d+",  # "around 28"
+            r"approximately \d+",  # "approximately 15"
+            r"about \d+",  # "about 20"
+            r"reached .* high",  # "reached new highs" without citation
+            r"strong performance",  # Vague claims without data
+            r"record high",  # "record highs" without citation
+            r"significant growth",  # Vague claims
+            r"delivered .* return",  # "delivered X% return" without citation
         ]
 
         import re
+
         has_numbers = any(re.search(pattern, response_lower) for pattern in fabrication_patterns)
 
         # Check if numbers are cited (has [1], [2], [3])
-        has_citations = bool(re.search(r'\[\d+\]', response.text))
+        has_citations = bool(re.search(r"\[\d+\]", response.text))
 
         if has_numbers and not has_citations:
             logger.error(
                 "FABRICATION DETECTED: Model provided numbers/facts without web research",
-                extra={"extra_fields": {
-                    "provider": response.provider,
-                    "model": response.model,
-                    "research_used": research_used,
-                    "prompt": prompt[:100],
-                    "response_preview": response.text[:200]
-                }}
+                extra={
+                    "extra_fields": {
+                        "provider": response.provider,
+                        "model": response.model,
+                        "research_used": research_used,
+                        "prompt": prompt[:100],
+                        "response_preview": response.text[:200],
+                    }
+                },
             )
 
             # BLOCK THE RESPONSE
@@ -717,9 +740,9 @@ These rules prevent misinformation. Follow them carefully."""
         self,
         prompt: str,
         model_type: str,
-        context: Optional[UserContext] = None,
-        model_name: Optional[str] = None,
-        token_tracker: Optional[TokenTracker] = None,
+        context: UserContext | None = None,
+        model_name: str | None = None,
+        token_tracker: TokenTracker | None = None,
         research_mode: str = "auto",
         **kwargs,
     ) -> UnifiedResponse:
@@ -727,8 +750,8 @@ These rules prevent misinformation. Follow them carefully."""
             # Optimize prompt if enabled
             optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
             if opt_metadata.get("optimization_used"):
-                logger.debug(f"Using optimized prompt for request")
-            
+                logger.debug("Using optimized prompt for request")
+
             client = self._get_client(model_type, model_name)
             messages = self._build_messages(optimized_prompt, context)
 
@@ -738,7 +761,7 @@ These rules prevent misinformation. Follow them carefully."""
                     prompt=optimized_prompt,
                     messages=messages,
                     research_mode=research_mode,
-                    context=context
+                    context=context,
                 )
             else:
                 research_metadata = {
@@ -746,7 +769,7 @@ These rules prevent misinformation. Follow them carefully."""
                     "research_reused": False,
                     "research_topic": None,
                     "research_error": "service_not_configured",
-                    "sources": []
+                    "sources": [],
                 }
 
             resp = client.get_completion(messages=messages, **kwargs)
@@ -781,22 +804,22 @@ These rules prevent misinformation. Follow them carefully."""
     def compare(
         self,
         prompt: str,
-        models_list: List[Dict[str, str]],
-        context: Optional[UserContext] = None,
-        timeout_s: Optional[float] = None,
-        token_tracker: Optional[TokenTracker] = None,
+        models_list: list[dict[str, str]],
+        context: UserContext | None = None,
+        timeout_s: float | None = None,
+        token_tracker: TokenTracker | None = None,
         research_mode: str = "auto",
         **kwargs,
     ) -> MultiUnifiedResponse:
         request_group_id = str(uuid.uuid4())
-        responses: List[UnifiedResponse] = []
+        responses: list[UnifiedResponse] = []
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
             optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
             if opt_metadata.get("optimization_used"):
-                logger.debug(f"Using optimized prompt for comparison")
-            
+                logger.debug("Using optimized prompt for comparison")
+
             messages = self._build_messages(optimized_prompt, context)
 
             # Apply research ONCE for all models (compare fairness)
@@ -805,7 +828,7 @@ These rules prevent misinformation. Follow them carefully."""
                     prompt=optimized_prompt,
                     messages=messages,
                     research_mode=research_mode,
-                    context=context
+                    context=context,
                 )
             else:
                 research_metadata = {
@@ -813,11 +836,11 @@ These rules prevent misinformation. Follow them carefully."""
                     "research_reused": False,
                     "research_topic": None,
                     "research_error": "service_not_configured",
-                    "sources": []
+                    "sources": [],
                 }
 
-            clients: List[BaseAIClient] = []
-            client_meta: List[Dict[str, str]] = []
+            clients: list[BaseAIClient] = []
+            client_meta: list[dict[str, str]] = []
 
             for cfg in models_list:
                 provider = (cfg.get("provider") or "").lower().strip()
@@ -875,7 +898,9 @@ These rules prevent misinformation. Follow them carefully."""
                 merged_md = {**md, **research_metadata}
                 resp_with_metadata = replace(resp, metadata=merged_md)
                 # Check for browse disclaimer if research was used or explicitly requested
-                resp_checked = self._check_browse_disclaimer(resp_with_metadata, research_used, prompt)
+                resp_checked = self._check_browse_disclaimer(
+                    resp_with_metadata, research_used, prompt
+                )
                 # Check for fabricated numbers/facts
                 resp_final = self._check_fabrication(resp_checked, research_used, prompt)
                 updated_responses.append(resp_final)
@@ -902,10 +927,12 @@ These rules prevent misinformation. Follow them carefully."""
             return MultiUnifiedResponse.from_responses(request_group_id, prompt, responses)
 
     # --- keep these helpers (your CLI uses them) ---
-    def create_token_tracker(self, model_type: str, model_name: Optional[str] = None) -> TokenTracker:
+    def create_token_tracker(self, model_type: str, model_name: str | None = None) -> TokenTracker:
         return TokenTracker(model_type=model_type, model_name=model_name)
 
-    def create_cost_calculator(self, model_type: str, model_name: Optional[str] = None) -> CostCalculator:
+    def create_cost_calculator(
+        self, model_type: str, model_name: str | None = None
+    ) -> CostCalculator:
         if not model_name:
             if model_type.lower() == "openai":
                 model_name = os.getenv("DEFAULT_OPENAI_MODEL", "gpt-3.5-turbo")

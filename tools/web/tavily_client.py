@@ -8,11 +8,14 @@ Tavily handles:
 
 This replaces Brave Search + extractor + caching.
 """
+
 import os
-from typing import List, Optional
+
 from tavily import TavilyClient
-from .contracts import SourceDoc
+
 from utils.logger import get_logger
+
+from .contracts import SourceDoc
 
 logger = get_logger(__name__)
 
@@ -24,7 +27,7 @@ class TavilyResearchClient:
     Replaces the entire Brave Search + extractor pipeline with one API call.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """
         Initialize Tavily client.
 
@@ -40,11 +43,8 @@ class TavilyResearchClient:
         logger.info("Tavily client initialized")
 
     def search(
-        self,
-        query: str,
-        max_results: int = 5,
-        search_depth: str = "advanced"
-    ) -> List[SourceDoc]:
+        self, query: str, max_results: int = 5, search_depth: str = "advanced"
+    ) -> list[SourceDoc]:
         """
         Search the web using Tavily API.
 
@@ -65,7 +65,7 @@ class TavilyResearchClient:
                 max_results=max_results,
                 search_depth=search_depth,
                 include_raw_content=False,  # We don't need raw HTML
-                include_answer=False  # We generate our own answer
+                include_answer=False,  # We generate our own answer
             )
 
             # Convert Tavily results to SourceDoc format
@@ -79,7 +79,7 @@ class TavilyResearchClient:
                     title=result.get("title", "Untitled"),
                     url=result.get("url", ""),
                     excerpt=result.get("content", ""),  # Tavily provides clean extracted content
-                    fetched_at=response.get("query_time", "N/A")
+                    fetched_at=response.get("query_time", "N/A"),
                 )
 
                 sources.append(source)
@@ -92,7 +92,7 @@ class TavilyResearchClient:
             logger.error(f"❌ Tavily search failed: {e}", exc_info=True)
             return []
 
-    def qna_search(self, query: str) -> tuple[str, List[SourceDoc]]:
+    def qna_search(self, query: str) -> tuple[str, list[SourceDoc]]:
         """
         Get direct answer + sources from Tavily.
 
@@ -119,7 +119,7 @@ class TavilyResearchClient:
                     title=result.get("title", "Untitled"),
                     url=result.get("url", ""),
                     excerpt=result.get("content", ""),
-                    fetched_at=response.get("query_time", "N/A")
+                    fetched_at=response.get("query_time", "N/A"),
                 )
                 sources.append(source)
 

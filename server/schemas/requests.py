@@ -1,7 +1,6 @@
 """Pydantic request models for FastAPI endpoints."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
 
 class ConversationHistoryItem(BaseModel):
@@ -10,30 +9,30 @@ class ConversationHistoryItem(BaseModel):
 
 
 class UserContextRequest(BaseModel):
-    session_id: Optional[str] = None
-    conversation_history: Optional[List[ConversationHistoryItem]] = None
+    session_id: str | None = None
+    conversation_history: list[ConversationHistoryItem] | None = None
 
 
 class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     provider: str = Field(..., pattern="^(openai|gemini|deepseek|grok)$")
-    model: Optional[str] = None
-    context: Optional[UserContextRequest] = None
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(None, gt=0)
-    research_mode: Optional[str] = Field("auto", pattern="^(off|auto|on)$")
+    model: str | None = None
+    context: UserContextRequest | None = None
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(None, gt=0)
+    research_mode: str | None = Field("auto", pattern="^(off|auto|on)$")
 
 
 class CompareTargetRequest(BaseModel):
     provider: str = Field(..., pattern="^(openai|gemini|deepseek|grok)$")
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class CompareRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=4)
-    context: Optional[UserContextRequest] = None
-    timeout_s: Optional[float] = Field(None, gt=0, le=300)
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(None, gt=0)
-    research_mode: Optional[str] = Field("auto", pattern="^(off|auto|on)$")
+    targets: list[CompareTargetRequest] = Field(..., min_length=2, max_length=4)
+    context: UserContextRequest | None = None
+    timeout_s: float | None = Field(None, gt=0, le=300)
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(None, gt=0)
+    research_mode: str | None = Field("auto", pattern="^(off|auto|on)$")

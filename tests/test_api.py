@@ -1,15 +1,17 @@
 """Quick API test script."""
+
 import requests
-import json
 
 BASE_URL = "http://localhost:8000"
 API_KEY = "dev-key-1"
+
 
 def test_health():
     print("Testing /health...")
     r = requests.get(f"{BASE_URL}/health")
     print(f"Status: {r.status_code}")
     print(f"Response: {r.json()}\n")
+
 
 def test_chat():
     print("Testing /v1/chat...")
@@ -19,8 +21,8 @@ def test_chat():
         json={
             "prompt": "Say 'Hello, FastAPI works!' in one sentence",
             "provider": "openai",
-            "model": "gpt-4o-mini"
-        }
+            "model": "gpt-4o-mini",
+        },
     )
     print(f"Status: {r.status_code}")
     if r.status_code == 200:
@@ -31,6 +33,7 @@ def test_chat():
     else:
         print(f"Error: {r.text}\n")
 
+
 def test_compare():
     print("Testing /v1/compare...")
     r = requests.post(
@@ -38,11 +41,8 @@ def test_compare():
         headers={"X-API-Key": API_KEY},
         json={
             "prompt": "What is 2+2?",
-            "targets": [
-                {"provider": "openai", "model": "gpt-4o-mini"},
-                {"provider": "gemini"}
-            ]
-        }
+            "targets": [{"provider": "openai", "model": "gpt-4o-mini"}, {"provider": "gemini"}],
+        },
     )
     print(f"Status: {r.status_code}")
     if r.status_code == 200:
@@ -52,15 +52,17 @@ def test_compare():
     else:
         print(f"Error: {r.text}\n")
 
+
 def test_auth():
     print("Testing auth failure...")
     r = requests.post(
         f"{BASE_URL}/v1/chat",
         headers={"X-API-Key": "invalid"},
-        json={"prompt": "test", "provider": "openai"}
+        json={"prompt": "test", "provider": "openai"},
     )
     print(f"Status: {r.status_code} (should be 401)")
     print(f"Error: {r.json()['detail']}\n")
+
 
 if __name__ == "__main__":
     print("=== FastAPI Tests ===\n")

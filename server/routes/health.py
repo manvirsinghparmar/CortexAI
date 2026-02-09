@@ -1,7 +1,9 @@
 """Health check endpoint."""
 
-from fastapi import APIRouter
 from datetime import datetime
+
+from fastapi import APIRouter
+
 from server.schemas.responses import HealthResponseDTO
 
 router = APIRouter(tags=["Health"])
@@ -11,7 +13,5 @@ router = APIRouter(tags=["Health"])
 async def health_check():
     """Health check endpoint."""
     return HealthResponseDTO(
-        status="healthy",
-        timestamp=datetime.utcnow().isoformat() + "Z",
-        version="1.0.0"
+        status="healthy", timestamp=datetime.utcnow().isoformat() + "Z", version="1.0.0"
     )

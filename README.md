@@ -299,6 +299,9 @@ OpenAIProject/
 ├── .env                           # Your configuration (not in git)
 ├── .env.example                   # Example configuration template
 ├── .gitignore                     # Git ignore rules
+├── .github/                       # GitHub workflows and configuration
+│   └── workflows/
+│       └── ci.yml                 # Continuous integration workflow
 ├── README.md                      # This file
 ├── pyproject.toml                 # Modern Python packaging configuration
 ├── requirements.txt               # Python dependencies
@@ -643,6 +646,34 @@ If you encounter issues:
 6. Check the provider's status page for outages
 
 ## Development
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration with comprehensive quality checks:
+
+**🔍 Quality Checks:**
+- **Ruff** - Python linting and code quality
+- **Black** - Code formatting verification  
+- **MyPy** - Static type checking with explicit package bases
+- **Pytest** - Unit test execution (excludes integration tests)
+- **pip-audit** - Dependency vulnerability scanning
+- **Gitleaks** - Secrets detection and security scanning
+
+**📋 Pipeline Details:**
+- Triggers on push/PR to `main`/`master` branches
+- Runs on Ubuntu latest with Python 3.12
+- 20-minute timeout for quality gate
+- Caches pip dependencies for faster builds
+- Installs both production and development requirements
+
+**🚦 Quality Gates:**
+All checks must pass for code to be merged:
+- ✅ Code passes linting rules
+- ✅ Code formatting is consistent
+- ✅ Types are properly annotated
+- ✅ Tests pass (unit tests only)
+- ✅ No known dependency vulnerabilities
+- ✅ No secrets or credentials committed
 
 ### Running Tests
 

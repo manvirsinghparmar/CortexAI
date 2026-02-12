@@ -13,6 +13,8 @@ A Python command-line application that provides an interactive chat interface wi
 - **Cost Calculation**: Automatic cost estimation based on current pricing for all models
 - **Request Tracking**: Unique request IDs (UUID) for distributed tracing
 - **Latency Metrics**: End-to-end request timing for performance monitoring
+- **Database Integration**: Persistent storage for conversations and session data
+- **Research Tools**: Web research capabilities with Tavily integration
 
 ### Enterprise Features
 - **Structured JSON Logging**: Production-ready logging system with rotating file handlers
@@ -297,37 +299,20 @@ OpenAIProject/
 ├── .env                           # Your configuration (not in git)
 ├── .env.example                   # Example configuration template
 ├── .gitignore                     # Git ignore rules
+├── .github/                       # GitHub workflows and configuration
+│   └── workflows/
+│       └── ci.yml                 # Continuous integration workflow
 ├── README.md                      # This file
-├── FASTAPI_README.md              # FastAPI documentation (NEW)
-├── LOGGING.md                     # Logging system documentation
-├── UNIFIED_RESPONSE_CONTRACT.md   # Response contract documentation
-├── BILLING_ARCHITECTURE.md        # Billing system design (future feature)
-├── PROJECT_MAP.md                 # Project overview map
-├── CHANGELOG.md                   # Version history and changes
+├── pyproject.toml                 # Modern Python packaging configuration
 ├── requirements.txt               # Python dependencies
+├── requirements-dev.txt           # Development dependencies
 ├── pytest.ini                     # Pytest configuration
 ├── main.py                        # CLI entry point
-├── run_server.py                  # FastAPI server entry point (NEW)
-├── test_api.py                    # API test script (NEW)
-├── test_conversation.py           # Conversation testing utility
-│
-├── server/                        # FastAPI application (NEW)
-│   ├── app.py                     # FastAPI app factory
-│   ├── middleware.py              # Request ID middleware
-│   ├── dependencies.py            # Auth & orchestrator dependencies
-│   ├── schemas/
-│   │   ├── requests.py            # Pydantic request models
-│   │   └── responses.py           # Pydantic response DTOs
-│   └── routes/
-│       ├── health.py              # Health check endpoint
-│       ├── chat.py                # Single chat endpoint
-│       └── compare.py             # Multi-model compare endpoint
-│
-├── models/                        # Response models
-│   ├── __init__.py
-│   └── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
+├── run_server.py                  # FastAPI server entry point
+├── quick_test_optimizer.py        # Quick testing utility
 │
 ├── api/                           # API client implementations
+│   ├── __init__.py
 │   ├── base_client.py             # Abstract base with contract enforcement
 │   ├── openai_client.py           # OpenAI API client
 │   ├── google_gemini_client.py    # Google Gemini client
@@ -343,6 +328,55 @@ OpenAIProject/
 │   ├── __init__.py
 │   └── conversation_manager.py    # Conversation history management
 │
+├── db/                            # Database integration (NEW)
+│   ├── __init__.py
+│   ├── engine.py                  # Database engine configuration
+│   ├── repository.py              # Data access layer
+│   ├── session.py                 # Database session management
+│   └── tables.py                  # Database table definitions
+│
+├── models/                        # Response models
+│   ├── __init__.py
+│   ├── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
+│   ├── multi_unified_response.py  # Multi-model response wrapper
+│   └── user_context.py            # Session metadata container
+│
+├── orchestrator/                   # Business logic layer
+│   ├── __init__.py
+│   ├── core.py                    # Core orchestrator (CortexOrchestrator)
+│   └── multi_orchestrator.py      # Multi-model comparison logic
+│
+├── server/                        # FastAPI application
+│   ├── __init__.py
+│   ├── app.py                     # FastAPI app factory
+│   ├── dependencies.py            # Auth & orchestrator dependencies
+│   ├── middleware.py              # Request ID middleware
+│   ├── utils.py                   # Token/cost guardrails
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── requests.py            # Pydantic request models
+│   │   └── responses.py           # Pydantic response DTOs
+│   └── routes/
+│       ├── __init__.py
+│       ├── health.py              # Health check endpoint
+│       ├── chat.py                # Single chat endpoint
+│       └── compare.py             # Multi-model compare endpoint
+│
+├── tools/                         # Research and utility tools (NEW)
+│   └── web/                       # Web research tools
+│       ├── __init__.py
+│       ├── cache.py                # Research caching
+│       ├── contracts.py           # Tool contracts
+│       ├── factory.py             # Tool factory
+│       ├── intent.py               # Intent classification
+│       ├── research_decider.py     # Research decision logic
+│       ├── research_pack.py        # Research data packaging
+│       ├── research_state.py       # Research state management
+│       ├── research_state_store.py # Research state persistence
+│       ├── session_state.py        # Session state tracking
+│       ├── tavily_client.py        # Tavily web search client
+│       └── tavily_service.py       # Tavily service wrapper
+│
 ├── utils/                         # Utility modules
 │   ├── __init__.py
 │   ├── logger.py                  # Structured JSON logging
@@ -357,10 +391,24 @@ OpenAIProject/
 │   ├── error.log                  # Error logs (JSON)
 │   └── debug.log                  # Debug logs (JSON, if enabled)
 │
+├── docs/                          # Documentation
+│   ├── CHANGELOG.md               # Version history and changes
+│   ├── COMPARE_MODE_GUIDE.md      # Multi-model comparison guide
+│   ├── DATABASE_INTEGRATION_COMPLETE.md # Database integration docs
+│   ├── FASTAPI_README.md          # FastAPI documentation
+│   ├── LOGGING.md                 # Logging system documentation
+│   ├── PROJECT_MAP.md             # Project overview map
+│   ├── REFACTORING_SUMMARY.md     # Refactoring documentation
+│   ├── TAVILY_INTEGRATION.md      # Tavily web search integration
+│   └── UNIFIED_RESPONSE_CONTRACT.md # Response contract documentation
+│
 └── tests/                         # Test suite
     ├── __init__.py
     ├── README.md                  # Test documentation
     ├── conftest.py                # Pytest configuration
+    ├── test_api.py                # API test script
+    ├── test_conversation.py       # Conversation testing utility
+    ├── test_fastapi_contract_and_guardrails.py # FastAPI contract tests
     ├── test_model_utils.py        # Model utility tests
     └── test_unified_response_contract.py  # Contract tests
 ```
@@ -599,6 +647,34 @@ If you encounter issues:
 
 ## Development
 
+### CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration with comprehensive quality checks:
+
+**🔍 Quality Checks:**
+- **Ruff** - Python linting and code quality
+- **Black** - Code formatting verification  
+- **MyPy** - Static type checking with explicit package bases
+- **Pytest** - Unit test execution (excludes integration tests)
+- **pip-audit** - Dependency vulnerability scanning
+- **Gitleaks** - Secrets detection and security scanning
+
+**📋 Pipeline Details:**
+- Triggers on push/PR to `main`/`master` branches
+- Runs on Ubuntu latest with Python 3.12
+- 20-minute timeout for quality gate
+- Caches pip dependencies for faster builds
+- Installs both production and development requirements
+
+**🚦 Quality Gates:**
+All checks must pass for code to be merged:
+- ✅ Code passes linting rules
+- ✅ Code formatting is consistent
+- ✅ Types are properly annotated
+- ✅ Tests pass (unit tests only)
+- ✅ No known dependency vulnerabilities
+- ✅ No secrets or credentials committed
+
 ### Running Tests
 
 ```bash
@@ -662,10 +738,14 @@ class NewProviderClient(BaseAIClient):
 
 - [UNIFIED_RESPONSE_CONTRACT.md](docs/UNIFIED_RESPONSE_CONTRACT.md) - Complete response contract documentation
 - [LOGGING.md](docs/LOGGING.md) - Logging system documentation and integration guides
-- [BILLING_ARCHITECTURE.md](./BILLING_ARCHITECTURE.md) - Billing system architecture design (future feature)
+- [FASTAPI_README.md](docs/FASTAPI_README.md) - FastAPI REST API documentation
+- [DATABASE_INTEGRATION_COMPLETE.md](docs/DATABASE_INTEGRATION_COMPLETE.md) - Database integration documentation
+- [COMPARE_MODE_GUIDE.md](docs/COMPARE_MODE_GUIDE.md) - Multi-model comparison guide
+- [TAVILY_INTEGRATION.md](docs/TAVILY_INTEGRATION.md) - Tavily web search integration
+- [REFACTORING_SUMMARY.md](docs/REFACTORING_SUMMARY.md) - Refactoring documentation
 - [PROJECT_MAP.md](docs/PROJECT_MAP.md) - Project overview and quick reference map
 - [CHANGELOG.md](docs/CHANGELOG.md) - Version history and change log
-- [tests/README.md](./tests/README.md) - Test suite documentation
+- [tests/README.md](tests/README.md) - Test suite documentation
 
 ## License
 
@@ -680,5 +760,12 @@ This project is open source and available under the MIT License.
 
 ---
 
-**Last Updated**: January 2026
-**Version**: 2.0 (Unified Response Contract + Enterprise Logging)
+**Last Updated**: February 2026
+**Version**: 3.0 (Database Integration + Research Tools)
+
+### Recent Major Updates
+- **Database Integration**: Persistent storage with SQLAlchemy (`db/`)
+- **Research Tools**: Web research capabilities with Tavily (`tools/web/`)
+- **Modern Packaging**: `pyproject.toml` configuration
+- **Enhanced Testing**: Comprehensive test suite with FastAPI contract tests
+- **Documentation**: Complete docs in `docs/` directory

@@ -9,14 +9,18 @@ A Python command-line application that provides an interactive chat interface wi
 - **Unified Response Contract**: Provider-agnostic response format with immutable dataclasses
 - **Interactive CLI**: User-friendly command-line interface with loading animations
 - **FastAPI Integration**: RESTful HTTP API with authentication and request tracking
+- **Prompt Optimizer**: AI-powered prompt optimization with multi-stage validation and structured JSON output
 - **Token Tracking**: Real-time monitoring of token usage (prompt, completion, and total)
 - **Cost Calculation**: Automatic cost estimation based on current pricing for all models
 - **Request Tracking**: Unique request IDs (UUID) for distributed tracing
 - **Latency Metrics**: End-to-end request timing for performance monitoring
+- **Database Integration**: Persistent storage for conversations and session data
+- **Research Tools**: Web research capabilities with Tavily integration
 
 ### Enterprise Features
 - **Structured JSON Logging**: Production-ready logging system with rotating file handlers
 - **Centralized Log Aggregation Ready**: JSON format compatible with ELK Stack, Grafana Loki, Datadog
+- **CI/CD Pipeline**: Comprehensive GitHub Actions workflow with quality gates (Ruff, Black, MyPy, Pytest, pip-audit, Gitleaks)
 - **Error Normalization**: Standardized error codes across all providers
 - **No Exceptions Bubble Up**: All errors returned as structured responses
 - **Session Statistics**: View cumulative token usage and costs during your session
@@ -71,9 +75,13 @@ A Python command-line application that provides an interactive chat interface wi
    DEFAULT_DEEPSEEK_MODEL=deepseek-chat
    DEFAULT_GROK_MODEL=grok-4-latest
 
-   # Logging configuration (NEW)
+   # Logging configuration
    LOG_LEVEL=INFO                    # DEBUG, INFO, WARNING, ERROR, CRITICAL
    LOG_TO_CONSOLE=false              # Keep console clean for chat
+
+   # Prompt Optimizer configuration (optional)
+   PROMPT_OPTIMIZER_PROVIDER=openai  # 'openai' or 'gemini' (default: openai)
+   PROMPT_OPTIMIZER_MODEL=gpt-4o-mini  # Model for prompt optimization
    ```
 
 ## Usage
@@ -116,7 +124,55 @@ A Python command-line application that provides an interactive chat interface wi
    Last updated: 2026-01-04T00:45:12.123456
    ```
 
-## FastAPI Server (NEW)
+## Prompt Optimizer
+
+The Prompt Optimizer is an AI-powered utility that improves user-provided prompts for clarity, specificity, and effectiveness.
+
+### Quick Start
+
+```bash
+# Run the quick test utility
+python quick_test_optimizer.py
+```
+
+### Programmatic Usage
+
+```python
+from utils.prompt_optimizer import PromptOptimizer
+
+# Initialize optimizer (auto-detects provider from env)
+optimizer = PromptOptimizer()
+
+# Optimize a prompt
+result = optimizer.optimize_prompt({
+    "prompt": "write code for sorting",
+    "settings": {"focus": "clarity", "audience": "beginners"}
+})
+
+print(result["optimized_prompt"])
+print(result.get("steps", []))  # Optimization steps
+print(result.get("metrics", {}))  # Quality metrics
+```
+
+### Features
+
+- ✅ **Multi-Provider Support**: Works with OpenAI and Google Gemini
+- ✅ **Auto-Detection**: Reads `PROMPT_OPTIMIZER_PROVIDER` from `.env`
+- ✅ **Structured Output**: Returns JSON with `optimized_prompt`, `steps`, `explanations`, and `metrics`
+- ✅ **Multi-Stage Validation**: Input validation, AI optimization, output validation
+- ✅ **Self-Correction**: Retries with explicit schema instructions on validation failure
+- ✅ **Error Handling**: Comprehensive error handling with exponential backoff
+
+### Configuration
+
+```bash
+# .env file
+PROMPT_OPTIMIZER_PROVIDER=openai  # or 'gemini'
+PROMPT_OPTIMIZER_MODEL=gpt-4o-mini  # Optional: override default model
+PROMPT_OPTIMIZER_GEMINI_MODEL=gemini-2.0-flash-exp  # Optional: Gemini model
+```
+
+## FastAPI Server
 
 ### Quick Start
 
@@ -297,37 +353,20 @@ OpenAIProject/
 ├── .env                           # Your configuration (not in git)
 ├── .env.example                   # Example configuration template
 ├── .gitignore                     # Git ignore rules
+├── .github/                       # GitHub workflows and configuration
+│   └── workflows/
+│       └── ci.yml                 # Continuous integration workflow
 ├── README.md                      # This file
-├── FASTAPI_README.md              # FastAPI documentation (NEW)
-├── LOGGING.md                     # Logging system documentation
-├── UNIFIED_RESPONSE_CONTRACT.md   # Response contract documentation
-├── BILLING_ARCHITECTURE.md        # Billing system design (future feature)
-├── PROJECT_MAP.md                 # Project overview map
-├── CHANGELOG.md                   # Version history and changes
+├── pyproject.toml                 # Modern Python packaging configuration
 ├── requirements.txt               # Python dependencies
+├── requirements-dev.txt           # Development dependencies
 ├── pytest.ini                     # Pytest configuration
 ├── main.py                        # CLI entry point
-├── run_server.py                  # FastAPI server entry point (NEW)
-├── test_api.py                    # API test script (NEW)
-├── test_conversation.py           # Conversation testing utility
-│
-├── server/                        # FastAPI application (NEW)
-│   ├── app.py                     # FastAPI app factory
-│   ├── middleware.py              # Request ID middleware
-│   ├── dependencies.py            # Auth & orchestrator dependencies
-│   ├── schemas/
-│   │   ├── requests.py            # Pydantic request models
-│   │   └── responses.py           # Pydantic response DTOs
-│   └── routes/
-│       ├── health.py              # Health check endpoint
-│       ├── chat.py                # Single chat endpoint
-│       └── compare.py             # Multi-model compare endpoint
-│
-├── models/                        # Response models
-│   ├── __init__.py
-│   └── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
+├── run_server.py                  # FastAPI server entry point
+├── quick_test_optimizer.py        # Quick testing utility
 │
 ├── api/                           # API client implementations
+│   ├── __init__.py
 │   ├── base_client.py             # Abstract base with contract enforcement
 │   ├── openai_client.py           # OpenAI API client
 │   ├── google_gemini_client.py    # Google Gemini client
@@ -343,12 +382,62 @@ OpenAIProject/
 │   ├── __init__.py
 │   └── conversation_manager.py    # Conversation history management
 │
+├── db/                            # Database integration (NEW)
+│   ├── __init__.py
+│   ├── engine.py                  # Database engine configuration
+│   ├── repository.py              # Data access layer
+│   ├── session.py                 # Database session management
+│   └── tables.py                  # Database table definitions
+│
+├── models/                        # Response models
+│   ├── __init__.py
+│   ├── unified_response.py        # UnifiedResponse, TokenUsage, NormalizedError
+│   ├── multi_unified_response.py  # Multi-model response wrapper
+│   └── user_context.py            # Session metadata container
+│
+├── orchestrator/                   # Business logic layer
+│   ├── __init__.py
+│   ├── core.py                    # Core orchestrator (CortexOrchestrator)
+│   └── multi_orchestrator.py      # Multi-model comparison logic
+│
+├── server/                        # FastAPI application
+│   ├── __init__.py
+│   ├── app.py                     # FastAPI app factory
+│   ├── dependencies.py            # Auth & orchestrator dependencies
+│   ├── middleware.py              # Request ID middleware
+│   ├── utils.py                   # Token/cost guardrails
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── requests.py            # Pydantic request models
+│   │   └── responses.py           # Pydantic response DTOs
+│   └── routes/
+│       ├── __init__.py
+│       ├── health.py              # Health check endpoint
+│       ├── chat.py                # Single chat endpoint
+│       └── compare.py             # Multi-model compare endpoint
+│
+├── tools/                         # Research and utility tools (NEW)
+│   └── web/                       # Web research tools
+│       ├── __init__.py
+│       ├── cache.py                # Research caching
+│       ├── contracts.py           # Tool contracts
+│       ├── factory.py             # Tool factory
+│       ├── intent.py               # Intent classification
+│       ├── research_decider.py     # Research decision logic
+│       ├── research_pack.py        # Research data packaging
+│       ├── research_state.py       # Research state management
+│       ├── research_state_store.py # Research state persistence
+│       ├── session_state.py        # Session state tracking
+│       ├── tavily_client.py        # Tavily web search client
+│       └── tavily_service.py       # Tavily service wrapper
+│
 ├── utils/                         # Utility modules
 │   ├── __init__.py
 │   ├── logger.py                  # Structured JSON logging
 │   ├── token_tracker.py           # Token usage tracking
 │   ├── cost_calculator.py         # Cost calculation logic
 │   ├── model_utils.py             # Model utility functions
+│   ├── prompt_optimizer.py        # AI-powered prompt optimization
 │   └── GeminiAvailableModels.py   # Gemini model listing utility
 │
 ├── logs/                          # Log files (gitignored)
@@ -357,10 +446,24 @@ OpenAIProject/
 │   ├── error.log                  # Error logs (JSON)
 │   └── debug.log                  # Debug logs (JSON, if enabled)
 │
+├── docs/                          # Documentation
+│   ├── CHANGELOG.md               # Version history and changes
+│   ├── COMPARE_MODE_GUIDE.md      # Multi-model comparison guide
+│   ├── DATABASE_INTEGRATION_COMPLETE.md # Database integration docs
+│   ├── FASTAPI_README.md          # FastAPI documentation
+│   ├── LOGGING.md                 # Logging system documentation
+│   ├── PROJECT_MAP.md             # Project overview map
+│   ├── REFACTORING_SUMMARY.md     # Refactoring documentation
+│   ├── TAVILY_INTEGRATION.md      # Tavily web search integration
+│   └── UNIFIED_RESPONSE_CONTRACT.md # Response contract documentation
+│
 └── tests/                         # Test suite
     ├── __init__.py
     ├── README.md                  # Test documentation
     ├── conftest.py                # Pytest configuration
+    ├── test_api.py                # API test script
+    ├── test_conversation.py       # Conversation testing utility
+    ├── test_fastapi_contract_and_guardrails.py # FastAPI contract tests
     ├── test_model_utils.py        # Model utility tests
     └── test_unified_response_contract.py  # Contract tests
 ```
@@ -446,8 +549,11 @@ All API clients inherit from `BaseAIClient` and implement:
 | `DEFAULT_GEMINI_MODEL` | Default Gemini model | `gemini-2.5-flash-lite` | `gemini-1.5-flash` |
 | `DEFAULT_DEEPSEEK_MODEL` | Default DeepSeek model | `deepseek-chat` | `deepseek-chat` |
 | `DEFAULT_GROK_MODEL` | Default Grok model | `grok-4-latest` | `grok-4-latest` |
-| **`LOG_LEVEL`** (NEW) | Logging verbosity | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
-| **`LOG_TO_CONSOLE`** (NEW) | Log errors to console | `true`, `false` | `false` |
+| `LOG_LEVEL` | Logging verbosity | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_TO_CONSOLE` | Log errors to console | `true`, `false` | `false` |
+| `PROMPT_OPTIMIZER_PROVIDER` | Prompt optimizer provider | `openai`, `gemini` | `openai` |
+| `PROMPT_OPTIMIZER_MODEL` | Prompt optimizer model | `gpt-4o-mini` | `gpt-4o-mini` |
+| `PROMPT_OPTIMIZER_GEMINI_MODEL` | Prompt optimizer Gemini model | `gemini-2.0-flash-exp` | `gemini-2.0-flash-exp` |
 
 ### Switching Providers
 
@@ -599,6 +705,34 @@ If you encounter issues:
 
 ## Development
 
+### CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration with comprehensive quality checks:
+
+**🔍 Quality Checks:**
+- **Ruff** - Python linting and code quality
+- **Black** - Code formatting verification  
+- **MyPy** - Static type checking with explicit package bases
+- **Pytest** - Unit test execution (excludes integration tests)
+- **pip-audit** - Dependency vulnerability scanning
+- **Gitleaks** - Secrets detection and security scanning
+
+**📋 Pipeline Details:**
+- Triggers on push/PR to `main`/`master` branches
+- Runs on Ubuntu latest with Python 3.12
+- 20-minute timeout for quality gate
+- Caches pip dependencies for faster builds
+- Installs both production and development requirements
+
+**🚦 Quality Gates:**
+All checks must pass for code to be merged:
+- ✅ Code passes linting rules
+- ✅ Code formatting is consistent
+- ✅ Types are properly annotated
+- ✅ Tests pass (unit tests only)
+- ✅ No known dependency vulnerabilities
+- ✅ No secrets or credentials committed
+
 ### Running Tests
 
 ```bash
@@ -662,10 +796,14 @@ class NewProviderClient(BaseAIClient):
 
 - [UNIFIED_RESPONSE_CONTRACT.md](docs/UNIFIED_RESPONSE_CONTRACT.md) - Complete response contract documentation
 - [LOGGING.md](docs/LOGGING.md) - Logging system documentation and integration guides
-- [BILLING_ARCHITECTURE.md](./BILLING_ARCHITECTURE.md) - Billing system architecture design (future feature)
+- [FASTAPI_README.md](docs/FASTAPI_README.md) - FastAPI REST API documentation
+- [DATABASE_INTEGRATION_COMPLETE.md](docs/DATABASE_INTEGRATION_COMPLETE.md) - Database integration documentation
+- [COMPARE_MODE_GUIDE.md](docs/COMPARE_MODE_GUIDE.md) - Multi-model comparison guide
+- [TAVILY_INTEGRATION.md](docs/TAVILY_INTEGRATION.md) - Tavily web search integration
+- [REFACTORING_SUMMARY.md](docs/REFACTORING_SUMMARY.md) - Refactoring documentation
 - [PROJECT_MAP.md](docs/PROJECT_MAP.md) - Project overview and quick reference map
 - [CHANGELOG.md](docs/CHANGELOG.md) - Version history and change log
-- [tests/README.md](./tests/README.md) - Test suite documentation
+- [tests/README.md](tests/README.md) - Test suite documentation
 
 ## License
 
@@ -680,5 +818,14 @@ This project is open source and available under the MIT License.
 
 ---
 
-**Last Updated**: January 2026
-**Version**: 2.0 (Unified Response Contract + Enterprise Logging)
+**Last Updated**: February 2026
+**Version**: 3.0 (Database Integration + Research Tools)
+
+### Recent Major Updates
+- **Database Integration**: Persistent storage with SQLAlchemy (`db/`)
+- **Research Tools**: Web research capabilities with Tavily (`tools/web/`)
+- **Prompt Optimizer**: AI-powered prompt optimization with multi-stage validation (`utils/prompt_optimizer.py`)
+- **CI/CD Pipeline**: GitHub Actions workflow with comprehensive quality gates (`.github/workflows/ci.yml`)
+- **Modern Packaging**: `pyproject.toml` configuration
+- **Enhanced Testing**: Comprehensive test suite with 100+ tests across all modules
+- **Documentation**: Complete docs in `docs/` directory

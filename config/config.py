@@ -7,10 +7,10 @@ from dotenv import load_dotenv
 # Compare mode target configurations
 # Each entry is treated as unique (same provider with different models allowed)
 COMPARE_TARGETS = [
-    {"provider": "openai", "model": "gpt-4o-mini"},
+    {"provider": "openai", "model": "gpt-4.1-mini"},
     {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
     {"provider": "deepseek", "model": "deepseek-chat"},
-    {"provider": "grok", "model": "grok-4-latest"},
+    {"provider": "grok", "model": "grok-4-1-fast-non-reasoning"},
 ]
 
 
@@ -20,6 +20,7 @@ class ModelType(Enum):
     OPENAI = "openai"
     GEMINI = "gemini"
     DEEPSEEK = "deepseek"
+    GROK = "grok"
 
 
 class Config:
@@ -45,18 +46,22 @@ class Config:
 
         if ModelType.OPENAI.value == self.MODEL_TYPE:
             self.DEFAULT_MODEL = self.DEFAULT_OPENAI_MODEL or os.getenv(
-                "DEFAULT_MODEL", "gpt-3.5-turbo"
+                "DEFAULT_MODEL", "gpt-4o-mini"
             )
         elif ModelType.GEMINI.value == self.MODEL_TYPE:
             self.DEFAULT_MODEL = self.DEFAULT_GEMINI_MODEL or os.getenv(
-                "DEFAULT_MODEL", "gemini-1.5-flash"
+                "DEFAULT_MODEL", "gemini-2.5-flash-lite"
             )
         elif ModelType.DEEPSEEK.value == self.MODEL_TYPE:
             self.DEFAULT_MODEL = self.DEFAULT_DEEPSEEK_MODEL or os.getenv(
                 "DEFAULT_MODEL", "deepseek-chat"
             )
+        elif ModelType.GROK.value == self.MODEL_TYPE:
+            self.DEFAULT_MODEL = os.getenv("DEFAULT_GROK_MODEL") or os.getenv(
+                "DEFAULT_MODEL", "grok-4-1-fast-non-reasoning"
+            )
         else:
-            self.DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
+            self.DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
 
     def validate(self) -> bool:
         """
@@ -76,6 +81,10 @@ class Config:
         elif ModelType.DEEPSEEK.value == self.MODEL_TYPE:
             if not self.DEEPSEEK_API_KEY:
                 print("Error: DEEPSEEK_API_KEY is not set. Please set it in the .env file.")
+                return False
+        elif ModelType.GROK.value == self.MODEL_TYPE:
+            if not os.getenv("GROK_API_KEY"):
+                print("Error: GROK_API_KEY is not set. Please set it in the .env file.")
                 return False
         else:
             print(

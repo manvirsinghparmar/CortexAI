@@ -1,0 +1,118 @@
+providers:
+  openai:
+    models:
+      - name: "gpt-4.1-nano"
+        tier: "T0"
+        input_cost_per_1m: 0.100
+        output_cost_per_1m: 0.400
+        context_limit: 128000
+        tags: ["cheap", "fast", "non_reasoning", "general"]
+        enabled: true
+      - name: "gpt-4o-mini"
+        tier: "T1"
+        input_cost_per_1m: 0.150
+        output_cost_per_1m: 0.600
+        context_limit: 128000
+        tags: ["cheap", "fast", "balanced", "general"]
+        enabled: true
+      - name: "gpt-4.1-mini"
+        tier: "T1"
+        input_cost_per_1m: 0.400
+        output_cost_per_1m: 1.600
+        context_limit: 128000
+        tags: ["fast", "balanced", "coding", "general"]
+        enabled: true
+      - name: "gpt-5.1"
+        tier: "T2"
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 8.000
+        context_limit: 128000
+        tags: ["strong", "reasoning", "coding", "general", "long_context"]
+        enabled: true
+      - name: "gpt-5.2-codex"
+        tier: "T3"
+        input_cost_per_1m: 6.000
+        output_cost_per_1m: 18.000
+        context_limit: 128000
+        tags: ["strong", "reasoning", "coding", "production_code", "long_context"]
+        enabled: true
+      - name: "gpt-4o"
+        tier: "T2"
+        input_cost_per_1m: 2.500
+        output_cost_per_1m: 10.000
+        context_limit: 128000
+        tags: ["strong", "accurate", "balanced", "general"]
+        enabled: true
+  gemini:
+    models:
+      - name: "gemini-2.5-flash-lite"
+        tier: "T0"
+        input_cost_per_1m: 0.050
+        output_cost_per_1m: 0.200
+        context_limit: 1000000
+        tags: ["cheap", "fast", "non_reasoning", "general", "long_context"]
+        enabled: true
+      - name: "gemini-2.5-flash"
+        tier: "T1"
+        input_cost_per_1m: 0.300
+        output_cost_per_1m: 1.200
+        context_limit: 1000000
+        tags: ["fast", "balanced", "general", "long_context"]
+        enabled: true
+      - name: "gemini-2.5-pro"
+        tier: "T3"
+        input_cost_per_1m: 1.250
+        output_cost_per_1m: 5.000
+        context_limit: 1000000
+        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
+  deepseek:
+    models:
+      - name: "deepseek-chat"
+        tier: "T1"
+        input_cost_per_1m: 0.270
+        output_cost_per_1m: 1.100
+        context_limit: 128000
+        tags: ["balanced", "general", "cheap"]
+        enabled: true
+      - name: "deepseek-reasoner"
+        tier: "T3"
+        input_cost_per_1m: 0.550
+        output_cost_per_1m: 2.190
+        context_limit: 128000
+        tags: ["reasoning", "coding", "cheap", "long_context"]
+        enabled: true
+  grok:
+    models:
+      - name: "grok-4-1-fast-non-reasoning"
+        tier: "T1"
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 8.000
+        context_limit: 128000
+        tags: ["fast", "non_reasoning", "general"]
+        enabled: true
+      - name: "grok-4-1-fast-reasoning"
+        tier: "T3"
+        input_cost_per_1m: 3.000
+        output_cost_per_1m: 12.000
+        context_limit: 128000
+        tags: ["fast", "reasoning", "coding", "long_context"]
+        enabled: true
+routing_defaults:
+  tier_order: ["T0", "T1", "T2", "T3"]
+  max_attempts: 3
+  max_total_latency_ms: 12000
+  allow_providers: ["openai", "gemini", "deepseek", "grok"]
+  per_tier_timeout_ms:
+    T0: 5000
+    T1: 7000
+    T2: 10000
+    T3: 12000
+  thresholds:
+    cheap_max_prompt_tokens: 700
+    strong_prompt_tokens: 1800
+    ultra_prompt_tokens: 3200
+    strong_context_tokens: 2200
+    validator_short_complex_chars: 120
+    validator_short_simple_chars: 40
+    token_buffer: 200

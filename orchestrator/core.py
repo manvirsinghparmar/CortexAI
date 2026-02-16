@@ -10,6 +10,7 @@ Key guarantees:
 import hashlib
 import os
 import threading
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -24,6 +25,18 @@ from models.unified_response import (
 )
 from models.user_context import UserContext
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
+from orchestrator.model_registry import ModelRegistry
+from orchestrator.model_selector import ModelSelector, ReliabilityStore
+from orchestrator.prompt_analyzer import PromptAnalyzer
+from orchestrator.response_validator import ResponseValidator
+from orchestrator.routing_types import (
+    ModelCandidate,
+    RoutingConstraints,
+    Tier,
+)
+from orchestrator.fallback_manager import FallbackManager, FallbackPolicy
+from orchestrator.smart_router import SmartRouter
+from orchestrator.tier_decider import TierDecider
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
     is_explicit_web_request,
@@ -53,6 +66,19 @@ class CortexOrchestrator:
         self._client_cache: dict[str, BaseAIClient] = {}
         self._research_states: dict[str, Any] = {}  # session_id -> ResearchState
         self._research_lock = threading.Lock()  # thread-safe access to states
+        self._smart_router: SmartRouter | None = None
+        self._model_registry: ModelRegistry | None = None
+        self._selector: ModelSelector | None = None
+        self._validator: ResponseValidator | None = None
+        self._fallback_manager: FallbackManager | None = None
+        self._prompt_analyzer: PromptAnalyzer | None = None
+        self._tier_decider: TierDecider | None = None
+        self._enable_browse_disclaimer_check = (
+            os.getenv("ENABLE_BROWSE_DISCLAIMER_CHECK", "true").lower() == "true"
+        )
+        self._enable_fabrication_check = (
+            os.getenv("ENABLE_FABRICATION_CHECK", "true").lower() == "true"
+        )
 
         # Initialize prompt optimizer (optional - controlled by env var)
         self._prompt_optimizer = None
@@ -74,6 +100,30 @@ class CortexOrchestrator:
             self.research_service = None
             self.session_store = None
             logger.warning(f"Research service not available: {e}")
+
+        # Initialize smart routing components (optional but preferred)
+        try:
+            self._model_registry = ModelRegistry.from_yaml()
+            thresholds = self._model_registry.routing_defaults().get("thresholds", {})
+            token_buffer = thresholds.get("token_buffer", 200)
+            self._selector = ModelSelector(
+                reliability_store=ReliabilityStore(), token_buffer=token_buffer
+            )
+            self._validator = ResponseValidator(thresholds=thresholds)
+            self._fallback_manager = FallbackManager()
+            self._prompt_analyzer = PromptAnalyzer()
+            self._tier_decider = TierDecider(thresholds=thresholds)
+            self._smart_router = SmartRouter(
+                registry=self._model_registry,
+                selector=self._selector,
+                validator=self._validator,
+                fallback_manager=self._fallback_manager,
+                analyzer=self._prompt_analyzer,
+                decider=self._tier_decider,
+            )
+            logger.info("Smart routing components initialized")
+        except Exception as e:
+            logger.warning(f"Smart routing initialization failed: {e}")
 
     # ---------- helpers ----------
 
@@ -735,15 +785,234 @@ These rules prevent misinformation. Follow them carefully.""",
 
         return response
 
+    def _build_routing_constraints(
+        self, raw: dict[str, Any] | None
+    ) -> RoutingConstraints | None:
+        if not raw:
+            return None
+        allowed_providers = raw.get("allowed_providers") or raw.get("allow_providers")
+        if isinstance(allowed_providers, str):
+            allowed_providers = [allowed_providers]
+
+        return RoutingConstraints(
+            max_cost_usd=raw.get("max_cost_usd"),
+            max_total_latency_ms=raw.get("max_total_latency_ms"),
+            preferred_provider=raw.get("preferred_provider"),
+            allowed_providers=allowed_providers,
+            min_context_limit=raw.get("min_context_limit"),
+            json_only=bool(raw.get("json_only", False)),
+            strict_format=bool(raw.get("strict_format", False)),
+        )
+
+    def _resolve_forced_tier(self, routing_mode: str) -> Tier | None:
+        if routing_mode == "cheap":
+            return Tier.T0
+        if routing_mode == "strong":
+            return Tier.T2
+        return None
+
+    def _validate_explicit_model_selection(
+        self, model_type: str | None, model_name: str | None
+    ) -> tuple[bool, str]:
+        if not model_type or not model_name:
+            return False, "Both provider and model are required for explicit model selection"
+        if not self._model_registry:
+            return True, ""
+
+        candidate = self._model_registry.find_model(model_type, model_name)
+        if not candidate:
+            return (
+                False,
+                f"Model '{model_name}' for provider '{model_type}' is not configured in model_registry.yaml",
+            )
+        if not candidate.enabled:
+            return (
+                False,
+                f"Model '{model_name}' for provider '{model_type}' is currently disabled",
+            )
+        return True, ""
+
+    def _invoke_candidate(
+        self, candidate: ModelCandidate, messages: list[dict[str, str]], **kwargs
+    ) -> UnifiedResponse:
+        try:
+            client = self._get_client(candidate.provider, candidate.model_name)
+            return client.get_completion(messages=messages, **kwargs)
+        except Exception as e:
+            logger.exception("Candidate invocation failed")
+            return self._error_response(
+                provider=candidate.provider,
+                model=candidate.model_name,
+                message=str(e),
+                code="unknown",
+            )
+
+    def _run_smart_attempt_loop(
+        self,
+        *,
+        prompt: str,
+        context: UserContext | None,
+        messages: list[dict[str, str]],
+        routing_mode: str,
+        routing_constraints: RoutingConstraints | None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        if not self._smart_router or not self._model_registry or not self._validator:
+            return self._error_response(
+                provider="orchestrator",
+                model="smart_router",
+                message="Smart routing not initialized",
+                code="unknown",
+            )
+
+        start_time = time.monotonic()
+        try:
+            features, initial_tier, ordered_candidates, routing_md = (
+                self._smart_router.route_once_plan(
+                    prompt=prompt,
+                    context=context,
+                    routing_mode=routing_mode,
+                    constraints=routing_constraints,
+                )
+            )
+        except Exception as e:
+            logger.exception("Smart routing plan failed")
+            return self._error_response(
+                provider="orchestrator",
+                model="smart_router",
+                message=str(e),
+                code="unknown",
+            )
+
+        defaults = self._model_registry.routing_defaults()
+        max_attempts = int(defaults.get("max_attempts", 2))
+        max_latency_ms = int(defaults.get("max_total_latency_ms", 12000))
+        if routing_constraints and routing_constraints.max_total_latency_ms is not None:
+            max_latency_ms = int(routing_constraints.max_total_latency_ms)
+
+        policy = FallbackPolicy(
+            max_attempts=max_attempts,
+            max_total_latency_ms=max_latency_ms,
+            allow_escalation=True,
+        )
+
+        current_tier = initial_tier
+        current_candidates = list(ordered_candidates)
+        attempt_index = 0
+        best_non_error: UnifiedResponse | None = None
+        final_response: UnifiedResponse | None = None
+        last_response: UnifiedResponse | None = None
+
+        while attempt_index < policy.max_attempts:
+            if not current_candidates:
+                next_tier = None
+                if self._model_registry:
+                    next_tier = self._model_registry.next_tier(current_tier)
+                if not next_tier:
+                    break
+                current_tier = next_tier
+                candidates = self._model_registry.get_candidates(current_tier, routing_constraints)
+                selection = self._selector.select(features, candidates, routing_constraints)
+                current_candidates = [
+                    selection.primary_candidate,
+                    *selection.fallback_candidates,
+                ]
+                continue
+
+            candidate = current_candidates.pop(0)
+            resp = self._invoke_candidate(candidate, messages, **kwargs)
+            prev_response = last_response
+            last_response = resp
+            if attempt_index > 0 and prev_response:
+                resp = replace(
+                    resp,
+                    attempt=attempt_index + 1,
+                    fallback_from=f"{prev_response.provider}:{prev_response.model}",
+                )
+            else:
+                resp = replace(resp, attempt=attempt_index + 1)
+
+            validation = self._validator.validate(features, routing_constraints, resp)
+            routing_md["attempts"].append(
+                {
+                    "tier": current_tier.value,
+                    "provider": candidate.provider,
+                    "model": candidate.model_name,
+                    "validation": validation.reason,
+                    "latency_ms": resp.latency_ms,
+                }
+            )
+
+            if not resp.is_error and best_non_error is None:
+                best_non_error = resp
+
+            if validation.ok:
+                final_response = resp
+                break
+
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            decision = self._fallback_manager.decide(
+                current_tier=current_tier,
+                validation=validation,
+                attempt_index=attempt_index,
+                elapsed_ms=elapsed_ms,
+                remaining_same_tier_candidates=len(current_candidates),
+                policy=policy,
+                next_tier_fn=self._model_registry.next_tier,
+            )
+
+            if decision.action == "retry_same_tier":
+                routing_md["fallback_used"] = True
+                attempt_index += 1
+                continue
+            if decision.action == "escalate_tier" and decision.next_tier:
+                routing_md["fallback_used"] = True
+                current_tier = decision.next_tier
+                candidates = self._model_registry.get_candidates(current_tier, routing_constraints)
+                selection = self._selector.select(features, candidates, routing_constraints)
+                current_candidates = [
+                    selection.primary_candidate,
+                    *selection.fallback_candidates,
+                ]
+                attempt_index += 1
+                continue
+
+            final_response = resp
+            break
+
+        if not final_response:
+            if best_non_error:
+                final_response = best_non_error
+            elif last_response:
+                final_response = last_response
+            else:
+                return self._error_response(
+                    provider="orchestrator",
+                    model="smart_router",
+                    message="No available model candidates",
+                    code="unknown",
+                )
+
+        routing_md["attempt_count"] = len(routing_md["attempts"])
+        routing_md["final_tier"] = current_tier.value
+
+        md = final_response.metadata or {}
+        md["routing"] = routing_md
+        final_response = replace(final_response, metadata=md)
+
+        return final_response
+
     # ---------- public API ----------
     def ask(
         self,
         prompt: str,
-        model_type: str,
+        model_type: str | None = None,
         context: UserContext | None = None,
         model_name: str | None = None,
         token_tracker: TokenTracker | None = None,
         research_mode: str = "auto",
+        routing_mode: str = "smart",
+        routing_constraints: dict[str, Any] | None = None,
         **kwargs,
     ) -> UnifiedResponse:
         try:
@@ -752,7 +1021,6 @@ These rules prevent misinformation. Follow them carefully.""",
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for request")
 
-            client = self._get_client(model_type, model_name)
             messages = self._build_messages(optimized_prompt, context)
 
             # Apply research if needed (and if service is configured)
@@ -772,7 +1040,84 @@ These rules prevent misinformation. Follow them carefully.""",
                     "sources": [],
                 }
 
-            resp = client.get_completion(messages=messages, **kwargs)
+            routing_mode_norm = (routing_mode or "").lower().strip()
+            # Only use smart routing when explicitly requested.
+            # Any other value (e.g., "legacy") preserves direct model invocation.
+            use_smart = routing_mode_norm in {"smart", "cheap", "strong"}
+            explicit_model_selected = bool(model_type and model_name)
+
+            if explicit_model_selected:
+                is_valid, validation_error = self._validate_explicit_model_selection(
+                    model_type, model_name
+                )
+                if not is_valid:
+                    return self._error_response(
+                        provider=model_type or "unknown",
+                        model=model_name or "unknown",
+                        message=validation_error,
+                        code="bad_request",
+                    )
+
+                client = self._get_client(model_type, model_name)
+                resp = client.get_completion(messages=messages, **kwargs)
+                md = resp.metadata or {}
+                md["routing"] = {
+                    "mode": "explicit",
+                    "initial_tier": "N/A",
+                    "final_tier": "N/A",
+                    "attempt_count": 1,
+                    "fallback_used": False,
+                    "attempts": [
+                        {
+                            "tier": "N/A",
+                            "provider": model_type,
+                            "model": model_name,
+                            "validation": "ok",
+                            "latency_ms": resp.latency_ms,
+                        }
+                    ],
+                    "decision_reasons": ["explicit_model_selection"],
+                }
+                resp = replace(resp, metadata=md)
+            elif use_smart:
+                constraints = self._build_routing_constraints(routing_constraints)
+                if model_type:
+                    if constraints is None:
+                        constraints = RoutingConstraints(preferred_provider=model_type)
+                    elif not constraints.preferred_provider:
+                        constraints = replace(constraints, preferred_provider=model_type)
+
+                resp = self._run_smart_attempt_loop(
+                    prompt=optimized_prompt,
+                    context=context,
+                    messages=messages,
+                    routing_mode=routing_mode_norm,
+                    routing_constraints=constraints,
+                    **kwargs,
+                )
+            else:
+                if not model_type:
+                    return self._error_response(
+                        provider="orchestrator",
+                        model=model_name or "default",
+                        message="provider is required when routing_mode is not smart/cheap/strong",
+                        code="bad_request",
+                    )
+
+                if model_name:
+                    is_valid, validation_error = self._validate_explicit_model_selection(
+                        model_type, model_name
+                    )
+                    if not is_valid:
+                        return self._error_response(
+                            provider=model_type,
+                            model=model_name,
+                            message=validation_error,
+                            code="bad_request",
+                        )
+
+                client = self._get_client(model_type, model_name)
+                resp = client.get_completion(messages=messages, **kwargs)
 
             # Merge research and optimization metadata into response
             md = resp.metadata or {}
@@ -781,10 +1126,12 @@ These rules prevent misinformation. Follow them carefully.""",
 
             # Check for browse disclaimer if research was used or explicitly requested
             research_used = research_metadata.get("research_used", False)
-            resp = self._check_browse_disclaimer(resp, research_used, optimized_prompt)
+            if self._enable_browse_disclaimer_check:
+                resp = self._check_browse_disclaimer(resp, research_used, optimized_prompt)
 
             # CRITICAL: Check for fabricated numbers/facts
-            resp = self._check_fabrication(resp, research_used, optimized_prompt)
+            if self._enable_fabrication_check:
+                resp = self._check_fabrication(resp, research_used, optimized_prompt)
 
             # Update token tracker here (business layer)
             if token_tracker:
@@ -795,7 +1142,7 @@ These rules prevent misinformation. Follow them carefully.""",
         except Exception as e:
             logger.exception("ask() failed")
             return self._error_response(
-                provider=model_type,
+                provider=model_type or "orchestrator",
                 model=model_name or "default",
                 message=str(e),
                 code="unknown",
@@ -898,11 +1245,15 @@ These rules prevent misinformation. Follow them carefully.""",
                 merged_md = {**md, **research_metadata}
                 resp_with_metadata = replace(resp, metadata=merged_md)
                 # Check for browse disclaimer if research was used or explicitly requested
-                resp_checked = self._check_browse_disclaimer(
-                    resp_with_metadata, research_used, prompt
-                )
+                resp_checked = resp_with_metadata
+                if self._enable_browse_disclaimer_check:
+                    resp_checked = self._check_browse_disclaimer(
+                        resp_with_metadata, research_used, prompt
+                    )
                 # Check for fabricated numbers/facts
-                resp_final = self._check_fabrication(resp_checked, research_used, prompt)
+                resp_final = resp_checked
+                if self._enable_fabrication_check:
+                    resp_final = self._check_fabrication(resp_checked, research_used, prompt)
                 updated_responses.append(resp_final)
 
             if token_tracker:

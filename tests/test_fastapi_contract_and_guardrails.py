@@ -110,11 +110,13 @@ class FakeMultiUnifiedResponse:
 
 
 class FakeOrchestrator:
-    def ask(self, prompt: str, model_type: str, context: Any = None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context: Any = None, **kwargs
+    ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id="req_ask_1",
             text="OK",
-            provider=model_type,
+            provider=model_type or "auto",
             model=kwargs.get("model") or "fake-model",
             latency_ms=10,
             token_usage=TokenUsage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
@@ -349,3 +351,45 @@ def test_compare_never_returns_500(client):
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code < 500
+
+
+def test_compare_still_works(client):
+    payload = {
+        "prompt": "hello",
+        "targets": [{"provider": "openai"}, {"provider": "gemini"}],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+
+
+def test_chat_accepts_routing_mode(client):
+    payload = {
+        "prompt": "hello",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "routing_mode": "smart",
+        "routing_constraints": {"max_cost_usd": 0.01},
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+
+
+def test_chat_allows_auto_without_provider(client):
+    payload = {
+        "prompt": "hello",
+        "routing_mode": "smart",
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200

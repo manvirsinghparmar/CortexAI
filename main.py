@@ -13,6 +13,8 @@ load_dotenv()
 MODEL_TYPE = os.getenv("MODEL_TYPE", "openai").lower()
 COMPARE_MODE = os.getenv("COMPARE_MODE", "false").lower() == "true"
 RESEARCH_MODE = os.getenv("RESEARCH_MODE", "auto").lower()  # Default to 'auto'
+ROUTING_MODE = os.getenv("ROUTING_MODE", "smart").lower()
+ROUTING_DEBUG = os.getenv("ROUTING_DEBUG", "false").lower() == "true"
 
 # Import orchestrator and utilities
 from config.config import COMPARE_TARGETS
@@ -282,6 +284,96 @@ def show_loading_animation(stop_event: threading.Event) -> None:
     sys.stdout.flush()
 
 
+def collect_multiline_input(
+    end_marker: str = "/end", cancel_marker: str = "/cancel"
+) -> str | None:
+    """
+    Collect multiline input until a marker is entered.
+
+    Args:
+        end_marker: Marker line that submits captured text
+        cancel_marker: Marker line that aborts capture
+
+    Returns:
+        Combined multiline text, or None when cancelled.
+    """
+    print(
+        f"\n[Paste mode: enter multiple lines, then type '{end_marker}' on a new line to submit]"
+    )
+    print(f"[Type '{cancel_marker}' on a new line to cancel]\n")
+
+    lines: list[str] = []
+    while True:
+        line = input()
+        marker = line.strip().lower()
+
+        if marker == end_marker.lower():
+            break
+        if marker == cancel_marker.lower():
+            print("\n[Paste mode cancelled]\n")
+            return None
+
+        # Preserve line formatting for pasted code blocks.
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _looks_like_code_block(text: str) -> bool:
+    """
+    Heuristic for pasted code-like content.
+    """
+    lines = text.splitlines()
+    if len(lines) < 3:
+        return False
+
+    text_lower = text.lower()
+    code_markers = [
+        "def ",
+        "class ",
+        "import ",
+        "return ",
+        "if ",
+        "for ",
+        "while ",
+        "```",
+        "{",
+        "}",
+    ]
+    marker_hits = sum(1 for marker in code_markers if marker in text_lower)
+    indented_lines = sum(
+        1 for line in lines if line.startswith("    ") or line.startswith("\t")
+    )
+
+    return marker_hits >= 2 or indented_lines >= 2
+
+
+def _has_explicit_task_intent(text: str) -> bool:
+    """
+    Detect whether the prompt includes a clear instruction for code handling.
+    """
+    text_lower = text.lower()
+    intent_markers = [
+        "refactor",
+        "explain",
+        "fix",
+        "debug",
+        "optimize",
+        "review",
+        "improve",
+        "rewrite",
+        "summarize",
+        "convert",
+        "add tests",
+        "document",
+        "what is wrong",
+        "how do i",
+        "can you",
+        "please",
+    ]
+    return "?" in text_lower or any(marker in text_lower for marker in intent_markers)
+
+
 def main():
     """
     CLI entry point - thin layer that handles user I/O.
@@ -402,20 +494,49 @@ def main():
 
         mode_text = "Compare Mode" if COMPARE_MODE else f"Single Model ({MODEL_TYPE.upper()})"
         print(f"\n=== CortexAI CLI ({mode_text}) ===")
-        print("Type 'exit' to quit, 'stats' for session stats, 'help' for commands\n")
+        print("Type 'exit' to quit, 'stats' for session stats, 'help' for commands")
+        print("Use '/paste' for multiline input (finish with '/end')\n")
 
         while True:
             try:
                 user_input = input("You: ").strip()
+                from_paste_mode = False
 
                 if not user_input:
                     continue
 
-                if user_input.lower() in ("exit", "quit"):
+                if user_input.lower() == "/paste":
+                    from_paste_mode = True
+                    pasted_input = collect_multiline_input()
+                    if pasted_input is None:
+                        continue
+                    if not pasted_input.strip():
+                        print("\n[Paste mode ended with empty input]\n")
+                        continue
+                    user_input = pasted_input
+                    print(f"\n[Captured {len(user_input.splitlines())} lines]\n")
+
+                if (
+                    from_paste_mode
+                    and _looks_like_code_block(user_input)
+                    and not _has_explicit_task_intent(user_input)
+                ):
+                    user_input = (
+                        "Please review and refactor this code. Preserve behavior and explain key "
+                        "improvements.\n\n"
+                        f"{user_input}"
+                    )
+                    print(
+                        "\n[No explicit task detected in pasted code. "
+                        "Defaulting to: review + refactor]\n"
+                    )
+                    logger.info("Applied default instruction for code-only paste")
+
+                if not from_paste_mode and user_input.lower() in ("exit", "quit"):
                     print("\nGoodbye!")
                     break
 
-                if user_input.lower() == "stats":
+                if not from_paste_mode and user_input.lower() == "stats":
                     logger.debug("User requested session statistics")
                     print("\n=== Session Statistics ===")
                     print(token_tracker.format_summary())
@@ -429,18 +550,18 @@ def main():
                     print(f"\nLast updated: {token_tracker.get_summary()['timestamp']}\n")
                     continue
 
-                if user_input.lower() == "/reset":
+                if not from_paste_mode and user_input.lower() == "/reset":
                     conversation.reset(keep_system_prompt=True)
                     print("\n[Conversation history cleared]\n")
                     logger.info("User reset conversation history")
                     continue
 
-                if user_input.lower() == "/history":
+                if not from_paste_mode and user_input.lower() == "/history":
                     print(f"\n{conversation.get_conversation_summary(last_n=10)}\n")
                     logger.debug("User requested conversation history")
                     continue
 
-                if user_input.lower() == "/new" or user_input.lower() == "new":
+                if not from_paste_mode and (user_input.lower() == "/new" or user_input.lower() == "new"):
                     if DB_ENABLED and db_session and user_id:
                         mode = "compare" if COMPARE_MODE else "ask"
                         db_session_id = create_session(
@@ -458,7 +579,13 @@ def main():
                     logger.info("User created new session")
                     continue
 
-                if user_input.lower() == "/dbstats" and DB_ENABLED and db_session and user_id:
+                if (
+                    not from_paste_mode
+                    and user_input.lower() == "/dbstats"
+                    and DB_ENABLED
+                    and db_session
+                    and user_id
+                ):
                     from db.repository import get_usage_daily
 
                     usage = get_usage_daily(db_session, user_id)
@@ -471,10 +598,13 @@ def main():
                         print("\n\033[93mNo database usage today yet.\033[0m\n")
                     continue
 
-                if user_input.lower() == "help":
+                if not from_paste_mode and user_input.lower() == "help":
                     print("\n=== Available Commands ===")
                     print("help          - Show this help message")
                     print("stats         - Show token usage statistics")
+                    print("/paste        - Enter multiline paste mode")
+                    print("/end          - Submit multiline input (paste mode only)")
+                    print("/cancel       - Cancel multiline input (paste mode only)")
                     print("/reset        - Clear conversation history")
                     print("/history      - Show recent conversation")
                     print("/new          - Create new session")
@@ -636,7 +766,11 @@ def main():
                             context=context,
                             token_tracker=token_tracker,
                             research_mode=selected_research_mode,
+                            routing_mode=ROUTING_MODE,
                         )
+                        # Optional routing debug output for smart routing metadata.
+                        if ROUTING_DEBUG and resp.metadata and "routing" in resp.metadata:
+                            print(f"[Routing] {resp.metadata['routing']}")
 
                         stop_animation.set()
                         loading_thread.join()

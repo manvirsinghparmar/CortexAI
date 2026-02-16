@@ -10,6 +10,13 @@ class ModelPricing:
 
     # OpenAI Models Pricing (per million tokens)
     OPENAI_PRICING = {
+        "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+        "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+        "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gpt-4o": {"input": 2.50, "output": 10.00},
+        "gpt-5.1": {"input": 2.00, "output": 8.00},
+        "gpt-5.2-codex": {"input": 6.00, "output": 18.00},
         # GPT-4 Models
         "gpt-4": {"input": 30.00, "output": 60.00},
         "gpt-4-32k": {"input": 60.00, "output": 120.00},
@@ -34,7 +41,9 @@ class ModelPricing:
         "gemini-1.5-flash-8b": {"input": 0.0375, "output": 0.15},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
         "gemini-2.0-flash-exp": {"input": 0.00, "output": 0.00},  # Free during preview
+        "gemini-2.5-flash": {"input": 0.30, "output": 1.20},
         "gemini-2.5-flash-lite": {"input": 0.05, "output": 0.20},
+        "gemini-2.5-pro": {"input": 1.25, "output": 5.00},
         "gemini-1.0-pro": {"input": 0.50, "output": 1.50},
         "gemini-1.0-pro-001": {"input": 0.50, "output": 1.50},
     }
@@ -48,6 +57,8 @@ class ModelPricing:
     # Grok Models Pricing (per million tokens)
     GROK_PRICING = {
         "grok-4-latest": {"input": 5.00, "output": 15.00},
+        "grok-4-1-fast-non-reasoning": {"input": 2.00, "output": 8.00},
+        "grok-4-1-fast-reasoning": {"input": 3.00, "output": 12.00},
         "grok-2": {"input": 2.00, "output": 10.00},
         "grok-2-mini": {"input": 0.50, "output": 2.50},
     }

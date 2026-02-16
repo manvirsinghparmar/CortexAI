@@ -12,6 +12,7 @@ pydantic>=2.7.0
 # Environment & Utilities
 python-dotenv>=1.0.0
 colorama>=0.4.6
+PyYAML>=6.0.1
 
 # Database
 sqlalchemy>=2.0.0

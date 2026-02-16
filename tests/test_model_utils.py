@@ -70,6 +70,68 @@ class TestModelUtilsUnit:
         mock_gemini_class.assert_called_once_with(api_key="test-key", model_name="gemini-2.0-pro")
         mock_client.list_models.assert_called_once()
 
+    @patch("utils.model_utils.ModelUtils.list_available_models")
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_list_all_available_models_calls_all_supported_providers(
+        self, mock_stdout, mock_list_available
+    ):
+        api_keys = {
+            "openai": "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",
+            "gemini": "AIzaSyCQJbeUcPWFAKPp_mdkm-o5aUdmUO4mR2k",
+            "deepseek": "sk-486b946ae8234a49b8bc43be9e38745d",
+            "grok": "xai-ryo2QIzvpX3DSZbo1rJgzLp2l3wPxwxqNPmucL2D2zEqv999B19X1jpfxDvb1TD8CV3NMokLKFE2lkXg",
+        }
+        current_models = {
+            "openai": "gpt-4o",
+            "gemini": "gemini-2.5-pro",
+            "deepseek": "deepseek-chat",
+            "grok": "grok-4-latest",
+        }
+
+        ModelUtils.list_all_available_models(api_keys=api_keys, current_models=current_models)
+
+        assert mock_list_available.call_count == 4
+        called_providers = [call.kwargs["provider"] for call in mock_list_available.call_args_list]
+        assert called_providers == ["openai", "gemini", "deepseek", "grok"]
+
+    @patch("utils.model_utils.ModelUtils.list_available_models")
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_list_all_available_models_skips_missing_api_keys(self, mock_stdout, mock_list_available):
+        ModelUtils.list_all_available_models(
+            api_keys={"openai": "key-openai", "gemini": ""},
+            providers=["openai", "gemini"],
+        )
+        output = mock_stdout.getvalue().lower()
+        assert "[gemini] skipped: missing api key" in output
+        assert mock_list_available.call_count == 1
+        assert mock_list_available.call_args.kwargs["provider"] == "openai"
+
+    @patch("api.deepseek_client.DeepSeekClient.list_available_models")
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_list_models_supports_deepseek(self, mock_stdout, mock_list):
+        ModelUtils.list_available_models(
+            api_key="test-deepseek-key",
+            current_model="deepseek-chat",
+            provider="deepseek",
+        )
+        mock_list.assert_called_once_with(
+            api_key="test-deepseek-key",
+            current_model="deepseek-chat",
+        )
+
+    @patch("api.grok_client.GrokClient.list_available_models")
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_list_models_supports_grok(self, mock_stdout, mock_list):
+        ModelUtils.list_available_models(
+            api_key="test-grok-key",
+            current_model="grok-4-latest",
+            provider="grok",
+        )
+        mock_list.assert_called_once_with(
+            api_key="test-grok-key",
+            current_model="grok-4-latest",
+        )
+
     @patch("utils.GeminiAvailableModels.GeminiClient")
     @patch("sys.stdout", new_callable=StringIO)
     def test_list_models_filters_non_generation_models(self, mock_stdout, mock_gemini_class):

@@ -15,12 +15,14 @@ class UserContextRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    provider: str = Field(..., pattern="^(openai|gemini|deepseek|grok)$")
+    provider: str | None = Field(None, pattern="^(openai|gemini|deepseek|grok)$")
     model: str | None = None
     context: UserContextRequest | None = None
     temperature: float | None = Field(None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(None, gt=0)
     research_mode: str | None = Field("auto", pattern="^(off|auto|on)$")
+    routing_mode: str | None = Field("smart", pattern="^(smart|cheap|strong)$")
+    routing_constraints: dict | None = None
 
 
 class CompareTargetRequest(BaseModel):

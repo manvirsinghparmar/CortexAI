@@ -54,6 +54,8 @@ async def chat(
         model_name=request.model,
         token_tracker=None,
         research_mode=research_mode,
+        routing_mode=request.routing_mode or "smart",
+        routing_constraints=request.routing_constraints,
         **kwargs,
     )
 

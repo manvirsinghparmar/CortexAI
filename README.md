@@ -30,6 +30,8 @@ Python project for running chat/comparison workflows across OpenAI, Gemini, Deep
 - CLI multiline paste mode for code (`/paste`, finish with `/end`)
 - API auth via `X-API-Key`
 - Compare endpoint for side-by-side model results
+- DB-backed API persistence for `/v1/chat` and `/v1/compare`
+- Canonical compare `request_group_id` across API response, orchestrator logs, and DB rows
 - Token/cost tracking and structured JSON logs
 
 ## Setup
@@ -63,6 +65,7 @@ Optional:
 - `DATABASE_URL` to enable DB persistence
 - `TAVILY_API_KEY` to enable web research
 - `ENABLE_PROMPT_OPTIMIZATION=true` for prompt optimization
+- `AUTO_REGISTER_UNMAPPED_API_KEYS` / `ALLOW_UNMAPPED_API_KEY_PERSIST` for unmapped-key persistence behavior
 
 ## Run
 
@@ -161,6 +164,28 @@ API guardrails:
 
 Important:
 - API currently does not enforce CLI daily usage caps.
+
+API key DB registration (for persistence attribution):
+- `python tools/create_api_key.py --email api@cortexai.local --name "API Service User" --label "postman"`
+- For existing key: `python tools/create_api_key.py --email api@cortexai.local --key "dev-key-1" --label "env-dev-key"`
+- Zero-arg dev helper: `python tools/register_dev_key.py`
+
+API key persistence defaults:
+- `AUTO_REGISTER_UNMAPPED_API_KEYS=false`
+- `ALLOW_UNMAPPED_API_KEY_PERSIST=false`
+
+With both defaults, unmapped keys are rejected with `403` (safer testing default).
+
+## DB Migrations for API Persistence
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
+psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
+```
+
+What these add:
+- Owner invariant trigger for `llm_requests.user_id` vs `api_keys.user_id` when `api_key_id` is set
+- `llm_requests.request_group_id` + indexes for compare run grouping
 
 ## Smart Routing
 
@@ -331,6 +356,10 @@ OpenAIProject/
 - Set `API_KEYS` in `.env`
 - Send `X-API-Key` header
 
+OpenAI `Unsupported parameter: 'max_tokens'` with newer models:
+- Client now auto-retries with `max_completion_tokens`.
+- Update to latest code and restart server.
+
 ---
 
-Last updated: 2026-02-16
+Last updated: 2026-02-18

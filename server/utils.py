@@ -1,10 +1,13 @@
 """Shared utilities for FastAPI routes."""
 
+from collections.abc import Mapping
+
 from fastapi import HTTPException, status
 
 MAX_CONTEXT_MESSAGES = 10
 MAX_CONTEXT_CHARS = 8000
 MAX_OUTPUT_TOKENS = 1024
+SENSITIVE_HEADERS = {"x-api-key", "authorization"}
 
 
 def validate_and_trim_context(context_req):
@@ -35,3 +38,16 @@ def clamp_max_tokens(max_tokens):
     if max_tokens is None:
         return None
     return min(max_tokens, MAX_OUTPUT_TOKENS)
+
+
+def redact_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """
+    Redact auth-bearing headers before logging.
+    """
+    redacted: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in SENSITIVE_HEADERS and value:
+            redacted[key] = "[REDACTED]"
+        else:
+            redacted[key] = value
+    return redacted

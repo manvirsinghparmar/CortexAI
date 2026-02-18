@@ -55,6 +55,9 @@ class SmartRouter:
             initial_tier=tier,
             final_tier=tier,
             decision_reasons=reasons,
+            ordered_candidates=ordered_candidates,
+            features=features,
+            prompt=prompt,
         )
         metadata["selection"] = {
             "primary_provider": selection.primary_candidate.provider,
@@ -76,7 +79,20 @@ class SmartRouter:
         initial_tier: Tier,
         final_tier: Tier,
         decision_reasons: list[str],
+        ordered_candidates: list[ModelCandidate] | None = None,
+        features: PromptFeatures | None = None,
+        prompt: str = "",
     ) -> dict[str, Any]:
+        candidate_plan = self._build_candidate_plan(
+            ordered_candidates=ordered_candidates or [],
+            features=features,
+            tier=initial_tier,
+        )
+
+        selected_slots = self._build_selected_slots(candidate_plan)
+        features_payload = vars(features) if features else {}
+        prompt_category = self._derive_prompt_category(prompt=prompt, features=features)
+
         return {
             "mode": mode,
             "initial_tier": initial_tier.value,
@@ -85,7 +101,163 @@ class SmartRouter:
             "fallback_used": False,
             "attempts": [],
             "decision_reasons": decision_reasons,
+            "candidate_plan": candidate_plan,
+            "selected_sequence": [],
+            "first_selected_model": selected_slots[0],
+            "second_selected_model": selected_slots[1],
+            "third_selected_model": selected_slots[2],
+            "features": features_payload,
+            "prompt_category": prompt_category,
         }
+
+    def _build_candidate_plan(
+        self,
+        *,
+        ordered_candidates: list[ModelCandidate],
+        features: PromptFeatures | None,
+        tier: Tier,
+    ) -> list[dict[str, Any]]:
+        if not ordered_candidates:
+            return []
+
+        token_buffer = int(getattr(self._selector, "_token_buffer", 200))
+        required_tokens = 0
+        if features:
+            required_tokens = (
+                int(features.token_estimate) + int(features.context_token_estimate) + token_buffer
+            )
+
+        plan: list[dict[str, Any]] = []
+        for index, candidate in enumerate(ordered_candidates, start=1):
+            blended_cost = round(
+                (0.6 * candidate.input_cost_per_1m) + (0.4 * candidate.output_cost_per_1m), 6
+            )
+            why_selected = [
+                f"ranked_{index}_by_selector_within_{tier.value}",
+                f"blended_cost_per_1m={blended_cost}",
+            ]
+
+            if required_tokens > 0:
+                if candidate.context_limit >= required_tokens:
+                    why_selected.append(
+                        f"context_limit_ok_{candidate.context_limit}_for_required_{required_tokens}"
+                    )
+                else:
+                    why_selected.append(
+                        f"context_limit_below_required_{candidate.context_limit}_lt_{required_tokens}_kept_as_fallback"
+                    )
+
+            tags = {t.lower() for t in candidate.tags}
+            if features:
+                if features.has_code:
+                    if {"coding", "reasoning"} & tags:
+                        why_selected.append("matches_code_or_reasoning_tags")
+                    else:
+                        why_selected.append("selected_despite_weak_code_tags_as_available_fallback")
+                if features.has_analysis or features.has_math or features.needs_accuracy:
+                    if "reasoning" in tags:
+                        why_selected.append("matches_reasoning_requirement")
+                    else:
+                        why_selected.append("selected_without_reasoning_tag_due_to_ranking_availability")
+                if (features.token_estimate + features.context_token_estimate) >= 2200:
+                    if "long_context" in tags:
+                        why_selected.append("long_context_preferred")
+                    else:
+                        why_selected.append("long_context_not_tagged")
+
+            plan.append(
+                {
+                    "order": index,
+                    "provider": candidate.provider,
+                    "model": candidate.model_name,
+                    "tier": tier.value,
+                    "status": "pending",
+                    "outcome_reason": "not_attempted",
+                    "why_selected": why_selected,
+                }
+            )
+
+        return plan
+
+    def _build_selected_slots(self, candidate_plan: list[dict[str, Any]]) -> list[dict[str, Any] | None]:
+        slots: list[dict[str, Any] | None] = []
+        for idx in range(3):
+            if idx < len(candidate_plan):
+                item = candidate_plan[idx]
+                slots.append(
+                    {
+                        "order": item["order"],
+                        "provider": item["provider"],
+                        "model": item["model"],
+                        "tier": item["tier"],
+                        "why_selected": item.get("why_selected", []),
+                        "status": "pending",
+                        "why_worked": None,
+                        "why_failed": None,
+                    }
+                )
+            else:
+                slots.append(None)
+        return slots
+
+    def _derive_prompt_category(self, prompt: str, features: PromptFeatures | None) -> str:
+        """
+        Derive prompt category aligned to DB enum:
+        coding|financial|educational|math|legal|data_technical|general|unknown
+        """
+        text = (prompt or "").lower()
+        has_code = bool(features and features.has_code)
+        has_math = bool(features and features.has_math)
+        has_analysis = bool(features and features.has_analysis)
+        has_logs = bool(features and features.has_logs_stacktrace)
+        intent = features.intent if features else "general"
+
+        if has_code or intent == "code":
+            return "coding"
+        if has_math:
+            return "math"
+        if any(
+            kw in text
+            for kw in [
+                "stock",
+                "stocks",
+                "market",
+                "finance",
+                "financial",
+                "revenue",
+                "profit",
+                "portfolio",
+                "crypto",
+                "investment",
+                "nasdaq",
+                "dow jones",
+            ]
+        ):
+            return "financial"
+        if any(
+            kw in text
+            for kw in ["law", "legal", "contract", "liability", "regulation", "statute", "court"]
+        ):
+            return "legal"
+        if any(
+            kw in text
+            for kw in [
+                "teach",
+                "lesson",
+                "tutorial",
+                "explain like",
+                "beginner",
+                "homework",
+                "student",
+                "study plan",
+            ]
+        ):
+            return "educational"
+        if has_analysis or intent == "analysis" or has_logs:
+            return "data_technical"
+        if prompt.strip():
+            return "general"
+        return "unknown"
 
     def _apply_constraints(
         self, features: PromptFeatures, constraints: RoutingConstraints | None

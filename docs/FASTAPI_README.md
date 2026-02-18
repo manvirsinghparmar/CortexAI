@@ -7,17 +7,22 @@
 pip install -r requirements.txt
 ```
 
-2. Configure API auth keys in `.env`:
+2. Configure auth in `.env`:
 ```ini
 API_KEYS=dev-key-1,dev-key-2
 ```
 
-3. Start server:
+3. Optional DB persistence:
+```ini
+DATABASE_URL=postgresql+psycopg://...
+```
+
+4. Start server:
 ```bash
 python run_server.py --reload
 ```
 
-4. Open docs:
+5. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 
@@ -29,14 +34,45 @@ python run_server.py --reload
 
 ## Authentication
 
-All protected endpoints require:
-- Header: `X-API-Key: <key-from-API_KEYS>`
+Protected endpoints require:
+- `X-API-Key: <key-from-API_KEYS>`
 
-If key is missing/invalid, response is `401`.
+Invalid or missing key returns `401`.
+
+## API Key Persistence Policy (DB-enabled routes)
+
+When `DATABASE_URL` is set, chat/compare persistence resolves API key ownership before model invocation.
+
+Env flags:
+- `AUTO_REGISTER_UNMAPPED_API_KEYS=false` (safe default)
+- `ALLOW_UNMAPPED_API_KEY_PERSIST=false` (safe default)
+- `API_KEY_FALLBACK_USER_EMAIL=api@cortexai.local`
+- `API_KEY_FALLBACK_USER_NAME=API Service User`
+
+Behavior for key present in `API_KEYS` but unmapped in `public.api_keys`:
+1. If `AUTO_REGISTER_UNMAPPED_API_KEYS=true`: creates DB mapping under service user.
+2. Else if `ALLOW_UNMAPPED_API_KEY_PERSIST=true`: persists with service user and `api_key_id=NULL`.
+3. Else: rejects with `403`.
+
+Guardrail:
+- If `llm_requests.api_key_id` is set, `llm_requests.user_id` must match `api_keys.user_id`.
+- Enforced in app logic and DB trigger migration.
+
+## Register Dev/Test Key
+
+Preferred zero-arg helper (IDE-friendly):
+```bash
+python tools/register_dev_key.py
+```
+
+Param-based helper:
+```bash
+python tools/create_api_key.py --email api@cortexai.local --name "API Service User" --key "dev-key-1" --label "postman-dev"
+```
 
 ## Chat API
 
-### Request Shape
+### Request shape
 
 ```json
 {
@@ -54,57 +90,20 @@ If key is missing/invalid, response is `401`.
   "research_mode": "off|auto|on",
   "routing_mode": "smart|cheap|strong",
   "routing_constraints": {
-    "max_cost_usd": 0.01,
-    "max_total_latency_ms": 8000,
-    "preferred_provider": "openai",
-    "allowed_providers": ["openai", "gemini"],
-    "min_context_limit": 128000,
-    "json_only": true,
-    "strict_format": true
+    "max_cost_usd": 0.01
   }
 }
 ```
 
-### Notes
-
-- `provider` can be omitted when using smart routing (`routing_mode=smart|cheap|strong`).
-- If both `provider` and `model` are provided, explicit model selection is used and validated against `config/model_registry.yaml`.
-- Unknown/disabled explicit model returns `bad_request`.
-
-### Example: Auto Routing
-
-```bash
-curl -X POST http://127.0.0.1:8000/v1/chat \
-  -H "X-API-Key: dev-key-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Fix this stack trace and propose a patch",
-    "routing_mode": "smart"
-  }'
-```
-
-### Example: Explicit Model
-
-```bash
-curl -X POST http://127.0.0.1:8000/v1/chat \
-  -H "X-API-Key: dev-key-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Explain decorators in Python",
-    "provider": "openai",
-    "model": "gpt-4o-mini"
-  }'
-```
-
 ## Compare API
 
-### Request Shape
+### Request shape
 
 ```json
 {
   "prompt": "string (required)",
   "targets": [
-    {"provider": "openai", "model": "gpt-4.1-mini"},
+    {"provider": "openai", "model": "gpt-5.1"},
     {"provider": "gemini", "model": "gemini-2.5-flash-lite"}
   ],
   "context": {
@@ -120,25 +119,27 @@ curl -X POST http://127.0.0.1:8000/v1/chat \
 }
 ```
 
-### Rules
+Rules:
+- 2 to 4 targets.
+- Context rejected when targets > 2.
 
-- Min 2 targets, max 4 targets.
-- Context is rejected when targets > 2.
+Persistence:
+- One `llm_requests` + `llm_responses` row per compare target response.
+- Shared `llm_requests.request_group_id` per compare run.
+- API response `request_group_id` is canonical and matches orchestrator/log/persistence group ID.
 
-### Example
+## Schema Migrations
+
+Apply these when enabling updated persistence flows:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/compare \
-  -H "X-API-Key: dev-key-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Summarize tradeoffs of sync vs async IO",
-    "targets": [
-      {"provider": "openai", "model": "gpt-4.1-mini"},
-      {"provider": "deepseek", "model": "deepseek-chat"}
-    ]
-  }'
+psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
+psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
 ```
+
+## OpenAI Compatibility Note
+
+For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client now retries with `max_completion_tokens`.
 
 ## Guardrails
 
@@ -147,34 +148,27 @@ Applied in `server/utils.py`:
 - Total context chars capped at 8000.
 - `max_tokens` clamped to 1024.
 
-## What API Does Not Enforce (Current)
-
-- Daily token/cost caps (`DAILY_TOKEN_CAP`, `DAILY_COST_CAP`) are enforced in CLI (with DB path), not in API routes.
+Security/logging:
+- `X-API-Key` and `Authorization` headers are redacted in auth logs.
+- Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
 
 ## Testing
 
-Run contract/guardrail tests:
+Run FastAPI contract tests:
 ```bash
 pytest tests/test_fastapi_contract_and_guardrails.py -v
 ```
 
-Run integration tests (server must be running):
+Run persistence guardrail tests:
 ```bash
-pytest tests/test_api.py -v
+pytest tests/test_api_persistence_guardrails.py -v
 ```
 
-## Relevant Files
-
-- `server/app.py`
-- `server/routes/chat.py`
-- `server/routes/compare.py`
-- `server/routes/health.py`
-- `server/schemas/requests.py`
-- `server/schemas/responses.py`
-- `server/dependencies.py`
-- `server/utils.py`
-- `orchestrator/core.py`
+Run compare orchestrator tests:
+```bash
+pytest tests/test_multi_compare_mode.py -v
+```
 
 ---
 
-Last updated: 2026-02-16
+Last updated: 2026-02-18

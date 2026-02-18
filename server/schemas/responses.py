@@ -1,5 +1,6 @@
 """Pydantic response models (DTOs) for FastAPI endpoints."""
 
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -82,17 +83,43 @@ class CompareResponseDTO(BaseModel):
     total_cost: float
     timestamp: str
 
+    @staticmethod
+    def _resolve_compare_timestamp(mur: Any) -> str:
+        """
+        Support both MultiUnifiedResponse variants:
+        - models.multi_unified_response.MultiUnifiedResponse -> created_at: datetime
+        - models.unified_response.MultiUnifiedResponse -> timestamp: str
+        """
+        timestamp_value = getattr(mur, "timestamp", None)
+        if isinstance(timestamp_value, str) and timestamp_value.strip():
+            return timestamp_value
+
+        created_at = getattr(mur, "created_at", None)
+        if isinstance(created_at, datetime):
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            return created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        if created_at and hasattr(created_at, "isoformat"):
+            try:
+                return str(created_at.isoformat())
+            except Exception:
+                pass
+
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
     @classmethod
     def from_multi_unified_response(cls, mur):
         """Convert MultiUnifiedResponse to DTO."""
+        normalized_responses = [r for r in mur.responses if r is not None]
         return cls(
             request_group_id=mur.request_group_id,
-            responses=[ChatResponseDTO.from_unified_response(r) for r in mur.responses],
+            responses=[ChatResponseDTO.from_unified_response(r) for r in normalized_responses],
             success_count=mur.success_count,
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,
             total_cost=mur.total_cost,
-            timestamp=mur.created_at.isoformat().replace("+00:00", "Z"),
+            timestamp=cls._resolve_compare_timestamp(mur),
         )
 
 

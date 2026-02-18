@@ -847,6 +847,98 @@ These rules prevent misinformation. Follow them carefully.""",
                 code="unknown",
             )
 
+    def _explain_attempt_failure(self, response: UnifiedResponse, validation_reason: str) -> str:
+        if response.is_error and response.error:
+            return (
+                f"provider_error:{response.error.code}"
+                f" message={response.error.message}"
+            )
+
+        reason_map = {
+            "refusal": "model_refused_request_or_system_instruction_conflict",
+            "too_short": "response_below_minimum_quality_length_threshold",
+            "format_violation": "response_did_not_meet_required_output_format",
+            "truncated": "response_truncated_before_completion",
+            "timeout": "provider_timed_out",
+            "rate_limit": "provider_rate_limited_request",
+            "provider_error": "provider_returned_invalid_or_error_response",
+            "latency_budget": "routing_latency_budget_exceeded",
+            "max_attempts": "routing_max_attempts_reached",
+        }
+        return reason_map.get(validation_reason, f"validation_failed:{validation_reason}")
+
+    def _update_routing_metadata_for_attempt(
+        self,
+        routing_md: dict[str, Any],
+        *,
+        attempt_number: int,
+        tier: Tier,
+        candidate: ModelCandidate,
+        response: UnifiedResponse,
+        validation_reason: str,
+        validation_ok: bool,
+    ) -> None:
+        status = "success" if validation_ok else "failed"
+        why_worked = (
+            "response_passed_validator_checks_and_returned_usable_output"
+            if validation_ok
+            else None
+        )
+        why_failed = (
+            None if validation_ok else self._explain_attempt_failure(response, validation_reason)
+        )
+
+        attempt_entry = {
+            "attempt_number": attempt_number,
+            "tier": tier.value,
+            "provider": candidate.provider,
+            "model": candidate.model_name,
+            "validation": validation_reason,
+            "latency_ms": response.latency_ms,
+            "status": status,
+            "why_worked": why_worked,
+            "why_failed": why_failed,
+        }
+        routing_md["attempts"].append(attempt_entry)
+
+        plan_entry = None
+        for item in routing_md.get("candidate_plan", []):
+            if (
+                item.get("provider") == candidate.provider
+                and item.get("model") == candidate.model_name
+                and item.get("status") == "pending"
+            ):
+                plan_entry = item
+                break
+
+        selected_item = {
+            "attempt_number": attempt_number,
+            "provider": candidate.provider,
+            "model": candidate.model_name,
+            "tier": tier.value,
+            "status": status,
+            "why_selected": (plan_entry or {}).get(
+                "why_selected",
+                ["selected_by_runtime_fallback_or_tier_reselection"],
+            ),
+            "why_worked": why_worked,
+            "why_failed": why_failed,
+        }
+
+        if plan_entry:
+            plan_entry["status"] = status
+            plan_entry["outcome_reason"] = "validator_ok" if validation_ok else validation_reason
+            plan_entry["why_worked"] = why_worked
+            plan_entry["why_failed"] = why_failed
+            selected_item["order"] = plan_entry.get("order")
+
+        routing_md.setdefault("selected_sequence", []).append(selected_item)
+
+        seq = routing_md.get("selected_sequence", [])
+        routing_md["first_selected_model"] = seq[0] if len(seq) >= 1 else None
+        routing_md["second_selected_model"] = seq[1] if len(seq) >= 2 else None
+        routing_md["third_selected_model"] = seq[2] if len(seq) >= 3 else None
+
     def _run_smart_attempt_loop(
         self,
         *,
@@ -933,14 +1025,14 @@ These rules prevent misinformation. Follow them carefully.""",
                 resp = replace(resp, attempt=attempt_index + 1)
 
             validation = self._validator.validate(features, routing_constraints, resp)
-            routing_md["attempts"].append(
-                {
-                    "tier": current_tier.value,
-                    "provider": candidate.provider,
-                    "model": candidate.model_name,
-                    "validation": validation.reason,
-                    "latency_ms": resp.latency_ms,
-                }
+            self._update_routing_metadata_for_attempt(
+                routing_md,
+                attempt_number=attempt_index + 1,
+                tier=current_tier,
+                candidate=candidate,
+                response=resp,
+                validation_reason=validation.reason,
+                validation_ok=validation.ok,
             )
 
             if not resp.is_error and best_non_error is None:
@@ -960,6 +1052,12 @@ These rules prevent misinformation. Follow them carefully.""",
                 policy=policy,
                 next_tier_fn=self._model_registry.next_tier,
             )
+            if routing_md.get("selected_sequence"):
+                latest_selected = routing_md["selected_sequence"][-1]
+                latest_selected["next_action"] = (
+                    decision.action.value if hasattr(decision.action, "value") else str(decision.action)
+                )
+                latest_selected["next_action_reason"] = decision.reason
 
             if decision.action == "retry_same_tier":
                 routing_md["fallback_used"] = True
@@ -1121,7 +1219,7 @@ These rules prevent misinformation. Follow them carefully.""",
 
             # Merge research and optimization metadata into response
             md = resp.metadata or {}
-            merged_md = {**md, **research_metadata, **opt_metadata}
+            merged_md = {**md, **research_metadata, **opt_metadata, "research_mode": research_mode}
             resp = replace(resp, metadata=merged_md)
 
             # Check for browse disclaimer if research was used or explicitly requested
@@ -1156,9 +1254,10 @@ These rules prevent misinformation. Follow them carefully.""",
         timeout_s: float | None = None,
         token_tracker: TokenTracker | None = None,
         research_mode: str = "auto",
+        request_group_id: str | None = None,
         **kwargs,
     ) -> MultiUnifiedResponse:
-        request_group_id = str(uuid.uuid4())
+        request_group_id = request_group_id or str(uuid.uuid4())
         responses: list[UnifiedResponse] = []
 
         try:
@@ -1230,6 +1329,7 @@ These rules prevent misinformation. Follow them carefully.""",
                 prompt=prompt,
                 clients=clients,
                 timeout_s=timeout_s,
+                request_group_id=request_group_id,
                 messages=messages,  # Pass research-injected messages to all models
                 **kwargs,
             )
@@ -1242,7 +1342,7 @@ These rules prevent misinformation. Follow them carefully.""",
             updated_responses = []
             for resp in responses:
                 md = resp.metadata or {}
-                merged_md = {**md, **research_metadata}
+                merged_md = {**md, **research_metadata, "research_mode": research_mode}
                 resp_with_metadata = replace(resp, metadata=merged_md)
                 # Check for browse disclaimer if research was used or explicitly requested
                 resp_checked = resp_with_metadata

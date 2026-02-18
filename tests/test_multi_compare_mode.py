@@ -292,6 +292,20 @@ class TestMultiModelOrchestrator:
         orchestrator = MultiModelOrchestrator(default_timeout_s=1.0)
         assert orchestrator.default_timeout_s == 1.0
 
+    def test_request_group_id_passthrough(self):
+        """Caller-provided request_group_id should be preserved end-to-end."""
+        orchestrator = MultiModelOrchestrator()
+        client = FakeClient(provider_name="openai", model_name="gpt-4")
+        group_id = "group-fixed-123"
+
+        result = orchestrator.get_comparisons_sync(
+            "Test prompt",
+            [client],
+            request_group_id=group_id,
+        )
+
+        assert result.request_group_id == group_id
+
     def test_empty_client_list(self):
         """Test orchestrator with empty client list."""
         orchestrator = MultiModelOrchestrator()

@@ -13,6 +13,7 @@ from api.deepseek_client import DeepSeekClient
 from api.google_gemini_client import GeminiClient
 from api.grok_client import GrokClient
 from api.openai_client import OpenAIClient
+from server.schemas.responses import CompareResponseDTO
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 
 
@@ -164,6 +165,34 @@ class TestProviderContractCompliance:
         assert response.text == ""
 
     @patch("openai.OpenAI")
+    def test_openai_retries_with_max_completion_tokens_when_max_tokens_unsupported(self, mock_openai):
+        """Test OpenAI fallback for model families that reject max_tokens."""
+        mock_success = Mock()
+        mock_success.choices = [Mock(message=Mock(content="Recovered"), finish_reason="stop")]
+        mock_success.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+
+        unsupported_error = Exception(
+            "Invalid request: Error code: 400 - {'error': {'message': "
+            "'Unsupported parameter: \\'max_tokens\\' is not supported with this model. "
+            "Use \\'max_completion_tokens\\' instead.'}}"
+        )
+        mock_openai.return_value.chat.completions.create.side_effect = [unsupported_error, mock_success]
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.1")
+        response = client.get_completion("Test prompt", max_tokens=321)
+
+        assert response.is_success
+        assert response.text == "Recovered"
+
+        calls = mock_openai.return_value.chat.completions.create.call_args_list
+        assert len(calls) == 2
+        assert "max_tokens" in calls[0].kwargs
+        assert calls[0].kwargs["max_tokens"] == 321
+        assert "max_completion_tokens" in calls[1].kwargs
+        assert calls[1].kwargs["max_completion_tokens"] == 321
+        assert "max_tokens" not in calls[1].kwargs
+
+    @patch("openai.OpenAI")
     def test_deepseek_returns_unified_response(self, mock_openai):
         """Test that DeepSeek client returns UnifiedResponse."""
         # Mock successful response
@@ -284,6 +313,37 @@ class TestTokenTrackerIntegration:
         assert tracker.total_completion_tokens == 100
         assert tracker.total_tokens == 150
         assert tracker.requests == 1
+
+
+class TestCompareDtoCompatibility:
+    def test_compare_dto_supports_timestamp_based_multi_response_shape(self):
+        class TimestampShapeMur:
+            def __init__(self):
+                self.request_group_id = "grp_ts_1"
+                self.responses = [
+                    UnifiedResponse(
+                        request_id="cmp_ts_1",
+                        text="hello",
+                        provider="openai",
+                        model="gpt-4o-mini",
+                        latency_ms=10,
+                        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+                        estimated_cost=0.00001,
+                        finish_reason="stop",
+                        error=None,
+                        metadata={},
+                    )
+                ]
+                self.success_count = 1
+                self.error_count = 0
+                self.total_tokens = 3
+                self.total_cost = 0.00001
+                self.timestamp = "2026-02-18T12:00:00Z"
+
+        dto = CompareResponseDTO.from_multi_unified_response(TimestampShapeMur())
+        assert dto.request_group_id == "grp_ts_1"
+        assert dto.timestamp == "2026-02-18T12:00:00Z"
+        assert len(dto.responses) == 1
 
     def test_token_tracker_backward_compatibility(self):
         """Test that TokenTracker still accepts dicts for backward compatibility."""

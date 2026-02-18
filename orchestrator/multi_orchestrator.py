@@ -162,7 +162,12 @@ class MultiModelOrchestrator:
             return self._create_exception_response(client, request_id, e, elapsed_ms)
 
     async def get_comparisons(
-        self, prompt: str, clients: list[BaseAIClient], timeout_s: float | None = None, **kwargs
+        self,
+        prompt: str,
+        clients: list[BaseAIClient],
+        timeout_s: float | None = None,
+        request_group_id: str | None = None,
+        **kwargs,
     ) -> MultiUnifiedResponse:
         """
         Execute prompt against multiple clients concurrently.
@@ -171,13 +176,14 @@ class MultiModelOrchestrator:
             prompt: The prompt to send to all clients
             clients: List of AI clients to query
             timeout_s: Per-call timeout in seconds (defaults to self.default_timeout_s)
+            request_group_id: Optional caller-provided group id to correlate logs/results
             **kwargs: Additional arguments passed to each client's get_completion
 
         Returns:
             MultiUnifiedResponse containing all responses in input order
         """
         timeout = timeout_s or self.default_timeout_s
-        request_group_id = str(uuid.uuid4())
+        request_group_id = request_group_id or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc)
 
         logger.info(
@@ -217,7 +223,12 @@ class MultiModelOrchestrator:
         return result
 
     def get_comparisons_sync(
-        self, prompt: str, clients: list[BaseAIClient], timeout_s: float | None = None, **kwargs
+        self,
+        prompt: str,
+        clients: list[BaseAIClient],
+        timeout_s: float | None = None,
+        request_group_id: str | None = None,
+        **kwargs,
     ) -> MultiUnifiedResponse:
         """
         Synchronous wrapper for get_comparisons.
@@ -229,6 +240,7 @@ class MultiModelOrchestrator:
             prompt: The prompt to send to all clients
             clients: List of AI clients to query
             timeout_s: Per-call timeout in seconds (defaults to self.default_timeout_s)
+            request_group_id: Optional caller-provided group id to correlate logs/results
             **kwargs: Additional arguments passed to each client's get_completion
 
         Returns:
@@ -238,13 +250,32 @@ class MultiModelOrchestrator:
             # Check if loop is already running
             asyncio.get_running_loop()
             # Loop is running - execute in separate thread
-            return self._run_in_new_thread(prompt, clients, timeout_s, **kwargs)
+            return self._run_in_new_thread(
+                prompt,
+                clients,
+                timeout_s,
+                request_group_id=request_group_id,
+                **kwargs,
+            )
         except RuntimeError:
             # No running loop - use asyncio.run directly
-            return asyncio.run(self.get_comparisons(prompt, clients, timeout_s, **kwargs))
+            return asyncio.run(
+                self.get_comparisons(
+                    prompt,
+                    clients,
+                    timeout_s,
+                    request_group_id=request_group_id,
+                    **kwargs,
+                )
+            )
 
     def _run_in_new_thread(
-        self, prompt: str, clients: list[BaseAIClient], timeout_s: float | None, **kwargs
+        self,
+        prompt: str,
+        clients: list[BaseAIClient],
+        timeout_s: float | None,
+        request_group_id: str | None = None,
+        **kwargs,
     ) -> MultiUnifiedResponse:
         """
         Run the async comparison in a new thread with its own event loop.
@@ -253,6 +284,13 @@ class MultiModelOrchestrator:
         """
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                asyncio.run, self.get_comparisons(prompt, clients, timeout_s, **kwargs)
+                asyncio.run,
+                self.get_comparisons(
+                    prompt,
+                    clients,
+                    timeout_s,
+                    request_group_id=request_group_id,
+                    **kwargs,
+                ),
             )
             return future.result()

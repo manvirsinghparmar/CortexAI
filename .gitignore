@@ -36,6 +36,8 @@ logs/*.log
 logs/*.log.*
 tests/logs/*.log
 tests/logs/*.log.*
+tools/logs/*.log
+tools/logs/*.log.*
 
 # Test coverage
 .coverage

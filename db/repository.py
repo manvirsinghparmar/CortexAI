@@ -18,6 +18,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert  # For UPSERT
 from sqlalchemy.orm import Session
 
 # Import logger
+from utils.api_key_utils import (
+    compute_api_key_hash as _compute_api_key_hash,
+    generate_api_key as _generate_api_key,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,6 +31,23 @@ try:
     from models.unified_response import UnifiedResponse
 except ImportError:
     UnifiedResponse = Any  # Fallback if import fails
+
+ALLOWED_PROMPT_CATEGORIES = {
+    "coding",
+    "financial",
+    "educational",
+    "math",
+    "legal",
+    "data_technical",
+    "general",
+    "unknown",
+}
+
+ALLOWED_RESEARCH_MODES = {"off", "auto", "on"}
+ALLOWED_ROUTING_MODES = {"smart", "cheap", "strong", "explicit", "legacy"}
+SERVICE_AUTH_PROVIDER = "service"
+SERVICE_AUTH_SUBJECT = "api-service"
+SERVICE_AUTH_ISSUER = "cortexai"
 
 
 # ============================================================================
@@ -74,7 +95,20 @@ def compute_api_key_hash(api_key: str) -> str:
     Returns:
         str: Hexadecimal SHA-256 hash
     """
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    return _compute_api_key_hash(api_key)
+
+
+def generate_api_key(prefix: str = "cortex") -> str:
+    """
+    Generate a random API key string.
+
+    Args:
+        prefix: Key prefix label
+
+    Returns:
+        str: API key (raw, return-once secret)
+    """
+    return _generate_api_key(prefix)
 
 
 # ============================================================================
@@ -132,6 +166,83 @@ def get_or_create_cli_user(
     logger.info(f"Created CLI user: {email} (id: {user_id})")
 
     return user_id
+
+
+def get_or_create_service_user(
+    db: Session, email: str = "api@cortexai.local", display_name: str = "API Service User"
+) -> UUID:
+    """
+    Get or create deterministic service user for API fallback/autoreg paths.
+
+    Uses a dedicated auth identity that cannot collide with CLI identity:
+    - auth_provider=service
+    - auth_subject=api-service
+    - auth_issuer=cortexai
+
+    Args:
+        db: Database session
+        email: Service user email
+        display_name: Service user display name
+
+    Returns:
+        UUID: user_id
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    users = get_table("users")
+
+    # Identity-first lookup guarantees deterministic resolution.
+    by_identity_stmt = select(users.c.id).where(
+        and_(
+            users.c.auth_provider == SERVICE_AUTH_PROVIDER,
+            users.c.auth_subject == SERVICE_AUTH_SUBJECT,
+            users.c.auth_issuer == SERVICE_AUTH_ISSUER,
+        )
+    )
+    service_user_id = db.execute(by_identity_stmt).scalar_one_or_none()
+    if service_user_id:
+        return service_user_id
+
+    # Protect against accidental email reuse by a non-service principal.
+    by_email_stmt = select(
+        users.c.id,
+        users.c.auth_provider,
+        users.c.auth_subject,
+        users.c.auth_issuer,
+    ).where(users.c.email == email)
+    existing_email_user = db.execute(by_email_stmt).first()
+    if existing_email_user:
+        existing_id, provider, subject, issuer = existing_email_user
+        if (
+            provider == SERVICE_AUTH_PROVIDER
+            and subject == SERVICE_AUTH_SUBJECT
+            and issuer == SERVICE_AUTH_ISSUER
+        ):
+            return existing_id
+        raise ValueError(
+            "Configured API fallback user email is already used by a non-service identity. "
+            f"email={email}"
+        )
+
+    stmt = (
+        insert(users)
+        .values(
+            email=email,
+            display_name=display_name,
+            is_active=True,
+            auth_provider=SERVICE_AUTH_PROVIDER,
+            auth_subject=SERVICE_AUTH_SUBJECT,
+            auth_issuer=SERVICE_AUTH_ISSUER,
+        )
+        .returning(users.c.id)
+    )
+
+    service_user_id = db.execute(stmt).scalar_one()
+    logger.info(f"Created service user: {email} (id: {service_user_id})")
+    return service_user_id
 
 
 def get_user_by_api_key(db: Session, api_key: str) -> tuple[UUID, UUID] | None:
@@ -517,6 +628,7 @@ def create_llm_request(
     model: str,
     prompt: str,
     session_id: UUID | None = None,
+    request_group_id: UUID | None = None,
     api_key_id: UUID | None = None,
     input_tokens_est: int | None = None,
     store_prompt: bool = False,
@@ -533,6 +645,7 @@ def create_llm_request(
         model: Model name (e.g., 'gpt-4')
         prompt: User's prompt text
         session_id: Optional session ID
+        request_group_id: Optional grouping UUID for multi-response flows (e.g., compare mode)
         api_key_id: Optional API key ID (if request via API)
         input_tokens_est: Optional estimated input tokens
         store_prompt: Whether to store raw prompt text (default: False for privacy)
@@ -548,24 +661,24 @@ def create_llm_request(
     llm_requests = get_table("llm_requests")
 
     prompt_sha256 = compute_prompt_sha256(prompt)
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "request_id": request_id,
+        "route_mode": route_mode,
+        "provider": provider,
+        "model": model,
+        "prompt_sha256": prompt_sha256,
+        "prompt_stored": store_prompt,
+        "prompt_text": prompt if store_prompt else None,
+        "input_tokens_est": input_tokens_est,
+        "api_key_id": api_key_id,
+    }
+    column_names = {col.name for col in llm_requests.columns}
+    if "request_group_id" in column_names:
+        values["request_group_id"] = request_group_id
 
-    stmt = (
-        insert(llm_requests)
-        .values(
-            user_id=user_id,
-            session_id=session_id,
-            request_id=request_id,
-            route_mode=route_mode,
-            provider=provider,
-            model=model,
-            prompt_sha256=prompt_sha256,
-            prompt_stored=store_prompt,
-            prompt_text=prompt if store_prompt else None,
-            input_tokens_est=input_tokens_est,
-            api_key_id=api_key_id,
-        )
-        .returning(llm_requests.c.id)
-    )
+    stmt = insert(llm_requests).values(**values).returning(llm_requests.c.id)
 
     llm_request_id = db.execute(stmt).scalar_one()
 
@@ -615,7 +728,328 @@ def create_llm_response(db: Session, llm_request_id: UUID, response: UnifiedResp
 
     db.execute(stmt)
 
-    logger.debug(f"Created llm_response for request: {llm_request_id}")
+
+def _build_api_key_insert_values(
+    api_keys_table,
+    *,
+    user_id: UUID,
+    key_hash: str,
+    raw_api_key: str,
+    label: str | None,
+) -> dict[str, Any]:
+    """
+    Build insert payload for api_keys table while supporting schema variants.
+    """
+    values: dict[str, Any] = {"user_id": user_id, "key_hash": key_hash}
+    column_names = {col.name for col in api_keys_table.columns}
+
+    if "label" in column_names and label is not None:
+        values["label"] = label
+    if "name" in column_names and label is not None:
+        values["name"] = label
+    if "is_active" in column_names:
+        values["is_active"] = True
+
+    key_prefix = raw_api_key[:12]
+    key_last4 = raw_api_key[-4:]
+    if "key_prefix" in column_names:
+        values["key_prefix"] = key_prefix
+    if "prefix" in column_names:
+        values["prefix"] = key_prefix
+    if "key_last4" in column_names:
+        values["key_last4"] = key_last4
+    if "last4" in column_names:
+        values["last4"] = key_last4
+
+    missing_required: list[str] = []
+    for col in api_keys_table.columns:
+        if col.name in values:
+            continue
+        if col.nullable:
+            continue
+        if col.default is not None or col.server_default is not None:
+            continue
+        if col.primary_key:
+            continue
+        missing_required.append(col.name)
+
+    if missing_required:
+        raise ValueError(
+            "api_keys has required columns not handled by insert payload: "
+            f"{', '.join(sorted(missing_required))}"
+        )
+
+    return values
+
+
+def create_api_key(
+    db: Session,
+    *,
+    user_id: UUID,
+    raw_api_key: str,
+    label: str | None = None,
+) -> tuple[UUID, UUID]:
+    """
+    Create or reuse API key mapping in api_keys table.
+
+    Args:
+        db: Database session
+        user_id: User ID to own the key
+        raw_api_key: Raw API key secret (will be hashed; not stored)
+        label: Optional label/name for key
+
+    Returns:
+        tuple[UUID, UUID]: (api_key_id, owner_user_id)
+
+    Note:
+        Does NOT commit. Caller must commit.
+        If key hash already exists for another owner, existing owner is always returned.
+    """
+    from db.tables import get_table
+
+    api_keys = get_table("api_keys")
+    key_hash = compute_api_key_hash(raw_api_key)
+
+    # Reuse existing mapping if hash already exists.
+    existing_stmt = select(api_keys.c.id, api_keys.c.user_id).where(api_keys.c.key_hash == key_hash)
+    existing = db.execute(existing_stmt).first()
+    if existing:
+        api_key_id, owner_user_id = existing
+        if owner_user_id != user_id:
+            logger.warning(
+                "API key hash already mapped to different owner; forcing existing owner",
+                extra={
+                    "extra_fields": {
+                        "api_key_id": str(api_key_id),
+                        "existing_owner_user_id": str(owner_user_id),
+                        "requested_user_id": str(user_id),
+                    }
+                },
+            )
+        logger.debug(f"API key hash already exists: {str(api_key_id)[:8]}...")
+        return api_key_id, owner_user_id
+
+    values = _build_api_key_insert_values(
+        api_keys,
+        user_id=user_id,
+        key_hash=key_hash,
+        raw_api_key=raw_api_key,
+        label=label,
+    )
+
+    stmt = insert(api_keys).values(**values).returning(api_keys.c.id)
+    api_key_id = db.execute(stmt).scalar_one()
+    logger.info(
+        f"Created api_key mapping: api_key_id={api_key_id}, "
+        f"user_id={user_id}, label={label or 'n/a'}"
+    )
+    return api_key_id, user_id
+
+
+def _safe_json_dict(payload: Any) -> dict[str, Any]:
+    """Ensure payload is JSONB-safe dict-like data."""
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _normalize_prompt_category(value: str | None) -> str:
+    category = (value or "unknown").strip().lower()
+    return category if category in ALLOWED_PROMPT_CATEGORIES else "unknown"
+
+
+def _normalize_research_mode(value: str | None) -> str:
+    mode = (value or "off").strip().lower()
+    return mode if mode in ALLOWED_RESEARCH_MODES else "off"
+
+
+def _normalize_routing_mode(value: str | None) -> str:
+    mode = (value or "smart").strip().lower()
+    return mode if mode in ALLOWED_ROUTING_MODES else "legacy"
+
+
+def create_routing_decision(
+    db: Session,
+    llm_request_id: UUID,
+    routing_metadata: dict[str, Any],
+    *,
+    prompt_category: str = "unknown",
+    research_mode: str = "off",
+    features: dict[str, Any] | None = None,
+) -> UUID:
+    """
+    Upsert routing_decisions row for a request.
+
+    Args:
+        db: Database session
+        llm_request_id: FK to llm_requests.id
+        routing_metadata: metadata["routing"] payload from UnifiedResponse
+        prompt_category: Prompt category enum value
+        research_mode: off|auto|on
+        features: Optional PromptAnalyzer-like features payload
+
+    Returns:
+        UUID: routing_decisions.id
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    routing_decisions = get_table("routing_decisions")
+
+    trace = _safe_json_dict(routing_metadata)
+    decision_reasons_raw = trace.get("decision_reasons", [])
+    if isinstance(decision_reasons_raw, list):
+        decision_reasons = [str(reason) for reason in decision_reasons_raw]
+    else:
+        decision_reasons = []
+
+    attempts_raw = trace.get("attempts", [])
+    attempt_count = trace.get("attempt_count")
+    if attempt_count is None:
+        attempt_count = len(attempts_raw) if isinstance(attempts_raw, list) else 1
+    try:
+        attempt_count = max(int(attempt_count), 1)
+    except Exception:
+        attempt_count = 1
+
+    payload = {
+        "llm_request_id": llm_request_id,
+        "prompt_category": _normalize_prompt_category(prompt_category),
+        "research_mode": _normalize_research_mode(research_mode),
+        "routing_mode": _normalize_routing_mode(trace.get("mode")),
+        "initial_tier": trace.get("initial_tier"),
+        "final_tier": trace.get("final_tier"),
+        "attempt_count": attempt_count,
+        "fallback_used": bool(trace.get("fallback_used", False)),
+        "decision_reasons": decision_reasons,
+        "features": _safe_json_dict(features),
+        "trace": trace,
+    }
+
+    stmt = (
+        pg_insert(routing_decisions)
+        .values(**payload)
+        .on_conflict_do_update(
+            index_elements=["llm_request_id"],
+            set_={
+                "prompt_category": payload["prompt_category"],
+                "research_mode": payload["research_mode"],
+                "routing_mode": payload["routing_mode"],
+                "initial_tier": payload["initial_tier"],
+                "final_tier": payload["final_tier"],
+                "attempt_count": payload["attempt_count"],
+                "fallback_used": payload["fallback_used"],
+                "decision_reasons": payload["decision_reasons"],
+                "features": payload["features"],
+                "trace": payload["trace"],
+            },
+        )
+        .returning(routing_decisions.c.id)
+    )
+
+    routing_decision_id = db.execute(stmt).scalar_one()
+    logger.debug(
+        f"Upserted routing_decision: {routing_decision_id} for llm_request_id: {llm_request_id}"
+    )
+    return routing_decision_id
+
+
+def create_routing_attempts(
+    db: Session,
+    routing_decision_id: UUID,
+    attempts: list[dict[str, Any]] | None,
+) -> int:
+    """
+    Upsert routing_attempts rows from routing metadata.
+
+    Args:
+        db: Database session
+        routing_decision_id: FK to routing_decisions.id
+        attempts: Attempt payload list from selected_sequence/attempts
+
+    Returns:
+        int: Number of attempt rows processed
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    if not attempts:
+        return 0
+
+    routing_attempts = get_table("routing_attempts")
+    processed = 0
+
+    for index, attempt in enumerate(attempts, start=1):
+        if not isinstance(attempt, dict):
+            continue
+
+        raw_attempt_number = attempt.get("attempt_number", index)
+        try:
+            attempt_number = int(raw_attempt_number)
+        except Exception:
+            attempt_number = index
+        attempt_number = max(attempt_number, 1)
+
+        validation = str(attempt.get("validation", "") or "").strip().lower()
+        if not validation:
+            status = str(attempt.get("status", "") or "").strip().lower()
+            validation = "ok" if status == "success" else "unknown"
+
+        error_message = attempt.get("error_message") or attempt.get("why_failed")
+        if error_message is not None:
+            error_message = str(error_message)
+            if len(error_message) > 4000:
+                error_message = error_message[:4000]
+
+        error_type = attempt.get("error_type")
+        if not error_type and validation != "ok":
+            error_type = validation
+        if error_type is not None:
+            error_type = str(error_type)
+
+        latency = attempt.get("latency_ms")
+        if latency is not None:
+            try:
+                latency = int(latency)
+            except Exception:
+                latency = None
+
+        payload = {
+            "routing_decision_id": routing_decision_id,
+            "attempt_number": attempt_number,
+            "tier": attempt.get("tier"),
+            "provider": attempt.get("provider"),
+            "model": attempt.get("model"),
+            "validation": validation,
+            "latency_ms": latency,
+            "error_type": error_type,
+            "error_message": error_message,
+        }
+
+        stmt = pg_insert(routing_attempts).values(**payload).on_conflict_do_update(
+            index_elements=["routing_decision_id", "attempt_number"],
+            set_={
+                "tier": payload["tier"],
+                "provider": payload["provider"],
+                "model": payload["model"],
+                "validation": payload["validation"],
+                "latency_ms": payload["latency_ms"],
+                "error_type": payload["error_type"],
+                "error_message": payload["error_message"],
+            },
+        )
+
+        db.execute(stmt)
+        processed += 1
+
+    logger.debug(
+        f"Upserted {processed} routing_attempts for routing_decision_id: {routing_decision_id}"
+    )
+    return processed
 
 
 # ============================================================================

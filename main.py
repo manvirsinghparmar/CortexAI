@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import threading
@@ -31,6 +32,8 @@ try:
         check_usage_limit,
         create_llm_request,
         create_llm_response,
+        create_routing_attempts,
+        create_routing_decision,
         create_session,
         get_active_session,
         get_db,
@@ -62,8 +65,75 @@ def _convert_to_user_context(conversation: ConversationManager) -> UserContext:
     return UserContext(conversation_history=conversation.get_messages())
 
 
+def _extract_routing_payload(response) -> tuple[dict, list[dict], dict]:
+    """
+    Extract routing metadata blobs from UnifiedResponse.
+
+    Returns:
+        tuple:
+            routing_metadata: metadata["routing"] dict (or empty)
+            attempt_rows: selected_sequence or attempts list (or empty)
+            features: routing features payload (or empty)
+    """
+    metadata = response.metadata if isinstance(response.metadata, dict) else {}
+    routing_metadata = metadata.get("routing", {})
+    if not isinstance(routing_metadata, dict):
+        return {}, [], {}
+
+    attempt_rows = routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    if not isinstance(attempt_rows, list):
+        attempt_rows = []
+
+    features = routing_metadata.get("features", {})
+    if not isinstance(features, dict):
+        features = {}
+
+    return routing_metadata, attempt_rows, features
+
+
+def _persist_routing_telemetry(db_session, llm_request_id: UUID, response, research_mode: str) -> None:
+    """
+    Persist routing decision + attempts for a single response when metadata is present.
+    """
+    routing_metadata, attempt_rows, features = _extract_routing_payload(response)
+    if not routing_metadata:
+        return
+
+    metadata = response.metadata if isinstance(response.metadata, dict) else {}
+    prompt_category = metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    normalized_research_mode = (
+        metadata.get("research_mode")
+        or routing_metadata.get("research_mode")
+        or research_mode
+        or "off"
+    )
+
+    try:
+        # Use savepoint so telemetry failures don't poison the main transaction.
+        with db_session.begin_nested():
+            routing_decision_id = create_routing_decision(
+                db_session,
+                llm_request_id,
+                routing_metadata,
+                prompt_category=str(prompt_category),
+                research_mode=str(normalized_research_mode),
+                features=features,
+            )
+
+            create_routing_attempts(db_session, routing_decision_id, attempt_rows)
+    except Exception as exc:
+        # Telemetry should never block core request/response persistence.
+        logger.warning(f"Routing telemetry persistence skipped due to error: {exc}")
+
+
 def _persist_single_interaction(
-    db_session, user_id: UUID, db_session_id: UUID, user_input: str, response, mode: str = "ask"
+    db_session,
+    user_id: UUID,
+    db_session_id: UUID,
+    user_input: str,
+    response,
+    mode: str = "ask",
+    research_mode: str = "off",
 ) -> None:
     """
     Persist a single LLM interaction to database in ONE TRANSACTION.
@@ -75,11 +145,20 @@ def _persist_single_interaction(
         user_input: User's prompt
         response: UnifiedResponse object
         mode: Mode ('ask' or 'compare')
+        research_mode: Requested research mode for this interaction
     """
     if not db_session or not user_id or not db_session_id:
         return
 
     try:
+        request_group_id = None
+        raw_group_id = getattr(multi_resp, "request_group_id", None)
+        if raw_group_id:
+            try:
+                request_group_id = UUID(str(raw_group_id))
+            except Exception:
+                request_group_id = None
+
         # BEGIN TRANSACTION - All writes together
         # 1. Save user message
         save_message(db_session, db_session_id, "user", user_input)
@@ -101,14 +180,17 @@ def _persist_single_interaction(
         # 3. Persist LLM response
         create_llm_response(db_session, llm_request_id, response)
 
-        # 4. Save assistant message (only if not error)
+        # 4. Persist routing telemetry when available (smart/cheap/strong/explicit)
+        _persist_routing_telemetry(db_session, llm_request_id, response, research_mode)
+
+        # 5. Save assistant message (only if not error)
         if not response.is_error:
             save_message(db_session, db_session_id, "assistant", response.text)
 
-        # 5. Update session timestamp
+        # 6. Update session timestamp
         update_session_timestamp(db_session, db_session_id)
 
-        # 6. Update usage stats
+        # 7. Update usage stats
         upsert_usage_daily(
             db_session,
             user_id=user_id,
@@ -168,6 +250,7 @@ def _persist_compare_interaction(
                 model=response.model,
                 prompt=user_input,
                 session_id=db_session_id,
+                request_group_id=request_group_id,
                 api_key_id=None,  # CLI has no API key
                 store_prompt=False,  # Privacy
             )
@@ -265,6 +348,141 @@ def display_research_info(response) -> None:
             print(f"  [{source['id']}] {source['title']}")
             print(f"      {source['url']}")
         print()
+
+def print_routing_debug(routing_metadata: dict) -> None:
+    """
+    Print routing metadata in a human-readable summary.
+    """
+    def _shorten(text: str | None, max_len: int = 220) -> str:
+        if not text:
+            return "-"
+        t = str(text).strip().replace("\n", " ")
+        if len(t) <= max_len:
+            return t
+        return t[: max_len - 3] + "..."
+
+    def _humanize_reason(reason: str) -> str:
+        if not reason:
+            return "-"
+
+        if reason.startswith("ranked_") and "_by_selector_within_" in reason:
+            parts = reason.split("_")
+            try:
+                rank = parts[1]
+                tier = reason.split("_by_selector_within_")[1]
+                return f"ranked #{rank} by selector in {tier}"
+            except Exception:
+                return reason.replace("_", " ")
+
+        if reason.startswith("blended_cost_per_1m="):
+            value = reason.split("=", 1)[1]
+            return f"blended cost per 1M tokens = ${value}"
+
+        if reason.startswith("context_limit_ok_"):
+            # format: context_limit_ok_128000_for_required_262
+            parts = reason.split("_")
+            if len(parts) >= 7:
+                return f"context ok ({parts[3]} >= required {parts[6]})"
+            return reason.replace("_", " ")
+
+        if reason.startswith("context_limit_below_required_"):
+            # format: context_limit_below_required_128000_lt_200000_kept_as_fallback
+            parts = reason.split("_")
+            if len(parts) >= 11:
+                return (
+                    f"context below required ({parts[4]} < {parts[6]}), "
+                    f"kept as fallback"
+                )
+            return reason.replace("_", " ")
+
+        replace_map = {
+            "matches_reasoning_requirement": "matches reasoning requirement",
+            "matches_code_or_reasoning_tags": "matches code/reasoning tags",
+            "selected_without_reasoning_tag_due_to_ranking_availability": (
+                "selected by ranking even without reasoning tag"
+            ),
+            "selected_despite_weak_code_tags_as_available_fallback": (
+                "selected as fallback despite weak code tags"
+            ),
+            "long_context_preferred": "preferred for long context",
+            "long_context_not_tagged": "not tagged for long context",
+            "response_passed_validator_checks_and_returned_usable_output": (
+                "validator accepted response"
+            ),
+            "provider_error": "provider returned an error",
+            "too_short": "response too short",
+            "format_violation": "response format violation",
+            "truncated": "response got truncated",
+            "refusal": "model refused the request",
+            "latency_budget": "latency budget exceeded",
+            "max_attempts": "max attempts reached",
+            "validator_ok": "validator passed",
+            "not_attempted": "not attempted",
+        }
+        if reason in replace_map:
+            return replace_map[reason]
+
+        return reason.replace("_", " ")
+
+    mode = routing_metadata.get("mode", "-")
+    initial_tier = routing_metadata.get("initial_tier", "-")
+    final_tier = routing_metadata.get("final_tier", "-")
+    attempt_count = routing_metadata.get("attempt_count", 0)
+    fallback_used = routing_metadata.get("fallback_used", False)
+
+    decision_reasons = routing_metadata.get("decision_reasons", []) or []
+    selection = routing_metadata.get("selection", {}) or {}
+    selected_sequence = routing_metadata.get("selected_sequence", []) or []
+
+    print("[Routing Summary]")
+    print(
+        f"Mode: {mode} | Tier: {initial_tier} -> {final_tier} | "
+        f"Attempts: {attempt_count} | Fallback used: {'yes' if fallback_used else 'no'}"
+    )
+    if decision_reasons:
+        print("Tier decision reasons:")
+        for r in decision_reasons:
+            print(f"- {_humanize_reason(r)}")
+
+    if selection:
+        primary_provider = selection.get("primary_provider", "-")
+        primary_model = selection.get("primary_model", "-")
+        primary_cost = selection.get("primary_blended_cost_per_1m", "-")
+        fallback_count = selection.get("fallback_count", 0)
+        print(
+            "Initial selection: "
+            f"{primary_provider}/{primary_model} "
+            f"(blended cost/1M=${primary_cost}, fallbacks={fallback_count})"
+        )
+
+    if selected_sequence:
+        print("Attempt timeline:")
+        for item in selected_sequence:
+            attempt_no = item.get("attempt_number", "-")
+            provider = item.get("provider", "-")
+            model = item.get("model", "-")
+            status = str(item.get("status", "unknown")).upper()
+            tier = item.get("tier", "-")
+            print(f"- Attempt {attempt_no}: {provider}/{model} [{status}] in {tier}")
+
+            why_selected = item.get("why_selected", []) or []
+            if why_selected:
+                for reason in why_selected:
+                    print(f"  selected because: {_humanize_reason(str(reason))}")
+
+            if item.get("why_worked"):
+                print(f"  worked because: {_humanize_reason(str(item['why_worked']))}")
+            if item.get("why_failed"):
+                print(f"  failed because: {_shorten(str(item['why_failed']))}")
+            if item.get("next_action"):
+                action = _humanize_reason(str(item["next_action"]))
+                action_reason = _humanize_reason(str(item.get("next_action_reason", "-")))
+                print(f"  next action: {action} ({action_reason})")
+
+    # Optional raw JSON dump for deep debugging
+    if os.getenv("ROUTING_DEBUG_JSON", "false").lower() == "true":
+        print("\n[Routing Raw JSON]")
+        print(json.dumps(routing_metadata, indent=2, ensure_ascii=False, default=str))
 
 
 def show_loading_animation(stop_event: threading.Event) -> None:
@@ -770,7 +988,7 @@ def main():
                         )
                         # Optional routing debug output for smart routing metadata.
                         if ROUTING_DEBUG and resp.metadata and "routing" in resp.metadata:
-                            print(f"[Routing] {resp.metadata['routing']}")
+                            print_routing_debug(resp.metadata["routing"])
 
                         stop_animation.set()
                         loading_thread.join()
@@ -778,7 +996,13 @@ def main():
                         # Persist to database (single mode) - even on errors for audit
                         if DB_ENABLED and db_session and user_id and db_session_id:
                             _persist_single_interaction(
-                                db_session, user_id, db_session_id, user_input, resp, mode="ask"
+                                db_session,
+                                user_id,
+                                db_session_id,
+                                user_input,
+                                resp,
+                                mode="ask",
+                                research_mode=selected_research_mode,
                             )
 
                         if resp.is_error:

@@ -64,17 +64,45 @@ class OpenAIClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 500)
+        max_completion_tokens = kwargs.get("max_completion_tokens")
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
 
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=normalized_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            request_payload = {
+                "model": model,
+                "messages": normalized_messages,
+                "temperature": temperature,
+            }
+            if max_completion_tokens is not None:
+                request_payload["max_completion_tokens"] = max_completion_tokens
+            else:
+                request_payload["max_tokens"] = max_tokens
+
+            try:
+                response = self.client.chat.completions.create(**request_payload)
+            except Exception as request_exc:
+                # OpenAI newer model families reject max_tokens and require max_completion_tokens.
+                if (
+                    "max_tokens" in request_payload
+                    and self._should_retry_with_max_completion_tokens(request_exc)
+                ):
+                    retry_payload = dict(request_payload)
+                    retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+                    logger.warning(
+                        "Retrying OpenAI request with max_completion_tokens",
+                        extra={
+                            "extra_fields": {
+                                "request_id": request_id,
+                                "model": model,
+                                "retry_reason": "unsupported_max_tokens_parameter",
+                            }
+                        },
+                    )
+                    response = self.client.chat.completions.create(**retry_payload)
+                else:
+                    raise
 
             latency_ms = self._measure_latency(start_time)
 
@@ -178,6 +206,18 @@ class OpenAIClient(BaseAIClient):
             return self._create_error_response(
                 request_id=request_id, error=error, latency_ms=latency_ms, model=model
             )
+
+    @staticmethod
+    def _should_retry_with_max_completion_tokens(exc: Exception) -> bool:
+        """
+        Detect OpenAI 400 errors indicating max_tokens is unsupported for the selected model.
+        """
+        message = str(exc).lower()
+        return (
+            "unsupported parameter" in message
+            and "max_tokens" in message
+            and "max_completion_tokens" in message
+        )
 
     @classmethod
     def list_available_models(cls, api_key: str = None, **kwargs) -> None:

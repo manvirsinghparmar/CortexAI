@@ -40,6 +40,8 @@ TABLE_NAMES = [
     "wallets",
     "ledger_entries",
     "feedback",
+    "routing_decisions",
+    "routing_attempts",
 ]
 
 

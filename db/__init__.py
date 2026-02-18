@@ -7,12 +7,17 @@ from db.engine import get_engine
 from db.repository import (
     check_usage_limit,
     compute_context_hash,
+    compute_api_key_hash,
+    create_api_key,
+    create_routing_attempts,
+    create_routing_decision,
     # Utility
     compute_prompt_sha256,
     create_context_snapshot,
     # LLM Audit
     create_llm_request,
     create_llm_response,
+    generate_api_key,
     # Session Management
     create_session,
     get_active_session,
@@ -20,6 +25,7 @@ from db.repository import (
     get_latest_context_snapshot,
     # User & Auth
     get_or_create_cli_user,
+    get_or_create_service_user,
     get_session_by_id,
     get_session_messages,
     # Usage Tracking
@@ -46,17 +52,23 @@ from db.tables import (
 __all__ = [
     "SessionLocal",
     "check_usage_limit",
+    "compute_api_key_hash",
     "compute_context_hash",
     "compute_prompt_sha256",
+    "create_api_key",
     "create_context_snapshot",
     "create_llm_request",
     "create_llm_response",
+    "generate_api_key",
+    "create_routing_attempts",
+    "create_routing_decision",
     "create_session",
     "get_active_session",
     "get_db",
     "get_engine",
     "get_latest_context_snapshot",
     "get_or_create_cli_user",
+    "get_or_create_service_user",
     "get_session_by_id",
     "get_session_messages",
     "get_table",

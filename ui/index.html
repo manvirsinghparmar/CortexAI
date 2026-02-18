@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CortexAI Arena - Compare AI Responses</title>
+    <meta name="description" content="Compare AI model responses side by side in the CortexAI Arena">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=arena2026">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="24" height="24" rx="6" fill="url(#logoGradient)" />
+                        <path d="M12 7L16 12L12 17M8 12H16" stroke="#fff" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <defs>
+                            <linearGradient id="logoGradient" x1="0" y1="0" x2="24" y2="24">
+                                <stop offset="0%" stop-color="#7c3aed" />
+                                <stop offset="100%" stop-color="#00d4ff" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <span class="logo-text">CortexAI</span>
+            </div>
+            <div class="header-actions">
+                <button class="nav-btn" id="homeBtn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 6L8 2L14 6V13C14 13.5523 13.5523 14 13 14H3C2.44772 14 2 13.5523 2 13V6Z"
+                            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M6 14V9H10V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span>Home</span>
+                </button>
+                <button class="nav-btn" id="historyBtn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" />
+                        <path d="M8 4V8L11 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                    </svg>
+                    <span>History</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Arena Badge -->
+            <div class="arena-badge">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
+                </svg>
+                <span>CortexAI Arena</span>
+            </div>
+
+            <!-- Hero Section -->
+            <h1 class="main-heading">Compare AI Responses</h1>
+            <h2 class="sub-heading">Side by Side</h2>
+            <p class="description">Choose your AI models and compare their responses side by side. Vote for the best
+                one.</p>
+
+            <!-- Model Selection Panel -->
+            <div class="model-selection-panel">
+                <div class="panel-header">
+                    <h3>Model Selection</h3>
+                    <div class="comparison-toggle">
+                        <span class="toggle-label">Compare:</span>
+                        <button class="toggle-btn" data-models="2"><span>2 Models</span></button>
+                        <button class="toggle-btn active" data-models="3"><span>3 Models</span></button>
+                    </div>
+                </div>
+
+                <div class="model-slots">
+                    <!-- Slot 1 -->
+                    <div class="model-slot">
+                        <label class="slot-label">SLOT 1</label>
+                        <div class="model-dropdown" data-slot="1">
+                            <div class="model-icon gemini-icon">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
+                                </svg>
+                            </div>
+                            <span class="model-name">Gemini</span>
+                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <!-- Slot 2 -->
+                    <div class="model-slot">
+                        <label class="slot-label">SLOT 2</label>
+                        <div class="model-dropdown" data-slot="2">
+                            <div class="model-icon openai-icon">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" />
+                                    <circle cx="8" cy="8" r="2" fill="currentColor" />
+                                </svg>
+                            </div>
+                            <span class="model-name">OpenAI GPT</span>
+                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <!-- Slot 3 -->
+                    <div class="model-slot">
+                        <label class="slot-label">SLOT 3</label>
+                        <div class="model-dropdown" data-slot="3">
+                            <div class="model-icon claude-icon">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor"
+                                        stroke-width="1.5" />
+                                </svg>
+                            </div>
+                            <span class="model-name">Claude</span>
+                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prompt Input -->
+            <div class="prompt-container">
+                <textarea class="prompt-input" id="promptInput"
+                    placeholder="Enter your prompt and compare responses from 3 AI models..."></textarea>
+                <div class="prompt-footer">
+                    <span class="prompt-hint">Press Ctrl+Enter to submit</span>
+                    <button class="compare-btn" id="compareBtn">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
+                        </svg>
+                        <span>Compare Models</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Examples Section -->
+            <div class="examples-section">
+                <p class="examples-label">TRY AN EXAMPLE</p>
+                <div class="examples-grid">
+                    <button class="example-card" data-query="Explain quantum computing in simple terms">
+                        Explain quantum computing in simple terms
+                    </button>
+                    <button class="example-card" data-query="Write a haiku about artificial intelligence">
+                        Write a haiku about artificial intelligence
+                    </button>
+                    <button class="example-card" data-query="What are the pros and cons of remote work?">
+                        What are the pros and cons of remote work?
+                    </button>
+                    <button class="example-card" data-query="Explain the difference between SQL and NoSQL databases">
+                        Explain the difference between SQL and NoSQL databases
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js?v=arena2026"></script>
+</body>
+
+</html>

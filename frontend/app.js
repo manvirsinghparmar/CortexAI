@@ -6,19 +6,20 @@
 const API_BASE = "http://127.0.0.1:8000";
 const API_KEY = "dev-key-1";
 
-/* ─── Model Catalog ───────────────────────── */
-const MODELS = {
-    openai: ["gpt-3.5-turbo", "gpt-4", "gpt-4o", "gpt-4o-mini"],
-    gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-1.5-pro"],
-    deepseek: ["deepseek-chat", "deepseek-reasoner"],
-    grok: ["grok-4-latest"],
-};
-const PROVIDER_LABELS = {
-    openai: "OpenAI",
-    gemini: "Google Gemini",
-    deepseek: "DeepSeek",
-    grok: "Grok",
-};
+/* ─── Provider Catalog ────────────────────── */
+// One entry per provider — icon shows in the dropdown, model is the default sent to API
+const PROVIDERS = [
+    { key: "gemini", label: "Gemini", icon: "⭐", model: "gemini-2.5-flash" },
+    { key: "openai", label: "OpenAI GPT", icon: "🎯", model: "gpt-4o" },
+    { key: "deepseek", label: "DeepSeek", icon: "🧠", model: "deepseek-chat" },
+    { key: "grok", label: "Grok", icon: "🤖", model: "grok-4-latest" },
+];
+// Quick lookup for response card labels (provider key → display label)
+const PROVIDER_LABELS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.label]));
+const PROVIDER_ICONS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.icon]));
+// Default model per provider (for API calls)
+const PROVIDER_DEFAULT_MODEL = Object.fromEntries(PROVIDERS.map(p => [p.key, p.model]));
+
 const WORKSPACE_TAGLINES = {
     single: "Single model · Conversational",
     compare: "Multi-model · Parallel comparison",
@@ -175,19 +176,14 @@ function buildOptions(selectEl, excludeKeys = new Set()) {
     const current = selectEl.value;
     selectEl.innerHTML = "";
 
-    Object.entries(MODELS).forEach(([provider, models]) => {
-        const group = document.createElement("optgroup");
-        group.label = PROVIDER_LABELS[provider];
-        models.forEach(model => {
-            const key = `${provider}:${model}`;
-            if (excludeKeys.has(key)) return;
-            const opt = document.createElement("option");
-            opt.value = key;
-            opt.textContent = model;
-            if (key === current) opt.selected = true;
-            group.appendChild(opt);
-        });
-        if (group.children.length > 0) selectEl.appendChild(group);
+    PROVIDERS.forEach(p => {
+        const key = `${p.key}:${p.model}`;
+        if (excludeKeys.has(key)) return;
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = `${p.icon}  ${p.label}`;
+        if (key === current) opt.selected = true;
+        selectEl.appendChild(opt);
     });
 
     if (!selectEl.value && selectEl.options.length > 0) {
@@ -491,8 +487,8 @@ function buildResponseCard(resp, index) {
          style="animation: cardIn 0.4s cubic-bezier(.4,0,.2,1) ${delay}ms both;">
       <div class="response-card-header">
         <span class="model-badge">
-          <span class="provider-dot dot-${escHtml(resp.provider)}"></span>
-          ${escHtml(PROVIDER_LABELS[resp.provider] || resp.provider)} &mdash; ${escHtml(resp.model)}
+          <span class="provider-icon">${PROVIDER_ICONS[resp.provider] || "🤖"}</span>
+          ${escHtml(PROVIDER_LABELS[resp.provider] || resp.provider)}
         </span>
         <span class="latency-badge">⏱ ${latency}</span>
       </div>

@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
 from server.routes import chat, compare, health
@@ -45,8 +46,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # API routes – registered first so /v1/* takes precedence over static files
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(compare.router)
+
+    # Serve the frontend SPA from the /frontend directory at root path
+    frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+    if os.path.isdir(frontend_dir):
+        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    else:
+        logger.warning(f"Frontend directory not found at {frontend_dir}; skipping static mount")
 
     return app

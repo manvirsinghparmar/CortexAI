@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CortexAI – Compare AI Responses Side by Side</title>
+    <meta name="description"
+        content="Compare AI model responses side by side. Single chat or multi-model comparison powered by CortexAI." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+    <!-- ── Header ── -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">CortexAI</span>
+            </div>
+            <nav class="nav">
+                <button class="nav-btn active" id="navHome">Home</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- ── Main ── -->
+    <main class="main">
+
+        <!-- Hero -->
+        <section class="hero">
+            <div class="hero-badge">
+                <span class="hero-badge-icon">⚡</span> CortexAI Arena
+            </div>
+            <h1 class="hero-title">
+                Compare AI Responses<br />
+                <span class="hero-accent">Side by Side</span>
+            </h1>
+            <p class="hero-sub">Choose your AI models and compare their responses side by side.</p>
+
+            <!-- Mode toggle -->
+            <div class="mode-toggle" role="tablist" aria-label="Chat mode">
+                <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true" data-mode="single">
+                    💬 Single Chat
+                </button>
+                <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false" data-mode="compare">
+                    ⚖️ Compare
+                </button>
+            </div>
+        </section>
+
+        <!-- ── Prompt Optimization Toggle ── -->
+        <div class="opt-toggle-row">
+            <label class="opt-toggle-label" for="optToggle">
+                <span class="opt-icon">✨</span>
+                Prompt Optimization
+            </label>
+            <label class="toggle-switch">
+                <input type="checkbox" id="optToggle" aria-label="Enable prompt optimization" />
+                <span class="toggle-track">
+                    <span class="toggle-thumb"></span>
+                </span>
+            </label>
+            <span class="opt-status" id="optStatus">Off</span>
+        </div>
+
+        <!-- ── Single Chat Panel ── -->
+        <section class="panel panel-single" id="panelSingle" aria-live="polite">
+            <div class="card model-card">
+                <div class="card-header">
+                    <span class="card-title">Model</span>
+                </div>
+                <div class="single-slot">
+                    <label class="slot-label" for="singleModel">SELECT MODEL</label>
+                    <select id="singleModel" class="model-select">
+                        <!-- populated by JS -->
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Compare Panel ── -->
+        <section class="panel panel-compare hidden" id="panelCompare" aria-live="polite">
+            <div class="card model-card">
+                <div class="card-header">
+                    <span class="card-title">Model Selection</span>
+                    <div class="slot-count-btns">
+                        <span class="slot-count-label">Compare:</span>
+                        <button class="slot-count-btn active" id="btn2Models" data-count="2">2 Models</button>
+                        <button class="slot-count-btn" id="btn3Models" data-count="3">3 Models</button>
+                    </div>
+                </div>
+                <div class="compare-slots" id="compareSlots">
+                    <!-- SLOT 1 -->
+                    <div class="slot" id="slot1">
+                        <label class="slot-label">SLOT 1</label>
+                        <select class="model-select compare-select" id="compareModel1">
+                            <!-- populated by JS -->
+                        </select>
+                    </div>
+                    <!-- SLOT 2 -->
+                    <div class="slot" id="slot2">
+                        <label class="slot-label">SLOT 2</label>
+                        <select class="model-select compare-select" id="compareModel2">
+                            <!-- populated by JS -->
+                        </select>
+                    </div>
+                    <!-- SLOT 3 (hidden) -->
+                    <div class="slot hidden" id="slot3">
+                        <label class="slot-label">SLOT 3</label>
+                        <select class="model-select compare-select" id="compareModel3">
+                            <!-- populated by JS -->
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Prompt Area ── -->
+        <div class="card prompt-card">
+            <textarea id="promptInput" class="prompt-textarea"
+                placeholder="Enter your prompt and compare responses from AI models…" rows="4"
+                aria-label="Prompt input"></textarea>
+            <div class="prompt-footer">
+                <span class="prompt-hint">Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
+                <button class="btn-submit" id="submitBtn">
+                    <span class="btn-icon">⚡</span>
+                    <span id="submitBtnLabel">Send</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Example Prompts ── -->
+        <div class="examples-section">
+            <p class="examples-title">TRY AN EXAMPLE</p>
+            <div class="examples-chips">
+                <button class="chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing
+                    in simple terms</button>
+                <button class="chip" data-prompt="Write a haiku about artificial intelligence">Write a haiku about
+                    artificial intelligence</button>
+                <button class="chip" data-prompt="What are the pros and cons of remote work?">What are the pros and cons
+                    of remote work?</button>
+                <button class="chip" data-prompt="Explain the difference between SQL and NoSQL databases">Explain the
+                    difference between SQL and NoSQL databases</button>
+                <button class="chip" data-prompt="What is the best way to learn a new programming language?">What is the
+                    best way to learn a new programming language?</button>
+            </div>
+        </div>
+
+        <!-- ── Results ── -->
+        <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">
+            <div class="results-header">
+                <h2 class="results-title">Responses</h2>
+                <button class="btn-clear" id="clearBtn" title="Clear results">✕ Clear</button>
+            </div>
+            <div class="results-grid" id="resultsGrid">
+                <!-- cards injected by JS -->
+            </div>
+        </section>
+
+        <!-- ── Error Banner ── -->
+        <div class="error-banner hidden" id="errorBanner" role="alert">
+            <span class="error-icon">⚠️</span>
+            <span id="errorMsg">Something went wrong.</span>
+            <button class="error-close" id="errorClose" aria-label="Dismiss error">✕</button>
+        </div>
+
+    </main>
+
+    <footer class="footer">
+        <p>CortexAI — Unified AI Comparison Engine</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -78,7 +78,7 @@ class CompareResponseDTO(BaseModel):
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,
             total_cost=mur.total_cost,
-            timestamp=mur.created_at.isoformat().replace("+00:00", "Z")
+            timestamp=mur.timestamp
         )
 
 

@@ -9,6 +9,10 @@ Key guarantees:
 
 import os
 import uuid
+import threading
+import hashlib
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 from api.base_client import BaseAIClient
@@ -20,6 +24,82 @@ from utils.logger import get_logger
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Stubs for research / prompt-optimizer modules (source files not present).
+# These allow the server to start; the research features are gracefully
+# disabled at runtime via the try/except blocks in __init__.
+# ---------------------------------------------------------------------------
+
+class _ResearchSource:
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+class _ResearchState:
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        self.sources = kw.get('sources', [])
+        self.topic = kw.get('topic', None)
+        self.mode = kw.get('mode', 'off')
+        self.injected_text = kw.get('injected_text', '')
+        self.ttl_seconds = kw.get('ttl_seconds', 900)
+        self.used = kw.get('used', False)
+
+    def with_update(self, **kw):
+        d = self.__dict__.copy()
+        d.update(kw)
+        return _ResearchState(**d)
+
+ResearchState  = _ResearchState
+ResearchSource = _ResearchSource
+
+def create_initial_state(session_id, mode, ttl_seconds=900):
+    return _ResearchState(session_id=session_id, mode=mode, ttl_seconds=ttl_seconds)
+
+def create_research_service_from_env():
+    raise RuntimeError("Research service not configured")
+
+def get_session_store():
+    return None
+
+def should_reuse_research(prompt, state):
+    return False
+
+def should_search(prompt, mode, state):
+    return False
+
+def sanitize_query(prompt, state, last_user_msg=None):
+    return prompt
+
+def normalize_topic(prompt):
+    return prompt[:80]
+
+def wants_more_sources(prompt):
+    return False
+
+def is_explicit_web_request(prompt):
+    return False
+
+
+class PromptOptimizer:
+    """Stub — real implementation not present in this environment."""
+    def __init__(self, provider='gemini'):
+        raise RuntimeError("PromptOptimizer not available")
+
+    def optimize_prompt(self, payload):
+        return {"optimized_prompt": payload.get("prompt", ""), "steps": [], "metrics": {}}
+
+
+# System instruction injected into every conversation
+system_instruction = {
+    "role": "system",
+    "content": (
+        "You are CortexAI, a helpful, accurate, and concise AI assistant. "
+        "Answer questions clearly and directly."
+    ),
+}
 
 
 class CortexOrchestrator:

@@ -140,10 +140,35 @@
                 rows="4" aria-label="Prompt input"></textarea>
             <div class="prompt-footer">
                 <span class="prompt-hint">Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
-                <button class="btn-submit" id="submitBtn">
-                    <span class="btn-icon">⚡</span>
-                    <span id="submitBtnLabel">Send</span>
-                </button>
+                <div class="prompt-footer-right">
+                    <!-- Appears after optimization runs -->
+                    <button class="btn-opt-view hidden" id="optViewBtn"
+                        title="See what prompt was actually sent to the LLM">
+                        ✨ View Optimized
+                    </button>
+                    <button class="btn-submit" id="submitBtn">
+                        <span class="btn-icon">⚡</span>
+                        <span id="submitBtnLabel">Send</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Optimized Prompt Panel (slide-in) ── -->
+        <div class="opt-panel hidden" id="optPanel" role="region" aria-label="Optimized prompt view">
+            <div class="opt-panel-header">
+                <span class="opt-panel-title">✨ Prompt Optimization — what went to the LLM</span>
+                <button class="opt-panel-close" id="optPanelClose" aria-label="Close">✕</button>
+            </div>
+            <div class="opt-panel-body">
+                <div class="opt-col">
+                    <div class="opt-col-label">YOUR ORIGINAL</div>
+                    <div class="opt-col-text" id="optOriginalText"></div>
+                </div>
+                <div class="opt-col opt-col-right">
+                    <div class="opt-col-label">OPTIMIZED ✨</div>
+                    <div class="opt-col-text" id="optOptimizedText"></div>
+                </div>
             </div>
         </div>
 
@@ -163,6 +188,7 @@
                     learn a programming language?</button>
             </div>
         </div>
+
 
         <!-- ── Results ── -->
         <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">

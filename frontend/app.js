@@ -29,6 +29,7 @@ let currentMode = "single";
 let compareSlotCount = 2;
 let conversationHistory = [];
 let optimizeEnabled = false;
+let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
 
 /* ─── DOM References ──────────────────────── */
 const $ = id => document.getElementById(id);
@@ -66,6 +67,11 @@ const el = {
     errorBanner: $("errorBanner"),
     errorMsg: $("errorMsg"),
     errorClose: $("errorClose"),
+    optViewBtn: $("optViewBtn"),
+    optPanel: $("optPanel"),
+    optPanelClose: $("optPanelClose"),
+    optOriginalText: $("optOriginalText"),
+    optOptimizedText: $("optOptimizedText"),
 };
 
 /* ═══════════════════════════════════════════
@@ -293,19 +299,82 @@ el.promptInput.addEventListener("keydown", e => {
 });
 
 /* ═══════════════════════════════════════════
+   OPT PANEL — View / close
+═══════════════════════════════════════════ */
+
+// Toggle the panel when ✨ View Optimized is clicked
+el.optViewBtn.addEventListener("click", () => {
+    const isHidden = el.optPanel.classList.toggle("hidden");
+    el.optViewBtn.textContent = isHidden
+        ? (lastOptimizeResult?.wasOptimized ? "✨ View Optimized" : "ℹ️ Optimization Off (server)")
+        : "✕ Close";
+});
+
+// Close the panel via its ✕ button
+el.optPanelClose.addEventListener("click", () => {
+    el.optPanel.classList.add("hidden");
+    if (lastOptimizeResult) {
+        el.optViewBtn.textContent = lastOptimizeResult.wasOptimized
+            ? "✨ View Optimized"
+            : "ℹ️ Optimization Off (server)";
+    }
+});
+
+
+/* ═══════════════════════════════════════════
+   OPTIMIZE PROMPT CALL
+═══════════════════════════════════════════ */
+
+async function callOptimize(prompt) {
+    const data = await callAPI("/v1/optimize", { prompt });
+    if (!data) return prompt;               // on error fall through
+
+    lastOptimizeResult = {
+        original: data.original_prompt,
+        optimized: data.optimized_prompt,
+        wasOptimized: data.was_optimized,
+        serverEnabled: data.server_optimization_enabled,
+    };
+
+    // Show / update the View Optimized button
+    el.optViewBtn.classList.remove("hidden");
+    el.optViewBtn.textContent = data.was_optimized
+        ? "✨ View Optimized"
+        : "ℹ️ Optimization Off (server)";
+
+    // Pre-fill the panel texts
+    el.optOriginalText.textContent = data.original_prompt;
+    el.optOptimizedText.textContent = data.optimized_prompt;
+
+    return data.optimized_prompt;
+}
+
+/* ═══════════════════════════════════════════
    SUBMIT
 ═══════════════════════════════════════════ */
 
 el.submitBtn.addEventListener("click", handleSubmit);
 
 async function handleSubmit() {
-    const prompt = el.promptInput.value.trim();
-    if (!prompt) { el.promptInput.focus(); return; }
+    const rawPrompt = el.promptInput.value.trim();
+    if (!rawPrompt) { el.promptInput.focus(); return; }
 
     clearError();
     setLoading(true);
 
     try {
+        // Step 1: optionally optimize the prompt
+        let prompt = rawPrompt;
+        if (optimizeEnabled) {
+            prompt = await callOptimize(rawPrompt);
+        } else {
+            // Hide the panel when opt is off
+            el.optViewBtn.classList.add("hidden");
+            el.optPanel.classList.add("hidden");
+            lastOptimizeResult = null;
+        }
+
+        // Step 2: send to chat / compare
         if (currentMode === "single") {
             await doSingleChat(prompt);
         } else {

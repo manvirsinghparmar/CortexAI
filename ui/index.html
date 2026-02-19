@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CortexAI Arena - Compare AI Responses</title>
-    <meta name="description" content="Compare AI model responses side by side in the CortexAI Arena">
+    <title>CortexAI Arena - Chat and Compare</title>
+    <meta name="description" content="Chat with smart routing or compare two AI model responses side by side.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -14,7 +14,6 @@
 
 <body>
     <div class="container">
-        <!-- Header -->
         <header class="header">
             <div class="logo">
                 <div class="logo-icon">
@@ -52,9 +51,7 @@
             </div>
         </header>
 
-        <!-- Main Content -->
         <main class="main-content">
-            <!-- Arena Badge -->
             <div class="arena-badge">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
@@ -62,54 +59,26 @@
                 <span>CortexAI Arena</span>
             </div>
 
-            <!-- Hero Section -->
-            <h1 class="main-heading">Compare AI Responses</h1>
-            <h2 class="sub-heading">Side by Side</h2>
-            <p class="description">Choose your AI models and compare their responses side by side. Vote for the best
-                one.</p>
+            <h1 class="main-heading">Chat or Compare</h1>
+            <h2 class="sub-heading">FastAPI End to End</h2>
+            <p class="description">Single chat defaults to smart routing via <code>/v1/chat</code>. Compare mode uses exactly two models via <code>/v1/compare</code>.</p>
 
-            <!-- Model Selection Panel -->
             <div class="model-selection-panel">
                 <div class="panel-header">
-                    <h3>Model Selection</h3>
+                    <h3>Run Mode</h3>
                     <div class="comparison-toggle">
-                        <span class="toggle-label">Compare:</span>
-                        <button class="toggle-btn" data-models="2"><span>2 Models</span></button>
-                        <button class="toggle-btn active" data-models="3"><span>3 Models</span></button>
+                        <button class="toggle-btn mode-btn active" id="singleModeBtn" data-mode="single"><span>Single Chat</span></button>
+                        <button class="toggle-btn mode-btn" id="compareModeBtn" data-mode="compare"><span>Compare 2 Models</span></button>
                     </div>
                 </div>
 
-                <div class="model-slots">
-                    <!-- Slot 1 -->
-                    <div class="model-slot">
-                        <label class="slot-label">SLOT 1</label>
-                        <div class="model-dropdown" data-slot="1">
-                            <div class="model-icon gemini-icon">
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                    xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
-                                </svg>
-                            </div>
-                            <span class="model-name">Gemini</span>
-                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
-                                xmlns="http://www.w3.org/2000/svg">
-                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                                    stroke-linejoin="round" />
-                            </svg>
-                        </div>
-                    </div>
+                <p class="mode-hint" id="modeHint">Single mode uses <code>/v1/chat</code> with smart routing ON by default.</p>
 
-                    <!-- Slot 2 -->
-                    <div class="model-slot">
-                        <label class="slot-label">SLOT 2</label>
-                        <div class="model-dropdown" data-slot="2">
-                            <div class="model-icon openai-icon">
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                    xmlns="http://www.w3.org/2000/svg">
-                                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" />
-                                    <circle cx="8" cy="8" r="2" fill="currentColor" />
-                                </svg>
-                            </div>
+                <div class="model-slots" id="modelSlots">
+                    <div class="model-slot" data-slot="1">
+                        <label class="slot-label" id="slot1Label">PRIMARY MODEL (manual mode)</label>
+                        <div class="model-dropdown" data-slot="1">
+                            <div class="model-icon openai-icon">OA</div>
                             <span class="model-name">OpenAI GPT</span>
                             <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
                                 xmlns="http://www.w3.org/2000/svg">
@@ -119,18 +88,11 @@
                         </div>
                     </div>
 
-                    <!-- Slot 3 -->
-                    <div class="model-slot">
-                        <label class="slot-label">SLOT 3</label>
-                        <div class="model-dropdown" data-slot="3">
-                            <div class="model-icon claude-icon">
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                    xmlns="http://www.w3.org/2000/svg">
-                                    <rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor"
-                                        stroke-width="1.5" />
-                                </svg>
-                            </div>
-                            <span class="model-name">Claude</span>
+                    <div class="model-slot" data-slot="2" id="slot2Container">
+                        <label class="slot-label">COMPARE MODEL 2</label>
+                        <div class="model-dropdown" data-slot="2">
+                            <div class="model-icon gemini-icon">GM</div>
+                            <span class="model-name">Gemini</span>
                             <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
                                 xmlns="http://www.w3.org/2000/svg">
                                 <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
@@ -139,38 +101,58 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="runtime-controls">
+                    <div class="control-row api-key-row">
+                        <label for="apiKeyInput">API Key</label>
+                        <input id="apiKeyInput" type="password" autocomplete="off" placeholder="dev-key-1">
+                    </div>
+
+                    <div class="control-row" id="smartRoutingRow">
+                        <label for="smartRoutingToggle">Smart Routing</label>
+                        <input id="smartRoutingToggle" type="checkbox" checked>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="promptOptToggle">Prompt Optimization</label>
+                        <input id="promptOptToggle" type="checkbox">
+                    </div>
+
+                    <div class="control-row">
+                        <label for="researchToggle">Research Mode</label>
+                        <input id="researchToggle" type="checkbox">
+                    </div>
+                </div>
             </div>
 
-            <!-- Prompt Input -->
             <div class="prompt-container">
                 <textarea class="prompt-input" id="promptInput"
-                    placeholder="Enter your prompt and compare responses from 3 AI models..."></textarea>
+                    placeholder="Ask anything. Single chat mode is enabled by default."></textarea>
                 <div class="prompt-footer">
                     <span class="prompt-hint">Press Ctrl+Enter to submit</span>
                     <button class="compare-btn" id="compareBtn">
                         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
                         </svg>
-                        <span>Compare Models</span>
+                        <span id="submitBtnLabel">Send Message</span>
                     </button>
                 </div>
             </div>
 
-            <!-- Examples Section -->
             <div class="examples-section">
                 <p class="examples-label">TRY AN EXAMPLE</p>
                 <div class="examples-grid">
-                    <button class="example-card" data-query="Explain quantum computing in simple terms">
-                        Explain quantum computing in simple terms
+                    <button class="example-card" data-query="Explain smart routing briefly">
+                        Explain smart routing briefly
                     </button>
-                    <button class="example-card" data-query="Write a haiku about artificial intelligence">
-                        Write a haiku about artificial intelligence
+                    <button class="example-card" data-query="Write a short release note for a backend API change">
+                        Write a short release note for a backend API change
                     </button>
-                    <button class="example-card" data-query="What are the pros and cons of remote work?">
-                        What are the pros and cons of remote work?
+                    <button class="example-card" data-query="What are pros and cons of caching API responses?">
+                        What are pros and cons of caching API responses?
                     </button>
-                    <button class="example-card" data-query="Explain the difference between SQL and NoSQL databases">
-                        Explain the difference between SQL and NoSQL databases
+                    <button class="example-card" data-query="Summarize this repo architecture in bullets">
+                        Summarize this repo architecture in bullets
                     </button>
                 </div>
             </div>

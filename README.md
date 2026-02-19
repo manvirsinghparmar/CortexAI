@@ -109,12 +109,28 @@ Notes:
 - `GET /health`
 - `POST /v1/chat`
 - `POST /v1/compare`
+- Protected routes require `X-API-Key`
 
 ### `POST /v1/chat`
 
-`provider` is optional when using smart routing.
+Accepted body fields:
+- `prompt` (required)
+- `provider` (`openai|gemini|deepseek|grok`, optional)
+- `model` (optional)
+- `context.session_id` (optional UUID string)
+- `context.conversation_history[]` (`role` + `content`)
+- `temperature` (`0.0..2.0`, optional)
+- `max_tokens` (`>0`, clamped to `1024`)
+- `research_mode` (`off|auto|on`)
+- `routing_mode` (`smart|cheap|strong`)
+- `routing_constraints` (optional object)
+- `prompt_optimization_enabled` (optional boolean)
 
-Example (auto-routing):
+Notes:
+- `provider`/`model` are optional when using smart routing.
+- If `DATABASE_URL` is enabled and you send `context.session_id`, it must exist in `public.sessions.id`; otherwise DB persistence can fail due FK constraints.
+
+Example (smart routing):
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat \
@@ -122,11 +138,18 @@ curl -X POST http://127.0.0.1:8000/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Fix this Python traceback",
-    "routing_mode": "smart"
+    "routing_mode": "smart",
+    "research_mode": "off",
+    "prompt_optimization_enabled": false,
+    "context": {
+      "conversation_history": [
+        {"role": "user", "content": "I get ImportError in tests"}
+      ]
+    }
   }'
 ```
 
-Example (explicit model):
+Example (manual provider/model):
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat \
@@ -134,15 +157,26 @@ curl -X POST http://127.0.0.1:8000/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Explain decorators",
+    "routing_mode": "smart",
     "provider": "openai",
-    "model": "gpt-4o-mini"
+    "model": "gpt-4o-mini",
+    "prompt_optimization_enabled": true
   }'
 ```
 
 ### `POST /v1/compare`
 
-- 2 to 4 targets required
-- Context is rejected when more than 2 targets are sent
+Accepted body fields:
+- `prompt` (required)
+- `targets` (2 to 4 items)
+- `targets[].provider` (`openai|gemini|deepseek|grok`, required)
+- `targets[].model` (optional, backend default is used if omitted)
+- `context` (optional; rejected when `targets > 2`)
+- `timeout_s` (`>0` and `<=300`)
+- `temperature` (`0.0..2.0`, optional)
+- `max_tokens` (`>0`, clamped to `1024`)
+- `research_mode` (`off|auto|on`)
+- `prompt_optimization_enabled` (optional boolean)
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/compare \
@@ -162,6 +196,11 @@ API guardrails:
 - Context hard limit: 8000 chars
 - `max_tokens` clamped to 1024
 
+Correlation IDs:
+- `X-Request-ID` header is request-transport correlation ID.
+- API response `request_id` maps to `public.llm_requests.request_id`.
+- Compare response `request_group_id` maps to `public.llm_requests.request_group_id`.
+
 Important:
 - API currently does not enforce CLI daily usage caps.
 
@@ -175,6 +214,29 @@ API key persistence defaults:
 - `ALLOW_UNMAPPED_API_KEY_PERSIST=false`
 
 With both defaults, unmapped keys are rejected with `403` (safer testing default).
+
+## Web UI (FastAPI End-to-End)
+
+The current UI is in `ui/` and calls FastAPI directly:
+- Single mode (default) calls `POST /v1/chat` with smart routing ON by default.
+- Single mode can disable smart routing and send explicit `provider` + `model`.
+- Compare mode calls `POST /v1/compare` with exactly 2 targets in the UI.
+- Compare mode hides smart routing controls.
+- UI exposes toggles for prompt optimization and research mode.
+- UI sends recent conversation history, but intentionally does not send `context.session_id` to avoid session FK issues.
+
+Run UI with FastAPI:
+
+```bash
+python run_server.py --reload
+cd ui
+python -m http.server 8080
+```
+
+Then open `http://127.0.0.1:8080`.
+
+Note:
+- `web_server.py` is a legacy Flask path (`/api/chat`). The updated UI flow uses FastAPI `/v1/chat` and `/v1/compare`.
 
 ## DB Migrations for API Persistence
 
@@ -337,6 +399,8 @@ OpenAIProject/
 ## Docs
 
 - `docs/FASTAPI_README.md`
+- `WEB_UI_GUIDE.md`
+- `ui/README.md`
 - `docs/UNIFIED_RESPONSE_CONTRACT.md`
 - `docs/LOGGING.md`
 - `docs/COMPARE_MODE_GUIDE.md`
@@ -362,4 +426,4 @@ OpenAI `Unsupported parameter: 'max_tokens'` with newer models:
 
 ---
 
-Last updated: 2026-02-18
+Last updated: 2026-02-19

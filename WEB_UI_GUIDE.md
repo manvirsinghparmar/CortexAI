@@ -1,163 +1,165 @@
-# CortexAI Web Interface - Quick Start Guide
+# CortexAI Web UI Guide
 
-## ✅ Setup Complete!
+This guide documents the current UI flow in `ui/` with FastAPI backend integration.
 
-Your CortexAI web interface is now fully integrated with your existing backend!
+## What Changed
 
-## 🚀 How to Use
+- UI now calls FastAPI directly (`/v1/chat`, `/v1/compare`).
+- Single mode is default and uses smart routing by default.
+- Compare mode is fixed to 2 models in UI.
+- Prompt Optimization and Research Mode are user toggles.
+- Smart routing toggle is not shown in compare mode.
+- Response cards show backend `request_id`.
+- UI context sends conversation history only (no `session_id`) to avoid DB FK persistence issues.
 
-### 1. Start the Web Server
+## Run End to End
+
+1. Start FastAPI server:
 
 ```bash
-cd "c:\Users\Soumadeep Gupta\CortexAI\CortexAI"
-python web_server.py
+python run_server.py --reload
 ```
 
-The server will start on **http://localhost:5000**
+2. Serve the UI (any static server):
 
-### 2. Open the UI
-
-Open your web browser and navigate to:
-```
-http://localhost:5000
+```bash
+cd ui
+python -m http.server 8080
 ```
 
-### 3. Start Chatting!
+3. Open:
 
-- Type your question in the search box
-- Click the send button or press Enter
-- Watch as your prompt is processed through the same `CortexOrchestrator` that powers the terminal UI
-- See AI responses with research sources, stats, and metadata
+`http://127.0.0.1:8080`
 
-## 🎯 Features
+Default backend target is `http://127.0.0.1:8000/v1`.
 
-### What Works Now:
-- ✅ **Full CortexAI Integration**: Uses your existing `orchestrator.core.CortexOrchestrator`
-- ✅ **Chat Interface**: Beautiful, modern chat UI with message history
-- ✅ **Research Display**: Shows web research sources when used
-- ✅ **Stats Display**: Token usage, cost, latency for each response
-- ✅ **Session Management**: Maintains conversation context
-- ✅ **Research Mode Toggle**: Click the model selector to switch between auto/on/off
-- ✅ **Keyboard Shortcuts**: 
-  - `Ctrl/Cmd + K`: Focus search
-  - `Ctrl/Cmd + R`: Reset conversation
-  - `Enter`: Send message
+## API Base URL Resolution
 
-### Example Queries:
-Click on any of the example queries to try them out:
-- "Explain quantum entanglement simply"
-- "Generate a creative app name for task management"
-- "Translate 'flutter like than never' into Latin"
-- "Write a short riddle with the answer 'time'"
+The UI resolves API base like this:
 
-## 🔧 Configuration
+1. `localStorage["cortex_api_base_url"]` (if set)
+2. If page is served from port `8000`: `<current-origin>/v1`
+3. Fallback: `http://127.0.0.1:8000/v1`
 
-The web server uses your existing `.env` configuration:
+Set custom API base in browser console:
 
-- `MODEL_TYPE`: Which AI model to use (gemini, openai, etc.)
-- `COMPARE_MODE`: Enable multi-model comparison
-- `RESEARCH_MODE`: Default research mode (auto/on/off)
-- `ENABLE_PROMPT_OPTIMIZATION`: Enable prompt optimization
-- `WEB_PORT`: Web server port (default: 5000)
-
-## 📊 API Endpoints
-
-The Flask server provides these REST endpoints:
-
-- `GET /` - Serve the web UI
-- `POST /api/chat` - Send a chat message
-- `GET /api/session/{id}/history` - Get conversation history
-- `POST /api/session/{id}/reset` - Reset conversation
-- `GET /api/session/{id}/stats` - Get session statistics
-- `GET /api/config` - Get current configuration
-- `GET /api/health` - Health check
-
-## 🎨 UI Components
-
-### Files Created:
-```
-ui/
-├── index.html      # Main HTML structure
-├── styles.css      # Complete styling with chat UI
-├── script.js       # API integration and interactivity
-└── README.md       # UI documentation
-
-web_server.py       # Flask backend server
+```js
+localStorage.setItem("cortex_api_base_url", "http://127.0.0.1:8000/v1");
 ```
 
-## 🔄 How It Works
+## UI Mode Behavior
 
-1. **User enters a prompt** in the web UI
-2. **JavaScript sends POST request** to `/api/chat`
-3. **Flask server receives request** and creates/retrieves session
-4. **CortexOrchestrator processes** the prompt (same as terminal UI)
-5. **Response flows back** through Flask → JavaScript → UI
-6. **Chat message displayed** with research sources and stats
+### Single Chat Mode (default)
 
-## 💡 Next Steps
+- Endpoint: `POST /v1/chat`
+- Default behavior: smart routing ON
+  - payload includes `routing_mode: "smart"`
+  - no explicit provider/model
+- If smart routing is toggled OFF:
+  - payload includes `provider` and `model` from selected model dropdown
+- Prompt Optimization toggle maps to `prompt_optimization_enabled`
+- Research Mode toggle maps to `research_mode` (`on`/`off`)
 
-### Immediate Improvements:
-1. **Streaming Responses**: Add SSE (Server-Sent Events) for real-time streaming
-2. **File Upload**: Implement document upload and processing
-3. **Voice Input**: Add Web Speech API integration
-4. **Dark Mode**: Add theme toggle
-5. **Export Chat**: Download conversation history
+### Compare Mode
 
-### Advanced Features:
-1. **User Authentication**: Add login/signup
-2. **Multiple Conversations**: Save and switch between chats
-3. **Prompt Templates**: Pre-built prompts for common tasks
-4. **Code Highlighting**: Syntax highlighting for code responses
-5. **Markdown Rendering**: Full markdown support in responses
+- Endpoint: `POST /v1/compare`
+- UI always sends exactly 2 targets.
+- Smart routing toggle is hidden.
+- Prompt Optimization toggle maps to `prompt_optimization_enabled`
+- Research Mode toggle maps to `research_mode` (`on`/`off`)
+- `timeout_s` is sent as `60`.
 
-## 🐛 Troubleshooting
+## Payload Mapping
 
-### "Failed to fetch" Error
-- Make sure the Flask server is running: `python web_server.py`
-- Check that port 5000 is not in use by another application
-- Verify the API_BASE_URL in `script.js` matches your server address
+### Single mode payload (smart ON)
 
-### No Response from AI
-- Check your `.env` file has valid API keys
-- Look at the Flask server console for error messages
-- Check browser console (F12) for JavaScript errors
+```json
+{
+  "prompt": "user text",
+  "research_mode": "off",
+  "prompt_optimization_enabled": false,
+  "routing_mode": "smart",
+  "context": {
+    "conversation_history": [
+      {"role": "user", "content": "..." }
+    ]
+  }
+}
+```
 
-### Research Not Working
-- Ensure `TAVILY_API_KEY` is set in `.env`
-- Check research mode is not set to "off"
-- Verify web search is enabled in your configuration
+### Single mode payload (smart OFF)
 
-## 📝 Comparison: Terminal UI vs Web UI
+```json
+{
+  "prompt": "user text",
+  "research_mode": "on",
+  "prompt_optimization_enabled": true,
+  "routing_mode": "smart",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "context": {
+    "conversation_history": []
+  }
+}
+```
 
-| Feature | Terminal UI | Web UI |
-|---------|-------------|--------|
-| Interface | Text-based CLI | Modern web interface |
-| Message History | Scrollback only | Persistent chat view |
-| Research Display | Text list | Clickable links with formatting |
-| Stats Display | Inline text | Formatted badges |
-| Multi-session | Single session | Multiple browser tabs |
-| Accessibility | Keyboard only | Mouse + Keyboard |
-| Visual Appeal | Basic | Premium design |
+### Compare mode payload
 
-## 🎓 Learning Resources
+```json
+{
+  "prompt": "user text",
+  "research_mode": "off",
+  "prompt_optimization_enabled": false,
+  "timeout_s": 60,
+  "targets": [
+    {"provider": "openai", "model": "gpt-4o-mini"},
+    {"provider": "gemini", "model": "gemini-2.5-flash-lite"}
+  ],
+  "context": {
+    "conversation_history": []
+  }
+}
+```
 
-To understand the codebase better:
+## Conversation Context Handling
 
-1. **Backend Flow**: `web_server.py` → `orchestrator/core.py` → AI clients
-2. **Frontend Flow**: `script.js` → Fetch API → Flask endpoints
-3. **Session Management**: In-memory dict (upgrade to Redis for production)
-4. **Error Handling**: Try-catch in JS, error responses in Flask
+- UI keeps local `conversationHistory`.
+- On each request, only the last 10 messages are sent.
+- UI intentionally does not send `context.session_id`.
+  - Reason: avoid FK violations when DB persistence validates `llm_requests.session_id`.
 
-## 📞 Support
+## Request IDs and DB Checks
 
-If you encounter issues:
-1. Check the Flask server console output
-2. Check browser console (F12 → Console tab)
-3. Verify all dependencies are installed: `pip install flask flask-cors`
-4. Ensure your `.env` file is properly configured
+- UI response cards display backend `request_id`.
+- Use that value to query DB:
+
+```sql
+SELECT r.*, resp.*
+FROM public.llm_requests r
+LEFT JOIN public.llm_responses resp ON resp.llm_request_id = r.id
+WHERE r.request_id = 'your-request-id';
+```
+
+Failure reason query:
+
+```sql
+SELECT
+  r.request_id,
+  r.provider,
+  r.model,
+  resp.finish_reason,
+  resp.error_type,
+  resp.error_message
+FROM public.llm_requests r
+JOIN public.llm_responses resp ON resp.llm_request_id = r.id
+WHERE r.request_id = 'your-request-id';
+```
+
+## Known Legacy Path
+
+- `web_server.py` is legacy Flask (`/api/chat`) and not the default UI backend for this flow.
+- Current UI path is FastAPI `/v1/chat` and `/v1/compare`.
 
 ---
 
-**Enjoy your new CortexAI web interface!** 🎉
-
-The same powerful AI orchestration you had in the terminal, now with a beautiful, modern UI.
+Last updated: 2026-02-19

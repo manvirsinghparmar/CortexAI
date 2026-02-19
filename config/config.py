@@ -8,8 +8,7 @@ from enum import Enum
 COMPARE_TARGETS = [
     {"provider": "openai", "model": "gpt-4o-mini"},
     {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-    {"provider": "deepseek", "model": "deepseek-chat"},
-    {"provider": "grok", "model": "grok-4-latest"},
+    {"provider": "gemini", "model": "gemini-2.0-flash-exp"},  # Second Gemini model for comparison
 ]
 
 class ModelType(Enum):

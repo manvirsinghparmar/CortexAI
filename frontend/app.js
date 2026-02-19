@@ -1,214 +1,306 @@
 /**
- * CortexAI Frontend — app.js
- * Drives the single-chat and compare-mode UI.
+ * CortexAI Frontend — app.js (v2 — Scrollytelling Edition)
  */
 
-/* ─── Config ────────────────────────────────────── */
+/* ─── Config ──────────────────────────────── */
 const API_BASE = "http://127.0.0.1:8000";
-const API_KEY = "dev-key-1";   // matches .env API_KEYS
+const API_KEY = "dev-key-1";
 
-/* ─── Available Models ──────────────────────────── */
+/* ─── Model Catalog ───────────────────────── */
 const MODELS = {
     openai: ["gpt-3.5-turbo", "gpt-4", "gpt-4o", "gpt-4o-mini"],
     gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-1.5-pro"],
     deepseek: ["deepseek-chat", "deepseek-reasoner"],
     grok: ["grok-4-latest"],
 };
-
 const PROVIDER_LABELS = {
     openai: "OpenAI",
     gemini: "Google Gemini",
     deepseek: "DeepSeek",
     grok: "Grok",
 };
-
-const PROVIDER_ICONS = {
-    openai: "🟢",
-    gemini: "🔵",
-    deepseek: "🟣",
-    grok: "🔷",
+const WORKSPACE_TAGLINES = {
+    single: "Single model · Conversational",
+    compare: "Multi-model · Parallel comparison",
 };
 
-// Flat list of all {provider, model} options
-const ALL_OPTIONS = Object.entries(MODELS).flatMap(([provider, models]) =>
-    models.map(model => ({ provider, model }))
-);
-
-const EXAMPLE_PROMPTS = [
-    "Explain quantum computing in simple terms",
-    "Write a haiku about artificial intelligence",
-    "What are the pros and cons of remote work?",
-    "Explain the difference between SQL and NoSQL databases",
-    "What is the best way to learn a new programming language?",
-];
-
-/* ─── State ─────────────────────────────────────── */
-let currentMode = "single";  // "single" | "compare"
+/* ─── State ───────────────────────────────── */
+let currentMode = "single";
 let compareSlotCount = 2;
-let conversationHistory = [];       // for single chat mode
+let conversationHistory = [];
 let optimizeEnabled = false;
 
-/* ─── DOM Refs ──────────────────────────────────── */
+/* ─── DOM References ──────────────────────── */
 const $ = id => document.getElementById(id);
+const el = {
+    hero: $("hero"),
+    heroContent: $("heroContent"),
+    heroScrollHint: $("heroScrollHint"),
+    compactBar: $("compactBar"),
+    compactModelInfo: $("compactModelInfo"),
+    cBtnSingle: $("cBtnSingle"),
+    cBtnCompare: $("cBtnCompare"),
+    compactSendBtn: $("compactSendBtn"),
+    mainHeader: $("mainHeader"),
+    optToggle: $("optToggle"),
+    optStatus: $("optStatus"),
+    btnSingleMode: $("btnSingleMode"),
+    btnCompareMode: $("btnCompareMode"),
+    panelSingle: $("panelSingle"),
+    panelCompare: $("panelCompare"),
+    workspaceTagline: $("workspaceTagline"),
+    singleModel: $("singleModel"),
+    compareModel1: $("compareModel1"),
+    compareModel2: $("compareModel2"),
+    compareModel3: $("compareModel3"),
+    slot3: $("slot3"),
+    btn2Models: $("btn2Models"),
+    btn3Models: $("btn3Models"),
+    promptCard: $("promptCard"),
+    promptInput: $("promptInput"),
+    submitBtn: $("submitBtn"),
+    submitBtnLabel: $("submitBtnLabel"),
+    resultsSection: $("resultsSection"),
+    resultsGrid: $("resultsGrid"),
+    clearBtn: $("clearBtn"),
+    errorBanner: $("errorBanner"),
+    errorMsg: $("errorMsg"),
+    errorClose: $("errorClose"),
+};
 
-const btnSingleMode = $("btnSingleMode");
-const btnCompareMode = $("btnCompareMode");
-const panelSingle = $("panelSingle");
-const panelCompare = $("panelCompare");
-const optToggle = $("optToggle");
-const optStatus = $("optStatus");
-const singleModel = $("singleModel");
-const compareModel1 = $("compareModel1");
-const compareModel2 = $("compareModel2");
-const compareModel3 = $("compareModel3");
-const slot3 = $("slot3");
-const btn2Models = $("btn2Models");
-const btn3Models = $("btn3Models");
-const promptInput = $("promptInput");
-const submitBtn = $("submitBtn");
-const submitBtnLabel = $("submitBtnLabel");
-const resultsSection = $("resultsSection");
-const resultsGrid = $("resultsGrid");
-const clearBtn = $("clearBtn");
-const errorBanner = $("errorBanner");
-const errorMsg = $("errorMsg");
-const errorClose = $("errorClose");
+/* ═══════════════════════════════════════════
+   SCROLL BEHAVIOUR — Hero fade + Compact bar
+═══════════════════════════════════════════ */
 
-/* ─── Dropdown Helpers ─────────────────────────── */
+(function initScrollBehaviour() {
+    // 1. Scroll-linked hero opacity/transform via rAF (60fps)
+    let ticking = false;
+    function onScroll() {
+        if (!ticking) {
+            requestAnimationFrame(updateHero);
+            ticking = true;
+        }
+    }
 
-/**
- * Build <optgroup> options for a select, excluding a set of {provider:model} combos.
- */
+    function updateHero() {
+        const heroH = el.hero.offsetHeight;
+        const scrollY = window.scrollY;
+        const prog = Math.min(scrollY / (heroH * 0.7), 1); // 0 → 1 over 70% of hero height
+
+        // Fade + slide the hero content
+        el.heroContent.style.opacity = 1 - prog;
+        el.heroContent.style.transform = `translateY(${prog * -40}px)`;
+
+        // Header shadow
+        if (scrollY > 10) {
+            el.mainHeader.classList.add("scrolled");
+        } else {
+            el.mainHeader.classList.remove("scrolled");
+        }
+
+        ticking = false;
+    }
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    // 2. IntersectionObserver — show compact bar once hero is mostly gone
+    const observer = new IntersectionObserver(
+        ([entry]) => {
+            const showBar = !entry.isIntersecting;
+            el.compactBar.classList.toggle("visible", showBar);
+            el.compactBar.setAttribute("aria-hidden", showBar ? "false" : "true");
+        },
+        { threshold: 0.15 }   // trigger when <15% of hero is visible
+    );
+    observer.observe(el.hero);
+})();
+
+/* ═══════════════════════════════════════════
+   COMPACT BAR — SYNC
+═══════════════════════════════════════════ */
+
+function updateCompactBar() {
+    // Mode buttons
+    el.cBtnSingle.classList.toggle("active", currentMode === "single");
+    el.cBtnCompare.classList.toggle("active", currentMode === "compare");
+
+    // Model badges
+    const badgesHTML = getCompactBadges();
+    el.compactModelInfo.innerHTML = badgesHTML;
+
+    // Send label
+    el.compactSendBtn.innerHTML = `<span class="btn-icon">⚡</span> ${currentMode === "single" ? "Send" : "Compare"}`;
+}
+
+function getCompactBadges() {
+    if (currentMode === "single") {
+        const { provider, model } = parseKey(el.singleModel.value || "");
+        if (!provider) return "";
+        return `<span class="compact-model-badge">
+              <span class="provider-dot dot-${provider}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
+              ${escHtml(model)}
+            </span>`;
+    }
+    return getActiveCompareSelects().map(sel => {
+        const { provider, model } = parseKey(sel.value || "");
+        if (!provider) return "";
+        return `<span class="compact-model-badge">
+              <span class="provider-dot dot-${provider}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
+              ${escHtml(model)}
+            </span>`;
+    }).join("");
+}
+
+// Main workspace mode toggle buttons
+el.btnSingleMode.addEventListener("click", () => setMode("single"));
+el.btnCompareMode.addEventListener("click", () => setMode("compare"));
+
+// Compact bar mirrors
+el.cBtnSingle.addEventListener("click", () => setMode("single"));
+el.cBtnCompare.addEventListener("click", () => setMode("compare"));
+el.compactSendBtn.addEventListener("click", handleSubmit);
+
+
+/* ═══════════════════════════════════════════
+   DROPDOWNS
+═══════════════════════════════════════════ */
+
 function buildOptions(selectEl, excludeKeys = new Set()) {
-    const current = selectEl.value; // try to preserve current selection
+    const current = selectEl.value;
     selectEl.innerHTML = "";
 
     Object.entries(MODELS).forEach(([provider, models]) => {
         const group = document.createElement("optgroup");
         group.label = PROVIDER_LABELS[provider];
-
         models.forEach(model => {
             const key = `${provider}:${model}`;
-            if (excludeKeys.has(key)) return; // skip duplicates
-
+            if (excludeKeys.has(key)) return;
             const opt = document.createElement("option");
             opt.value = key;
             opt.textContent = model;
             if (key === current) opt.selected = true;
             group.appendChild(opt);
         });
-
         if (group.children.length > 0) selectEl.appendChild(group);
     });
 
-    // If nothing selected yet, pick first option
     if (!selectEl.value && selectEl.options.length > 0) {
         selectEl.options[0].selected = true;
     }
 }
 
-function getSelectedKey(selectEl) {
-    return selectEl.value; // "provider:model"
+function getActiveCompareSelects() {
+    const s = [el.compareModel1, el.compareModel2];
+    if (compareSlotCount === 3) s.push(el.compareModel3);
+    return s;
+}
+
+function syncCompareDropdowns() {
+    const selects = getActiveCompareSelects();
+    selects.forEach((sel, i) => {
+        const others = new Set(selects.filter((_, j) => j !== i).map(s => s.value).filter(Boolean));
+        buildOptions(sel, others);
+    });
+    updateCompactBar();
 }
 
 function parseKey(key) {
-    const idx = key.indexOf(":");
+    const idx = (key || "").indexOf(":");
+    if (idx < 0) return { provider: "", model: key };
     return { provider: key.slice(0, idx), model: key.slice(idx + 1) };
 }
 
-/** Rebuild all compare dropdowns so no two slots share the same provider:model */
-function syncCompareDropdowns() {
-    const selects = getActiveCompareSelects();
-
-    selects.forEach((sel, i) => {
-        const otherKeys = new Set(
-            selects.filter((_, j) => j !== i).map(s => s.value).filter(Boolean)
-        );
-        buildOptions(sel, otherKeys);
-    });
-}
-
-function getActiveCompareSelects() {
-    const selects = [compareModel1, compareModel2];
-    if (compareSlotCount === 3) selects.push(compareModel3);
-    return selects;
-}
-
-/** Initial population of the single-chat dropdown */
-function populateSingleDropdown() {
-    buildOptions(singleModel, new Set());
-}
-
-/* ─── Mode Toggle ─────────────────────────────── */
+/* ═══════════════════════════════════════════
+   MODE
+═══════════════════════════════════════════ */
 
 function setMode(mode) {
     currentMode = mode;
-    btnSingleMode.classList.toggle("active", mode === "single");
-    btnCompareMode.classList.toggle("active", mode === "compare");
-    btnSingleMode.setAttribute("aria-selected", mode === "single");
-    btnCompareMode.setAttribute("aria-selected", mode === "compare");
 
-    if (mode === "single") {
-        panelSingle.classList.remove("hidden");
-        panelCompare.classList.add("hidden");
-        submitBtnLabel.textContent = "Send";
-    } else {
-        panelSingle.classList.add("hidden");
-        panelCompare.classList.remove("hidden");
-        submitBtnLabel.textContent = "Compare Models";
-        syncCompareDropdowns();
-    }
+    const isSingle = mode === "single";
+    el.btnSingleMode.classList.toggle("active", isSingle);
+    el.btnCompareMode.classList.toggle("active", !isSingle);
+    el.btnSingleMode.setAttribute("aria-selected", isSingle);
+    el.btnCompareMode.setAttribute("aria-selected", !isSingle);
+
+    el.panelSingle.classList.toggle("hidden", !isSingle);
+    el.panelCompare.classList.toggle("hidden", isSingle);
+
+    el.submitBtnLabel.textContent = isSingle ? "Send" : "Compare Models";
+    el.workspaceTagline.textContent = WORKSPACE_TAGLINES[mode];
+
+    if (!isSingle) syncCompareDropdowns();
 
     clearResults();
     conversationHistory = [];
+    updateCompactBar();
 }
 
-/* ─── Slot Count (2 / 3 models) ─────────────────── */
+/* ═══════════════════════════════════════════
+   SLOT COUNT
+═══════════════════════════════════════════ */
 
 function setSlotCount(n) {
     compareSlotCount = n;
-    btn2Models.classList.toggle("active", n === 2);
-    btn3Models.classList.toggle("active", n === 3);
-    slot3.classList.toggle("hidden", n < 3);
+    el.btn2Models.classList.toggle("active", n === 2);
+    el.btn3Models.classList.toggle("active", n === 3);
+    el.slot3.classList.toggle("hidden", n < 3);
     syncCompareDropdowns();
 }
 
-/* ─── Prompt Optimization ─────────────────────── */
+el.btn2Models.addEventListener("click", () => setSlotCount(2));
+el.btn3Models.addEventListener("click", () => setSlotCount(3));
 
-optToggle.addEventListener("change", () => {
-    optimizeEnabled = optToggle.checked;
-    optStatus.textContent = optimizeEnabled ? "On" : "Off";
-    optStatus.classList.toggle("on", optimizeEnabled);
+/* ═══════════════════════════════════════════
+   PROMPT OPTIMIZATION TOGGLE
+═══════════════════════════════════════════ */
+
+el.optToggle.addEventListener("change", () => {
+    optimizeEnabled = el.optToggle.checked;
+    el.optStatus.textContent = optimizeEnabled ? "On" : "Off";
+    el.optStatus.classList.toggle("on", optimizeEnabled);
 });
 
-/* ─── Example Chips ─────────────────────────── */
+/* ═══════════════════════════════════════════
+   PROMPT FOCUS — card glow effect
+═══════════════════════════════════════════ */
+
+el.promptInput.addEventListener("focus", () => el.promptCard.classList.add("focused"));
+el.promptInput.addEventListener("blur", () => el.promptCard.classList.remove("focused"));
+
+/* ═══════════════════════════════════════════
+   EXAMPLE CHIPS
+═══════════════════════════════════════════ */
 
 document.querySelectorAll(".chip").forEach(chip => {
     chip.addEventListener("click", () => {
-        promptInput.value = chip.dataset.prompt;
-        promptInput.focus();
+        el.promptInput.value = chip.dataset.prompt;
+        el.promptInput.focus();
+        // Scroll to workspace smoothly
+        document.getElementById("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
     });
 });
 
-/* ─── Keyboard shortcut Ctrl+Enter ─────────────── */
+/* ═══════════════════════════════════════════
+   KEYBOARD SHORTCUT
+═══════════════════════════════════════════ */
 
-promptInput.addEventListener("keydown", e => {
+el.promptInput.addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleSubmit();
     }
 });
 
-/* ─── Submit ────────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   SUBMIT
+═══════════════════════════════════════════ */
 
-submitBtn.addEventListener("click", handleSubmit);
+el.submitBtn.addEventListener("click", handleSubmit);
 
 async function handleSubmit() {
-    const prompt = promptInput.value.trim();
-    if (!prompt) {
-        promptInput.focus();
-        return;
-    }
+    const prompt = el.promptInput.value.trim();
+    if (!prompt) { el.promptInput.focus(); return; }
 
     clearError();
     setLoading(true);
@@ -226,74 +318,60 @@ async function handleSubmit() {
     }
 }
 
-/* ─── Single Chat ─────────────────────────────── */
+/* ═══════════════════════════════════════════
+   SINGLE CHAT
+═══════════════════════════════════════════ */
 
 async function doSingleChat(prompt) {
-    const key = getSelectedKey(singleModel);
-    if (!key) { showError("Please select a model."); return; }
-    const { provider, model } = parseKey(key);
+    const { provider, model } = parseKey(el.singleModel.value);
+    if (!provider) { showError("Please select a model."); return; }
 
     const body = {
         prompt,
         provider,
         model,
         ...(conversationHistory.length > 0 ? {
-            context: {
-                session_id: "ui-session",
-                conversation_history: conversationHistory,
-            }
+            context: { session_id: "ui-session", conversation_history: conversationHistory }
         } : {}),
     };
 
     const data = await callAPI("/v1/chat", body);
     if (!data) return;
 
-    // Update conversation history
     conversationHistory.push({ role: "user", content: prompt });
     conversationHistory.push({ role: "assistant", content: data.text || "" });
-    // Keep last 10 exchanges (20 messages)
-    if (conversationHistory.length > 20) {
-        conversationHistory = conversationHistory.slice(-20);
-    }
+    if (conversationHistory.length > 20) conversationHistory = conversationHistory.slice(-20);
 
     showResults([data], false);
 }
 
-/* ─── Compare ────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   COMPARE
+═══════════════════════════════════════════ */
 
 async function doCompare(prompt) {
     const selects = getActiveCompareSelects();
-    const targets = selects.map(sel => {
-        const { provider, model } = parseKey(sel.value);
-        return { provider, model };
-    });
+    const targets = selects.map(sel => parseKey(sel.value));
 
     if (new Set(targets.map(t => `${t.provider}:${t.model}`)).size < targets.length) {
         showError("Please select different models for each slot.");
         return;
     }
 
-    const body = {
-        prompt,
-        targets,
-    };
-
-    const data = await callAPI("/v1/compare", body);
+    const data = await callAPI("/v1/compare", { prompt, targets });
     if (!data) return;
 
-    // data.responses is an array of ChatResponseDTO
     showResults(data.responses, true, data);
 }
 
-/* ─── API Helper ─────────────────────────────── */
+/* ═══════════════════════════════════════════
+   API
+═══════════════════════════════════════════ */
 
 async function callAPI(path, body) {
     const resp = await fetch(`${API_BASE}${path}`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": API_KEY,
-        },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
         body: JSON.stringify(body),
     });
 
@@ -303,44 +381,48 @@ async function callAPI(path, body) {
         showError(`API error: ${detail}`);
         return null;
     }
-
     return resp.json();
 }
 
-/* ─── Rendering Results ──────────────────────── */
+/* ═══════════════════════════════════════════
+   RENDER RESULTS — staggered card animation
+═══════════════════════════════════════════ */
 
 function showResults(responses, isMulti, compareData) {
-    resultsSection.classList.remove("hidden");
-    resultsGrid.className = isMulti ? "results-grid multi" : "results-grid";
+    el.resultsSection.classList.remove("hidden");
+    el.resultsGrid.className = isMulti ? "results-grid multi" : "results-grid";
 
     if (!isMulti) {
-        // For single chat, prepend new card (keep history visible)
-        resultsGrid.insertAdjacentHTML("afterbegin", buildResponseCard(responses[0], false));
+        el.resultsGrid.style.gridTemplateColumns = "";
+        el.resultsGrid.insertAdjacentHTML("afterbegin", buildResponseCard(responses[0], 0));
     } else {
-        // For compare, always replace
-        resultsGrid.innerHTML = responses.map(r => buildResponseCard(r, true)).join("");
-
-        // Append compare summary footer if applicable
-        if (compareData) {
-            const summary = buildCompareSummary(compareData);
-            resultsGrid.insertAdjacentHTML("beforeend", summary);
-        }
+        // Explicitly match columns to card count — prevents empty 3rd column with 2 cards
+        el.resultsGrid.style.gridTemplateColumns = `repeat(${responses.length}, 1fr)`;
+        el.resultsGrid.innerHTML = responses.map((r, i) => buildResponseCard(r, i)).join("");
+        if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
     }
+
+    // Smooth scroll to results
+    setTimeout(() => {
+        el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
 }
 
-function buildResponseCard(resp, isCompare) {
+
+function buildResponseCard(resp, index) {
     const hasError = !!resp.error;
-    const providerClass = `dot-${resp.provider}`;
     const latency = resp.latency_ms != null ? `${resp.latency_ms} ms` : "—";
     const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = resp.token_usage ? resp.token_usage.total_tokens : 0;
     const cost = resp.estimated_cost != null ? `$${resp.estimated_cost.toFixed(5)}` : "—";
+    const delay = index * 60;
 
     return `
-    <div class="response-card ${hasError ? "error-card" : ""}">
+    <div class="response-card ${hasError ? "error-card" : ""}"
+         style="animation: cardIn 0.4s cubic-bezier(.4,0,.2,1) ${delay}ms both;">
       <div class="response-card-header">
         <span class="model-badge">
-          <span class="provider-dot ${providerClass}"></span>
+          <span class="provider-dot dot-${escHtml(resp.provider)}"></span>
           ${escHtml(PROVIDER_LABELS[resp.provider] || resp.provider)} &mdash; ${escHtml(resp.model)}
         </span>
         <span class="latency-badge">⏱ ${latency}</span>
@@ -367,9 +449,9 @@ function buildResponseCard(resp, isCompare) {
 
 function buildCompareSummary(data) {
     return `
-    <div class="response-card" style="grid-column: 1/-1; background: #FAFAFA;">
-      <div class="response-card-body" style="padding:14px 16px;">
-        <div style="display:flex;gap:24px;flex-wrap:wrap;">
+    <div class="response-card" style="grid-column:1/-1;background:#FAFAFA;animation:cardIn 0.4s cubic-bezier(.4,0,.2,1) ${data.responses.length * 60}ms both;">
+      <div class="response-card-body" style="padding:12px 16px;">
+        <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
           <div class="stat-item">
             <span class="stat-label">Total Tokens</span>
             <span class="stat-value">${(data.total_tokens || 0).toLocaleString()}</span>
@@ -387,65 +469,62 @@ function buildCompareSummary(data) {
     </div>`;
 }
 
-/* ─── Clear & Error ──────────────────────────── */
+/* ═══════════════════════════════════════════
+   CLEAR / ERROR / LOADING
+═══════════════════════════════════════════ */
 
-clearBtn.addEventListener("click", () => {
-    clearResults();
-    conversationHistory = [];
-});
+el.clearBtn.addEventListener("click", () => { clearResults(); conversationHistory = []; });
 
 function clearResults() {
-    resultsSection.classList.add("hidden");
-    resultsGrid.innerHTML = "";
+    el.resultsSection.classList.add("hidden");
+    el.resultsGrid.innerHTML = "";
 }
 
 function showError(msg) {
-    errorMsg.textContent = msg;
-    errorBanner.classList.remove("hidden");
+    el.errorMsg.textContent = msg;
+    el.errorBanner.classList.remove("hidden");
 }
-
-function clearError() {
-    errorBanner.classList.add("hidden");
-}
-
-errorClose.addEventListener("click", clearError);
-
-/* ─── Loading State ─────────────────────────── */
+function clearError() { el.errorBanner.classList.add("hidden"); }
+el.errorClose.addEventListener("click", clearError);
 
 function setLoading(loading) {
-    submitBtn.disabled = loading;
+    el.submitBtn.disabled = loading;
+    el.compactSendBtn.disabled = loading;
+
     if (loading) {
-        submitBtn.innerHTML = `<span class="spinner"></span> <span>Processing…</span>`;
+        el.submitBtn.innerHTML = `<span class="spinner"></span> Processing…`;
+        el.compactSendBtn.innerHTML = `<span class="spinner"></span>`;
     } else {
         const label = currentMode === "single" ? "Send" : "Compare Models";
-        submitBtn.innerHTML = `<span class="btn-icon">⚡</span><span id="submitBtnLabel">${label}</span>`;
+        el.submitBtn.innerHTML = `<span class="btn-icon">⚡</span><span id="submitBtnLabel">${label}</span>`;
+        el.compactSendBtn.innerHTML = `<span class="btn-icon">⚡</span> ${currentMode === "single" ? "Send" : "Compare"}`;
+        // Re-bind the label ref (it gets recreated)
+        el.submitBtnLabel = document.getElementById("submitBtnLabel");
     }
 }
 
-/* ─── Event Listeners ─────────────────────────── */
-
-btnSingleMode.addEventListener("click", () => setMode("single"));
-btnCompareMode.addEventListener("click", () => setMode("compare"));
-
-btn2Models.addEventListener("click", () => setSlotCount(2));
-btn3Models.addEventListener("click", () => setSlotCount(3));
-
-// Sync dropdowns whenever a compare slot changes
-[compareModel1, compareModel2, compareModel3].forEach(sel => {
-    sel.addEventListener("change", syncCompareDropdowns);
-});
-
-/* ─── Init ──────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════ */
 
 (function init() {
-    populateSingleDropdown();
-    buildOptions(compareModel1, new Set());
-    buildOptions(compareModel2, new Set([compareModel1.value]));
-    buildOptions(compareModel3, new Set([compareModel1.value, compareModel2.value]));
+    buildOptions(el.singleModel, new Set());
+    buildOptions(el.compareModel1, new Set());
+    buildOptions(el.compareModel2, new Set([el.compareModel1.value]));
+    buildOptions(el.compareModel3, new Set([el.compareModel1.value, el.compareModel2.value]));
+
+    // Dedup on change
+    [el.compareModel1, el.compareModel2, el.compareModel3].forEach(s =>
+        s.addEventListener("change", syncCompareDropdowns)
+    );
+    el.singleModel.addEventListener("change", updateCompactBar);
+
     setMode("single");
 })();
 
-/* ─── Utils ─────────────────────────────────── */
+/* ═══════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════ */
 
 function escHtml(str) {
     return String(str)

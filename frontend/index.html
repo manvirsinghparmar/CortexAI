@@ -53,6 +53,10 @@
                     <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 </label>
                 <span class="opt-status" id="optStatus">Off</span>
+                <button class="history-toggle-btn" id="historyToggleBtn" aria-label="Toggle chat history"
+                    title="Chat History">
+                    🕐 History
+                </button>
             </div>
         </div>
     </header>
@@ -207,6 +211,31 @@
         </div>
 
     </main>
+
+    <!-- ── History Sidebar ── -->
+    <aside class="history-sidebar" id="historySidebar" aria-label="Chat history" aria-hidden="true">
+        <div class="history-sidebar-header">
+            <div class="history-sidebar-title">
+                <span>🕐</span> Chat History
+            </div>
+            <div class="history-sidebar-actions">
+                <button class="history-clear-btn" id="historyClearAllBtn" title="Clear all history">🗑 Clear
+                    All</button>
+                <button class="history-close-btn" id="historySidebarClose" aria-label="Close history">✕</button>
+            </div>
+        </div>
+        <div class="history-search-wrap">
+            <input type="text" id="historySearch" class="history-search" placeholder="Search history…"
+                aria-label="Search history" />
+        </div>
+        <ul class="history-list" id="historyList" role="list"></ul>
+        <div class="history-empty" id="historyEmpty">
+            <div class="history-empty-icon">💬</div>
+            <p>No history yet.<br>Send a prompt to get started.</p>
+        </div>
+    </aside>
+    <!-- Overlay behind sidebar -->
+    <div class="history-overlay" id="historyOverlay"></div>
 
     <footer class="footer">
         <p>CortexAI — Unified AI Comparison Engine</p>

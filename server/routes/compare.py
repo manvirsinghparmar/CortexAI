@@ -75,4 +75,23 @@ async def compare(
         **kwargs
     )
 
-    return CompareResponseDTO.from_multi_unified_response(response)
+    dto = CompareResponseDTO.from_multi_unified_response(response)
+
+    # Persist each model's response to history DB (best-effort)
+    try:
+        from server.database import save_chat
+        for r in dto.responses:
+            save_chat(
+                prompt=request.prompt,
+                provider=r.provider,
+                model=r.model,
+                response=r.text,
+                latency_ms=r.latency_ms,
+                tokens=r.token_usage.total_tokens if r.token_usage else None,
+                cost=r.estimated_cost,
+                mode="compare",
+            )
+    except Exception:
+        pass
+
+    return dto

@@ -380,6 +380,8 @@ async function handleSubmit() {
         showError(err.message || "An unexpected error occurred.");
     } finally {
         setLoading(false);
+        // Refresh history panel (silently, whether open or not, so next open is fresh)
+        loadHistory();
     }
 }
 
@@ -598,3 +600,144 @@ function escHtml(str) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
 }
+
+/* ═══════════════════════════════════════════
+   HISTORY SIDEBAR
+═══════════════════════════════════════════ */
+
+const historyEl = {
+    sidebar: $("historySidebar"),
+    overlay: $("historyOverlay"),
+    toggleBtn: $("historyToggleBtn"),
+    closeBtn: $("historySidebarClose"),
+    clearAllBtn: $("historyClearAllBtn"),
+    list: $("historyList"),
+    empty: $("historyEmpty"),
+    search: $("historySearch"),
+};
+
+let _historyData = [];   // full fetched list
+let _sidebarOpen = false;
+
+function openHistorySidebar() {
+    _sidebarOpen = true;
+    historyEl.sidebar.classList.add("open");
+    historyEl.overlay.classList.add("visible");
+    historyEl.sidebar.setAttribute("aria-hidden", "false");
+    historyEl.toggleBtn.classList.add("active");
+    loadHistory();
+}
+
+function closeHistorySidebar() {
+    _sidebarOpen = false;
+    historyEl.sidebar.classList.remove("open");
+    historyEl.overlay.classList.remove("visible");
+    historyEl.sidebar.setAttribute("aria-hidden", "true");
+    historyEl.toggleBtn.classList.remove("active");
+}
+
+historyEl.toggleBtn.addEventListener("click", () => {
+    _sidebarOpen ? closeHistorySidebar() : openHistorySidebar();
+});
+historyEl.closeBtn.addEventListener("click", closeHistorySidebar);
+historyEl.overlay.addEventListener("click", closeHistorySidebar);
+
+historyEl.clearAllBtn.addEventListener("click", async () => {
+    if (!confirm("Delete all history?")) return;
+    await fetch(`${API_BASE}/v1/history`, {
+        method: "DELETE",
+        headers: { "X-API-Key": API_KEY },
+    });
+    loadHistory();
+});
+
+historyEl.search.addEventListener("input", () => {
+    renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+});
+
+async function loadHistory() {
+    try {
+        const resp = await fetch(`${API_BASE}/v1/history?limit=200`, {
+            headers: { "X-API-Key": API_KEY },
+        });
+        if (!resp.ok) return;
+        _historyData = await resp.json();
+        renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+    } catch (_) { /* silent */ }
+}
+
+function renderHistory(data, filter = "") {
+    const filtered = filter
+        ? data.filter(e =>
+            e.prompt.toLowerCase().includes(filter) ||
+            e.provider.toLowerCase().includes(filter) ||
+            e.model.toLowerCase().includes(filter))
+        : data;
+
+    if (filtered.length === 0) {
+        historyEl.list.innerHTML = "";
+        historyEl.empty.style.display = "flex";
+        return;
+    }
+    historyEl.empty.style.display = "none";
+
+    historyEl.list.innerHTML = filtered.map(entry => {
+        const icon = entry.mode === "compare" ? "⚖️" : "💬";
+        const date = new Date(entry.timestamp).toLocaleString(undefined, {
+            month: "short", day: "numeric",
+            hour: "2-digit", minute: "2-digit",
+        });
+        const promptSnippet = escHtml(entry.prompt.length > 80
+            ? entry.prompt.slice(0, 80) + "…"
+            : entry.prompt);
+        const responseSnippet = escHtml(entry.response.length > 120
+            ? entry.response.slice(0, 120) + "…"
+            : entry.response);
+        const costStr = entry.cost != null ? `$${Number(entry.cost).toFixed(5)}` : "—";
+        const tokStr = entry.tokens != null ? entry.tokens.toLocaleString() : "—";
+        const modeLabel = entry.mode === "compare" ? "compare" : "chat";
+
+        return `<li class="history-entry" data-id="${entry.id}">
+          <div class="history-entry-top">
+            <span class="history-mode-badge history-mode-${modeLabel}">${icon} ${modeLabel}</span>
+            <span class="history-provider-badge">${escHtml(entry.provider)}</span>
+            <span class="history-date">${date}</span>
+            <button class="history-delete-btn" data-id="${entry.id}" title="Delete entry" aria-label="Delete">🗑</button>
+          </div>
+          <div class="history-prompt">${promptSnippet}</div>
+          <div class="history-response">${responseSnippet}</div>
+          <div class="history-meta">
+            <span>🔢 ${tokStr} tokens</span>
+            <span>💰 ${costStr}</span>
+            <span>⏱ ${entry.latency_ms != null ? entry.latency_ms + " ms" : "—"}</span>
+          </div>
+        </li>`;
+    }).join("");
+
+    // Delete button listeners
+    historyEl.list.querySelectorAll(".history-delete-btn").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            await fetch(`${API_BASE}/v1/history/${id}`, {
+                method: "DELETE",
+                headers: { "X-API-Key": API_KEY },
+            });
+            loadHistory();
+        });
+    });
+
+    // Click entry to replay prompt in textarea
+    historyEl.list.querySelectorAll(".history-entry").forEach(item => {
+        item.addEventListener("click", (e) => {
+            if (e.target.classList.contains("history-delete-btn")) return;
+            const entry = filtered.find(en => en.id === Number(item.dataset.id));
+            if (!entry) return;
+            el.promptInput.value = entry.prompt;
+            el.promptInput.focus();
+            closeHistorySidebar();
+            document.getElementById("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+    });
+}
+

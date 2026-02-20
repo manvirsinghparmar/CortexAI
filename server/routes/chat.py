@@ -56,4 +56,22 @@ async def chat(
         **kwargs
     )
 
-    return ChatResponseDTO.from_unified_response(response)
+    dto = ChatResponseDTO.from_unified_response(response)
+
+    # Persist to history DB (best-effort — don't fail the request if it errors)
+    try:
+        from server.database import save_chat
+        save_chat(
+            prompt=request.prompt,
+            provider=dto.provider,
+            model=dto.model,
+            response=dto.text,
+            latency_ms=dto.latency_ms,
+            tokens=dto.token_usage.total_tokens if dto.token_usage else None,
+            cost=dto.estimated_cost,
+            mode="chat",
+        )
+    except Exception:
+        pass
+
+    return dto

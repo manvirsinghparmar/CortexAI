@@ -1247,3 +1247,294 @@ body {
         display: none;
     }
 }
+
+/* ══════════════════════════════════════════
+   HISTORY SIDEBAR
+══════════════════════════════════════════ */
+
+.history-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 380px;
+    max-width: 90vw;
+    height: 100vh;
+    background: rgba(255, 251, 239, 0.94);
+    backdrop-filter: blur(24px) saturate(1.8);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8);
+    border-left: 1px solid rgba(229, 231, 235, 0.8);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.12);
+    transform: translateX(100%);
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.history-sidebar.open {
+    transform: translateX(0);
+}
+
+.history-sidebar-header {
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.history-sidebar-title {
+    font-size: 1.05rem;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+}
+
+.history-sidebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.history-clear-btn {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-sec);
+    font-family: var(--font);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+}
+
+.history-clear-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: #EF4444;
+}
+
+.history-close-btn {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-sec);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background var(--t);
+    display: grid;
+    place-items: center;
+}
+
+.history-close-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.history-search-wrap {
+    padding: 12px 20px;
+}
+
+.history-search {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1.5px solid var(--border);
+    background: var(--white);
+    font-family: var(--font);
+    font-size: 0.88rem;
+    outline: none;
+    transition: border-color var(--t), box-shadow var(--t);
+}
+
+.history-search:focus {
+    border-color: var(--amber);
+    box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.15);
+}
+
+.history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 20px 40px;
+    list-style: none;
+}
+
+.history-entry {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.history-entry:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+    border-color: var(--amber-light);
+}
+
+.history-entry-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.history-mode-badge {
+    font-size: 0.62rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+}
+
+.history-mode-chat {
+    background: #E0F2FE;
+    color: #0369A1;
+}
+
+.history-mode-compare {
+    background: #FEE2E2;
+    color: #B91C1C;
+}
+
+.history-provider-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-sec);
+    background: #F3F4F6;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.history-date {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.history-delete-btn {
+    padding: 4px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.3;
+    transition: opacity var(--t), transform var(--t);
+    font-size: 0.8rem;
+}
+
+.history-entry:hover .history-delete-btn {
+    opacity: 1;
+}
+
+.history-delete-btn:hover {
+    color: #EF4444;
+    transform: scale(1.1);
+}
+
+.history-prompt {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.history-response {
+    font-size: 0.8rem;
+    color: var(--text-sec);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.history-meta {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+/* History overlay */
+.history-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(4px);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s var(--ease);
+}
+
+.history-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Empty state */
+.history-empty {
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 40px;
+    color: var(--text-muted);
+}
+
+.history-empty-icon {
+    font-size: 3rem;
+    margin-bottom: 12px;
+    opacity: 0.2;
+}
+
+.history-empty p {
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+/* Header history button pulse if new items */
+.history-toggle-btn {
+    padding: 6px 12px;
+    border-radius: 30px;
+    border: 1.5px solid var(--border);
+    background: var(--white);
+    font-family: var(--font);
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-sec);
+    cursor: pointer;
+    transition: all var(--t);
+    white-space: nowrap;
+}
+
+.history-toggle-btn:hover {
+    border-color: var(--amber);
+    color: var(--amber);
+    background: var(--cream-deep);
+}
+
+.history-toggle-btn.active {
+    background: var(--amber);
+    color: var(--white);
+    border-color: var(--amber);
+    box-shadow: 0 0 12px rgba(245, 166, 35, 0.4);
+}

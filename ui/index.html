@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CortexAI Arena - Chat and Compare</title>
+    <meta name="description" content="Chat with smart routing or compare two AI model responses side by side.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=arena2026">
+</head>
+
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="24" height="24" rx="6" fill="url(#logoGradient)" />
+                        <path d="M12 7L16 12L12 17M8 12H16" stroke="#fff" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <defs>
+                            <linearGradient id="logoGradient" x1="0" y1="0" x2="24" y2="24">
+                                <stop offset="0%" stop-color="#7c3aed" />
+                                <stop offset="100%" stop-color="#00d4ff" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <span class="logo-text">CortexAI</span>
+            </div>
+            <div class="header-actions">
+                <button class="nav-btn" id="homeBtn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 6L8 2L14 6V13C14 13.5523 13.5523 14 13 14H3C2.44772 14 2 13.5523 2 13V6Z"
+                            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M6 14V9H10V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span>Home</span>
+                </button>
+                <button class="nav-btn" id="historyBtn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" />
+                        <path d="M8 4V8L11 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                    </svg>
+                    <span>History</span>
+                </button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="arena-badge">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
+                </svg>
+                <span>CortexAI Arena</span>
+            </div>
+
+            <h1 class="main-heading">Chat or Compare</h1>
+            <h2 class="sub-heading">FastAPI End to End</h2>
+            <p class="description">Single chat defaults to smart routing via <code>/v1/chat</code>. Compare mode uses exactly two models via <code>/v1/compare</code>.</p>
+
+            <div class="model-selection-panel">
+                <div class="panel-header">
+                    <h3>Run Mode</h3>
+                    <div class="comparison-toggle">
+                        <button class="toggle-btn mode-btn active" id="singleModeBtn" data-mode="single"><span>Single Chat</span></button>
+                        <button class="toggle-btn mode-btn" id="compareModeBtn" data-mode="compare"><span>Compare 2 Models</span></button>
+                    </div>
+                </div>
+
+                <p class="mode-hint" id="modeHint">Single mode uses <code>/v1/chat</code> with smart routing ON by default.</p>
+
+                <div class="model-slots" id="modelSlots">
+                    <div class="model-slot" data-slot="1">
+                        <label class="slot-label" id="slot1Label">PRIMARY MODEL (manual mode)</label>
+                        <div class="model-dropdown" data-slot="1">
+                            <div class="model-icon openai-icon">OA</div>
+                            <span class="model-name">OpenAI GPT</span>
+                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div class="model-slot" data-slot="2" id="slot2Container">
+                        <label class="slot-label">COMPARE MODEL 2</label>
+                        <div class="model-dropdown" data-slot="2">
+                            <div class="model-icon gemini-icon">GM</div>
+                            <span class="model-name">Gemini</span>
+                            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 5L6 8L9 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                    stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="runtime-controls">
+                    <div class="control-row api-key-row">
+                        <label for="apiKeyInput">API Key</label>
+                        <input id="apiKeyInput" type="password" autocomplete="off" placeholder="dev-key-1">
+                    </div>
+
+                    <div class="control-row" id="smartRoutingRow">
+                        <label for="smartRoutingToggle">Smart Routing</label>
+                        <input id="smartRoutingToggle" type="checkbox" checked>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="promptOptToggle">Prompt Optimization</label>
+                        <input id="promptOptToggle" type="checkbox">
+                    </div>
+
+                    <div class="control-row">
+                        <label for="researchToggle">Research Mode</label>
+                        <input id="researchToggle" type="checkbox">
+                    </div>
+                </div>
+            </div>
+
+            <div class="prompt-container">
+                <textarea class="prompt-input" id="promptInput"
+                    placeholder="Ask anything. Single chat mode is enabled by default."></textarea>
+                <div class="prompt-footer">
+                    <span class="prompt-hint">Press Ctrl+Enter to submit</span>
+                    <button class="compare-btn" id="compareBtn">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8 2L10 6H14L11 9L12 13L8 10L4 13L5 9L2 6H6L8 2Z" fill="currentColor" />
+                        </svg>
+                        <span id="submitBtnLabel">Send Message</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="examples-section">
+                <p class="examples-label">TRY AN EXAMPLE</p>
+                <div class="examples-grid">
+                    <button class="example-card" data-query="Explain smart routing briefly">
+                        Explain smart routing briefly
+                    </button>
+                    <button class="example-card" data-query="Write a short release note for a backend API change">
+                        Write a short release note for a backend API change
+                    </button>
+                    <button class="example-card" data-query="What are pros and cons of caching API responses?">
+                        What are pros and cons of caching API responses?
+                    </button>
+                    <button class="example-card" data-query="Summarize this repo architecture in bullets">
+                        Summarize this repo architecture in bullets
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js?v=arena2026"></script>
+</body>
+
+</html>

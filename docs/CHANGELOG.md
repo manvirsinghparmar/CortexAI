@@ -14,6 +14,11 @@ All notable changes to OpenAIProject will be documented in this file.
 - DB migrations:
   - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
   - `db/migrations/20260218_add_request_group_id_to_llm_requests.sql`
+- Documentation updates for FastAPI + UI end-to-end flow:
+  - `README.md`
+  - `docs/FASTAPI_README.md`
+  - `WEB_UI_GUIDE.md`
+  - `ui/README.md`
 
 ### Changed
 - FastAPI `/v1/chat` persistence flow now enforces key-owner attribution:
@@ -29,6 +34,15 @@ All notable changes to OpenAIProject will be documented in this file.
   - `llm_requests.request_group_id`
 - `create_llm_request(...)` supports optional `request_group_id` (schema-aware insert)
 - Header redaction added for auth logs (`X-API-Key`, `Authorization`)
+- FastAPI request schemas now accept `prompt_optimization_enabled` for both `/v1/chat` and `/v1/compare`
+- Chat route now forwards `prompt_optimization_enabled` into orchestrator (`enable_optimization`)
+- Compare route now supports omitted target model by resolving provider defaults
+- Web UI now uses FastAPI endpoints directly:
+  - single mode defaults to smart `/v1/chat`
+  - compare mode is fixed to exactly 2 targets via `/v1/compare`
+  - smart routing control is hidden in compare mode
+  - prompt optimization and research mode toggles map to API request fields
+  - response cards show backend `request_id`
 
 ### Fixed
 - OpenAI newer model compatibility:
@@ -36,6 +50,8 @@ All notable changes to OpenAIProject will be documented in this file.
 - Compare DTO mapping compatibility:
   - supports both `created_at` and `timestamp` MultiUnifiedResponse variants
 - Prevented API key ownership mismatch corruption in persistence paths (app + DB trigger defense in depth)
+- Prevented UI-generated session IDs from causing DB FK persistence failures:
+  - UI now sends `context.conversation_history` without `context.session_id`
 
 ## [2.0.0] - 2026-01-03
 

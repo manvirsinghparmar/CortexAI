@@ -82,6 +82,13 @@ class CortexOrchestrator:
 
         # Initialize prompt optimizer (optional - controlled by env var)
         self._prompt_optimizer = None
+        try:
+            provider = os.getenv('PROMPT_OPTIMIZER_PROVIDER', 'gemini')
+            self._prompt_optimizer = PromptOptimizer(provider=provider)
+            logger.info(f"Prompt optimizer initialized with provider: {provider}")
+        except Exception as e:
+            logger.warning(f"Prompt optimizer initialization failed: {e}")
+            self._prompt_optimizer = None
         if os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true":
             try:
                 provider = os.getenv("PROMPT_OPTIMIZER_PROVIDER", "gemini")
@@ -315,16 +322,32 @@ These rules prevent misinformation. Follow them carefully.""",
             return context.session_id
         return self._generate_session_id(messages)
 
-    def _optimize_prompt_if_enabled(self, prompt: str) -> tuple[str, dict]:
+    def _optimize_prompt_if_enabled(self, prompt: str, force_enable: bool = False) -> tuple[str, dict]:
         """
         Optimize prompt if optimization is enabled.
 
         Returns:
             tuple: (optimized_prompt, metadata)
-            - If optimization disabled/fails: returns (original_prompt, {})
-            - If optimization succeeds: returns (optimized_prompt, optimization_metadata)
         """
+        # Read global config as fallback
+        global_enabled = os.getenv('ENABLE_PROMPT_OPTIMIZATION', 'false').lower() == 'true'
+        should_run = global_enabled or force_enable
+        
+        if not should_run:
+            return prompt, {"optimization_used": False}
+            
         if not self._prompt_optimizer:
+            # Try to lazy-initialize if it was missing
+            try:
+                provider = os.getenv('PROMPT_OPTIMIZER_PROVIDER', 'gemini')
+                self._prompt_optimizer = PromptOptimizer(provider=provider)
+            except Exception as e:
+                return prompt, {
+                    "optimization_used": False, 
+                    "optimization_requested": True,
+                    "optimization_error": f"Optimizer not initialized: {e}"
+                }
+        
             return prompt, {}
 
         try:
@@ -332,12 +355,20 @@ These rules prevent misinformation. Follow them carefully.""",
 
             if result.get("error"):
                 logger.warning(f"Prompt optimization failed: {result['error']['message']}")
+                return prompt, {
+                    "optimization_used": False,
+                    "optimization_requested": True,
+                    "optimization_error": result["error"]["message"]
+                }
+            
                 return prompt, {"optimization_error": result["error"]["message"]}
 
             optimized = result.get("optimized_prompt", prompt)
             metadata = {
                 "optimization_used": True,
+                "optimization_requested": True,
                 "original_prompt": prompt,
+                "optimized_prompt": optimized,
                 "optimization_steps": result.get("steps", []),
                 "optimization_metrics": result.get("metrics", {}),
             }
@@ -347,7 +378,11 @@ These rules prevent misinformation. Follow them carefully.""",
 
         except Exception as e:
             logger.error(f"Prompt optimization error: {e}")
-            return prompt, {"optimization_error": str(e)}
+            return prompt, {
+                "optimization_used": False,
+                "optimization_requested": True,
+                "optimization_error": str(e)
+            }
 
     def _get_or_create_research_state(self, session_id: str, research_mode: str) -> ResearchState:
         """
@@ -1111,11 +1146,12 @@ These rules prevent misinformation. Follow them carefully.""",
         research_mode: str = "auto",
         routing_mode: str = "smart",
         routing_constraints: dict[str, Any] | None = None,
+        enable_optimization: bool = False,
         **kwargs,
     ) -> UnifiedResponse:
         try:
             # Optimize prompt if enabled
-            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt, force_enable=enable_optimization)
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for request")
 
@@ -1255,6 +1291,7 @@ These rules prevent misinformation. Follow them carefully.""",
         token_tracker: TokenTracker | None = None,
         research_mode: str = "auto",
         request_group_id: str | None = None,
+        enable_optimization: bool = False,
         **kwargs,
     ) -> MultiUnifiedResponse:
         request_group_id = request_group_id or str(uuid.uuid4())
@@ -1262,7 +1299,7 @@ These rules prevent misinformation. Follow them carefully.""",
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
-            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt, force_enable=enable_optimization)
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for comparison")
 

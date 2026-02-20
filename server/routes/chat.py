@@ -383,6 +383,7 @@ async def chat(
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
 
     research_mode = request.research_mode or "off"
+    enable_optimization = bool(request.prompt_optimization_enabled)
     middleware_request_id = getattr(http_request.state, "request_id", "unknown")
 
     resolution = await asyncio.to_thread(
@@ -401,6 +402,7 @@ async def chat(
         research_mode=research_mode,
         routing_mode=request.routing_mode or "smart",
         routing_constraints=request.routing_constraints,
+        enable_optimization=enable_optimization,
         **kwargs,
     )
 

@@ -23,6 +23,7 @@ class ChatRequest(BaseModel):
     research_mode: str | None = Field("auto", pattern="^(off|auto|on)$")
     routing_mode: str | None = Field("smart", pattern="^(smart|cheap|strong)$")
     routing_constraints: dict | None = None
+    prompt_optimization_enabled: bool | None = None
 
 
 class CompareTargetRequest(BaseModel):
@@ -38,3 +39,4 @@ class CompareRequest(BaseModel):
     temperature: float | None = Field(None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(None, gt=0)
     research_mode: str | None = Field("auto", pattern="^(off|auto|on)$")
+    prompt_optimization_enabled: bool | None = None

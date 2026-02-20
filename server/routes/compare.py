@@ -42,6 +42,19 @@ router = APIRouter(prefix="/v1", tags=["Compare"])
 MAX_COMPARE_TARGETS = 4
 
 
+def _default_model_for_provider(provider: str) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized == "openai":
+        return os.getenv("DEFAULT_OPENAI_MODEL", "gpt-4o-mini")
+    if normalized == "gemini":
+        return os.getenv("DEFAULT_GEMINI_MODEL", "gemini-2.5-flash-lite")
+    if normalized == "deepseek":
+        return os.getenv("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat")
+    if normalized == "grok":
+        return os.getenv("DEFAULT_GROK_MODEL", "grok-4-1-fast-non-reasoning")
+    return "unknown"
+
+
 @dataclass(frozen=True)
 class ApiKeyPersistenceResolution:
     user_id: UUID
@@ -403,13 +416,20 @@ async def compare(
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
 
-    models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
+    models_list = [
+        {
+            "provider": t.provider,
+            "model": t.model or _default_model_for_provider(t.provider),
+        }
+        for t in request.targets
+    ]
 
     kwargs = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    enable_optimization = bool(request.prompt_optimization_enabled)
 
     canonical_request_group_id = str(uuid4())
 
@@ -432,6 +452,7 @@ async def compare(
         token_tracker=None,
         research_mode=research_mode,
         request_group_id=canonical_request_group_id,
+        enable_optimization=enable_optimization,
         **kwargs,
     )
 

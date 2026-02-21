@@ -12,6 +12,7 @@ from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.dependencies import get_api_key, get_orchestrator
 from server.utils import validate_and_trim_context, clamp_max_tokens
+from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
 STREAM_LINE_DELAY_S = 0.1
@@ -119,6 +120,12 @@ async def chat(
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    routing = request.routing
+    research_mode = bool(routing and routing.research_mode)
+    effective_prompt, _research_meta = await maybe_enrich_prompt_with_web(
+        request.prompt,
+        enabled=research_mode,
+    )
     target_provider, target_model = _resolve_chat_target(request)
 
     kwargs = {}
@@ -129,7 +136,7 @@ async def chat(
 
     response = await asyncio.to_thread(
         orchestrator.ask,
-        prompt=request.prompt,
+        prompt=effective_prompt,
         model_type=target_provider,
         context=context,
         model_name=target_model,
@@ -167,6 +174,12 @@ async def chat_stream(
     """Stream a single-model chat response as NDJSON events."""
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    routing = request.routing
+    research_mode = bool(routing and routing.research_mode)
+    effective_prompt, research_meta = await maybe_enrich_prompt_with_web(
+        request.prompt,
+        enabled=research_mode,
+    )
     target_provider, target_model = _resolve_chat_target(request)
 
     kwargs = {}
@@ -181,12 +194,15 @@ async def chat_stream(
             "mode": "chat",
             "provider": target_provider,
             "model": target_model,
+            "research_mode": research_mode,
+            "web_sources": research_meta.get("source_count", 0),
+            "web_source_items": research_meta.get("sources", []),
         })
 
         try:
             response = await asyncio.to_thread(
                 orchestrator.ask,
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 model_type=target_provider,
                 context=context,
                 model_name=target_model,

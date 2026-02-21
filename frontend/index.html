@@ -20,16 +20,15 @@
     <div class="compact-bar" id="compactBar" aria-hidden="true">
         <div class="compact-bar-inner">
             <div class="compact-logo">
-                <span class="compact-logo-icon">AI</span>
-                <span>CortexAI</span>
+                <span class="compact-logo-text">CortexAI</span>
             </div>
             <div class="compact-mode-toggle">
-                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Chat</button>
+                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Ask</button>
                 <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">Compare</button>
             </div>
             <div class="compact-model-info" id="compactModelInfo"></div>
             <button class="compact-send-btn" id="compactSendBtn">
-                <span class="btn-icon">↑</span> Send
+                <span class="btn-icon">&uarr;</span> Send
             </button>
         </div>
     </div>
@@ -37,13 +36,13 @@
     <header class="header" id="mainHeader">
         <div class="header-inner">
             <div class="logo">
-                <span class="logo-icon">AI</span>
                 <span class="logo-text">CortexAI</span>
             </div>
-            <div class="header-right"></div>
-        </div>
-        <div class="header-intro">
-            <p class="header-intro-sub">Pick your models, type a prompt, and watch AI responses instantly - compared in real time.</p>
+            <div class="header-right">
+                <button class="top-nav-link" type="button">History</button>
+                <button class="top-nav-link" type="button">Settings</button>
+                <button class="top-nav-link" type="button">Profile</button>
+            </div>
         </div>
     </header>
 
@@ -69,45 +68,6 @@
 
     <main class="main" id="workspace">
 
-        <div class="workspace-header">
-            <div class="mode-toggle" role="tablist" aria-label="Chat mode">
-                <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true" data-mode="single">
-                    Single Chat
-                </button>
-                <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false" data-mode="compare">
-                    Compare
-                </button>
-            </div>
-            <div class="workspace-tagline" id="workspaceTagline">Single model - Conversational</div>
-        </div>
-
-        <section class="panel panel-compare hidden" id="panelCompare" aria-live="polite">
-            <div class="card model-card">
-                <div class="card-header">
-                    <span class="card-title">Model Selection</span>
-                    <div class="slot-count-btns">
-                        <span class="slot-count-label">Compare:</span>
-                        <button class="slot-count-btn active" id="btn2Models" data-count="2">2 Models</button>
-                        <button class="slot-count-btn" id="btn3Models" data-count="3">3 Models</button>
-                    </div>
-                </div>
-                <div class="compare-slots" id="compareSlots">
-                    <div class="slot" id="slot1">
-                        <label class="slot-label">MODEL 1</label>
-                        <select class="model-select compare-select" id="compareModel1"></select>
-                    </div>
-                    <div class="slot" id="slot2">
-                        <label class="slot-label">MODEL 2</label>
-                        <select class="model-select compare-select" id="compareModel2"></select>
-                    </div>
-                    <div class="slot hidden" id="slot3">
-                        <label class="slot-label">MODEL 3</label>
-                        <select class="model-select compare-select" id="compareModel3"></select>
-                    </div>
-                </div>
-            </div>
-        </section>
-
         <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">
             <div class="results-header">
                 <h2 class="results-title">Responses</h2>
@@ -118,47 +78,87 @@
 
         <div class="card prompt-card" id="promptCard">
             <div class="composer-toolbar" id="composerToolbar" role="group" aria-label="Prompt routing controls">
-                <div class="composer-toolbar-left" id="singleRoutingControls">
-                    <span class="smart-help-wrap">
-                        <button class="smart-help" id="smartHelpBtn" type="button"
-                            aria-label="About Smart Routing"
-                            aria-describedby="smartRoutingTooltip"
-                            title="Auto-selects the best model for your prompt.">i</button>
-                        <span class="smart-tooltip" id="smartRoutingTooltip" role="tooltip">
-                            Auto-selects the best model for your prompt.
+                <div class="composer-toolbar-row">
+                    <div class="mode-toggle toolbar-mode-toggle" role="tablist" aria-label="Chat mode">
+                        <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true"
+                            data-mode="single">
+                            Ask
+                        </button>
+                        <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false"
+                            data-mode="compare">
+                            Compare
+                        </button>
+                    </div>
+                    <div class="composer-toolbar-left feature-strip" id="singleRoutingControls">
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
+                                aria-checked="true" aria-label="Auto (Recommended)"
+                                aria-describedby="smartRoutingTooltip">
+                                Auto (Recommended)
+                            </button>
+                            <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
+                                Automatically selects the best model based on quality, speed, and cost.
+                            </span>
                         </span>
-                    </span>
-                    <button class="chat-route-btn route-compact-btn" id="routeSmartBtn" type="button"
-                        aria-label="Toggle Smart Mode">
-                        Smart
-                    </button>
-                    <div class="toolbar-model-group hidden" id="singleModelWrap">
-                        <label class="sr-only" for="singleModel">Choose model</label>
-                        <span class="toolbar-model-label">Model:</span>
-                        <select id="singleModel" class="model-select toolbar-model-select" aria-label="Choose model">
-                            <option value="openai:gpt-4o">ChatGPT</option>
-                        </select>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#127760;</span>
+                                <span>Web</span>
+                            </button>
+                            <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
+                                Searches the internet and includes citations.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
+                                <span>Rewrite</span>
+                            </button>
+                            <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
+                                Improves your prompt before sending.
+                            </span>
+                        </span>
                     </div>
                 </div>
-                <div class="composer-toolbar-right">
-                    <button class="chat-route-btn route-compact-btn" id="routeResearchBtn" type="button"
-                        aria-label="Toggle Research Mode">Research</button>
-                    <button class="chat-route-btn route-compact-btn optimize-chip" id="routeOptimizeBtn" type="button"
-                        aria-label="Toggle Prompt Optimizer">Optimizer</button>
+                <div class="toolbar-model-group hidden" id="singleModelWrap">
+                    <label class="sr-only" for="singleModel">Manual model selection</label>
+                    <span class="toolbar-model-label" id="singleModelLabel">Using:</span>
+                    <select id="singleModel" class="model-select toolbar-model-select" aria-label="Using: ChatGPT">
+                        <option value="openai:gpt-4o">ChatGPT</option>
+                    </select>
+                </div>
+                <div class="toolbar-compare-group hidden" id="compareModelWrap" aria-label="Compare model selectors">
+                    <span class="toolbar-compare-label">Compare:</span>
+                    <label class="sr-only" for="compareModel1">Compare model 1</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel1"></select>
+                    <span class="toolbar-compare-sep">vs</span>
+                    <label class="sr-only" for="compareModel2">Compare model 2</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel2"></select>
+                    <span class="toolbar-compare-third hidden" id="compareModel3Wrap">
+                        <span class="toolbar-compare-sep">vs</span>
+                        <label class="sr-only" for="compareModel3">Compare model 3</label>
+                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel3"></select>
+                    </span>
+                    <button class="toolbar-add-model-btn" id="compareAddModelBtn" type="button" aria-expanded="false">
+                        + Add Model
+                    </button>
                 </div>
             </div>
-            <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything... your models are ready."
-                rows="1" aria-label="Prompt input"></textarea>
+            <div class="prompt-input-wrap">
+                <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything... your models are ready."
+                    rows="1" aria-label="Prompt input"></textarea>
+                <button class="btn-submit btn-submit-inline" id="submitBtn" aria-label="Send message">
+                    <span class="btn-icon">&uarr;</span>
+                </button>
+            </div>
+            <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
             <div class="prompt-footer">
                 <div class="prompt-footer-left">
                     <button class="btn-opt-view hidden" id="optViewBtn"
                         title="See what prompt was actually sent to the LLM">
                         View Optimized
-                    </button>
-                </div>
-                <div class="prompt-footer-right">
-                    <button class="btn-submit" id="submitBtn" aria-label="Send message">
-                        <span class="btn-icon">↑</span>
                     </button>
                 </div>
             </div>
@@ -214,3 +214,4 @@
 </body>
 
 </html>
+

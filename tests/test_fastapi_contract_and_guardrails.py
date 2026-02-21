@@ -107,7 +107,12 @@ class FakeMultiUnifiedResponse:
 # -------------------------------------------------------------------
 
 class FakeOrchestrator:
+    def __init__(self):
+        self.last_ask_prompt = None
+        self.last_compare_prompt = None
+
     def ask(self, prompt: str, model_type: str, context: Any = None, **kwargs) -> UnifiedResponse:
+        self.last_ask_prompt = prompt
         return UnifiedResponse(
             request_id="req_ask_1",
             text="OK",
@@ -128,6 +133,7 @@ class FakeOrchestrator:
         context: Any = None,
         **kwargs
     ) -> FakeMultiUnifiedResponse:
+        self.last_compare_prompt = prompt
         r1 = UnifiedResponse(
             request_id="req_cmp_1",
             text="A",
@@ -203,7 +209,9 @@ def app():
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
 
-    app.dependency_overrides[deps.get_orchestrator] = lambda: FakeOrchestrator()
+    fake_orchestrator = FakeOrchestrator()
+    app.state.fake_orchestrator = fake_orchestrator
+    app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orchestrator
     return app
 
 
@@ -440,3 +448,47 @@ def test_chat_stream_auto_routing_includes_selected_target(client):
     assert start_event is not None
     assert start_event.get("provider") in {"openai", "gemini", "deepseek", "grok"}
     assert isinstance(start_event.get("model"), str)
+
+
+def test_chat_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        assert enabled is True
+        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 1}
+
+    monkeypatch.setattr("server.routes.chat.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    payload = {
+        "prompt": "Latest AI policy updates",
+        "routing": {"smart_mode": True, "research_mode": True},
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+
+
+def test_compare_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        assert enabled is True
+        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 2}
+
+    monkeypatch.setattr("server.routes.compare.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    payload = {
+        "prompt": "Recent market updates",
+        "routing": {"research_mode": True},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_compare_prompt.endswith("[WEB_CTX]")

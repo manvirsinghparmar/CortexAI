@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const SmartRoutingState = require("./smart-routing-state.js");
 
-test("smart routing defaults to on when no model is selected", () => {
+test("auto-select defaults to on when no model is selected", () => {
     const smartOn = SmartRoutingState.deriveSmartModeFromSelection("");
     assert.equal(smartOn, true);
     assert.equal(SmartRoutingState.isModelDropdownVisible("single", smartOn), false);
@@ -15,7 +15,7 @@ test("smart routing defaults to on when no model is selected", () => {
     );
 });
 
-test("smart off shows model dropdown and defaults to chatgpt when empty", () => {
+test("auto-select off shows model dropdown and defaults to ChatGPT when empty", () => {
     const fallback = "openai:gpt-4o";
     assert.equal(SmartRoutingState.isModelDropdownVisible("single", false), true);
     assert.equal(
@@ -24,7 +24,7 @@ test("smart off shows model dropdown and defaults to chatgpt when empty", () => 
     );
 });
 
-test("selecting a model switches into manual override", () => {
+test("selecting a model keeps manual override active", () => {
     const key = "openai:gpt-4o";
     const smartOn = SmartRoutingState.deriveSmartModeFromSelection(key);
     assert.equal(smartOn, false);

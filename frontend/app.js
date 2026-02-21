@@ -23,9 +23,10 @@ const MANUAL_DEFAULT_PROVIDER = "openai";
 const MANUAL_FALLBACK_PROVIDER = PROVIDERS[0] || { key: "openai", model: "gpt-4o" };
 const MANUAL_DEFAULT_MODEL_KEY = `${PROVIDER_DEFAULT_MODEL[MANUAL_DEFAULT_PROVIDER] ? MANUAL_DEFAULT_PROVIDER : MANUAL_FALLBACK_PROVIDER.key}:${PROVIDER_DEFAULT_MODEL[MANUAL_DEFAULT_PROVIDER] || MANUAL_FALLBACK_PROVIDER.model}`;
 
-const WORKSPACE_TAGLINES = {
-    single: "Smart routing · Auto model selection",
-    compare: "Multi-model · Parallel comparison",
+const ACTIVE_ROUTING_INDICATORS = {
+    auto: "Auto",
+    web: "Web",
+    rewrite: "Rewrite",
 };
 
 /* ─── State ───────────────────────────────── */
@@ -34,9 +35,12 @@ let compareSlotCount = 2;
 let conversationHistory = [];
 let optimizeEnabled = false;
 let smartModeEnabled = true;
-let researchModeEnabled = false;
+let askResearchModeEnabled = true;
+let compareResearchModeEnabled = false;
 let isSubmitting = false;
+let hasReceivedFirstStreamResponse = false;
 let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
+const pendingWebSourcesByCard = new Map();
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
         const raw = String(key || "");
@@ -73,17 +77,17 @@ const el = {
     mainHeader: $("mainHeader"),
     btnSingleMode: $("btnSingleMode"),
     btnCompareMode: $("btnCompareMode"),
-    panelCompare: $("panelCompare"),
     workspaceTagline: $("workspaceTagline"),
     singleRoutingControls: $("singleRoutingControls"),
     singleModelWrap: $("singleModelWrap"),
+    singleModelLabel: $("singleModelLabel"),
     singleModel: $("singleModel"),
+    compareModelWrap: $("compareModelWrap"),
+    compareModel3Wrap: $("compareModel3Wrap"),
+    compareAddModelBtn: $("compareAddModelBtn"),
     compareModel1: $("compareModel1"),
     compareModel2: $("compareModel2"),
     compareModel3: $("compareModel3"),
-    slot3: $("slot3"),
-    btn2Models: $("btn2Models"),
-    btn3Models: $("btn3Models"),
     promptCard: $("promptCard"),
     promptInput: $("promptInput"),
     submitBtn: $("submitBtn"),
@@ -184,14 +188,14 @@ function getCompactBadges() {
     if (currentMode === "single") {
         const { provider, model } = parseKey(el.singleModel.value || "");
         if (smartModeEnabled) {
-            return `<span class="compact-model-badge">Smart Routing (Auto)</span>`;
+            return `<span class="compact-model-badge">Auto</span>`;
         }
         if (!provider) {
-            return `<span class="compact-model-badge">Select a model</span>`;
+            return `<span class="compact-model-badge">Using: ChatGPT</span>`;
         }
         return `<span class="compact-model-badge">
               <span class="provider-dot dot-${provider}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
-              ${escHtml(model)}
+              ${escHtml(PROVIDER_LABELS[provider] || model)}
             </span>`;
     }
     return getActiveCompareSelects().map(sel => {
@@ -260,6 +264,17 @@ function syncCompareDropdowns() {
     updateCompactBar();
 }
 
+function updateCompareAddButton() {
+    const showThird = compareSlotCount === 3;
+    if (el.compareModel3Wrap) {
+        el.compareModel3Wrap.classList.toggle("hidden", !showThird);
+    }
+    if (el.compareAddModelBtn) {
+        el.compareAddModelBtn.textContent = showThird ? "- Remove Model" : "+ Add Model";
+        el.compareAddModelBtn.setAttribute("aria-expanded", showThird ? "true" : "false");
+    }
+}
+
 function parseKey(key) {
     const idx = (key || "").indexOf(":");
     if (idx < 0) return { provider: "", model: key };
@@ -270,23 +285,75 @@ function hasSelectedSingleModel() {
     return SmartRoutingState.hasSelectedModelKey(el.singleModel.value || "");
 }
 
-function ensureSingleManualModelSelection() {
+function getSingleModelDisplayName() {
+    const { provider } = parseKey(el.singleModel.value || "");
+    return PROVIDER_LABELS[provider] || "ChatGPT";
+}
+
+function ensureSingleManualModelSelection(forceDefault = false) {
+    if (forceDefault) {
+        el.singleModel.value = MANUAL_DEFAULT_MODEL_KEY;
+        return;
+    }
     el.singleModel.value = SmartRoutingState.resolveManualSelection(
         el.singleModel.value || "",
         MANUAL_DEFAULT_MODEL_KEY
     );
 }
 
+function updateSingleModelLabel() {
+    const label = "Using:";
+    if (el.singleModelLabel) {
+        el.singleModelLabel.textContent = label;
+    }
+    el.singleModel.setAttribute("aria-label", `Using: ${getSingleModelDisplayName()}`);
+}
+
+function setComposerDocked(docked) {
+    el.promptCard.classList.toggle("docked", docked);
+}
+
+function markFirstStreamResponseSeen() {
+    if (hasReceivedFirstStreamResponse) return;
+    hasReceivedFirstStreamResponse = true;
+    setComposerDocked(true);
+}
+
+function updateRoutingHint() {
+    el.workspaceTagline.innerHTML = "";
+}
+
+function isResearchEnabledForCurrentMode() {
+    return currentMode === "single" ? askResearchModeEnabled : compareResearchModeEnabled;
+}
+
+function setResearchEnabledForCurrentMode(enabled) {
+    if (currentMode === "single") {
+        askResearchModeEnabled = enabled;
+        return;
+    }
+    compareResearchModeEnabled = enabled;
+}
+
 function updateSingleModelRoutingUI() {
     const showModelDropdown = SmartRoutingState.isModelDropdownVisible(currentMode, smartModeEnabled);
+    const showCompareControls = currentMode === "compare";
     if (showModelDropdown) {
         ensureSingleManualModelSelection();
     }
+    updateSingleModelLabel();
 
     if (el.singleModelWrap) {
         el.singleModelWrap.classList.toggle("hidden", !showModelDropdown);
     }
+    if (el.compareModelWrap) {
+        el.compareModelWrap.classList.toggle("hidden", !showCompareControls);
+    }
+    if (el.compareAddModelBtn) {
+        el.compareAddModelBtn.disabled = !showCompareControls;
+    }
     el.singleModel.disabled = !showModelDropdown;
+    updateCompareAddButton();
 
     updateRoutingButtons();
     updateCompactBar();
@@ -305,15 +372,6 @@ function setMode(mode) {
     el.btnCompareMode.classList.toggle("active", !isSingle);
     el.btnSingleMode.setAttribute("aria-selected", isSingle);
     el.btnCompareMode.setAttribute("aria-selected", !isSingle);
-
-    if (el.panelCompare) {
-        el.panelCompare.classList.toggle("hidden", isSingle);
-    }
-    if (el.singleRoutingControls) {
-        el.singleRoutingControls.classList.toggle("hidden", !isSingle);
-    }
-
-    el.workspaceTagline.textContent = WORKSPACE_TAGLINES[mode];
 
     if (!isSingle) syncCompareDropdowns();
     updateSingleModelRoutingUI();
@@ -337,16 +395,13 @@ function isSingleManualModePendingSelection() {
    SLOT COUNT
 ═══════════════════════════════════════════ */
 
-function setSlotCount(n) {
-    compareSlotCount = n;
-    el.btn2Models.classList.toggle("active", n === 2);
-    el.btn3Models.classList.toggle("active", n === 3);
-    el.slot3.classList.toggle("hidden", n < 3);
-    syncCompareDropdowns();
+if (el.compareAddModelBtn) {
+    el.compareAddModelBtn.addEventListener("click", () => {
+        compareSlotCount = compareSlotCount === 3 ? 2 : 3;
+        updateCompareAddButton();
+        syncCompareDropdowns();
+    });
 }
-
-el.btn2Models.addEventListener("click", () => setSlotCount(2));
-el.btn3Models.addEventListener("click", () => setSlotCount(3));
 
 /* ═══════════════════════════════════════════
    PROMPT OPTIMIZATION TOGGLE
@@ -361,28 +416,35 @@ el.routeSmartBtn.addEventListener("click", () => {
     if (currentMode !== "single") return;
     smartModeEnabled = !smartModeEnabled;
     if (!smartModeEnabled) {
-        ensureSingleManualModelSelection();
+        ensureSingleManualModelSelection(true);
     }
     updateSingleModelRoutingUI();
 });
 
 el.routeResearchBtn.addEventListener("click", () => {
-    researchModeEnabled = !researchModeEnabled;
+    setResearchEnabledForCurrentMode(!isResearchEnabledForCurrentMode());
     updateRoutingButtons();
 });
 
 function setRoutingButtonState(button, label, enabled) {
     button.classList.toggle("active", enabled);
+    button.setAttribute("aria-checked", enabled ? "true" : "false");
     button.setAttribute("aria-pressed", enabled ? "true" : "false");
     button.setAttribute("title", label);
 }
 
 function updateRoutingButtons() {
-    setRoutingButtonState(el.routeOptimizeBtn, "Prompt Optimizer", optimizeEnabled);
+    setRoutingButtonState(el.routeOptimizeBtn, "Rewrite", optimizeEnabled);
     const smartAllowed = currentMode === "single";
+    const smartChipWrap = el.routeSmartBtn ? el.routeSmartBtn.closest(".feature-chip-wrap") : null;
+    if (smartChipWrap) {
+        smartChipWrap.classList.toggle("hidden", !smartAllowed);
+        smartChipWrap.setAttribute("aria-hidden", smartAllowed ? "false" : "true");
+    }
     el.routeSmartBtn.disabled = !smartAllowed;
-    setRoutingButtonState(el.routeSmartBtn, "Smart Routing", smartAllowed && smartModeEnabled);
-    setRoutingButtonState(el.routeResearchBtn, "Research Mode", researchModeEnabled);
+    setRoutingButtonState(el.routeSmartBtn, "Auto (Recommended)", smartAllowed && smartModeEnabled);
+    setRoutingButtonState(el.routeResearchBtn, "Web", isResearchEnabledForCurrentMode());
+    updateRoutingHint();
 }
 
 function updateSendButtonState() {
@@ -391,32 +453,34 @@ function updateSendButtonState() {
     const disabled = isSubmitting || !hasPrompt || missingManualModel;
     el.submitBtn.disabled = disabled;
     el.compactSendBtn.disabled = disabled;
-    el.promptCard.classList.toggle("expanded", hasPrompt);
-    autoSizePromptInput(hasPrompt);
+    const isExpanded = autoSizePromptInput(hasPrompt);
+    el.promptCard.classList.toggle("expanded", isExpanded);
 }
 
 function autoSizePromptInput(hasPrompt) {
-    const collapsedHeight = 44;
-    const expandedMinHeight = 96;
+    const collapsedHeight = 56;
     const expandedMaxHeight = 240;
+    const multilineThreshold = 4;
 
     el.promptInput.style.height = "auto";
     if (!hasPrompt) {
         el.promptInput.style.height = `${collapsedHeight}px`;
-        return;
+        return false;
     }
 
-    const nextHeight = Math.min(
-        Math.max(el.promptInput.scrollHeight, expandedMinHeight),
-        expandedMaxHeight
-    );
+    const contentHeight = el.promptInput.scrollHeight;
+    const shouldExpand = contentHeight > (collapsedHeight + multilineThreshold);
+    const nextHeight = shouldExpand
+        ? Math.min(contentHeight, expandedMaxHeight)
+        : collapsedHeight;
     el.promptInput.style.height = `${nextHeight}px`;
+    return shouldExpand;
 }
 
 function getRoutingPayload() {
     return {
         smart_mode: currentMode === "single" ? smartModeEnabled : false,
-        research_mode: researchModeEnabled,
+        research_mode: isResearchEnabledForCurrentMode(),
     };
 }
 
@@ -553,7 +617,7 @@ async function doSingleChat(prompt) {
     const manualMode = currentMode === "single" && !smartModeEnabled;
     const useManualModel = manualMode && !!provider;
     if (manualMode && !useManualModel) {
-        showError("Please select a model or turn Smart mode back on.");
+        showError("Please select a model or turn Auto-Select back on.");
         return;
     }
 
@@ -567,12 +631,16 @@ async function doSingleChat(prompt) {
     };
 
     initStreamingResults(
-        [useManualModel ? { provider, model } : { provider: "Smart Routing", model: "Auto-selected model" }],
+        [useManualModel ? { provider, model } : { provider: "Auto", model: "Auto-selected model" }],
         false
     );
 
     let finalResponse = null;
     await callAPIStream("/v1/chat/stream", body, async event => {
+        if (event.type === "start") {
+            setPendingWebSources([0], event.web_source_items || []);
+            return;
+        }
         if (event.type === "line") {
             appendStreamLine(0, event.text || "");
             return;
@@ -617,6 +685,10 @@ async function doCompare(prompt) {
     let comparePayload = null;
 
     await callAPIStream("/v1/compare/stream", { prompt, targets, routing: getRoutingPayload() }, async event => {
+        if (event.type === "start") {
+            setPendingWebSources(targets.map((_, i) => i), event.web_source_items || []);
+            return;
+        }
         if (event.type === "line" && Number.isInteger(event.index)) {
             appendStreamLine(event.index, event.text || "");
             return;
@@ -725,7 +797,78 @@ async function callAPIStream(path, body, onEvent) {
     }
 }
 
+function normalizeWebSources(rawSources) {
+    if (!Array.isArray(rawSources)) return [];
+    return rawSources
+        .map(src => {
+            const title = String(src?.title || "").trim();
+            const url = String(src?.url || "").trim();
+            const safeUrl = toSafeHttpUrl(url);
+            if (!safeUrl) return null;
+            return {
+                title: title || safeUrl,
+                url: safeUrl,
+            };
+        })
+        .filter(Boolean)
+        .slice(0, 6);
+}
+
+function toSafeHttpUrl(url) {
+    try {
+        const parsed = new URL(String(url || ""));
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return "";
+        }
+        return parsed.toString();
+    } catch {
+        return "";
+    }
+}
+
+function buildWebSourceIconsHtml(sources) {
+    const chips = sources.map((source, idx) => {
+        const faviconUrl = `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
+        return `
+          <a class="web-source-icon-link"
+             href="${escHtml(source.url)}"
+             target="_blank"
+             rel="noopener noreferrer"
+             title="${escHtml(source.title)}">
+            <img class="web-source-icon" src="${faviconUrl}" alt="" loading="lazy" decoding="async" />
+            <span class="sr-only">Source ${idx + 1}: ${escHtml(source.title)}</span>
+          </a>
+        `;
+    }).join("");
+    return `
+      <span class="web-source-label">Sources</span>
+      <span class="web-source-icons">${chips}</span>
+    `;
+}
+
+function setPendingWebSources(indexes, rawSources) {
+    const sources = normalizeWebSources(rawSources);
+    indexes.forEach(index => {
+        pendingWebSourcesByCard.set(Number(index), sources);
+    });
+}
+
+function applyPendingWebSources(index, shouldShow = true) {
+    const wrap = document.getElementById(`response-sources-${index}`);
+    if (!wrap) return;
+    const sources = pendingWebSourcesByCard.get(Number(index)) || [];
+    pendingWebSourcesByCard.delete(Number(index));
+    if (!shouldShow || sources.length === 0) {
+        wrap.classList.add("hidden");
+        wrap.innerHTML = "";
+        return;
+    }
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = buildWebSourceIconsHtml(sources);
+}
+
 function initStreamingResults(targets, isMulti) {
+    pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
     el.resultsGrid.className = isMulti ? "results-grid multi" : "results-grid";
     el.resultsGrid.style.gridTemplateColumns = isMulti ? `repeat(${targets.length}, 1fr)` : "";
@@ -734,6 +877,60 @@ function initStreamingResults(targets, isMulti) {
     setTimeout(() => {
         el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
+}
+
+function buildActionIcon(action) {
+    if (action === "copy") {
+        return `
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <rect x="5" y="5" width="10" height="10" rx="2"></rect>
+          </svg>`;
+    }
+    if (action === "like") {
+        return `
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">
+            <path d="M9 11V20H5V11H9Z"></path>
+            <path d="M11 20H17.6C18.42 20 19.14 19.45 19.36 18.66L20.81 13.66C21.12 12.59 20.31 11.52 19.19 11.52H15V7.74C15 6.78 14.22 6 13.26 6C12.92 6 12.59 6.1 12.31 6.29L9.82 11H11V20Z"></path>
+          </svg>`;
+    }
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">
+        <path d="M15 13V4H19V13H15Z"></path>
+        <path d="M13 4H6.4C5.58 4 4.86 4.55 4.64 5.34L3.19 10.34C2.88 11.41 3.69 12.48 4.81 12.48H9V16.26C9 17.22 9.78 18 10.74 18C11.08 18 11.41 17.9 11.69 17.71L14.18 13H13V4Z"></path>
+      </svg>`;
+}
+
+function buildResponseActionButtons(index) {
+    return `
+      <div class="response-actions" role="group" aria-label="Response actions">
+        <button type="button"
+                class="response-action-btn"
+                data-action="copy"
+                data-index="${index}"
+                aria-label="Copy response"
+                title="Copy response">
+          ${buildActionIcon("copy")}
+        </button>
+        <button type="button"
+                class="response-action-btn"
+                data-action="like"
+                data-index="${index}"
+                aria-label="Like response"
+                aria-pressed="false"
+                title="Like response">
+          ${buildActionIcon("like")}
+        </button>
+        <button type="button"
+                class="response-action-btn"
+                data-action="dislike"
+                data-index="${index}"
+                aria-label="Dislike response"
+                aria-pressed="false"
+                title="Dislike response">
+          ${buildActionIcon("dislike")}
+        </button>
+      </div>`;
 }
 
 function buildStreamingCard(target, index) {
@@ -751,31 +948,31 @@ function buildStreamingCard(target, index) {
           <span class="provider-icon">${icon}</span>
           ${escHtml(label + modelSuffix)}
         </span>
-        <span class="latency-badge" id="response-latency-${index}">⏳ Streaming…</span>
       </div>
       <div class="response-card-body">
         <p class="response-text" id="response-text-${index}" data-empty="true">Waiting for response…</p>
       </div>
       <div class="response-card-footer">
-        <div class="stat-item">
-          <span class="stat-label">Tokens</span>
-          <span class="stat-value" id="response-tokens-${index}">0</span>
+        <div class="response-stats">
+          <div class="stat-item">
+            <span class="stat-label">Tokens</span>
+            <span class="stat-value" id="response-tokens-${index}">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Finish</span>
+            <span class="stat-value" id="response-finish-${index}">-</span>
+          </div>
         </div>
-        <div class="stat-item">
-          <span class="stat-label">Est. Cost</span>
-          <span class="stat-value" id="response-cost-${index}">—</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Finish</span>
-          <span class="stat-value" id="response-finish-${index}">—</span>
-        </div>
+        ${buildResponseActionButtons(index)}
       </div>
+      <div class="web-source-strip hidden" id="response-sources-${index}" aria-label="Web sources"></div>
     </div>`;
 }
 
 function appendStreamLine(index, text) {
     const textEl = document.getElementById(`response-text-${index}`);
     if (!textEl) return;
+    if (text) markFirstStreamResponseSeen();
     if (textEl.dataset.empty === "true") {
         textEl.textContent = "";
         textEl.dataset.empty = "false";
@@ -786,22 +983,19 @@ function appendStreamLine(index, text) {
 function finalizeStreamCard(index, resp) {
     const card = document.getElementById(`response-card-${index}`);
     if (!card) return;
+    markFirstStreamResponseSeen();
 
     const hasError = !!resp.error;
     const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = resp.token_usage ? resp.token_usage.total_tokens : 0;
-    const cost = resp.estimated_cost != null ? `$${Number(resp.estimated_cost).toFixed(5)}` : "—";
     const finish = resp.finish_reason || "—";
-    const latency = resp.latency_ms != null ? `${resp.latency_ms} ms` : "—";
     const provider = resp.provider || "";
     const label = PROVIDER_LABELS[provider] || provider || "Model";
     const modelSuffix = resp.model ? ` · ${resp.model}` : "";
     const icon = PROVIDER_ICONS[provider] || "🤖";
 
     const textEl = document.getElementById(`response-text-${index}`);
-    const latencyEl = document.getElementById(`response-latency-${index}`);
     const tokensEl = document.getElementById(`response-tokens-${index}`);
-    const costEl = document.getElementById(`response-cost-${index}`);
     const finishEl = document.getElementById(`response-finish-${index}`);
     const badgeEl = document.getElementById(`response-model-badge-${index}`);
 
@@ -810,9 +1004,7 @@ function finalizeStreamCard(index, resp) {
         textEl.dataset.empty = "false";
         textEl.classList.toggle("error-text", hasError);
     }
-    if (latencyEl) latencyEl.textContent = `⏱ ${latency}`;
     if (tokensEl) tokensEl.textContent = tokens.toLocaleString();
-    if (costEl) costEl.textContent = cost;
     if (finishEl) finishEl.textContent = finish;
     if (badgeEl) {
         badgeEl.innerHTML = `
@@ -823,6 +1015,7 @@ function finalizeStreamCard(index, resp) {
 
     card.classList.remove("loading-card");
     card.classList.toggle("error-card", hasError);
+    applyPendingWebSources(index, !hasError);
 }
 
 function renderCompareSummary(data) {
@@ -830,6 +1023,83 @@ function renderCompareSummary(data) {
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
 }
+
+async function copyTextToClipboard(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch (_) { /* fallback */ }
+
+    try {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        return copied;
+    } catch (_) {
+        return false;
+    }
+}
+
+function setActionPressed(button, pressed) {
+    button.classList.toggle("is-active", pressed);
+    button.setAttribute("aria-pressed", pressed ? "true" : "false");
+}
+
+function handleReactionAction(button, action) {
+    const card = button.closest(".response-card");
+    if (!card) return;
+    const likeBtn = card.querySelector('.response-action-btn[data-action="like"]');
+    const dislikeBtn = card.querySelector('.response-action-btn[data-action="dislike"]');
+    if (!likeBtn || !dislikeBtn) return;
+
+    const targetBtn = action === "like" ? likeBtn : dislikeBtn;
+    const otherBtn = action === "like" ? dislikeBtn : likeBtn;
+    const shouldActivate = !targetBtn.classList.contains("is-active");
+
+    setActionPressed(otherBtn, false);
+    setActionPressed(targetBtn, shouldActivate);
+}
+
+async function handleCopyAction(button) {
+    const index = button.dataset.index || "";
+    const textEl =
+        document.getElementById(`response-text-${index}`) ||
+        button.closest(".response-card")?.querySelector(".response-text");
+    const text = textEl ? textEl.textContent : "";
+    const copied = await copyTextToClipboard(text);
+    button.classList.toggle("copied", copied);
+    const nextTitle = copied ? "Copied" : "Copy unavailable";
+    button.setAttribute("title", nextTitle);
+    button.setAttribute("aria-label", nextTitle);
+    window.setTimeout(() => {
+        button.classList.remove("copied");
+        button.setAttribute("title", "Copy response");
+        button.setAttribute("aria-label", "Copy response");
+    }, 1000);
+}
+
+el.resultsGrid.addEventListener("click", event => {
+    const button = event.target.closest(".response-action-btn");
+    if (!button || !el.resultsGrid.contains(button)) return;
+    const action = button.dataset.action;
+    if (action === "copy") {
+        handleCopyAction(button);
+        return;
+    }
+    if (action === "like" || action === "dislike") {
+        handleReactionAction(button, action);
+    }
+});
 
 /* ═══════════════════════════════════════════
    RENDER RESULTS — staggered card animation
@@ -858,38 +1128,35 @@ function showResults(responses, isMulti, compareData) {
 
 function buildResponseCard(resp, index) {
     const hasError = !!resp.error;
-    const latency = resp.latency_ms != null ? `${resp.latency_ms} ms` : "—";
     const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = resp.token_usage ? resp.token_usage.total_tokens : 0;
-    const cost = resp.estimated_cost != null ? `$${resp.estimated_cost.toFixed(5)}` : "—";
     const delay = index * 60;
 
     return `
     <div class="response-card ${hasError ? "error-card" : ""}"
+         id="response-card-${index}"
          style="animation: cardIn 0.4s cubic-bezier(.4,0,.2,1) ${delay}ms both;">
       <div class="response-card-header">
         <span class="model-badge">
           <span class="provider-icon">${PROVIDER_ICONS[resp.provider] || "🤖"}</span>
           ${escHtml(PROVIDER_LABELS[resp.provider] || resp.provider)}
         </span>
-        <span class="latency-badge">⏱ ${latency}</span>
       </div>
       <div class="response-card-body">
-        <p class="response-text ${hasError ? "error-text" : ""}">${escHtml(text)}</p>
+        <p class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${escHtml(text)}</p>
       </div>
       <div class="response-card-footer">
-        <div class="stat-item">
-          <span class="stat-label">Tokens</span>
-          <span class="stat-value">${tokens.toLocaleString()}</span>
+        <div class="response-stats">
+          <div class="stat-item">
+            <span class="stat-label">Tokens</span>
+            <span class="stat-value">${tokens.toLocaleString()}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Finish</span>
+            <span class="stat-value">${escHtml(resp.finish_reason || "-")}</span>
+          </div>
         </div>
-        <div class="stat-item">
-          <span class="stat-label">Est. Cost</span>
-          <span class="stat-value">${cost}</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Finish</span>
-          <span class="stat-value">${escHtml(resp.finish_reason || "—")}</span>
-        </div>
+        ${buildResponseActionButtons(index)}
       </div>
     </div>`;
 }
@@ -903,10 +1170,6 @@ function buildCompareSummary(data) {
           <div class="stat-item">
             <span class="stat-label">Total Tokens</span>
             <span class="stat-value">${(data.total_tokens || 0).toLocaleString()}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Total Cost</span>
-            <span class="stat-value">$${(data.total_cost || 0).toFixed(5)}</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">Successful</span>
@@ -926,6 +1189,9 @@ el.clearBtn.addEventListener("click", () => { clearResults(); conversationHistor
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
+    pendingWebSourcesByCard.clear();
+    hasReceivedFirstStreamResponse = false;
+    setComposerDocked(false);
 }
 
 function showError(msg) {
@@ -972,6 +1238,7 @@ function setLoading(loading) {
 
     updateRoutingButtons();
     updateSingleModelRoutingUI();
+    setComposerDocked(false);
     setMode("single");
     updateSendButtonState();
 })();
@@ -1055,7 +1322,6 @@ function renderHistory(data, filter = "") {
         const responseSnippet = escHtml(entry.response.length > 120
             ? entry.response.slice(0, 120) + "…"
             : entry.response);
-        const costStr = entry.cost != null ? `$${Number(entry.cost).toFixed(5)}` : "—";
         const tokStr = entry.tokens != null ? entry.tokens.toLocaleString() : "—";
         const modeLabel = entry.mode === "compare" ? "compare" : "chat";
 
@@ -1069,9 +1335,7 @@ function renderHistory(data, filter = "") {
           <div class="history-prompt">${promptSnippet}</div>
           <div class="history-response">${responseSnippet}</div>
           <div class="history-meta">
-            <span>🔢 ${tokStr} tokens</span>
-            <span>💰 ${costStr}</span>
-            <span>⏱ ${entry.latency_ms != null ? entry.latency_ms + " ms" : "—"}</span>
+            <span>Tokens: ${tokStr}</span>
           </div>
         </li>`;
     }).join("");
@@ -1102,5 +1366,7 @@ function renderHistory(data, filter = "") {
         });
     });
 }
+
+
 
 

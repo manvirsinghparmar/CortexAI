@@ -15,6 +15,7 @@ from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.dependencies import get_api_key, get_orchestrator
 from server.utils import validate_and_trim_context, clamp_max_tokens
+from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Compare"])
 
@@ -144,6 +145,11 @@ async def compare(
 
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    research_mode = bool(request.routing and request.routing.research_mode)
+    effective_prompt, _research_meta = await maybe_enrich_prompt_with_web(
+        request.prompt,
+        enabled=research_mode,
+    )
 
     models_list = [
         {"provider": t.provider, "model": t.model or ""}
@@ -158,7 +164,7 @@ async def compare(
 
     response = await asyncio.to_thread(
         orchestrator.compare,
-        prompt=request.prompt,
+        prompt=effective_prompt,
         models_list=models_list,
         context=context,
         timeout_s=request.timeout_s,
@@ -209,6 +215,11 @@ async def compare_stream(
 
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    research_mode = bool(request.routing and request.routing.research_mode)
+    effective_prompt, research_meta = await maybe_enrich_prompt_with_web(
+        request.prompt,
+        enabled=research_mode,
+    )
 
     kwargs = {}
     if request.temperature is not None:
@@ -221,6 +232,9 @@ async def compare_stream(
             "type": "start",
             "mode": "compare",
             "target_count": len(request.targets),
+            "research_mode": research_mode,
+            "web_sources": research_meta.get("source_count", 0),
+            "web_source_items": research_meta.get("sources", []),
         })
 
         try:
@@ -263,7 +277,7 @@ async def compare_stream(
                     asyncio.create_task(
                         _run_compare_target(
                             index=i,
-                            prompt=request.prompt,
+                            prompt=effective_prompt,
                             provider=provider,
                             model=model,
                             context=context,

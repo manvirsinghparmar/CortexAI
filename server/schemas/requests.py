@@ -43,6 +43,7 @@ class CompareTargetRequest(BaseModel):
 class CompareRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=4)
+    routing: Optional[ChatRoutingRequest] = None
     context: Optional[UserContextRequest] = None
     timeout_s: Optional[float] = Field(None, gt=0, le=300)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)

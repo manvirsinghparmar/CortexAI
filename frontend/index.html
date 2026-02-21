@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CortexAI – Compare AI Responses Side by Side</title>
+    <title>CortexAI - Compare AI Responses Side by Side</title>
     <meta name="description"
         content="Compare AI model responses side by side. Single chat or multi-model comparison powered by CortexAI." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -17,152 +17,157 @@
 
 <body>
 
-    <!-- ── Floating Compact Toolbar (appears on scroll) ── -->
     <div class="compact-bar" id="compactBar" aria-hidden="true">
         <div class="compact-bar-inner">
             <div class="compact-logo">
-                <span class="compact-logo-icon">⚡</span>
-                <span>CortexAI</span>
+                <span class="compact-logo-text">CortexAI</span>
             </div>
             <div class="compact-mode-toggle">
-                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">💬 Chat</button>
-                <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">⚖️ Compare</button>
+                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Ask</button>
+                <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">Compare</button>
             </div>
-            <div class="compact-model-info" id="compactModelInfo">
-                <!-- filled by JS -->
-            </div>
+            <div class="compact-model-info" id="compactModelInfo"></div>
             <button class="compact-send-btn" id="compactSendBtn">
-                <span class="btn-icon">⚡</span> Send
+                <span class="btn-icon">&uarr;</span> Send
             </button>
         </div>
     </div>
 
-    <!-- ── Sticky Header ── -->
     <header class="header" id="mainHeader">
         <div class="header-inner">
             <div class="logo">
-                <span class="logo-icon">⚡</span>
                 <span class="logo-text">CortexAI</span>
             </div>
             <div class="header-right">
-                <label class="opt-toggle-label" for="optToggle">
-                    <span class="opt-icon">✨</span> Prompt Optimization
-                </label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="optToggle" aria-label="Enable prompt optimization" />
-                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
-                </label>
-                <span class="opt-status" id="optStatus">Off</span>
-                <button class="history-toggle-btn" id="historyToggleBtn" aria-label="Toggle chat history"
-                    title="Chat History">
-                    🕐 History
-                </button>
+                <button class="top-nav-link" type="button">History</button>
+                <button class="top-nav-link" type="button">Settings</button>
+                <button class="top-nav-link" type="button">Profile</button>
             </div>
         </div>
     </header>
 
-    <!-- ── Hero (scrolls away) ── -->
-    <section class="hero" id="hero">
-        <div class="hero-bg-grid"></div>
-        <div class="hero-content" id="heroContent">
-            <div class="hero-badge">
-                <span class="hero-badge-dot"></span> CortexAI Arena
+    <aside class="history-sidebar" id="historySidebar" aria-label="Chat history">
+        <div class="history-sidebar-header">
+            <div class="history-sidebar-title">
+                <span>History</span>
             </div>
-            <h1 class="hero-title">
-                Compare AI Responses
-                <span class="hero-accent">Side by Side</span>
-            </h1>
-            <p class="hero-sub">Pick your models, type a prompt, and watch AI responses instantly — compared in real
-                time.</p>
-            <div class="hero-scroll-hint" id="heroScrollHint">
-                <span>Scroll to workspace</span>
-                <div class="scroll-arrow">↓</div>
+            <div class="history-sidebar-actions">
+                <button class="history-clear-btn" id="historyClearAllBtn" title="Clear all history">Clear All</button>
             </div>
         </div>
-    </section>
+        <div class="history-search-wrap">
+            <input type="text" id="historySearch" class="history-search" placeholder="Search history..."
+                aria-label="Search history" />
+        </div>
+        <ul class="history-list" id="historyList" role="list"></ul>
+        <div class="history-empty" id="historyEmpty">
+            <div class="history-empty-icon">Chat</div>
+            <p>No history yet.<br>Send a prompt to get started.</p>
+        </div>
+    </aside>
 
-    <!-- ── Main Workspace ── -->
     <main class="main" id="workspace">
 
-        <!-- Mode toggle -->
-        <div class="workspace-header">
-            <div class="mode-toggle" role="tablist" aria-label="Chat mode">
-                <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true" data-mode="single">
-                    💬 Single Chat
-                </button>
-                <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false" data-mode="compare">
-                    ⚖️ Compare
-                </button>
+        <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">
+            <div class="results-header">
+                <h2 class="results-title">Responses</h2>
+                <button class="btn-clear" id="clearBtn" title="Clear results">Clear</button>
             </div>
-            <div class="workspace-tagline" id="workspaceTagline">Single model • Conversational</div>
-        </div>
-
-        <!-- ── Single Chat Panel ── -->
-        <section class="panel panel-single" id="panelSingle" aria-live="polite">
-            <div class="card model-card">
-                <div class="card-header">
-                    <span class="card-title">Model</span>
-                </div>
-                <div class="single-slot">
-                    <label class="slot-label" for="singleModel">SELECT MODEL</label>
-                    <select id="singleModel" class="model-select"></select>
-                </div>
-            </div>
+            <div class="results-grid" id="resultsGrid"></div>
         </section>
 
-        <!-- ── Compare Panel ── -->
-        <section class="panel panel-compare hidden" id="panelCompare" aria-live="polite">
-            <div class="card model-card">
-                <div class="card-header">
-                    <span class="card-title">Model Selection</span>
-                    <div class="slot-count-btns">
-                        <span class="slot-count-label">Compare:</span>
-                        <button class="slot-count-btn active" id="btn2Models" data-count="2">2 Models</button>
-                        <button class="slot-count-btn" id="btn3Models" data-count="3">3 Models</button>
-                    </div>
-                </div>
-                <div class="compare-slots" id="compareSlots">
-                    <div class="slot" id="slot1">
-                        <label class="slot-label">MODEL 1</label>
-                        <select class="model-select compare-select" id="compareModel1"></select>
-                    </div>
-                    <div class="slot" id="slot2">
-                        <label class="slot-label">MODEL 2</label>
-                        <select class="model-select compare-select" id="compareModel2"></select>
-                    </div>
-                    <div class="slot hidden" id="slot3">
-                        <label class="slot-label">MODEL 3</label>
-                        <select class="model-select compare-select" id="compareModel3"></select>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ── Prompt Area ── -->
         <div class="card prompt-card" id="promptCard">
-            <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything… your models are ready."
-                rows="4" aria-label="Prompt input"></textarea>
+            <div class="composer-toolbar" id="composerToolbar" role="group" aria-label="Prompt routing controls">
+                <div class="composer-toolbar-row">
+                    <div class="mode-toggle toolbar-mode-toggle" role="tablist" aria-label="Chat mode">
+                        <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true"
+                            data-mode="single">
+                            Ask
+                        </button>
+                        <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false"
+                            data-mode="compare">
+                            Compare
+                        </button>
+                    </div>
+                    <div class="composer-toolbar-left feature-strip" id="singleRoutingControls">
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
+                                aria-checked="true" aria-label="Auto (Recommended)"
+                                aria-describedby="smartRoutingTooltip">
+                                Auto (Recommended)
+                            </button>
+                            <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
+                                Automatically selects the best model based on quality, speed, and cost.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#127760;</span>
+                                <span>Web</span>
+                            </button>
+                            <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
+                                Searches the internet and includes citations.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
+                                <span>Rewrite</span>
+                            </button>
+                            <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
+                                Improves your prompt before sending.
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="toolbar-model-group hidden" id="singleModelWrap">
+                    <label class="sr-only" for="singleModel">Manual model selection</label>
+                    <span class="toolbar-model-label" id="singleModelLabel">Using:</span>
+                    <select id="singleModel" class="model-select toolbar-model-select" aria-label="Using: ChatGPT">
+                        <option value="openai:gpt-4o">ChatGPT</option>
+                    </select>
+                </div>
+                <div class="toolbar-compare-group hidden" id="compareModelWrap" aria-label="Compare model selectors">
+                    <span class="toolbar-compare-label">Compare:</span>
+                    <label class="sr-only" for="compareModel1">Compare model 1</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel1"></select>
+                    <span class="toolbar-compare-sep">vs</span>
+                    <label class="sr-only" for="compareModel2">Compare model 2</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel2"></select>
+                    <span class="toolbar-compare-third hidden" id="compareModel3Wrap">
+                        <span class="toolbar-compare-sep">vs</span>
+                        <label class="sr-only" for="compareModel3">Compare model 3</label>
+                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel3"></select>
+                    </span>
+                    <button class="toolbar-add-model-btn" id="compareAddModelBtn" type="button" aria-expanded="false">
+                        + Add Model
+                    </button>
+                </div>
+            </div>
+            <div class="prompt-input-wrap">
+                <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything... your models are ready."
+                    rows="1" aria-label="Prompt input"></textarea>
+                <button class="btn-submit btn-submit-inline" id="submitBtn" aria-label="Send message">
+                    <span class="btn-icon">&uarr;</span>
+                </button>
+            </div>
+            <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
             <div class="prompt-footer">
-                <span class="prompt-hint">Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
-                <div class="prompt-footer-right">
-                    <!-- Appears after optimization runs -->
+                <div class="prompt-footer-left">
                     <button class="btn-opt-view hidden" id="optViewBtn"
                         title="See what prompt was actually sent to the LLM">
-                        ✨ View Optimized
-                    </button>
-                    <button class="btn-submit" id="submitBtn">
-                        <span class="btn-icon">⚡</span>
-                        <span id="submitBtnLabel">Send</span>
+                        View Optimized
                     </button>
                 </div>
             </div>
         </div>
 
-        <!-- ── Optimized Prompt Panel (slide-in) ── -->
         <div class="opt-panel hidden" id="optPanel" role="region" aria-label="Optimized prompt view">
             <div class="opt-panel-header">
-                <span class="opt-panel-title">✨ Prompt Optimization — what went to the LLM</span>
-                <button class="opt-panel-close" id="optPanelClose" aria-label="Close">✕</button>
+                <span class="opt-panel-title">Prompt Optimization - what went to the LLM</span>
+                <button class="opt-panel-close" id="optPanelClose" aria-label="Close">X</button>
             </div>
             <div class="opt-panel-body">
                 <div class="opt-col">
@@ -170,13 +175,12 @@
                     <div class="opt-col-text" id="optOriginalText"></div>
                 </div>
                 <div class="opt-col opt-col-right">
-                    <div class="opt-col-label">OPTIMIZED ✨</div>
+                    <div class="opt-col-label">OPTIMIZED</div>
                     <div class="opt-col-text" id="optOptimizedText"></div>
                 </div>
             </div>
         </div>
 
-        <!-- ── Example Prompts ── -->
         <div class="examples-section">
             <p class="examples-title">TRY AN EXAMPLE</p>
             <div class="examples-chips">
@@ -193,55 +197,21 @@
             </div>
         </div>
 
-
-        <!-- ── Results ── -->
-        <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">
-            <div class="results-header">
-                <h2 class="results-title">Responses</h2>
-                <button class="btn-clear" id="clearBtn" title="Clear results">✕ Clear</button>
-            </div>
-            <div class="results-grid" id="resultsGrid"></div>
-        </section>
-
-        <!-- ── Error Banner ── -->
         <div class="error-banner hidden" id="errorBanner" role="alert">
-            <span class="error-icon">⚠️</span>
+            <span class="error-icon">!</span>
             <span id="errorMsg">Something went wrong.</span>
-            <button class="error-close" id="errorClose" aria-label="Dismiss error">✕</button>
+            <button class="error-close" id="errorClose" aria-label="Dismiss error">X</button>
         </div>
 
     </main>
 
-    <!-- ── History Sidebar ── -->
-    <aside class="history-sidebar" id="historySidebar" aria-label="Chat history" aria-hidden="true">
-        <div class="history-sidebar-header">
-            <div class="history-sidebar-title">
-                <span>🕐</span> Chat History
-            </div>
-            <div class="history-sidebar-actions">
-                <button class="history-clear-btn" id="historyClearAllBtn" title="Clear all history">🗑 Clear
-                    All</button>
-                <button class="history-close-btn" id="historySidebarClose" aria-label="Close history">✕</button>
-            </div>
-        </div>
-        <div class="history-search-wrap">
-            <input type="text" id="historySearch" class="history-search" placeholder="Search history…"
-                aria-label="Search history" />
-        </div>
-        <ul class="history-list" id="historyList" role="list"></ul>
-        <div class="history-empty" id="historyEmpty">
-            <div class="history-empty-icon">💬</div>
-            <p>No history yet.<br>Send a prompt to get started.</p>
-        </div>
-    </aside>
-    <!-- Overlay behind sidebar -->
-    <div class="history-overlay" id="historyOverlay"></div>
-
     <footer class="footer">
-        <p>CortexAI — Unified AI Comparison Engine</p>
+        <p>CortexAI - Unified AI Comparison Engine</p>
     </footer>
 
+    <script src="smart-routing-state.js"></script>
     <script src="app.js"></script>
 </body>
 
 </html>
+

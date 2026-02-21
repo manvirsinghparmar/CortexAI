@@ -69,6 +69,7 @@ If these tests pass, the application guarantees:
 """
 
 import pytest
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -106,7 +107,12 @@ class FakeMultiUnifiedResponse:
 # -------------------------------------------------------------------
 
 class FakeOrchestrator:
+    def __init__(self):
+        self.last_ask_prompt = None
+        self.last_compare_prompt = None
+
     def ask(self, prompt: str, model_type: str, context: Any = None, **kwargs) -> UnifiedResponse:
+        self.last_ask_prompt = prompt
         return UnifiedResponse(
             request_id="req_ask_1",
             text="OK",
@@ -127,6 +133,7 @@ class FakeOrchestrator:
         context: Any = None,
         **kwargs
     ) -> FakeMultiUnifiedResponse:
+        self.last_compare_prompt = prompt
         r1 = UnifiedResponse(
             request_id="req_cmp_1",
             text="A",
@@ -202,7 +209,9 @@ def app():
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
 
-    app.dependency_overrides[deps.get_orchestrator] = lambda: FakeOrchestrator()
+    fake_orchestrator = FakeOrchestrator()
+    app.state.fake_orchestrator = fake_orchestrator
+    app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orchestrator
     return app
 
 
@@ -346,3 +355,140 @@ def test_compare_never_returns_500(client):
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code < 500
+
+
+def test_chat_stream_returns_ndjson_events(client):
+    payload = {
+        "prompt": "hello",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert "application/x-ndjson" in r.headers.get("content-type", "")
+
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    event_types = [e.get("type") for e in events]
+
+    assert "start" in event_types
+    assert "response_done" in event_types
+    assert "done" in event_types
+
+
+def test_compare_stream_returns_ndjson_events(client):
+    payload = {
+        "prompt": "hello",
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert "application/x-ndjson" in r.headers.get("content-type", "")
+
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    event_types = [e.get("type") for e in events]
+
+    assert "start" in event_types
+    assert event_types.count("response_done") >= 2
+    assert "done" in event_types
+
+
+def test_chat_accepts_auto_routing_without_provider(client):
+    payload = {
+        "prompt": "Give me a quick summary of async await",
+        "routing": {"smart_mode": True, "research_mode": False},
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert isinstance(body.get("model"), str)
+
+
+def test_chat_rejects_model_without_provider(client):
+    payload = {
+        "prompt": "hello",
+        "model": "gpt-4o-mini",
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 422
+
+
+def test_chat_stream_auto_routing_includes_selected_target(client):
+    payload = {
+        "prompt": "Write a small Python function",
+        "routing": {"smart_mode": True},
+    }
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    start_event = next((e for e in events if e.get("type") == "start"), None)
+    assert start_event is not None
+    assert start_event.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert isinstance(start_event.get("model"), str)
+
+
+def test_chat_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        assert enabled is True
+        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 1}
+
+    monkeypatch.setattr("server.routes.chat.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    payload = {
+        "prompt": "Latest AI policy updates",
+        "routing": {"smart_mode": True, "research_mode": True},
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+
+
+def test_compare_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        assert enabled is True
+        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 2}
+
+    monkeypatch.setattr("server.routes.compare.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    payload = {
+        "prompt": "Recent market updates",
+        "routing": {"research_mode": True},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_compare_prompt.endswith("[WEB_CTX]")

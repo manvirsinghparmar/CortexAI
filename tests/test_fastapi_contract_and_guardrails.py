@@ -69,6 +69,7 @@ If these tests pass, the application guarantees:
 """
 
 import pytest
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -346,3 +347,96 @@ def test_compare_never_returns_500(client):
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code < 500
+
+
+def test_chat_stream_returns_ndjson_events(client):
+    payload = {
+        "prompt": "hello",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert "application/x-ndjson" in r.headers.get("content-type", "")
+
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    event_types = [e.get("type") for e in events]
+
+    assert "start" in event_types
+    assert "response_done" in event_types
+    assert "done" in event_types
+
+
+def test_compare_stream_returns_ndjson_events(client):
+    payload = {
+        "prompt": "hello",
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert "application/x-ndjson" in r.headers.get("content-type", "")
+
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    event_types = [e.get("type") for e in events]
+
+    assert "start" in event_types
+    assert event_types.count("response_done") >= 2
+    assert "done" in event_types
+
+
+def test_chat_accepts_auto_routing_without_provider(client):
+    payload = {
+        "prompt": "Give me a quick summary of async await",
+        "routing": {"smart_mode": True, "research_mode": False},
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert isinstance(body.get("model"), str)
+
+
+def test_chat_rejects_model_without_provider(client):
+    payload = {
+        "prompt": "hello",
+        "model": "gpt-4o-mini",
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 422
+
+
+def test_chat_stream_auto_routing_includes_selected_target(client):
+    payload = {
+        "prompt": "Write a small Python function",
+        "routing": {"smart_mode": True},
+    }
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    start_event = next((e for e in events if e.get("type") == "start"), None)
+    assert start_event is not None
+    assert start_event.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert isinstance(start_event.get("model"), str)

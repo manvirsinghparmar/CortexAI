@@ -72,26 +72,30 @@ import pytest
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
-from server.app import create_app
-from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
-from server.schemas.responses import CompareResponseDTO
 from api.base_client import BaseAIClient
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from server.app import create_app
+from server.schemas.responses import CompareResponseDTO
+
+pytestmark = pytest.mark.integration
 
 
 # -------------------------------------------------------------------
 # Fake MultiUnifiedResponse (match what CompareResponseDTO expects)
 # -------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class FakeMultiUnifiedResponse:
     request_id: str
     request_group_id: str
     prompt: str
-    responses: List[UnifiedResponse]
+    responses: list[UnifiedResponse]
 
     success_count: int
     failure_count: int
@@ -106,6 +110,7 @@ class FakeMultiUnifiedResponse:
 # Fake orchestrator (keeps tests offline & deterministic)
 # -------------------------------------------------------------------
 
+
 class FakeOrchestrator:
     def __init__(self):
         self.last_ask_prompt = None
@@ -116,7 +121,7 @@ class FakeOrchestrator:
         return UnifiedResponse(
             request_id="req_ask_1",
             text="OK",
-            provider=model_type,
+            provider=model_type or "auto",
             model=kwargs.get("model") or "fake-model",
             latency_ms=10,
             token_usage=TokenUsage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
@@ -127,11 +132,7 @@ class FakeOrchestrator:
         )
 
     def compare(
-        self,
-        prompt: str,
-        models_list: List[Dict[str, Any]],
-        context: Any = None,
-        **kwargs
+        self, prompt: str, models_list: list[dict[str, Any]], context: Any = None, **kwargs
     ) -> FakeMultiUnifiedResponse:
         self.last_compare_prompt = prompt
         r1 = UnifiedResponse(
@@ -180,6 +181,7 @@ class FakeOrchestrator:
 # Dummy client to access BaseAIClient helpers
 # -------------------------------------------------------------------
 
+
 class DummyClient(BaseAIClient):
     def __init__(self):
         # don't call BaseAIClient.__init__ (signature may vary)
@@ -195,6 +197,7 @@ class DummyClient(BaseAIClient):
 # -------------------------------------------------------------------
 # Pytest fixtures
 # -------------------------------------------------------------------
+
 
 @pytest.fixture()
 def app():
@@ -223,6 +226,7 @@ def client(app):
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_health_ok(client):
     r = client.get("/health")

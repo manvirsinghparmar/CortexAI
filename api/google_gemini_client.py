@@ -1,11 +1,14 @@
 import os
 import time
-from typing import Optional, List, Dict, Any
+from typing import Any
+
 from google import genai
-from .base_client import BaseAIClient
-from models.unified_response import UnifiedResponse, TokenUsage
+
+from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
+
+from .base_client import BaseAIClient
 
 logger = get_logger(__name__)
 
@@ -34,12 +37,11 @@ class GeminiClient(BaseAIClient):
 
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
-        self.cost_calculator = CostCalculator(model_type='gemini', model_name=model_name)
+        self.cost_calculator = CostCalculator(model_type="gemini", model_name=model_name)
 
     def _convert_messages_to_gemini_format(
-        self,
-        messages: List[Dict[str, str]]
-    ) -> tuple[Optional[str], List[Dict[str, Any]]]:
+        self, messages: list[dict[str, str]]
+    ) -> tuple[str | None, list[dict[str, Any]]]:
         """
         Convert standard messages format to Gemini's format.
 
@@ -75,20 +77,17 @@ class GeminiClient(BaseAIClient):
             # Map roles: user->user, assistant->model
             gemini_role = "model" if role == "assistant" else "user"
 
-            gemini_contents.append({
-                "role": gemini_role,
-                "parts": [{"text": content}]
-            })
+            gemini_contents.append({"role": gemini_role, "parts": [{"text": content}]})
 
         return system_instruction, gemini_contents
 
     def get_completion(
         self,
-        prompt: Optional[str] = None,
+        prompt: str | None = None,
         *,
-        messages: Optional[list] = None,
+        messages: list | None = None,
         save_full: bool = False,
-        **kwargs
+        **kwargs,
     ) -> UnifiedResponse:
         """
         Get a completion from the Gemini API.
@@ -110,92 +109,94 @@ class GeminiClient(BaseAIClient):
         request_id = self._generate_request_id()
         start_time = time.time()
 
-        model_name = kwargs.get('model', self.model_name)
-        temperature = kwargs.get('temperature', 0.7)
-        max_output_tokens = kwargs.get('max_output_tokens', 2048)
+        model_name = kwargs.get("model", self.model_name)
+        temperature = kwargs.get("temperature", 0.7)
+        max_output_tokens = kwargs.get("max_output_tokens", 2048)
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
 
             # Convert to Gemini format
-            system_instruction, gemini_contents = self._convert_messages_to_gemini_format(normalized_messages)
+            system_instruction, gemini_contents = self._convert_messages_to_gemini_format(
+                normalized_messages
+            )
 
             # Build config
             config = {
-                'temperature': temperature,
-                'max_output_tokens': max_output_tokens,
+                "temperature": temperature,
+                "max_output_tokens": max_output_tokens,
             }
             if system_instruction:
-                config['system_instruction'] = system_instruction
+                config["system_instruction"] = system_instruction
 
             response = self.client.models.generate_content(
-                model=model_name,
-                contents=gemini_contents,
-                config=config
+                model=model_name, contents=gemini_contents, config=config
             )
 
             latency_ms = self._measure_latency(start_time)
 
             # Extract text
-            text = response.text if hasattr(response, 'text') else ""
+            text = response.text if hasattr(response, "text") else ""
 
             # Extract token usage
             token_usage = TokenUsage()
-            if hasattr(response, 'usage_metadata'):
+            if hasattr(response, "usage_metadata"):
                 usage_metadata = response.usage_metadata
                 token_usage = TokenUsage(
-                    prompt_tokens=getattr(usage_metadata, 'prompt_token_count', 0),
-                    completion_tokens=getattr(usage_metadata, 'candidates_token_count', 0),
-                    total_tokens=getattr(usage_metadata, 'total_token_count', 0)
+                    prompt_tokens=getattr(usage_metadata, "prompt_token_count", 0),
+                    completion_tokens=getattr(usage_metadata, "candidates_token_count", 0),
+                    total_tokens=getattr(usage_metadata, "total_token_count", 0),
                 )
 
             # Calculate cost
             cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens,
-                token_usage.completion_tokens
+                token_usage.prompt_tokens, token_usage.completion_tokens
             )
-            estimated_cost = cost['total_cost']
+            estimated_cost = cost["total_cost"]
 
             # Extract finish reason from Gemini response
             finish_reason_raw = None
-            if hasattr(response, 'candidates') and response.candidates:
+            if hasattr(response, "candidates") and response.candidates:
                 candidate = response.candidates[0]
-                if hasattr(candidate, 'finish_reason'):
+                if hasattr(candidate, "finish_reason"):
                     finish_reason_raw = str(candidate.finish_reason)
 
             # Normalize finish reason
-            finish_reason = self._normalize_finish_reason(
-                finish_reason_raw,
-                provider='gemini'
-            )
+            finish_reason = self._normalize_finish_reason(finish_reason_raw, provider="gemini")
 
             # Build raw response if requested
             raw = None
             if save_full:
                 raw = {
                     "text": text,
-                    "usage_metadata": {
-                        "prompt_token_count": token_usage.prompt_tokens,
-                        "candidates_token_count": token_usage.completion_tokens,
-                        "total_token_count": token_usage.total_tokens
-                    } if hasattr(response, 'usage_metadata') else None,
-                    "candidates": [
+                    "usage_metadata": (
                         {
-                            "finish_reason": finish_reason_raw
+                            "prompt_token_count": token_usage.prompt_tokens,
+                            "candidates_token_count": token_usage.completion_tokens,
+                            "total_token_count": token_usage.total_tokens,
                         }
-                    ] if hasattr(response, 'candidates') else []
+                        if hasattr(response, "usage_metadata")
+                        else None
+                    ),
+                    "candidates": (
+                        [{"finish_reason": finish_reason_raw}]
+                        if hasattr(response, "candidates")
+                        else []
+                    ),
                 }
 
             logger.info(
                 "Gemini completion successful",
-                extra={"extra_fields": {
-                    "request_id": request_id,
-                    "model": model_name,
-                    "latency_ms": latency_ms,
-                    "tokens": token_usage.total_tokens,
-                    "cost": estimated_cost
-                }}
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "model": model_name,
+                        "latency_ms": latency_ms,
+                        "tokens": token_usage.total_tokens,
+                        "cost": estimated_cost,
+                    }
+                },
             )
 
             return UnifiedResponse(
@@ -209,29 +210,28 @@ class GeminiClient(BaseAIClient):
                 finish_reason=finish_reason,
                 error=None,
                 metadata={},
-                raw=raw
+                raw=raw,
             )
 
         except Exception as e:
             latency_ms = self._measure_latency(start_time)
-            error = self._normalize_error(e, provider='gemini')
+            error = self._normalize_error(e, provider="gemini")
 
             logger.error(
                 f"Gemini completion failed: {error.code}",
-                extra={"extra_fields": {
-                    "request_id": request_id,
-                    "model": model_name,
-                    "error_code": error.code,
-                    "error_message": error.message,
-                    "retryable": error.retryable
-                }}
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "model": model_name,
+                        "error_code": error.code,
+                        "error_message": error.message,
+                        "retryable": error.retryable,
+                    }
+                },
             )
 
             return self._create_error_response(
-                request_id=request_id,
-                error=error,
-                latency_ms=latency_ms,
-                model=model_name
+                request_id=request_id, error=error, latency_ms=latency_ms, model=model_name
             )
 
     @classmethod
@@ -251,7 +251,7 @@ class GeminiClient(BaseAIClient):
                 return
 
             client = genai.Client(api_key=api_key)
-            current_model = kwargs.get('current_model', 'gemini-1.5-flash')
+            current_model = kwargs.get("current_model", "gemini-1.5-flash")
 
             # Get the list of available models
             models = client.models.list()
@@ -259,16 +259,23 @@ class GeminiClient(BaseAIClient):
             model_list = list(models)
             logger.info(
                 "Listed available Gemini models",
-                extra={"extra_fields": {"model_count": len(model_list), "current_model": current_model}}
+                extra={
+                    "extra_fields": {"model_count": len(model_list), "current_model": current_model}
+                },
             )
 
             print("\n=== Available Gemini Models ===")
             for model in model_list:
                 # Check if model supports content generation
-                if hasattr(model, 'supported_generation_methods') and 'generateContent' in model.supported_generation_methods:
+                if (
+                    hasattr(model, "supported_generation_methods")
+                    and "generateContent" in model.supported_generation_methods
+                ):
                     prefix = "* " if model.name == current_model else "  "
-                    print(f"{prefix}{model.name} (supports: {', '.join(model.supported_generation_methods)})")
-                elif hasattr(model, 'name'):
+                    print(
+                        f"{prefix}{model.name} (supports: {', '.join(model.supported_generation_methods)})"
+                    )
+                elif hasattr(model, "name"):
                     # Fallback if supported_generation_methods is not available
                     prefix = "* " if model.name == current_model else "  "
                     print(f"{prefix}{model.name}")
@@ -276,10 +283,10 @@ class GeminiClient(BaseAIClient):
 
         except Exception as e:
             logger.error(
-                f"Error listing available Gemini models: {str(e)}",
-                extra={"extra_fields": {"error_type": type(e).__name__}}
+                f"Error listing available Gemini models: {e!s}",
+                extra={"extra_fields": {"error_type": type(e).__name__}},
             )
-            print(f"Error listing available models: {str(e)}")
+            print(f"Error listing available models: {e!s}")
 
 
 # Example usage

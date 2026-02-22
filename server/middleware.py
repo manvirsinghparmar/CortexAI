@@ -1,6 +1,7 @@
 """Request ID middleware for tracking requests."""
 
 import uuid
+
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 

@@ -9,6 +9,21 @@ Compare Mode allows you to send every query to multiple LLM providers simultaneo
 - Comparing costs between providers
 - Testing prompt effectiveness across models
 
+## Release Notes (2026-02-18)
+
+- FastAPI `POST /v1/compare` now persists compare runs to DB when `DATABASE_URL` is set.
+- Each model response in a compare run writes one `llm_requests` + one `llm_responses` row.
+- `request_group_id` is now canonical and shared across:
+  - API response payload
+  - orchestrator compare logs
+  - `public.llm_requests.request_group_id`
+- API key attribution for compare now uses the same guardrails as chat:
+  - mapped key owner is authoritative
+  - unmapped key behavior controlled by `AUTO_REGISTER_UNMAPPED_API_KEYS` and `ALLOW_UNMAPPED_API_KEY_PERSIST`
+- Required DB migrations for compare persistence:
+  - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
+  - `db/migrations/20260218_add_request_group_id_to_llm_requests.sql`
+
 ## How to Enable Compare Mode
 
 ### Step 1: Edit your `.env` file
@@ -229,8 +244,9 @@ COMPARE_TARGETS = [
 - **Immutable Results**: All responses are stored immutably for consistency
 - **Order Preservation**: Results appear in the order configured, not completion order
 - **Graceful Degradation**: System continues even if some models fail
+- **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 
 ---
 
-**Last Updated:** 2026-01-06
+**Last Updated:** 2026-02-18
 **Applies To:** OpenAI Project v2.0+

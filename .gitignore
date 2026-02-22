@@ -36,6 +36,8 @@ logs/*.log
 logs/*.log.*
 tests/logs/*.log
 tests/logs/*.log.*
+tools/logs/*.log
+tools/logs/*.log.*
 
 # Test coverage
 .coverage
@@ -46,3 +48,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+/api/logs/app.log
+/orchestrator/logs/app.log
+/api/logs/error.log
+/orchestrator/logs/error.log

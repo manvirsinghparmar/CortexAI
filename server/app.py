@@ -1,5 +1,8 @@
 """FastAPI application factory."""
 
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +11,6 @@ from server.middleware import RequestIDMiddleware
 from server.routes import chat, compare, health, optimize, history
 from server.database import init_db
 from utils.logger import get_logger
-import os
 
 logger = get_logger(__name__)
 
@@ -35,7 +37,7 @@ def create_app() -> FastAPI:
         title="CortexAI API",
         description="Unified API for multiple AI providers",
         version="1.0.0",
-        lifespan=lifespan
+        lifespan=lifespan,
     )
 
     app.add_middleware(RequestIDMiddleware)

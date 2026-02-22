@@ -1,0 +1,18 @@
+# Linting & formatting
+ruff
+black
+
+# Typing
+mypy
+types-requests
+
+# Testing
+pytest
+pytest-cov
+
+# Security scanning
+pip-audit
+bandit
+
+# Git hooks (optional but recommended)
+pre-commit

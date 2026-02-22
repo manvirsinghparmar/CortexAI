@@ -5,11 +5,11 @@ All provider clients MUST inherit from this class and return UnifiedResponse.
 This enforces the "locked" contract across all providers.
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
-import uuid
 import time
-from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
+import uuid
+from abc import ABC, abstractmethod
+
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,17 +35,17 @@ class BaseAIClient(ABC):
             **kwargs: Additional model-specific parameters
         """
         self.api_key = api_key
-        self.model_name = kwargs.get('model_name')
-        self.provider_name = self.__class__.__name__.replace('Client', '').lower()
+        self.model_name = kwargs.get("model_name")
+        self.provider_name = self.__class__.__name__.replace("Client", "").lower()
 
     @abstractmethod
     def get_completion(
         self,
-        prompt: Optional[str] = None,
+        prompt: str | None = None,
         *,
-        messages: Optional[list] = None,
+        messages: list | None = None,
         save_full: bool = False,
-        **kwargs
+        **kwargs,
     ) -> UnifiedResponse:
         """
         Get a completion from the AI model.
@@ -90,10 +90,8 @@ class BaseAIClient(ABC):
     # ============================================================
 
     def _normalize_input(
-        self,
-        prompt: Optional[str] = None,
-        messages: Optional[List[Dict[str, str]]] = None
-    ) -> List[Dict[str, str]]:
+        self, prompt: str | None = None, messages: list[dict[str, str]] | None = None
+    ) -> list[dict[str, str]]:
         """
         Normalize input to messages format.
 
@@ -146,9 +144,7 @@ class BaseAIClient(ABC):
         return int((time.time() - start_time) * 1000)
 
     def _normalize_error(
-        self,
-        exception: Exception,
-        provider: Optional[str] = None
+        self, exception: Exception, provider: str | None = None
     ) -> NormalizedError:
         """
         Normalize provider-specific exceptions into standard error codes.
@@ -173,53 +169,62 @@ class BaseAIClient(ABC):
         exc_type = type(exception).__name__
 
         # Timeout errors
-        if 'timeout' in exc_str or 'timed out' in exc_str:
+        if "timeout" in exc_str or "timed out" in exc_str:
             return NormalizedError(
                 code="timeout",
                 message=f"Request timed out: {exception}",
                 provider=provider,
                 retryable=True,
-                details={"exception_type": exc_type}
+                details={"exception_type": exc_type},
             )
 
         # Authentication errors
-        if '401' in exc_str or '403' in exc_str or 'unauthorized' in exc_str or 'api key' in exc_str or 'authentication' in exc_str:
+        if (
+            "401" in exc_str
+            or "403" in exc_str
+            or "unauthorized" in exc_str
+            or "api key" in exc_str
+            or "authentication" in exc_str
+        ):
             return NormalizedError(
                 code="auth",
                 message=f"Authentication failed: {exception}",
                 provider=provider,
                 retryable=False,
-                details={"exception_type": exc_type}
+                details={"exception_type": exc_type},
             )
 
         # Rate limit errors
-        if '429' in exc_str or 'rate limit' in exc_str or 'too many requests' in exc_str:
+        if "429" in exc_str or "rate limit" in exc_str or "too many requests" in exc_str:
             return NormalizedError(
                 code="rate_limit",
                 message=f"Rate limit exceeded: {exception}",
                 provider=provider,
                 retryable=True,
-                details={"exception_type": exc_type}
+                details={"exception_type": exc_type},
             )
 
         # Bad request errors
-        if '400' in exc_str or 'bad request' in exc_str or 'invalid' in exc_str:
+        if "400" in exc_str or "bad request" in exc_str or "invalid" in exc_str:
             return NormalizedError(
                 code="bad_request",
                 message=f"Invalid request: {exception}",
                 provider=provider,
                 retryable=False,
-                details={"exception_type": exc_type}
+                details={"exception_type": exc_type},
             )
 
         # Provider errors (5xx)
-        if any(code in exc_str for code in ['500', '502', '503', '504']) or 'server error' in exc_str:
+        if (
+            any(code in exc_str for code in ["500", "502", "503", "504"])
+            or "server error" in exc_str
+        ):
             return NormalizedError(
                 code="provider_error",
                 message=f"Provider error: {exception}",
                 provider=provider,
                 retryable=True,
-                details={"exception_type": exc_type}
+                details={"exception_type": exc_type},
             )
 
         # Unknown error
@@ -228,14 +233,12 @@ class BaseAIClient(ABC):
             message=f"Unexpected error: {exception}",
             provider=provider,
             retryable=False,
-            details={"exception_type": exc_type}
+            details={"exception_type": exc_type},
         )
 
     def _normalize_finish_reason(
-        self,
-        provider_reason: Optional[str],
-        provider: Optional[str] = None
-    ) -> Optional[str]:
+        self, provider_reason: str | None, provider: str | None = None
+    ) -> str | None:
         """
         Normalize provider-specific finish reasons into standard codes.
 
@@ -260,38 +263,38 @@ class BaseAIClient(ABC):
         reason_lower = provider_reason.lower()
 
         # Natural completion
-        if reason_lower in ('stop', 'end_turn', 'complete', 'finished'):
+        if reason_lower in ("stop", "end_turn", "complete", "finished"):
             return "stop"
 
         # Max tokens/length
-        if 'length' in reason_lower or 'max_tokens' in reason_lower or 'token_limit' in reason_lower:
+        if (
+            "length" in reason_lower
+            or "max_tokens" in reason_lower
+            or "token_limit" in reason_lower
+        ):
             return "length"
 
         # Tool/function call
-        if 'tool' in reason_lower or 'function' in reason_lower:
+        if "tool" in reason_lower or "function" in reason_lower:
             return "tool"
 
         # Content filter
-        if 'content_filter' in reason_lower or 'safety' in reason_lower or 'policy' in reason_lower:
+        if "content_filter" in reason_lower or "safety" in reason_lower or "policy" in reason_lower:
             return "content_filter"
 
         # Error
-        if 'error' in reason_lower:
+        if "error" in reason_lower:
             return "error"
 
         # Unknown - log for debugging
         logger.debug(
             f"Unknown finish reason from {provider or self.provider_name}: {provider_reason}",
-            extra={"extra_fields": {"provider_reason": provider_reason}}
+            extra={"extra_fields": {"provider_reason": provider_reason}},
         )
         return None
 
     def _create_error_response(
-        self,
-        request_id: str,
-        error: NormalizedError,
-        latency_ms: int = 0,
-        model: Optional[str] = None
+        self, request_id: str, error: NormalizedError, latency_ms: int = 0, model: str | None = None
     ) -> UnifiedResponse:
         """
         Create a UnifiedResponse for error cases.
@@ -317,5 +320,5 @@ class BaseAIClient(ABC):
             estimated_cost=0.0,
             finish_reason="error",
             error=error,
-            metadata={}
+            metadata={},
         )

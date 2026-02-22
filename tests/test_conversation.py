@@ -8,6 +8,7 @@ Tests:
 """
 
 import sys
+
 from context.conversation_manager import ConversationManager
 
 
@@ -29,10 +30,10 @@ def test_conversation_manager():
     assert len(messages) == 4, "Should have 4 messages"
 
     print(f"   First message role: {messages[0]['role']} (expected: user)")
-    assert messages[0]['role'] == 'user', "First message should be from user"
+    assert messages[0]["role"] == "user", "First message should be from user"
 
     print(f"   Second message role: {messages[1]['role']} (expected: assistant)")
-    assert messages[1]['role'] == 'assistant', "Second message should be from assistant"
+    assert messages[1]["role"] == "assistant", "Second message should be from assistant"
 
     print("   [PASS] Basic functionality works!")
 
@@ -46,8 +47,8 @@ def test_conversation_manager():
     assert len(messages) == 5, "Should have trimmed to 5 messages"
 
     print(f"   First message content: '{messages[0]['content'][:30]}...'")
-    print(f"   (Should NOT contain 'Hello!' anymore)")
-    assert "Hello!" not in messages[0]['content'], "First message should have been trimmed"
+    print("   (Should NOT contain 'Hello!' anymore)")
+    assert "Hello!" not in messages[0]["content"], "First message should have been trimmed"
 
     print("   [PASS] Auto-trimming works!")
 
@@ -58,7 +59,7 @@ def test_conversation_manager():
 
     print(f"   Removed message role: {removed['role']} (expected: user)")
     print(f"   Removed message content: '{removed['content']}'")
-    assert removed['role'] == 'user', "Should have removed a user message"
+    assert removed["role"] == "user", "Should have removed a user message"
 
     final_count = len(conv.get_messages())
     print(f"   Message count after pop: {final_count} (expected: {initial_count - 1})")
@@ -77,32 +78,36 @@ def test_conversation_manager():
 
     # Test 5: System prompt preservation
     print("\n5. Testing system prompt preservation:")
-    conv_with_system = ConversationManager(max_messages=5, system_prompt="You are a helpful assistant.")
+    conv_with_system = ConversationManager(
+        max_messages=5, system_prompt="You are a helpful assistant."
+    )
 
     messages = conv_with_system.get_messages()
     print(f"   Message count with system prompt: {len(messages)} (expected: 1)")
     assert len(messages) == 1, "Should have 1 system message"
 
     print(f"   System message role: {messages[0]['role']} (expected: system)")
-    assert messages[0]['role'] == 'system', "First message should be system"
+    assert messages[0]["role"] == "system", "First message should be system"
 
     conv_with_system.add_user("Test")
     conv_with_system.add_assistant("Response")
 
-    print(f"   Message count after adding user/assistant: {conv_with_system.get_message_count()} (expected: 3)")
+    print(
+        f"   Message count after adding user/assistant: {conv_with_system.get_message_count()} (expected: 3)"
+    )
     assert conv_with_system.get_message_count() == 3, "Should have 3 messages total"
 
     conv_with_system.reset(keep_system_prompt=True)
     messages = conv_with_system.get_messages()
     print(f"   Message count after reset (keep_system_prompt=True): {len(messages)} (expected: 1)")
     assert len(messages) == 1, "Should still have system message"
-    assert messages[0]['role'] == 'system', "Should still have system message"
+    assert messages[0]["role"] == "system", "Should still have system message"
 
     print("   [PASS] System prompt preservation works!")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("[PASS] All ConversationManager tests passed!")
-    print("="*50)
+    print("=" * 50)
 
 
 def test_message_format():
@@ -118,16 +123,16 @@ def test_message_format():
     print("\n1. Checking message structure:")
     for i, msg in enumerate(messages):
         print(f"   Message {i+1}: {msg}")
-        assert 'role' in msg, "Message should have 'role' field"
-        assert 'content' in msg, "Message should have 'content' field"
-        assert msg['role'] in ['user', 'assistant', 'system'], "Role should be valid"
-        assert isinstance(msg['content'], str), "Content should be string"
+        assert "role" in msg, "Message should have 'role' field"
+        assert "content" in msg, "Message should have 'content' field"
+        assert msg["role"] in ["user", "assistant", "system"], "Role should be valid"
+        assert isinstance(msg["content"], str), "Content should be string"
 
     print("   [PASS] Message format is correct!")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("[PASS] All message format tests passed!")
-    print("="*50)
+    print("=" * 50)
 
 
 def test_conversation_summary():
@@ -148,9 +153,9 @@ def test_conversation_summary():
 
     print("\n   [PASS] Conversation summary works!")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("[PASS] All conversation summary tests passed!")
-    print("="*50)
+    print("=" * 50)
 
 
 if __name__ == "__main__":
@@ -159,9 +164,9 @@ if __name__ == "__main__":
         test_message_format()
         test_conversation_summary()
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("[SUCCESS] ALL TESTS PASSED! Multi-turn conversation support is working!")
-        print("="*70)
+        print("=" * 70)
         sys.exit(0)
 
     except AssertionError as e:
@@ -170,5 +175,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[ERROR] ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

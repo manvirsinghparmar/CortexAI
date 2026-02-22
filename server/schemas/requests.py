@@ -10,8 +10,8 @@ class ConversationHistoryItem(BaseModel):
 
 
 class UserContextRequest(BaseModel):
-    session_id: Optional[str] = None
-    conversation_history: Optional[List[ConversationHistoryItem]] = None
+    session_id: str | None = None
+    conversation_history: list[ConversationHistoryItem] | None = None
 
 
 class ChatRoutingRequest(BaseModel):
@@ -37,7 +37,7 @@ class ChatRequest(BaseModel):
 
 class CompareTargetRequest(BaseModel):
     provider: str = Field(..., pattern="^(openai|gemini|deepseek|grok)$")
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class CompareRequest(BaseModel):

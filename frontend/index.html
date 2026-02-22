@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CortexAI - Compare AI Responses Side by Side</title>
+    <meta name="description"
+        content="Compare AI model responses side by side. Single chat or multi-model comparison powered by CortexAI." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+    <div class="compact-bar" id="compactBar" aria-hidden="true">
+        <div class="compact-bar-inner">
+            <div class="compact-logo">
+                <span class="compact-logo-text">CortexAI</span>
+            </div>
+            <div class="compact-mode-toggle">
+                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Ask</button>
+                <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">Compare</button>
+            </div>
+            <div class="compact-model-info" id="compactModelInfo"></div>
+            <button class="compact-send-btn" id="compactSendBtn">
+                <span class="btn-icon">&uarr;</span> Send
+            </button>
+        </div>
+    </div>
+
+    <header class="header" id="mainHeader">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-text">CortexAI</span>
+            </div>
+            <div class="header-right">
+                <button class="top-nav-link" type="button">History</button>
+                <button class="top-nav-link" type="button">Settings</button>
+                <button class="top-nav-link" type="button">Profile</button>
+            </div>
+        </div>
+    </header>
+
+    <aside class="history-sidebar" id="historySidebar" aria-label="Chat history">
+        <div class="history-sidebar-header">
+            <div class="history-sidebar-title">
+                <span>History</span>
+            </div>
+            <div class="history-sidebar-actions">
+                <button class="history-clear-btn" id="historyClearAllBtn" title="Clear all history">Clear All</button>
+            </div>
+        </div>
+        <div class="history-search-wrap">
+            <input type="text" id="historySearch" class="history-search" placeholder="Search history..."
+                aria-label="Search history" />
+        </div>
+        <ul class="history-list" id="historyList" role="list"></ul>
+        <div class="history-empty" id="historyEmpty">
+            <div class="history-empty-icon">Chat</div>
+            <p>No history yet.<br>Send a prompt to get started.</p>
+        </div>
+    </aside>
+
+    <main class="main" id="workspace">
+
+        <section class="results-section hidden" id="resultsSection" aria-live="polite" aria-label="AI responses">
+            <div class="results-header">
+                <h2 class="results-title">Responses</h2>
+                <button class="btn-clear" id="clearBtn" title="Clear results">Clear</button>
+            </div>
+            <div class="results-grid" id="resultsGrid"></div>
+        </section>
+
+        <div class="card prompt-card" id="promptCard">
+            <div class="composer-toolbar" id="composerToolbar" role="group" aria-label="Prompt routing controls">
+                <div class="composer-toolbar-row">
+                    <div class="mode-toggle toolbar-mode-toggle" role="tablist" aria-label="Chat mode">
+                        <button class="mode-btn active" id="btnSingleMode" role="tab" aria-selected="true"
+                            data-mode="single">
+                            Ask
+                        </button>
+                        <button class="mode-btn" id="btnCompareMode" role="tab" aria-selected="false"
+                            data-mode="compare">
+                            Compare
+                        </button>
+                    </div>
+                    <div class="composer-toolbar-left feature-strip" id="singleRoutingControls">
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
+                                aria-checked="true" aria-label="Auto (Recommended)"
+                                aria-describedby="smartRoutingTooltip">
+                                Auto (Recommended)
+                            </button>
+                            <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
+                                Automatically selects the best model based on quality, speed, and cost.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#127760;</span>
+                                <span>Web</span>
+                            </button>
+                            <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
+                                Searches the internet and includes citations.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
+                                <span>Rewrite</span>
+                            </button>
+                            <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
+                                Improves your prompt before sending.
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="toolbar-model-group hidden" id="singleModelWrap">
+                    <label class="sr-only" for="singleModel">Manual model selection</label>
+                    <span class="toolbar-model-label" id="singleModelLabel">Using:</span>
+                    <select id="singleModel" class="model-select toolbar-model-select" aria-label="Using: ChatGPT">
+                        <option value="openai:gpt-4o">ChatGPT</option>
+                    </select>
+                </div>
+                <div class="toolbar-compare-group hidden" id="compareModelWrap" aria-label="Compare model selectors">
+                    <span class="toolbar-compare-label">Compare:</span>
+                    <label class="sr-only" for="compareModel1">Compare model 1</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel1"></select>
+                    <span class="toolbar-compare-sep">vs</span>
+                    <label class="sr-only" for="compareModel2">Compare model 2</label>
+                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel2"></select>
+                    <span class="toolbar-compare-third hidden" id="compareModel3Wrap">
+                        <span class="toolbar-compare-sep">vs</span>
+                        <label class="sr-only" for="compareModel3">Compare model 3</label>
+                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel3"></select>
+                    </span>
+                    <button class="toolbar-add-model-btn" id="compareAddModelBtn" type="button" aria-expanded="false">
+                        + Add Model
+                    </button>
+                </div>
+            </div>
+            <div class="prompt-input-wrap">
+                <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything... your models are ready."
+                    rows="1" aria-label="Prompt input"></textarea>
+                <button class="btn-submit btn-submit-inline" id="submitBtn" aria-label="Send message">
+                    <span class="btn-icon">&uarr;</span>
+                </button>
+            </div>
+            <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
+            <div class="prompt-footer">
+                <div class="prompt-footer-left">
+                    <button class="btn-opt-view hidden" id="optViewBtn"
+                        title="See what prompt was actually sent to the LLM">
+                        View Optimized
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="opt-panel hidden" id="optPanel" role="region" aria-label="Optimized prompt view">
+            <div class="opt-panel-header">
+                <span class="opt-panel-title">Prompt Optimization - what went to the LLM</span>
+                <button class="opt-panel-close" id="optPanelClose" aria-label="Close">X</button>
+            </div>
+            <div class="opt-panel-body">
+                <div class="opt-col">
+                    <div class="opt-col-label">YOUR ORIGINAL</div>
+                    <div class="opt-col-text" id="optOriginalText"></div>
+                </div>
+                <div class="opt-col opt-col-right">
+                    <div class="opt-col-label">OPTIMIZED</div>
+                    <div class="opt-col-text" id="optOptimizedText"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="examples-section">
+            <p class="examples-title">TRY AN EXAMPLE</p>
+            <div class="examples-chips">
+                <button class="chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing
+                    in simple terms</button>
+                <button class="chip" data-prompt="Write a haiku about artificial intelligence">Write a haiku about
+                    artificial intelligence</button>
+                <button class="chip" data-prompt="What are the pros and cons of remote work?">Pros and cons of remote
+                    work?</button>
+                <button class="chip" data-prompt="Explain the difference between SQL and NoSQL databases">SQL vs NoSQL
+                    databases</button>
+                <button class="chip" data-prompt="What is the best way to learn a new programming language?">How to
+                    learn a programming language?</button>
+            </div>
+        </div>
+
+        <div class="error-banner hidden" id="errorBanner" role="alert">
+            <span class="error-icon">!</span>
+            <span id="errorMsg">Something went wrong.</span>
+            <button class="error-close" id="errorClose" aria-label="Dismiss error">X</button>
+        </div>
+
+    </main>
+
+    <footer class="footer">
+        <p>CortexAI - Unified AI Comparison Engine</p>
+    </footer>
+
+    <script src="smart-routing-state.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
+

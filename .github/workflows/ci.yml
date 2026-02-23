@@ -43,9 +43,9 @@ jobs:
       - name: MyPy (type check)
         run: mypy . --explicit-package-bases
 
-      # ---- Tests (fast tests only) ----
-      - name: Pytest
-        run: python -m pytest tests -m "not integration"
+      # ---- Release gate ----
+      - name: Release gate (compile + pytest + DB smoke)
+        run: python scripts/release_gate.py
 
       # ---- Security ----
       - name: pip-audit (dependency vulnerabilities)

@@ -1,7 +1,7 @@
 """
 Model pricing configuration.
 All prices are in USD per million tokens.
-Prices are updated as of January 2026.
+Prices are updated as of February 2026.
 """
 
 
@@ -15,8 +15,8 @@ class ModelPricing:
         "gpt-4.1": {"input": 2.00, "output": 8.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         "gpt-4o": {"input": 2.50, "output": 10.00},
-        "gpt-5.1": {"input": 2.00, "output": 8.00},
-        "gpt-5.2-codex": {"input": 6.00, "output": 18.00},
+        "gpt-5.1": {"input": 1.25, "output": 10.00},
+        "gpt-5.2-codex": {"input": 1.75, "output": 14.00},
         # GPT-4 Models
         "gpt-4": {"input": 30.00, "output": 60.00},
         "gpt-4-32k": {"input": 60.00, "output": 120.00},
@@ -36,29 +36,31 @@ class ModelPricing:
     }
 
     # Google Gemini Models Pricing (per million tokens)
+    # Note: Gemini 2.5 pricing is tiered by prompt size; these are <=200k token rates.
     GEMINI_PRICING = {
         "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
         "gemini-1.5-flash-8b": {"input": 0.0375, "output": 0.15},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
         "gemini-2.0-flash-exp": {"input": 0.00, "output": 0.00},  # Free during preview
-        "gemini-2.5-flash": {"input": 0.30, "output": 1.20},
-        "gemini-2.5-flash-lite": {"input": 0.05, "output": 0.20},
-        "gemini-2.5-pro": {"input": 1.25, "output": 5.00},
+        "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+        "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+        "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
         "gemini-1.0-pro": {"input": 0.50, "output": 1.50},
         "gemini-1.0-pro-001": {"input": 0.50, "output": 1.50},
     }
 
     # DeepSeek Models Pricing (per million tokens)
+    # Note: uses current cache-miss input pricing for a simple one-rate estimator.
     DEEPSEEK_PRICING = {
-        "deepseek-chat": {"input": 0.27, "output": 1.10},
-        "deepseek-reasoner": {"input": 0.55, "output": 2.19},
+        "deepseek-chat": {"input": 0.28, "output": 0.42},
+        "deepseek-reasoner": {"input": 0.28, "output": 0.42},
     }
 
     # Grok Models Pricing (per million tokens)
     GROK_PRICING = {
-        "grok-4-latest": {"input": 5.00, "output": 15.00},
-        "grok-4-1-fast-non-reasoning": {"input": 2.00, "output": 8.00},
-        "grok-4-1-fast-reasoning": {"input": 3.00, "output": 12.00},
+        "grok-4-latest": {"input": 3.00, "output": 15.00},
+        "grok-4-1-fast-non-reasoning": {"input": 0.20, "output": 0.50},
+        "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},
         "grok-2": {"input": 2.00, "output": 10.00},
         "grok-2-mini": {"input": 0.50, "output": 2.50},
     }

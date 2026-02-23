@@ -3,19 +3,27 @@
 import asyncio
 import json
 import os
-from fastapi import APIRouter, Depends
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from orchestrator.core import CortexOrchestrator
+
 from models.user_context import UserContext
+from orchestrator.core import CortexOrchestrator
+from server.dependencies import get_api_key, get_orchestrator
+from server import persistence as persistence_service
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
-from server.dependencies import get_api_key, get_orchestrator
-from server.utils import validate_and_trim_context, clamp_max_tokens
+from server.utils import clamp_max_tokens, validate_and_trim_context
+from utils.logger import get_logger
 from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
 STREAM_LINE_DELAY_S = 0.1
+API_DB_ENABLED = persistence_service.API_DB_ENABLED
+
+logger = get_logger(__name__)
 
 DEFAULT_MODELS = {
     "openai": "gpt-4o",
@@ -23,6 +31,13 @@ DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "grok": "grok-4-latest",
 }
+
+ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
+_resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
+_enforce_usage_caps = persistence_service.enforce_usage_caps
+_resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
+_persist_chat_interaction = persistence_service.persist_chat_interaction
+_resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
 
 
 def _default_model_for_provider(provider: str) -> str:
@@ -114,8 +129,9 @@ def _to_ndjson(event: dict) -> str:
 @router.post("/chat", response_model=ChatResponseDTO)
 async def chat(
     request: ChatRequest,
+    http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
@@ -128,11 +144,23 @@ async def chat(
     )
     target_provider, target_model = _resolve_chat_target(request)
 
+    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    provider_api_keys: dict[str, str] = {}
+    if API_DB_ENABLED:
+        req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        provider_api_keys = _resolve_runtime_byok_provider_keys(
+            resolution=persistence_resolution,
+            providers=[target_provider],
+        )
+
     kwargs = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    if provider_api_keys:
+        kwargs["provider_api_keys"] = provider_api_keys
 
     response = await asyncio.to_thread(
         orchestrator.ask,
@@ -141,26 +169,40 @@ async def chat(
         context=context,
         model_name=target_model,
         token_tracker=None,
-        **kwargs
+        **kwargs,
     )
 
     dto = ChatResponseDTO.from_unified_response(response)
 
-    # Persist to history DB (best-effort — don't fail the request if it errors)
-    try:
-        from server.database import save_chat
-        save_chat(
-            prompt=request.prompt,
-            provider=dto.provider,
-            model=dto.model,
-            response=dto.text,
-            latency_ms=dto.latency_ms,
-            tokens=dto.token_usage.total_tokens if dto.token_usage else None,
-            cost=dto.estimated_cost,
-            mode="chat",
-        )
-    except Exception:
-        pass
+    if API_DB_ENABLED and persistence_resolution is not None:
+        try:
+            _persist_chat_interaction(
+                api_key=api_key,
+                resolution=persistence_resolution,
+                prompt=request.prompt,
+                response=response,
+                requested_session_id=request.context.session_id if request.context else None,
+                research_mode=research_mode,
+            )
+        except Exception:
+            logger.exception("Chat persistence failed in DB mode")
+    else:
+        # Legacy/local fallback when DATABASE_URL is not configured.
+        try:
+            from server.database import save_chat
+
+            save_chat(
+                prompt=request.prompt,
+                provider=dto.provider,
+                model=dto.model,
+                response=dto.text,
+                latency_ms=dto.latency_ms,
+                tokens=dto.token_usage.total_tokens if dto.token_usage else None,
+                cost=dto.estimated_cost,
+                mode="chat",
+            )
+        except Exception:
+            pass
 
     return dto
 
@@ -168,8 +210,9 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
+    http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """Stream a single-model chat response as NDJSON events."""
     request.context = validate_and_trim_context(request.context)
@@ -182,22 +225,36 @@ async def chat_stream(
     )
     target_provider, target_model = _resolve_chat_target(request)
 
+    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    provider_api_keys: dict[str, str] = {}
+    if API_DB_ENABLED:
+        req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        provider_api_keys = _resolve_runtime_byok_provider_keys(
+            resolution=persistence_resolution,
+            providers=[target_provider],
+        )
+
     kwargs = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    if provider_api_keys:
+        kwargs["provider_api_keys"] = provider_api_keys
 
     async def event_stream():
-        yield _to_ndjson({
-            "type": "start",
-            "mode": "chat",
-            "provider": target_provider,
-            "model": target_model,
-            "research_mode": research_mode,
-            "web_sources": research_meta.get("source_count", 0),
-            "web_source_items": research_meta.get("sources", []),
-        })
+        yield _to_ndjson(
+            {
+                "type": "start",
+                "mode": "chat",
+                "provider": target_provider,
+                "model": target_model,
+                "research_mode": research_mode,
+                "web_sources": research_meta.get("source_count", 0),
+                "web_source_items": research_meta.get("sources", []),
+            }
+        )
 
         try:
             response = await asyncio.to_thread(
@@ -207,7 +264,7 @@ async def chat_stream(
                 context=context,
                 model_name=target_model,
                 token_tracker=None,
-                **kwargs
+                **kwargs,
             )
 
             dto = ChatResponseDTO.from_unified_response(response)
@@ -219,30 +276,65 @@ async def chat_stream(
                 yield _to_ndjson({"type": "line", "index": 0, "text": line})
                 await asyncio.sleep(STREAM_LINE_DELAY_S)
 
-            yield _to_ndjson({
-                "type": "response_done",
-                "index": 0,
-                "response": jsonable_encoder(dto),
-            })
+            yield _to_ndjson(
+                {
+                    "type": "response_done",
+                    "index": 0,
+                    "response": jsonable_encoder(dto),
+                }
+            )
             yield _to_ndjson({"type": "done", "mode": "chat"})
 
-            # Persist to history DB (best-effort — don't fail stream if it errors)
-            try:
-                from server.database import save_chat
-                save_chat(
-                    prompt=request.prompt,
-                    provider=dto.provider,
-                    model=dto.model,
-                    response=dto.text,
-                    latency_ms=dto.latency_ms,
-                    tokens=dto.token_usage.total_tokens if dto.token_usage else None,
-                    cost=dto.estimated_cost,
-                    mode="chat",
-                )
-            except Exception:
-                pass
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    _persist_chat_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
+                        prompt=request.prompt,
+                        response=response,
+                        requested_session_id=request.context.session_id if request.context else None,
+                        research_mode=research_mode,
+                    )
+                except Exception:
+                    logger.exception("Chat stream persistence failed in DB mode")
+            else:
+                # Legacy/local fallback when DATABASE_URL is not configured.
+                try:
+                    from server.database import save_chat
+
+                    save_chat(
+                        prompt=request.prompt,
+                        provider=dto.provider,
+                        model=dto.model,
+                        response=dto.text,
+                        latency_ms=dto.latency_ms,
+                        tokens=dto.token_usage.total_tokens if dto.token_usage else None,
+                        cost=dto.estimated_cost,
+                        mode="chat",
+                    )
+                except Exception:
+                    pass
 
         except Exception as exc:
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    error_response = persistence_service.build_error_response(
+                        provider=target_provider,
+                        model=target_model,
+                        message=str(exc),
+                        code="provider_error",
+                        retryable=True,
+                    )
+                    _persist_chat_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
+                        prompt=request.prompt,
+                        response=error_response,
+                        requested_session_id=request.context.session_id if request.context else None,
+                        research_mode=research_mode,
+                    )
+                except Exception:
+                    logger.exception("Chat stream error persistence failed in DB mode")
             yield _to_ndjson({"type": "error", "message": str(exc)})
 
     return StreamingResponse(

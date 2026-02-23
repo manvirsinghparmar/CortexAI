@@ -9,11 +9,25 @@ Design principles:
 """
 
 import hashlib
-from datetime import date
+import zlib
+from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, desc, func, insert, select, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    cast,
+    delete,
+    desc,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # For UPSERT
 from sqlalchemy.orm import Session
 
@@ -676,7 +690,7 @@ def create_llm_request(
     }
     column_names = {col.name for col in llm_requests.columns}
     if "request_group_id" in column_names:
-        values["request_group_id"] = request_group_id
+        values["request_group_id"] = str(request_group_id) if request_group_id is not None else None
 
     stmt = insert(llm_requests).values(**values).returning(llm_requests.c.id)
 
@@ -1052,6 +1066,122 @@ def create_routing_attempts(
     return processed
 
 
+def get_failed_routing_attempts_by_request_group(
+    db: Session,
+    user_id: UUID,
+    request_group_id: UUID,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    Return failed routing attempts for one compare request group scoped to one user.
+
+    Failure rows are defined as attempts where validation != 'ok' or an explicit error
+    type/message is present.
+    """
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    routing_decisions = get_table("routing_decisions")
+    routing_attempts = get_table("routing_attempts")
+
+    req_cols = {col.name for col in llm_requests.columns}
+    attempt_cols = {col.name for col in routing_attempts.columns}
+
+    if "request_group_id" not in req_cols:
+        return []
+
+    failure_conditions = []
+    if "validation" in attempt_cols:
+        failure_conditions.append(
+            func.lower(func.coalesce(routing_attempts.c.validation, "")) != "ok"
+        )
+    if "error_type" in attempt_cols:
+        failure_conditions.append(routing_attempts.c.error_type.is_not(None))
+    if "error_message" in attempt_cols:
+        failure_conditions.append(routing_attempts.c.error_message.is_not(None))
+    if not failure_conditions:
+        return []
+
+    request_created_expr = (
+        llm_requests.c.created_at if "created_at" in req_cols else llm_requests.c.id
+    )
+    attempt_number_expr = (
+        routing_attempts.c.attempt_number
+        if "attempt_number" in attempt_cols
+        else literal(0)
+    )
+
+    group_text_expr = func.lower(cast(llm_requests.c.request_group_id, String))
+    request_group_match = or_(
+        group_text_expr == str(request_group_id).lower(),
+        func.replace(group_text_expr, "-", "") == request_group_id.hex.lower(),
+    )
+
+    stmt = (
+        select(
+            llm_requests.c.request_id.label("request_id"),
+            llm_requests.c.request_group_id.label("request_group_id"),
+            attempt_number_expr.label("attempt_number"),
+            (
+                routing_attempts.c.tier if "tier" in attempt_cols else literal(None)
+            ).label("tier"),
+            (
+                routing_attempts.c.provider if "provider" in attempt_cols else literal(None)
+            ).label("provider"),
+            (
+                routing_attempts.c.model if "model" in attempt_cols else literal(None)
+            ).label("model"),
+            (
+                routing_attempts.c.validation if "validation" in attempt_cols else literal(None)
+            ).label("validation"),
+            (
+                routing_attempts.c.latency_ms if "latency_ms" in attempt_cols else literal(None)
+            ).label("latency_ms"),
+            (
+                routing_attempts.c.error_type if "error_type" in attempt_cols else literal(None)
+            ).label("error_type"),
+            (
+                routing_attempts.c.error_message if "error_message" in attempt_cols else literal(None)
+            ).label("error_message"),
+        )
+        .select_from(
+            llm_requests.join(
+                routing_decisions,
+                routing_decisions.c.llm_request_id == llm_requests.c.id,
+            ).join(
+                routing_attempts,
+                routing_attempts.c.routing_decision_id == routing_decisions.c.id,
+            )
+        )
+        .where(
+            and_(
+                llm_requests.c.user_id == user_id,
+                request_group_match,
+                or_(*failure_conditions),
+            )
+        )
+        .order_by(desc(request_created_expr), attempt_number_expr)
+        .limit(max(1, int(limit)))
+    )
+
+    rows = db.execute(stmt).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row._mapping)
+        group_value = payload.get("request_group_id")
+        if group_value is not None:
+            payload["request_group_id"] = str(group_value)
+        if payload.get("attempt_number") is not None:
+            try:
+                payload["attempt_number"] = int(payload["attempt_number"])
+            except Exception:
+                pass
+        result.append(payload)
+
+    return result
+
+
 # ============================================================================
 # USAGE TRACKING & ENFORCEMENT
 # ============================================================================
@@ -1195,6 +1325,636 @@ def check_usage_limit(
 
     # Allowed
     return {"allowed": True, "current_tokens": current_tokens, "current_cost": current_cost}
+
+
+# ============================================================================
+# B2B SETTINGS / BYOK / SAVINGS / REPORTING
+# ============================================================================
+
+
+def get_api_key_settings(db: Session, api_key_id: UUID) -> dict[str, Any] | None:
+    """Fetch per-api-key settings row."""
+    from db.tables import get_table
+
+    api_key_settings = get_table("api_key_settings")
+    stmt = select(api_key_settings).where(api_key_settings.c.api_key_id == api_key_id)
+    row = db.execute(stmt).first()
+    if row:
+        return dict(row._mapping)
+    return None
+
+
+def upsert_api_key_settings(
+    db: Session,
+    *,
+    api_key_id: UUID,
+    baseline_provider: str | None = None,
+    baseline_model: str | None = None,
+    requests_per_minute: int | None = None,
+) -> None:
+    """Create/update per-api-key settings."""
+    from db.tables import get_table
+
+    api_key_settings = get_table("api_key_settings")
+    payload: dict[str, Any] = {
+        "api_key_id": api_key_id,
+        "baseline_provider": baseline_provider,
+        "baseline_model": baseline_model,
+        "requests_per_minute": requests_per_minute,
+    }
+
+    stmt = pg_insert(api_key_settings).values(**payload).on_conflict_do_update(
+        index_elements=["api_key_id"],
+        set_={
+            "baseline_provider": payload["baseline_provider"],
+            "baseline_model": payload["baseline_model"],
+            "requests_per_minute": payload["requests_per_minute"],
+            "updated_at": func.now(),
+        },
+    )
+    db.execute(stmt)
+
+
+def upsert_byok_provider_key(
+    db: Session,
+    *,
+    api_key_id: UUID,
+    provider: str,
+    encrypted_key: str,
+    key_fingerprint: str,
+    key_last4: str | None = None,
+) -> None:
+    """Upsert encrypted BYOK provider credential for one API key."""
+    from db.tables import get_table
+
+    byok_provider_keys = get_table("byok_provider_keys")
+    provider_norm = (provider or "").strip().lower()
+    payload = {
+        "api_key_id": api_key_id,
+        "provider": provider_norm,
+        "encrypted_key": encrypted_key,
+        "key_fingerprint": key_fingerprint,
+        "key_last4": key_last4,
+    }
+    stmt = pg_insert(byok_provider_keys).values(**payload).on_conflict_do_update(
+        index_elements=["api_key_id", "provider"],
+        set_={
+            "encrypted_key": payload["encrypted_key"],
+            "key_fingerprint": payload["key_fingerprint"],
+            "key_last4": payload["key_last4"],
+            "updated_at": func.now(),
+        },
+    )
+    db.execute(stmt)
+
+
+def get_byok_provider_key(db: Session, *, api_key_id: UUID, provider: str) -> dict[str, Any] | None:
+    """Fetch one encrypted BYOK provider row."""
+    from db.tables import get_table
+
+    byok_provider_keys = get_table("byok_provider_keys")
+    stmt = select(byok_provider_keys).where(
+        and_(
+            byok_provider_keys.c.api_key_id == api_key_id,
+            byok_provider_keys.c.provider == (provider or "").strip().lower(),
+        )
+    )
+    row = db.execute(stmt).first()
+    if row:
+        return dict(row._mapping)
+    return None
+
+
+def list_byok_provider_keys(db: Session, *, api_key_id: UUID) -> list[dict[str, Any]]:
+    """List encrypted BYOK rows for one API key."""
+    from db.tables import get_table
+
+    byok_provider_keys = get_table("byok_provider_keys")
+    stmt = (
+        select(byok_provider_keys)
+        .where(byok_provider_keys.c.api_key_id == api_key_id)
+        .order_by(byok_provider_keys.c.provider)
+    )
+    rows = db.execute(stmt).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def delete_byok_provider_keys(
+    db: Session, *, api_key_id: UUID, provider: str | None = None
+) -> int:
+    """Delete BYOK rows for one API key (single provider or all)."""
+    from db.tables import get_table
+
+    byok_provider_keys = get_table("byok_provider_keys")
+    where_clause = byok_provider_keys.c.api_key_id == api_key_id
+    if provider:
+        where_clause = and_(
+            where_clause,
+            byok_provider_keys.c.provider == provider.strip().lower(),
+        )
+
+    result = db.execute(delete(byok_provider_keys).where(where_clause))
+    return int(result.rowcount or 0)
+
+
+def upsert_llm_savings(
+    db: Session,
+    *,
+    llm_request_id: UUID,
+    user_id: UUID,
+    api_key_id: UUID | None,
+    provider: str,
+    model: str,
+    actual_cost: float,
+    baseline_provider: str,
+    baseline_model: str,
+    baseline_cost: float,
+    savings_amount: float,
+    savings_pct: float,
+    response_status: str = "success",
+    error_code: str | None = None,
+    usage_date: date | None = None,
+) -> None:
+    """Upsert per-request savings telemetry."""
+    from db.tables import get_table
+
+    llm_savings = get_table("llm_savings")
+    cols = {col.name for col in llm_savings.columns}
+    payload: dict[str, Any] = {
+        "llm_request_id": llm_request_id,
+        "user_id": user_id,
+        "api_key_id": api_key_id,
+        "usage_date": usage_date or date.today(),
+        "provider": provider,
+        "model": model,
+        "actual_cost": float(actual_cost or 0.0),
+        "baseline_provider": baseline_provider,
+        "baseline_model": baseline_model,
+        "baseline_cost": float(baseline_cost or 0.0),
+        "savings_amount": float(savings_amount or 0.0),
+        "savings_pct": float(savings_pct or 0.0),
+    }
+    if "response_status" in cols:
+        payload["response_status"] = (response_status or "success").strip().lower()
+    if "error_code" in cols:
+        payload["error_code"] = error_code
+
+    stmt = pg_insert(llm_savings).values(**payload).on_conflict_do_update(
+        index_elements=["llm_request_id"],
+        set_={k: v for k, v in payload.items() if k != "llm_request_id"},
+    )
+    db.execute(stmt)
+
+
+def _apply_date_range_filters(
+    stmt,
+    *,
+    created_col,
+    date_from: date | None,
+    date_to: date | None,
+):
+    if created_col is None:
+        return stmt
+
+    if date_from is not None:
+        stmt = stmt.where(created_col >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(created_col < (date_to + timedelta(days=1)))
+    return stmt
+
+
+def get_usage_aggregates(
+    db: Session,
+    *,
+    user_id: UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    group_by: str = "day",
+) -> list[dict[str, Any]]:
+    """
+    Aggregate usage from llm_requests/llm_responses for a user.
+
+    Returns rows with keys: bucket, requests, tokens, cost.
+    """
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+
+    req_cols = {col.name for col in llm_requests.columns}
+    resp_cols = {col.name for col in llm_responses.columns}
+
+    created_col = llm_requests.c.created_at if "created_at" in req_cols else None
+    provider_col = llm_requests.c.provider if "provider" in req_cols else None
+    model_col = llm_requests.c.model if "model" in req_cols else None
+    tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
+    cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
+
+    group = (group_by or "day").strip().lower()
+    if group == "provider":
+        bucket_expr = provider_col if provider_col is not None else literal("unknown")
+    elif group == "model":
+        bucket_expr = model_col if model_col is not None else literal("unknown")
+    else:
+        group = "day"
+        if created_col is not None:
+            bucket_expr = func.date(created_col)
+        else:
+            bucket_expr = literal("unknown")
+
+    stmt = (
+        select(
+            bucket_expr.label("bucket"),
+            func.count(llm_requests.c.id).label("requests"),
+            (
+                func.coalesce(func.sum(tokens_col), 0).label("tokens")
+                if tokens_col is not None
+                else literal(0).label("tokens")
+            ),
+            (
+                func.coalesce(func.sum(cost_col), 0.0).label("cost")
+                if cost_col is not None
+                else literal(0.0).label("cost")
+            ),
+        )
+        .select_from(
+            llm_requests.outerjoin(
+                llm_responses,
+                llm_responses.c.llm_request_id == llm_requests.c.id,
+            )
+        )
+        .where(llm_requests.c.user_id == user_id)
+        .group_by(bucket_expr)
+        .order_by(bucket_expr)
+    )
+
+    stmt = _apply_date_range_filters(
+        stmt,
+        created_col=created_col,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    rows = db.execute(stmt).fetchall()
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row._mapping)
+        bucket_value = item.get("bucket")
+        if group == "day" and bucket_value is not None:
+            bucket_value = str(bucket_value)
+        payload.append(
+            {
+                "bucket": bucket_value if bucket_value is not None else "unknown",
+                "requests": int(item.get("requests") or 0),
+                "tokens": int(item.get("tokens") or 0),
+                "cost": float(item.get("cost") or 0.0),
+            }
+        )
+    return payload
+
+
+def get_savings_aggregates(
+    db: Session,
+    *,
+    user_id: UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    group_by: str = "day",
+) -> list[dict[str, Any]]:
+    """
+    Aggregate savings from llm_savings for a user.
+
+    Returns rows with keys:
+    bucket, requests, actual_cost, baseline_cost, savings_amount, savings_pct.
+    """
+    from db.tables import get_table
+
+    llm_savings = get_table("llm_savings")
+    cols = {col.name for col in llm_savings.columns}
+
+    usage_date_col = llm_savings.c.usage_date if "usage_date" in cols else None
+    provider_col = llm_savings.c.provider if "provider" in cols else None
+    model_col = llm_savings.c.model if "model" in cols else None
+    actual_col = llm_savings.c.actual_cost if "actual_cost" in cols else None
+    baseline_col = llm_savings.c.baseline_cost if "baseline_cost" in cols else None
+    savings_col = llm_savings.c.savings_amount if "savings_amount" in cols else None
+    status_col = llm_savings.c.response_status if "response_status" in cols else None
+
+    group = (group_by or "day").strip().lower()
+    if group == "provider":
+        bucket_expr = provider_col if provider_col is not None else literal("unknown")
+    elif group == "model":
+        bucket_expr = model_col if model_col is not None else literal("unknown")
+    else:
+        group = "day"
+        if usage_date_col is not None:
+            bucket_expr = usage_date_col
+        else:
+            bucket_expr = literal("unknown")
+
+    sum_actual = (
+        func.coalesce(func.sum(actual_col), 0.0).label("actual_cost")
+        if actual_col is not None
+        else literal(0.0).label("actual_cost")
+    )
+    sum_baseline = (
+        func.coalesce(func.sum(baseline_col), 0.0).label("baseline_cost")
+        if baseline_col is not None
+        else literal(0.0).label("baseline_cost")
+    )
+    sum_savings = (
+        func.coalesce(func.sum(savings_col), 0.0).label("savings_amount")
+        if savings_col is not None
+        else literal(0.0).label("savings_amount")
+    )
+    failed_expr = (
+        func.coalesce(
+            func.sum(
+                case(
+                    (
+                        func.lower(func.coalesce(status_col, literal("success"))) != "success",
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        ).label("failed_requests")
+        if status_col is not None
+        else literal(0).label("failed_requests")
+    )
+
+    stmt = (
+        select(
+            bucket_expr.label("bucket"),
+            func.count(llm_savings.c.llm_request_id).label("requests"),
+            sum_actual,
+            sum_baseline,
+            sum_savings,
+            failed_expr,
+        )
+        .where(llm_savings.c.user_id == user_id)
+        .group_by(bucket_expr)
+        .order_by(bucket_expr)
+    )
+
+    if usage_date_col is not None:
+        if date_from is not None:
+            stmt = stmt.where(usage_date_col >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(usage_date_col <= date_to)
+
+    rows = db.execute(stmt).fetchall()
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row._mapping)
+        bucket_value = item.get("bucket")
+        if group == "day" and bucket_value is not None:
+            bucket_value = str(bucket_value)
+
+        baseline_cost = float(item.get("baseline_cost") or 0.0)
+        savings_amount = float(item.get("savings_amount") or 0.0)
+        savings_pct = (savings_amount / baseline_cost) if baseline_cost > 0 else 0.0
+        failed_requests = int(item.get("failed_requests") or 0)
+        total_requests = int(item.get("requests") or 0)
+        payload.append(
+            {
+                "bucket": bucket_value if bucket_value is not None else "unknown",
+                "requests": total_requests,
+                "actual_cost": float(item.get("actual_cost") or 0.0),
+                "baseline_cost": baseline_cost,
+                "savings_amount": savings_amount,
+                "savings_pct": savings_pct,
+                "successful_requests": max(total_requests - failed_requests, 0),
+                "failed_requests": failed_requests,
+            }
+        )
+    return payload
+
+
+# ============================================================================
+# API HISTORY (LLM AUDIT BACKED)
+# ============================================================================
+
+
+def _history_entry_id(request_pk: Any, request_id: str | None) -> int:
+    """
+    Compute a deterministic int identifier for history entries.
+
+    Prefers native integer primary keys; otherwise derives a stable 31-bit hash
+    from request identifiers/primary key values.
+    """
+    if isinstance(request_pk, int):
+        return request_pk
+
+    if isinstance(request_pk, UUID):
+        return int(request_pk.int % 2147483647)
+
+    if request_pk is not None:
+        raw_pk = str(request_pk).strip()
+        if raw_pk:
+            try:
+                return int(raw_pk)
+            except Exception:
+                pass
+
+    source = str(request_id or request_pk or "")
+    if not source:
+        source = "0"
+    return int(zlib.crc32(source.encode("utf-8")) & 0x7FFFFFFF)
+
+
+def _to_history_timestamp(raw_value: Any) -> str:
+    """Normalize DB timestamp-like values to ISO8601 with trailing Z when possible."""
+    if raw_value is None:
+        return ""
+
+    # datetime objects
+    try:
+        iso = raw_value.isoformat()
+        if iso.endswith("+00:00"):
+            return iso.replace("+00:00", "Z")
+        return iso
+    except Exception:
+        pass
+
+    text = str(raw_value).strip()
+    if not text:
+        return ""
+    if text.endswith("+00:00"):
+        return text.replace("+00:00", "Z")
+    return text
+
+
+def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> list[dict[str, Any]]:
+    """
+    Return API history entries from llm_requests/llm_responses for one user.
+
+    Shape is compatible with server/routes/history.py HistoryEntry response model.
+    """
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+
+    req_cols = {col.name for col in llm_requests.columns}
+    resp_cols = {col.name for col in llm_responses.columns}
+
+    req_created_col = llm_requests.c.created_at if "created_at" in req_cols else None
+    req_mode_col = llm_requests.c.route_mode if "route_mode" in req_cols else None
+    req_prompt_col = llm_requests.c.prompt_text if "prompt_text" in req_cols else None
+    req_prompt_hash_col = llm_requests.c.prompt_sha256 if "prompt_sha256" in req_cols else None
+    req_provider_col = llm_requests.c.provider if "provider" in req_cols else None
+    req_model_col = llm_requests.c.model if "model" in req_cols else None
+
+    resp_text_col = llm_responses.c.text if "text" in resp_cols else None
+    resp_latency_col = llm_responses.c.latency_ms if "latency_ms" in resp_cols else None
+    resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
+    resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
+    resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
+
+    prompt_expr = req_prompt_col if req_prompt_col is not None else literal(None)
+    prompt_hash_expr = req_prompt_hash_col if req_prompt_hash_col is not None else literal(None)
+    provider_expr = req_provider_col if req_provider_col is not None else literal("unknown")
+    model_expr = req_model_col if req_model_col is not None else literal("unknown")
+    mode_expr = req_mode_col if req_mode_col is not None else literal("chat")
+    timestamp_expr = req_created_col if req_created_col is not None else literal(None)
+    response_text_expr = resp_text_col if resp_text_col is not None else literal("")
+    latency_expr = resp_latency_col if resp_latency_col is not None else literal(None)
+    tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
+    cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
+    error_expr = resp_error_col if resp_error_col is not None else literal(None)
+
+    order_col = req_created_col if req_created_col is not None else llm_requests.c.id
+
+    stmt = (
+        select(
+            llm_requests.c.id.label("request_pk"),
+            llm_requests.c.request_id.label("request_id"),
+            mode_expr.label("mode"),
+            prompt_expr.label("prompt_text"),
+            prompt_hash_expr.label("prompt_hash"),
+            provider_expr.label("provider"),
+            model_expr.label("model"),
+            timestamp_expr.label("created_at"),
+            response_text_expr.label("response_text"),
+            latency_expr.label("latency_ms"),
+            tokens_expr.label("tokens"),
+            cost_expr.label("cost"),
+            error_expr.label("error_message"),
+        )
+        .select_from(
+            llm_requests.outerjoin(
+                llm_responses,
+                llm_responses.c.llm_request_id == llm_requests.c.id,
+            )
+        )
+        .where(llm_requests.c.user_id == user_id)
+        .order_by(desc(order_col))
+        .limit(max(1, int(limit)))
+    )
+
+    rows = db.execute(stmt).fetchall()
+    entries: list[dict[str, Any]] = []
+
+    for row in rows:
+        payload = dict(row._mapping)
+        mode = str(payload.get("mode") or "chat").lower()
+        if mode == "ask":
+            mode = "chat"
+
+        prompt_text = payload.get("prompt_text")
+        if not prompt_text:
+            prompt_hash = payload.get("prompt_hash")
+            prompt_text = "[prompt not stored]"
+            if prompt_hash:
+                prompt_text = f"[prompt hash: {prompt_hash}]"
+
+        response_text = payload.get("response_text") or ""
+        if not response_text and payload.get("error_message"):
+            response_text = f"[error] {payload['error_message']}"
+
+        entries.append(
+            {
+                "id": _history_entry_id(payload.get("request_pk"), payload.get("request_id")),
+                "timestamp": _to_history_timestamp(payload.get("created_at")),
+                "mode": mode,
+                "prompt": str(prompt_text),
+                "provider": str(payload.get("provider") or "unknown"),
+                "model": str(payload.get("model") or "unknown"),
+                "response": str(response_text),
+                "latency_ms": payload.get("latency_ms"),
+                "tokens": payload.get("tokens"),
+                "cost": float(payload["cost"]) if payload.get("cost") is not None else None,
+            }
+        )
+
+    return entries
+
+
+def _find_request_pk_by_history_id(db: Session, user_id: UUID, entry_id: int) -> Any | None:
+    """Map HistoryEntry.id back to llm_requests primary key for one user."""
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    stmt = select(llm_requests.c.id, llm_requests.c.request_id).where(llm_requests.c.user_id == user_id)
+    rows = db.execute(stmt).fetchall()
+    for row in rows:
+        request_pk = row._mapping["id"]
+        request_id = row._mapping.get("request_id")
+        if _history_entry_id(request_pk, request_id) == int(entry_id):
+            return request_pk
+    return None
+
+
+def delete_llm_history_entry(db: Session, user_id: UUID, entry_id: int) -> bool:
+    """
+    Delete one history entry (llm request + response + routing telemetry) for a user.
+    """
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+    routing_decisions = get_table("routing_decisions")
+    routing_attempts = get_table("routing_attempts")
+
+    request_pk = _find_request_pk_by_history_id(db, user_id, entry_id)
+    if request_pk is None:
+        return False
+
+    decision_ids_subq = select(routing_decisions.c.id).where(
+        routing_decisions.c.llm_request_id == request_pk
+    )
+    db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
+    db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id == request_pk))
+    db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id == request_pk))
+    result = db.execute(
+        delete(llm_requests).where(and_(llm_requests.c.id == request_pk, llm_requests.c.user_id == user_id))
+    )
+    return bool(result.rowcount and result.rowcount > 0)
+
+
+def clear_llm_history(db: Session, user_id: UUID) -> int:
+    """
+    Clear all history entries for a user from llm/routing audit tables.
+    """
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+    routing_decisions = get_table("routing_decisions")
+    routing_attempts = get_table("routing_attempts")
+
+    user_request_ids_subq = select(llm_requests.c.id).where(llm_requests.c.user_id == user_id)
+    decision_ids_subq = select(routing_decisions.c.id).where(
+        routing_decisions.c.llm_request_id.in_(user_request_ids_subq)
+    )
+
+    db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
+    db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id.in_(user_request_ids_subq)))
+    db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id.in_(user_request_ids_subq)))
+    deleted = db.execute(delete(llm_requests).where(llm_requests.c.user_id == user_id))
+    return int(deleted.rowcount or 0)
 
 
 # ============================================================================

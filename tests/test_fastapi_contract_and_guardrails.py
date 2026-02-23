@@ -100,6 +100,9 @@ class FakeMultiUnifiedResponse:
     total_cost: float
 
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
 
 
 # -------------------------------------------------------------------
@@ -202,6 +205,14 @@ def app():
     Build FastAPI app and override get_orchestrator dependency.
     """
     app = create_app()
+
+    # Keep these tests DB-agnostic and deterministic.
+    from server.routes import chat as chat_route
+    from server.routes import compare as compare_route
+    from server.routes import history as history_route
+    chat_route.API_DB_ENABLED = False
+    compare_route.API_DB_ENABLED = False
+    history_route.API_DB_ENABLED = False
 
     from server import dependencies as deps
 

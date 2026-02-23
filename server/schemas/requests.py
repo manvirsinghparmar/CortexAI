@@ -1,7 +1,8 @@
 """Pydantic request models for FastAPI endpoints."""
 
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List
 
 
 class ConversationHistoryItem(BaseModel):
@@ -48,3 +49,26 @@ class CompareRequest(BaseModel):
     timeout_s: Optional[float] = Field(None, gt=0, le=300)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
+
+
+class ByokUpdateRequest(BaseModel):
+    provider_keys: Dict[str, str] = Field(default_factory=dict)
+    baseline_provider: Optional[str] = Field(None, pattern="^(openai|gemini|deepseek|grok)$")
+    baseline_model: Optional[str] = None
+    requests_per_minute: Optional[int] = Field(None, ge=1, le=10000)
+
+    @model_validator(mode="after")
+    def validate_payload(self):
+        if (
+            not self.provider_keys
+            and self.baseline_provider is None
+            and self.baseline_model is None
+            and self.requests_per_minute is None
+        ):
+            raise ValueError(
+                "Provide at least one of provider_keys, baseline_provider/baseline_model, or requests_per_minute"
+            )
+
+        if self.baseline_model and not self.baseline_provider:
+            raise ValueError("baseline_provider is required when baseline_model is provided")
+        return self

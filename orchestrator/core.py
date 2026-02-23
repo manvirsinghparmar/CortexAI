@@ -37,6 +37,7 @@ from orchestrator.routing_types import (
 from orchestrator.fallback_manager import FallbackManager, FallbackPolicy
 from orchestrator.smart_router import SmartRouter
 from orchestrator.tier_decider import TierDecider
+from server import circuit_breaker
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
     is_explicit_web_request,
@@ -155,16 +156,27 @@ class CortexOrchestrator:
             ),
         )
 
-    def _get_client(self, model_type: str, model_name: str | None = None) -> BaseAIClient:
+    def _get_client(
+        self,
+        model_type: str,
+        model_name: str | None = None,
+        *,
+        api_key_override: str | None = None,
+    ) -> BaseAIClient:
         model_type = (model_type or "").lower().strip()
-        cache_key = f"{model_type}:{model_name or 'default'}"
+        key_scope = (
+            hashlib.sha256(api_key_override.encode("utf-8")).hexdigest()[:12]
+            if api_key_override
+            else "env"
+        )
+        cache_key = f"{model_type}:{model_name or 'default'}:{key_scope}"
         if cache_key in self._client_cache:
             return self._client_cache[cache_key]
 
         if model_type == "openai":
             from api.openai_client import OpenAIClient
 
-            api_key = os.getenv("OPENAI_API_KEY")
+            api_key = api_key_override or os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OPENAI_API_KEY not found in environment variables")
             model_name = model_name or os.getenv("DEFAULT_OPENAI_MODEL", "gpt-3.5-turbo")
@@ -173,7 +185,7 @@ class CortexOrchestrator:
         elif model_type == "gemini":
             from api.google_gemini_client import GeminiClient
 
-            api_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+            api_key = api_key_override or os.getenv("GOOGLE_GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GOOGLE_GEMINI_API_KEY not found in environment variables")
             model_name = model_name or os.getenv("DEFAULT_GEMINI_MODEL", "gemini-2.5-flash-lite")
@@ -182,7 +194,7 @@ class CortexOrchestrator:
         elif model_type == "deepseek":
             from api.deepseek_client import DeepSeekClient
 
-            api_key = os.getenv("DEEPSEEK_API_KEY")
+            api_key = api_key_override or os.getenv("DEEPSEEK_API_KEY")
             if not api_key:
                 raise ValueError("DEEPSEEK_API_KEY not found in environment variables")
             model_name = model_name or os.getenv("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat")
@@ -191,7 +203,7 @@ class CortexOrchestrator:
         elif model_type == "grok":
             from api.grok_client import GrokClient
 
-            api_key = os.getenv("GROK_API_KEY")
+            api_key = api_key_override or os.getenv("GROK_API_KEY")
             if not api_key:
                 raise ValueError("GROK_API_KEY not found in environment variables")
             model_name = model_name or os.getenv("DEFAULT_GROK_MODEL", "grok-4-latest")
@@ -833,13 +845,38 @@ These rules prevent misinformation. Follow them carefully.""",
         return True, ""
 
     def _invoke_candidate(
-        self, candidate: ModelCandidate, messages: list[dict[str, str]], **kwargs
+        self,
+        candidate: ModelCandidate,
+        messages: list[dict[str, str]],
+        *,
+        provider_api_keys: dict[str, str] | None = None,
+        **kwargs,
     ) -> UnifiedResponse:
+        provider_api_keys = provider_api_keys or {}
+        if not circuit_breaker.circuit_allows(candidate.provider, candidate.model_name):
+            return self._error_response(
+                provider=candidate.provider,
+                model=candidate.model_name,
+                message=(
+                    f"Circuit open for {candidate.provider}/{candidate.model_name}; "
+                    "temporarily skipped for cooldown"
+                ),
+                code="provider_error",
+                retryable=True,
+            )
         try:
-            client = self._get_client(candidate.provider, candidate.model_name)
-            return client.get_completion(messages=messages, **kwargs)
+            override_key = provider_api_keys.get(candidate.provider.lower())
+            client = self._get_client(
+                candidate.provider,
+                candidate.model_name,
+                api_key_override=override_key,
+            )
+            response = client.get_completion(messages=messages, **kwargs)
+            circuit_breaker.record_response(response)
+            return response
         except Exception as e:
             logger.exception("Candidate invocation failed")
+            circuit_breaker.record_failure(candidate.provider, candidate.model_name)
             return self._error_response(
                 provider=candidate.provider,
                 model=candidate.model_name,
@@ -947,6 +984,7 @@ These rules prevent misinformation. Follow them carefully.""",
         messages: list[dict[str, str]],
         routing_mode: str,
         routing_constraints: RoutingConstraints | None,
+        provider_api_keys: dict[str, str] | None = None,
         **kwargs,
     ) -> UnifiedResponse:
         if not self._smart_router or not self._model_registry or not self._validator:
@@ -1012,7 +1050,12 @@ These rules prevent misinformation. Follow them carefully.""",
                 continue
 
             candidate = current_candidates.pop(0)
-            resp = self._invoke_candidate(candidate, messages, **kwargs)
+            resp = self._invoke_candidate(
+                candidate,
+                messages,
+                provider_api_keys=provider_api_keys,
+                **kwargs,
+            )
             prev_response = last_response
             last_response = resp
             if attempt_index > 0 and prev_response:
@@ -1114,6 +1157,10 @@ These rules prevent misinformation. Follow them carefully.""",
         **kwargs,
     ) -> UnifiedResponse:
         try:
+            provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
+            if not isinstance(provider_api_keys, dict):
+                provider_api_keys = {}
+
             # Optimize prompt if enabled
             optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
             if opt_metadata.get("optimization_used"):
@@ -1143,6 +1190,7 @@ These rules prevent misinformation. Follow them carefully.""",
             # Any other value (e.g., "legacy") preserves direct model invocation.
             use_smart = routing_mode_norm in {"smart", "cheap", "strong"}
             explicit_model_selected = bool(model_type and model_name)
+            record_direct_circuit = False
 
             if explicit_model_selected:
                 is_valid, validation_error = self._validate_explicit_model_selection(
@@ -1156,8 +1204,23 @@ These rules prevent misinformation. Follow them carefully.""",
                         code="bad_request",
                     )
 
-                client = self._get_client(model_type, model_name)
+                provider_norm = (model_type or "").strip().lower()
+                if not circuit_breaker.circuit_allows(provider_norm, model_name or ""):
+                    return self._error_response(
+                        provider=provider_norm or "unknown",
+                        model=model_name or "unknown",
+                        message=f"Circuit open for {provider_norm}/{model_name}; try later",
+                        code="provider_error",
+                        retryable=True,
+                    )
+
+                client = self._get_client(
+                    model_type,
+                    model_name,
+                    api_key_override=provider_api_keys.get(provider_norm),
+                )
                 resp = client.get_completion(messages=messages, **kwargs)
+                record_direct_circuit = True
                 md = resp.metadata or {}
                 md["routing"] = {
                     "mode": "explicit",
@@ -1191,6 +1254,7 @@ These rules prevent misinformation. Follow them carefully.""",
                     messages=messages,
                     routing_mode=routing_mode_norm,
                     routing_constraints=constraints,
+                    provider_api_keys=provider_api_keys,
                     **kwargs,
                 )
             else:
@@ -1214,8 +1278,23 @@ These rules prevent misinformation. Follow them carefully.""",
                             code="bad_request",
                         )
 
-                client = self._get_client(model_type, model_name)
+                provider_norm = (model_type or "").strip().lower()
+                if not circuit_breaker.circuit_allows(provider_norm, model_name or ""):
+                    return self._error_response(
+                        provider=provider_norm or "unknown",
+                        model=model_name or "unknown",
+                        message=f"Circuit open for {provider_norm}/{model_name}; try later",
+                        code="provider_error",
+                        retryable=True,
+                    )
+
+                client = self._get_client(
+                    model_type,
+                    model_name,
+                    api_key_override=provider_api_keys.get(provider_norm),
+                )
                 resp = client.get_completion(messages=messages, **kwargs)
+                record_direct_circuit = True
 
             # Merge research and optimization metadata into response
             md = resp.metadata or {}
@@ -1230,6 +1309,9 @@ These rules prevent misinformation. Follow them carefully.""",
             # CRITICAL: Check for fabricated numbers/facts
             if self._enable_fabrication_check:
                 resp = self._check_fabrication(resp, research_used, optimized_prompt)
+
+            if record_direct_circuit:
+                circuit_breaker.record_response(resp)
 
             # Update token tracker here (business layer)
             if token_tracker:
@@ -1259,6 +1341,9 @@ These rules prevent misinformation. Follow them carefully.""",
     ) -> MultiUnifiedResponse:
         request_group_id = request_group_id or str(uuid.uuid4())
         responses: list[UnifiedResponse] = []
+        provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
+        if not isinstance(provider_api_keys, dict):
+            provider_api_keys = {}
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
@@ -1286,7 +1371,6 @@ These rules prevent misinformation. Follow them carefully.""",
                 }
 
             clients: list[BaseAIClient] = []
-            client_meta: list[dict[str, str]] = []
 
             for cfg in models_list:
                 provider = (cfg.get("provider") or "").lower().strip()
@@ -1303,11 +1387,27 @@ These rules prevent misinformation. Follow them carefully.""",
                     )
                     continue
 
+                if not circuit_breaker.circuit_allows(provider, model):
+                    responses.append(
+                        self._error_response(
+                            provider=provider,
+                            model=model,
+                            message=f"Circuit open for {provider}/{model}; try later",
+                            code="provider_error",
+                            retryable=True,
+                        )
+                    )
+                    continue
+
                 try:
-                    c = self._get_client(provider, model)
+                    c = self._get_client(
+                        provider,
+                        model,
+                        api_key_override=provider_api_keys.get(provider),
+                    )
                     clients.append(c)
-                    client_meta.append({"provider": provider, "model": model})
                 except Exception as init_err:
+                    circuit_breaker.record_failure(provider, model)
                     responses.append(
                         self._error_response(
                             provider=provider,
@@ -1355,6 +1455,7 @@ These rules prevent misinformation. Follow them carefully.""",
                 if self._enable_fabrication_check:
                     resp_final = self._check_fabrication(resp_checked, research_used, prompt)
                 updated_responses.append(resp_final)
+                circuit_breaker.record_response(resp_final)
 
             if token_tracker:
                 for r in updated_responses:

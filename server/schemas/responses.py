@@ -86,3 +86,129 @@ class HealthResponseDTO(BaseModel):
     status: str
     timestamp: str
     version: str = "1.0.0"
+
+
+class FailedAttemptDTO(BaseModel):
+    request_id: str
+    request_group_id: str
+    attempt_number: int
+    tier: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    validation: Optional[str] = None
+    latency_ms: Optional[int] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class FailedAttemptsByGroupDTO(BaseModel):
+    request_group_id: str
+    count: int
+    items: List[FailedAttemptDTO] = Field(default_factory=list)
+
+
+class UsageTotalsDTO(BaseModel):
+    requests: int
+    tokens: int
+    cost: float
+
+
+class UsageBucketDTO(BaseModel):
+    bucket: str
+    requests: int
+    tokens: int
+    cost: float
+
+
+class UsageReportDTO(BaseModel):
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    group_by: str
+    totals: UsageTotalsDTO
+    breakdown: List[UsageBucketDTO] = Field(default_factory=list)
+
+
+class SavingsTotalsDTO(BaseModel):
+    requests: int
+    successful_requests: int = 0
+    failed_requests: int = 0
+    actual_cost: float
+    baseline_cost: float
+    savings_amount: float
+    savings_pct: float
+
+
+class SavingsBucketDTO(BaseModel):
+    bucket: str
+    requests: int
+    successful_requests: int = 0
+    failed_requests: int = 0
+    actual_cost: float
+    baseline_cost: float
+    savings_amount: float
+    savings_pct: float
+
+
+class SavingsReportDTO(BaseModel):
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    group_by: str
+    totals: SavingsTotalsDTO
+    breakdown: List[SavingsBucketDTO] = Field(default_factory=list)
+
+
+class ByokProviderStatusDTO(BaseModel):
+    provider: str
+    configured: bool
+    key_last4: Optional[str] = None
+    fingerprint_prefix: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ByokStatusDTO(BaseModel):
+    providers: List[ByokProviderStatusDTO] = Field(default_factory=list)
+    baseline_provider: Optional[str] = None
+    baseline_model: Optional[str] = None
+    requests_per_minute: Optional[int] = None
+
+
+class ByokUpdateResponseDTO(BaseModel):
+    updated_providers: List[str] = Field(default_factory=list)
+    baseline_provider: Optional[str] = None
+    baseline_model: Optional[str] = None
+    requests_per_minute: Optional[int] = None
+
+
+class ByokDeleteResponseDTO(BaseModel):
+    deleted_count: int
+
+
+class WhoAmIBaselineDTO(BaseModel):
+    provider: str
+    model: str
+    source: str
+
+
+class WhoAmIRateLimitConfigDTO(BaseModel):
+    requests_per_minute: int
+    daily_cap_scope: str
+    daily_token_cap: Optional[int] = None
+    daily_cost_cap: Optional[float] = None
+
+
+class WhoAmIBreakerConfigDTO(BaseModel):
+    failure_threshold: int
+    window_seconds: int
+    cooldown_seconds: int
+    scope: str
+
+
+class WhoAmIResponseDTO(BaseModel):
+    api_key_id: Optional[str] = None
+    user_id: Optional[str] = None
+    plan_tier: Optional[str] = None
+    storage_policy: str
+    redact_pii: bool
+    baseline: WhoAmIBaselineDTO
+    rate_limits: WhoAmIRateLimitConfigDTO
+    breakers: WhoAmIBreakerConfigDTO

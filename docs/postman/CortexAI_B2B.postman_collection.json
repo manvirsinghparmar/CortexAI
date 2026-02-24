@@ -1,0 +1,543 @@
+{
+  "info": {
+    "name": "CortexAI B2B API (Complete)",
+    "description": "Complete Postman collection for CortexAI B2B gateway checks: chat/compare/streaming, BYOK, reporting, exports, history, optimize, and admin diagnostics.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "api_key", "value": "dev-key-1" },
+    { "key": "chat_provider", "value": "openai" },
+    { "key": "chat_model", "value": "gpt-4o-mini" },
+    { "key": "compare_provider", "value": "gemini" },
+    { "key": "compare_model", "value": "gemini-2.5-flash-lite" },
+    { "key": "request_group_id", "value": "" },
+    { "key": "history_entry_id", "value": "1" },
+    { "key": "byok_openai_key", "value": "sk-tenant-openai-example-1234" },
+    { "key": "from_date", "value": "2026-02-01" },
+    { "key": "to_date", "value": "2026-02-22" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('healthy status', function () { pm.expect(body.status).to.eql('healthy'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Identity",
+      "item": [
+        {
+          "name": "GET /v1/whoami",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/whoami"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('whoami has core keys', function () {",
+                  "  pm.expect(body).to.have.property('storage_policy');",
+                  "  pm.expect(body).to.have.property('baseline');",
+                  "  pm.expect(body).to.have.property('rate_limits');",
+                  "  pm.expect(body).to.have.property('breakers');",
+                  "});",
+                  "if (body.user_id) { pm.collectionVariables.set('user_id', body.user_id); }",
+                  "if (body.api_key_id) { pm.collectionVariables.set('api_key_id', body.api_key_id); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "POST /v1/chat",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
+            },
+            "url": "{{base_url}}/v1/chat"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('chat response has request_id/provider/model', function () {",
+                  "  pm.expect(body.request_id).to.be.a('string');",
+                  "  pm.expect(body.provider).to.be.a('string');",
+                  "  pm.expect(body.model).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/chat/stream",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/x-ndjson" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
+            },
+            "url": "{{base_url}}/v1/chat/stream"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var text = pm.response.text();",
+                  "pm.test('stream includes start and done markers', function () {",
+                  "  pm.expect(text).to.include('\\\"type\\\": \\\"start\\\"');",
+                  "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Compare",
+      "item": [
+        {
+          "name": "POST /v1/compare",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+            },
+            "url": "{{base_url}}/v1/compare"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('compare has request_group_id + responses', function () {",
+                  "  pm.expect(body.request_group_id).to.be.a('string');",
+                  "  pm.expect(body.responses).to.be.an('array');",
+                  "  pm.expect(body.responses.length).to.be.above(1);",
+                  "});",
+                  "pm.collectionVariables.set('request_group_id', body.request_group_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/compare/stream",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/x-ndjson" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+            },
+            "url": "{{base_url}}/v1/compare/stream"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var text = pm.response.text();",
+                  "pm.test('stream includes done marker', function () {",
+                  "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "GET /v1/admin/request-groups/{request_group_id}/failed-attempts",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/admin/request-groups/{{request_group_id}}/failed-attempts?limit=200"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('admin payload has request_group_id', function () {",
+                  "  pm.expect(body.request_group_id).to.eql(pm.collectionVariables.get('request_group_id'));",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "History",
+      "item": [
+        {
+          "name": "GET /v1/history",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/history?limit=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('history is an array', function () { pm.expect(body).to.be.an('array'); });",
+                  "if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /v1/history/{entry_id}",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/history/{{history_entry_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204 or 404', function () {",
+                  "  pm.expect([204, 404]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reporting",
+      "item": [
+        {
+          "name": "GET /v1/usage",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/usage?from={{from_date}}&to={{to_date}}&group_by=day"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "  pm.expect([200, 501]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/savings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/savings?from={{from_date}}&to={{to_date}}&group_by=provider"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "  pm.expect([200, 501]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/usage/export (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/usage/export?format=csv&from={{from_date}}&to={{to_date}}&group_by=provider"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('deterministic usage export columns', function () {",
+                  "    pm.expect(pm.response.headers.get('X-Export-Columns')).to.eql('bucket,requests,tokens,cost');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/savings/export (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/savings/export?format=csv&from={{from_date}}&to={{to_date}}&group_by=day"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('deterministic savings export columns', function () {",
+                  "    pm.expect(pm.response.headers.get('X-Export-Columns')).to.eql('bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BYOK",
+      "item": [
+        {
+          "name": "POST /v1/byok (set/update)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_keys\": {\n    \"openai\": \"{{byok_openai_key}}\"\n  },\n  \"baseline_provider\": \"{{chat_provider}}\",\n  \"baseline_model\": \"{{chat_model}}\",\n  \"requests_per_minute\": 60\n}"
+            },
+            "url": "{{base_url}}/v1/byok"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/byok/status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/byok/status"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('BYOK status does not leak encrypted_key', function () {",
+                  "    pm.expect(JSON.stringify(body)).to.not.include('encrypted_key');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /v1/byok?provider=openai",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/byok?provider=openai"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /v1/byok (all)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/byok"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501', function () { pm.expect([200, 501]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Optimize",
+      "item": [
+        {
+          "name": "POST /v1/optimize",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\"\n}"
+            },
+            "url": "{{base_url}}/v1/optimize"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('optimize response schema', function () {",
+                  "  pm.expect(body).to.have.property('original_prompt');",
+                  "  pm.expect(body).to.have.property('optimized_prompt');",
+                  "  pm.expect(body).to.have.property('was_optimized');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

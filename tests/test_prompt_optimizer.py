@@ -6,7 +6,7 @@ output schema validation, error handling, and self-correction mechanisms.
 """
 
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,7 +19,7 @@ class TestInputValidation:
 
     def test_valid_input_with_prompt_only(self):
         """Test valid input with only prompt field."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {"prompt": "write code for sorting"}
 
         error = optimizer._validate_input(input_data)
@@ -27,7 +27,7 @@ class TestInputValidation:
 
     def test_valid_input_with_settings(self):
         """Test valid input with prompt and settings."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {
             "prompt": "write code for sorting",
             "settings": {"focus": "clarity", "language": "python"},
@@ -38,7 +38,7 @@ class TestInputValidation:
 
     def test_missing_prompt_field(self):
         """Test error when prompt field is missing."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {"settings": {"focus": "clarity"}}
 
         error = optimizer._validate_input(input_data)
@@ -48,7 +48,7 @@ class TestInputValidation:
 
     def test_empty_prompt(self):
         """Test error when prompt is empty."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {"prompt": "   "}
 
         error = optimizer._validate_input(input_data)
@@ -58,7 +58,7 @@ class TestInputValidation:
 
     def test_non_string_prompt(self):
         """Test error when prompt is not a string."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {"prompt": 123}
 
         error = optimizer._validate_input(input_data)
@@ -68,7 +68,7 @@ class TestInputValidation:
 
     def test_non_dict_input(self):
         """Test error when input is not a dictionary."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = "not a dict"
 
         error = optimizer._validate_input(input_data)
@@ -78,7 +78,7 @@ class TestInputValidation:
 
     def test_invalid_settings_type(self):
         """Test error when settings is not a dictionary."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         input_data = {"prompt": "test prompt", "settings": "not a dict"}
 
         error = optimizer._validate_input(input_data)
@@ -92,14 +92,14 @@ class TestOutputValidation:
 
     def test_valid_output_minimal(self):
         """Test valid output with only required field."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {"optimized_prompt": "Improved prompt"}
 
         assert optimizer._is_valid_output(output) is True
 
     def test_valid_output_complete(self):
         """Test valid output with all optional fields."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {
             "optimized_prompt": "Improved prompt",
             "steps": ["Step 1", "Step 2"],
@@ -111,28 +111,28 @@ class TestOutputValidation:
 
     def test_missing_required_field(self):
         """Test invalid output missing optimized_prompt."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {"steps": ["Step 1"]}
 
         assert optimizer._is_valid_output(output) is False
 
     def test_invalid_steps_type(self):
         """Test invalid output with wrong steps type."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {"optimized_prompt": "Test", "steps": "not a list"}
 
         assert optimizer._is_valid_output(output) is False
 
     def test_invalid_explanations_items(self):
         """Test invalid output with non-string explanations."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {"optimized_prompt": "Test", "explanations": [123, 456]}
 
         assert optimizer._is_valid_output(output) is False
 
     def test_invalid_metrics_type(self):
         """Test invalid output with wrong metrics type."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         output = {"optimized_prompt": "Test", "metrics": "not a dict"}
 
         assert optimizer._is_valid_output(output) is False
@@ -143,7 +143,7 @@ class TestResponseParsing:
 
     def test_parse_plain_json(self):
         """Test parsing plain JSON response."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         response_text = json.dumps({"optimized_prompt": "Improved prompt", "steps": ["Step 1"]})
 
         result = optimizer._parse_ai_response(response_text, "original")
@@ -152,7 +152,7 @@ class TestResponseParsing:
 
     def test_parse_markdown_code_block(self):
         """Test parsing JSON wrapped in markdown code blocks."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         response_text = """```json
 {
   "optimized_prompt": "Improved prompt",
@@ -166,7 +166,7 @@ class TestResponseParsing:
 
     def test_parse_invalid_json(self):
         """Test error handling for invalid JSON."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         response_text = "This is not JSON"
 
         with pytest.raises(Exception) as exc_info:
@@ -176,7 +176,7 @@ class TestResponseParsing:
 
     def test_parse_missing_required_field(self):
         """Test error when optimized_prompt is missing."""
-        optimizer = PromptOptimizer(api_key="test-key")
+        optimizer = PromptOptimizer(client=Mock())
         response_text = json.dumps({"steps": ["Step 1"]})
 
         with pytest.raises(Exception) as exc_info:
@@ -188,12 +188,10 @@ class TestResponseParsing:
 class TestOptimizationFlow:
     """Test the complete optimization flow with mocked OpenAI."""
 
-    @patch("utils.prompt_optimizer.OpenAIClient")
-    def test_successful_optimization(self, mock_client_class):
+    def test_successful_optimization(self):
         """Test successful optimization flow."""
         # Setup mock
         mock_client = Mock()
-        mock_client_class.return_value = mock_client
 
         mock_response = UnifiedResponse(
             request_id="test-123",
@@ -224,7 +222,7 @@ class TestOptimizationFlow:
         mock_client.get_completion.return_value = mock_response
 
         # Test
-        optimizer = PromptOptimizer(api_key="test-key", provider="openai")
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
         result = optimizer.optimize_prompt({"prompt": "write code for sorting"})
 
         # Assertions
@@ -236,12 +234,10 @@ class TestOptimizationFlow:
         assert "metrics" in result
         assert "error" not in result
 
-    @patch("utils.prompt_optimizer.OpenAIClient")
-    def test_optimization_with_settings(self, mock_client_class):
+    def test_optimization_with_settings(self):
         """Test optimization with additional settings."""
         # Setup mock
         mock_client = Mock()
-        mock_client_class.return_value = mock_client
 
         mock_response = UnifiedResponse(
             request_id="test-123",
@@ -263,7 +259,7 @@ class TestOptimizationFlow:
         mock_client.get_completion.return_value = mock_response
 
         # Test
-        optimizer = PromptOptimizer(api_key="test-key", provider="openai")
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
         result = optimizer.optimize_prompt(
             {
                 "prompt": "write code for sorting",
@@ -275,12 +271,10 @@ class TestOptimizationFlow:
         assert "optimized_prompt" in result
         assert "error" not in result
 
-    @patch("utils.prompt_optimizer.OpenAIClient")
-    def test_api_error_handling(self, mock_client_class):
+    def test_api_error_handling(self):
         """Test handling of OpenAI API errors."""
         # Setup mock
         mock_client = Mock()
-        mock_client_class.return_value = mock_client
 
         mock_error_response = UnifiedResponse(
             request_id="test-123",
@@ -299,7 +293,7 @@ class TestOptimizationFlow:
         mock_client.get_completion.return_value = mock_error_response
 
         # Test
-        optimizer = PromptOptimizer(api_key="test-key", provider="openai", max_retries=2)
+        optimizer = PromptOptimizer(provider="openai", max_retries=2, client=mock_client)
         result = optimizer.optimize_prompt({"prompt": "write code for sorting"})
 
         # Assertions
@@ -311,12 +305,10 @@ class TestOptimizationFlow:
 class TestSelfCorrection:
     """Test self-correction mechanisms."""
 
-    @patch("utils.prompt_optimizer.OpenAIClient")
-    def test_retry_on_invalid_json(self, mock_client_class):
+    def test_retry_on_invalid_json(self):
         """Test retry when OpenAI returns invalid JSON."""
         # Setup mock
         mock_client = Mock()
-        mock_client_class.return_value = mock_client
 
         # First call returns invalid JSON, second call returns valid
         invalid_response = UnifiedResponse(
@@ -348,7 +340,7 @@ class TestSelfCorrection:
         mock_client.get_completion.side_effect = [invalid_response, valid_response]
 
         # Test
-        optimizer = PromptOptimizer(api_key="test-key", provider="openai", max_retries=3)
+        optimizer = PromptOptimizer(provider="openai", max_retries=3, client=mock_client)
         result = optimizer.optimize_prompt({"prompt": "write code for sorting"})
 
         # Should succeed on second attempt

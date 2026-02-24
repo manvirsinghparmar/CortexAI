@@ -72,30 +72,26 @@ import pytest
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, List, Optional
 
-import pytest
 from fastapi.testclient import TestClient
 
-from api.base_client import BaseAIClient
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server.app import create_app
+from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
 from server.schemas.responses import CompareResponseDTO
-
-pytestmark = pytest.mark.integration
+from api.base_client import BaseAIClient
 
 
 # -------------------------------------------------------------------
 # Fake MultiUnifiedResponse (match what CompareResponseDTO expects)
 # -------------------------------------------------------------------
 
-
 @dataclass(frozen=True)
 class FakeMultiUnifiedResponse:
     request_id: str
     request_group_id: str
     prompt: str
-    responses: list[UnifiedResponse]
+    responses: List[UnifiedResponse]
 
     success_count: int
     failure_count: int
@@ -104,12 +100,14 @@ class FakeMultiUnifiedResponse:
     total_cost: float
 
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
 
 
 # -------------------------------------------------------------------
 # Fake orchestrator (keeps tests offline & deterministic)
 # -------------------------------------------------------------------
-
 
 class FakeOrchestrator:
     def __init__(self):
@@ -121,7 +119,7 @@ class FakeOrchestrator:
         return UnifiedResponse(
             request_id="req_ask_1",
             text="OK",
-            provider=model_type or "auto",
+            provider=model_type,
             model=kwargs.get("model") or "fake-model",
             latency_ms=10,
             token_usage=TokenUsage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
@@ -132,7 +130,11 @@ class FakeOrchestrator:
         )
 
     def compare(
-        self, prompt: str, models_list: list[dict[str, Any]], context: Any = None, **kwargs
+        self,
+        prompt: str,
+        models_list: List[Dict[str, Any]],
+        context: Any = None,
+        **kwargs
     ) -> FakeMultiUnifiedResponse:
         self.last_compare_prompt = prompt
         r1 = UnifiedResponse(
@@ -181,7 +183,6 @@ class FakeOrchestrator:
 # Dummy client to access BaseAIClient helpers
 # -------------------------------------------------------------------
 
-
 class DummyClient(BaseAIClient):
     def __init__(self):
         # don't call BaseAIClient.__init__ (signature may vary)
@@ -198,13 +199,20 @@ class DummyClient(BaseAIClient):
 # Pytest fixtures
 # -------------------------------------------------------------------
 
-
 @pytest.fixture()
 def app():
     """
     Build FastAPI app and override get_orchestrator dependency.
     """
     app = create_app()
+
+    # Keep these tests DB-agnostic and deterministic.
+    from server.routes import chat as chat_route
+    from server.routes import compare as compare_route
+    from server.routes import history as history_route
+    chat_route.API_DB_ENABLED = False
+    compare_route.API_DB_ENABLED = False
+    history_route.API_DB_ENABLED = False
 
     from server import dependencies as deps
 
@@ -226,7 +234,6 @@ def client(app):
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
-
 
 def test_health_ok(client):
     r = client.get("/health")

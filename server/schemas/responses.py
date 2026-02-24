@@ -1,9 +1,7 @@
 """Pydantic response models (DTOs) for FastAPI endpoints."""
 
-from datetime import datetime, timezone
-from typing import Any
-
 from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
 
 
 class TokenUsageDTO(BaseModel):
@@ -17,7 +15,7 @@ class ErrorDTO(BaseModel):
     message: str
     provider: str
     retryable: bool
-    details: dict[str, Any] = Field(default_factory=dict)
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponseDTO(BaseModel):
@@ -29,19 +27,13 @@ class ChatResponseDTO(BaseModel):
     token_usage: TokenUsageDTO
     estimated_cost: float
     cost_currency: str = "USD"
-    finish_reason: str | None = None
-    error: ErrorDTO | None = None
+    finish_reason: Optional[str] = None
+    error: Optional[ErrorDTO] = None
     timestamp: str
-    research_used: bool = False
-    sources: list[dict[str, Any]] = Field(default_factory=list)
-    research_error: str | None = None
 
     @classmethod
     def from_unified_response(cls, ur):
         """Convert UnifiedResponse to DTO."""
-        # Extract research metadata (handle None case)
-        md = ur.metadata or {}
-
         return cls(
             request_id=ur.request_id,
             text=ur.text,
@@ -51,70 +43,37 @@ class ChatResponseDTO(BaseModel):
             token_usage=TokenUsageDTO(
                 prompt_tokens=ur.token_usage.prompt_tokens,
                 completion_tokens=ur.token_usage.completion_tokens,
-                total_tokens=ur.token_usage.total_tokens,
+                total_tokens=ur.token_usage.total_tokens
             ),
             estimated_cost=ur.estimated_cost,
             cost_currency=ur.cost_currency,
             finish_reason=ur.finish_reason,
-            error=(
-                ErrorDTO(
-                    code=ur.error.code,
-                    message=ur.error.message,
-                    provider=ur.error.provider,
-                    retryable=ur.error.retryable,
-                    details=ur.error.details,
-                )
-                if ur.error
-                else None
-            ),
-            timestamp=ur.timestamp,
-            research_used=md.get("research_used", False),
-            sources=md.get("sources", []),
-            research_error=md.get("research_error"),
+            error=ErrorDTO(
+                code=ur.error.code,
+                message=ur.error.message,
+                provider=ur.error.provider,
+                retryable=ur.error.retryable,
+                details=ur.error.details
+            ) if ur.error else None,
+            timestamp=ur.timestamp
         )
 
 
 class CompareResponseDTO(BaseModel):
     request_group_id: str
-    responses: list[ChatResponseDTO]
+    responses: List[ChatResponseDTO]
     success_count: int
     error_count: int
     total_tokens: int
     total_cost: float
     timestamp: str
 
-    @staticmethod
-    def _resolve_compare_timestamp(mur: Any) -> str:
-        """
-        Support both MultiUnifiedResponse variants:
-        - models.multi_unified_response.MultiUnifiedResponse -> created_at: datetime
-        - models.unified_response.MultiUnifiedResponse -> timestamp: str
-        """
-        timestamp_value = getattr(mur, "timestamp", None)
-        if isinstance(timestamp_value, str) and timestamp_value.strip():
-            return timestamp_value
-
-        created_at = getattr(mur, "created_at", None)
-        if isinstance(created_at, datetime):
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=timezone.utc)
-            return created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-        if created_at and hasattr(created_at, "isoformat"):
-            try:
-                return str(created_at.isoformat())
-            except Exception:
-                pass
-
-        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
     @classmethod
     def from_multi_unified_response(cls, mur):
         """Convert MultiUnifiedResponse to DTO."""
-        normalized_responses = [r for r in mur.responses if r is not None]
         return cls(
             request_group_id=mur.request_group_id,
-            responses=[ChatResponseDTO.from_unified_response(r) for r in normalized_responses],
+            responses=[ChatResponseDTO.from_unified_response(r) for r in mur.responses],
             success_count=mur.success_count,
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,
@@ -127,3 +86,129 @@ class HealthResponseDTO(BaseModel):
     status: str
     timestamp: str
     version: str = "1.0.0"
+
+
+class FailedAttemptDTO(BaseModel):
+    request_id: str
+    request_group_id: str
+    attempt_number: int
+    tier: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    validation: Optional[str] = None
+    latency_ms: Optional[int] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class FailedAttemptsByGroupDTO(BaseModel):
+    request_group_id: str
+    count: int
+    items: List[FailedAttemptDTO] = Field(default_factory=list)
+
+
+class UsageTotalsDTO(BaseModel):
+    requests: int
+    tokens: int
+    cost: float
+
+
+class UsageBucketDTO(BaseModel):
+    bucket: str
+    requests: int
+    tokens: int
+    cost: float
+
+
+class UsageReportDTO(BaseModel):
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    group_by: str
+    totals: UsageTotalsDTO
+    breakdown: List[UsageBucketDTO] = Field(default_factory=list)
+
+
+class SavingsTotalsDTO(BaseModel):
+    requests: int
+    successful_requests: int = 0
+    failed_requests: int = 0
+    actual_cost: float
+    baseline_cost: float
+    savings_amount: float
+    savings_pct: float
+
+
+class SavingsBucketDTO(BaseModel):
+    bucket: str
+    requests: int
+    successful_requests: int = 0
+    failed_requests: int = 0
+    actual_cost: float
+    baseline_cost: float
+    savings_amount: float
+    savings_pct: float
+
+
+class SavingsReportDTO(BaseModel):
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    group_by: str
+    totals: SavingsTotalsDTO
+    breakdown: List[SavingsBucketDTO] = Field(default_factory=list)
+
+
+class ByokProviderStatusDTO(BaseModel):
+    provider: str
+    configured: bool
+    key_last4: Optional[str] = None
+    fingerprint_prefix: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ByokStatusDTO(BaseModel):
+    providers: List[ByokProviderStatusDTO] = Field(default_factory=list)
+    baseline_provider: Optional[str] = None
+    baseline_model: Optional[str] = None
+    requests_per_minute: Optional[int] = None
+
+
+class ByokUpdateResponseDTO(BaseModel):
+    updated_providers: List[str] = Field(default_factory=list)
+    baseline_provider: Optional[str] = None
+    baseline_model: Optional[str] = None
+    requests_per_minute: Optional[int] = None
+
+
+class ByokDeleteResponseDTO(BaseModel):
+    deleted_count: int
+
+
+class WhoAmIBaselineDTO(BaseModel):
+    provider: str
+    model: str
+    source: str
+
+
+class WhoAmIRateLimitConfigDTO(BaseModel):
+    requests_per_minute: int
+    daily_cap_scope: str
+    daily_token_cap: Optional[int] = None
+    daily_cost_cap: Optional[float] = None
+
+
+class WhoAmIBreakerConfigDTO(BaseModel):
+    failure_threshold: int
+    window_seconds: int
+    cooldown_seconds: int
+    scope: str
+
+
+class WhoAmIResponseDTO(BaseModel):
+    api_key_id: Optional[str] = None
+    user_id: Optional[str] = None
+    plan_tier: Optional[str] = None
+    storage_policy: str
+    redact_pii: bool
+    baseline: WhoAmIBaselineDTO
+    rate_limits: WhoAmIRateLimitConfigDTO
+    breakers: WhoAmIBreakerConfigDTO

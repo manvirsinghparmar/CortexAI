@@ -4,19 +4,20 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Tuple
-from fastapi import APIRouter, Depends, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from orchestrator.core import CortexOrchestrator
-from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
+
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
+from server import persistence as persistence_service
 from server.dependencies import get_api_key, get_orchestrator
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
-from server.dependencies import get_api_key, get_orchestrator
-from server.utils import validate_and_trim_context, clamp_max_tokens
+from server.utils import clamp_max_tokens, validate_and_trim_context
+from utils.logger import get_logger
 from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Compare"])
@@ -24,12 +25,16 @@ router = APIRouter(prefix="/v1", tags=["Compare"])
 MAX_COMPARE_TARGETS = 4
 STREAM_LINE_DELAY_S = 0.1
 
+API_DB_ENABLED = persistence_service.API_DB_ENABLED
+ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 
-@dataclass(frozen=True)
-class ApiKeyPersistenceResolution:
-    user_id: UUID
-    api_key_id: UUID | None
-    decision_path: str
+logger = get_logger(__name__)
+
+_resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
+_enforce_usage_caps = persistence_service.enforce_usage_caps
+_resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
+_persist_compare_interaction = persistence_service.persist_compare_interaction
+_resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
 
 
 def _build_user_context(context_req):
@@ -44,323 +49,10 @@ def _build_user_context(context_req):
             for item in context_req.conversation_history
         ]
 
-    return UserContext(session_id=context_req.session_id, conversation_history=history)
-
-
-def _extract_routing_payload(response) -> tuple[dict, list[dict], dict]:
-    metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    routing_metadata = metadata.get("routing", {})
-    if not isinstance(routing_metadata, dict):
-        return {}, [], {}
-
-    attempts = routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
-    if not isinstance(attempts, list):
-        attempts = []
-
-    features = routing_metadata.get("features", {})
-    if not isinstance(features, dict):
-        features = {}
-
-    return routing_metadata, attempts, features
-
-
-def _safe_uuid(value: str | None) -> UUID | None:
-    if not value:
-        return None
-    try:
-        return UUID(value)
-    except Exception:
-        return None
-
-
-def _env_flag(name: str, default: str) -> bool:
-    return os.getenv(name, default).strip().lower() == "true"
-
-
-def _resolve_api_key_in_session(
-    db_session,
-    *,
-    api_key: str,
-    request_id: str,
-    reject_unmapped: bool,
-) -> ApiKeyPersistenceResolution | None:
-    resolved = get_user_by_api_key(db_session, api_key)
-    if resolved:
-        user_id, api_key_id = resolved
-        return ApiKeyPersistenceResolution(
-            user_id=user_id,
-            api_key_id=api_key_id,
-            decision_path="mapped",
-        )
-
-    auto_register = _env_flag("AUTO_REGISTER_UNMAPPED_API_KEYS", AUTO_REGISTER_UNMAPPED_DEFAULT)
-    allow_unmapped = _env_flag("ALLOW_UNMAPPED_API_KEY_PERSIST", "false")
-
-    fallback_email = os.getenv("API_KEY_FALLBACK_USER_EMAIL", "api@cortexai.local")
-    fallback_name = os.getenv("API_KEY_FALLBACK_USER_NAME", "API Service User")
-
-    if auto_register:
-        owner_user_id = get_or_create_service_user(
-            db_session,
-            email=fallback_email,
-            display_name=fallback_name,
-        )
-        api_key_id, owner_user_id = create_api_key(
-            db_session,
-            user_id=owner_user_id,
-            raw_api_key=api_key,
-            label="auto-registered",
-        )
-        logger.warning(
-            "API key auto-registered for compare persistence",
-            extra={
-                "extra_fields": {
-                    "request_id": request_id,
-                    "resolved_user_id": str(owner_user_id),
-                    "api_key_id": str(api_key_id),
-                    "decision_path": "auto_registered",
-                }
-            },
-        )
-        return ApiKeyPersistenceResolution(
-            user_id=owner_user_id,
-            api_key_id=api_key_id,
-            decision_path="auto_registered",
-        )
-
-    if allow_unmapped:
-        owner_user_id = get_or_create_service_user(
-            db_session,
-            email=fallback_email,
-            display_name=fallback_name,
-        )
-        logger.warning(
-            "Unmapped API key compare persisted under fallback service user (no api_key_id)",
-            extra={
-                "extra_fields": {
-                    "request_id": request_id,
-                    "resolved_user_id": str(owner_user_id),
-                    "api_key_id": None,
-                    "decision_path": "fallback_user_without_api_key_id",
-                }
-            },
-        )
-        return ApiKeyPersistenceResolution(
-            user_id=owner_user_id,
-            api_key_id=None,
-            decision_path="fallback_user_without_api_key_id",
-        )
-
-    if reject_unmapped:
-        logger.warning(
-            "Rejecting compare request: unmapped API key and fallback disabled",
-            extra={
-                "extra_fields": {
-                    "request_id": request_id,
-                    "decision_path": "rejected_unmapped_key",
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "API key is not registered for persistence. "
-                "Enable AUTO_REGISTER_UNMAPPED_API_KEYS=true or "
-                "ALLOW_UNMAPPED_API_KEY_PERSIST=true for testing overrides."
-            ),
-        )
-
-    return None
-
-
-def _resolve_api_key_for_request(*, api_key: str, request_id: str) -> ApiKeyPersistenceResolution | None:
-    """
-    Resolve API key -> persistence attribution before model invocation.
-    """
-    if not API_DB_ENABLED:
-        return None
-
-    db_gen = None
-    db_session = None
-    try:
-        db_gen = get_db()
-        db_session = next(db_gen)
-
-        resolution = _resolve_api_key_in_session(
-            db_session,
-            api_key=api_key,
-            request_id=request_id,
-            reject_unmapped=True,
-        )
-        db_session.commit()
-        return resolution
-    except HTTPException:
-        if db_session is not None:
-            db_session.rollback()
-        raise
-    except Exception as exc:
-        if db_session is not None:
-            db_session.rollback()
-        logger.warning(
-            "Compare API key resolution failed",
-            extra={
-                "extra_fields": {
-                    "request_id": request_id,
-                    "error": str(exc),
-                    "decision_path": "resolution_error",
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to resolve API key attribution",
-        ) from exc
-    finally:
-        if db_gen is not None:
-            db_gen.close()
-
-
-def _persist_api_compare_interaction(
-    *,
-    api_key: str,
-    prompt: str,
-    compare_response,
-    request_context,
-    research_mode: str,
-    resolution: ApiKeyPersistenceResolution | None,
-) -> None:
-    """
-    Persist API compare request/response set and optional routing telemetry.
-    Failures are isolated and never affect API response flow.
-    """
-    if not API_DB_ENABLED:
-        return
-
-    db_gen = None
-    db_session = None
-    request_group_id = _safe_uuid(getattr(compare_response, "request_group_id", None))
-
-    try:
-        db_gen = get_db()
-        db_session = next(db_gen)
-
-        resolved = resolution
-        if resolved is None:
-            mapped = get_user_by_api_key(db_session, api_key)
-            if not mapped:
-                logger.warning(
-                    "Skipping compare DB persistence: API key not mapped",
-                    extra={
-                        "extra_fields": {
-                            "request_group_id": str(request_group_id) if request_group_id else None,
-                            "decision_path": "unmapped_skip",
-                            "persistence_status": "skipped",
-                        }
-                    },
-                )
-                return
-            resolved = ApiKeyPersistenceResolution(
-                user_id=mapped[0],
-                api_key_id=mapped[1],
-                decision_path="mapped",
-            )
-
-        user_id = resolved.user_id
-        api_key_id = resolved.api_key_id
-        session_id = _safe_uuid(request_context.session_id) if request_context else None
-
-        responses = list(getattr(compare_response, "responses", []) or [])
-        persisted_count = 0
-        routing_persisted_count = 0
-
-        for resp in responses:
-            if resp is None:
-                continue
-
-            token_usage = getattr(resp, "token_usage", None)
-            llm_request_id = create_llm_request(
-                db_session,
-                user_id=user_id,
-                request_id=getattr(resp, "request_id", "unknown"),
-                route_mode="compare",
-                provider=getattr(resp, "provider", "unknown"),
-                model=getattr(resp, "model", "unknown"),
-                prompt=prompt,
-                session_id=session_id,
-                request_group_id=request_group_id,
-                api_key_id=api_key_id,
-                input_tokens_est=(
-                    getattr(token_usage, "prompt_tokens", None) if token_usage else None
-                ),
-                store_prompt=False,
-            )
-            create_llm_response(db_session, llm_request_id, resp)
-            persisted_count += 1
-
-            routing_metadata, attempts, features = _extract_routing_payload(resp)
-            if routing_metadata:
-                metadata = resp.metadata if isinstance(resp.metadata, dict) else {}
-                prompt_category = (
-                    metadata.get("prompt_category")
-                    or routing_metadata.get("prompt_category")
-                    or "unknown"
-                )
-                normalized_research_mode = (
-                    metadata.get("research_mode")
-                    or routing_metadata.get("research_mode")
-                    or research_mode
-                    or "off"
-                )
-                routing_decision_id = create_routing_decision(
-                    db_session,
-                    llm_request_id,
-                    routing_metadata,
-                    prompt_category=str(prompt_category),
-                    research_mode=str(normalized_research_mode),
-                    features=features,
-                )
-                create_routing_attempts(db_session, routing_decision_id, attempts)
-                routing_persisted_count += 1
-
-            upsert_usage_daily(
-                db_session,
-                user_id=user_id,
-                total_tokens=getattr(token_usage, "total_tokens", 0) if token_usage else 0,
-                estimated_cost=float(getattr(resp, "estimated_cost", 0.0) or 0.0),
-            )
-
-        db_session.commit()
-        logger.info(
-            "API compare persisted to DB",
-            extra={
-                "extra_fields": {
-                    "request_group_id": str(request_group_id) if request_group_id else None,
-                    "resolved_user_id": str(user_id),
-                    "api_key_id": str(api_key_id) if api_key_id else None,
-                    "decision_path": resolved.decision_path,
-                    "persisted_count": persisted_count,
-                    "routing_persisted_count": routing_persisted_count,
-                    "persistence_status": "success",
-                }
-            },
-        )
-    except Exception as exc:
-        if db_session is not None:
-            db_session.rollback()
-        logger.warning(
-            "API compare DB persistence failed",
-            extra={
-                "extra_fields": {
-                    "request_group_id": str(request_group_id) if request_group_id else None,
-                    "error": str(exc),
-                    "decision_path": resolution.decision_path if resolution else "unknown",
-                    "persistence_status": "failed",
-                }
-            },
-        )
-    finally:
-        if db_gen is not None:
-            db_gen.close()
+    return UserContext(
+        session_id=context_req.session_id,
+        conversation_history=history,
+    )
 
 
 def _iter_stream_lines(text: str):
@@ -419,7 +111,7 @@ async def _run_compare_target(
     orchestrator: CortexOrchestrator,
     timeout_s: float | None,
     kwargs: dict,
-) -> Tuple[int, UnifiedResponse]:
+):
     """Run one compare target and capture timeout as UnifiedResponse."""
     ask_coro = asyncio.to_thread(
         orchestrator.ask,
@@ -444,7 +136,6 @@ async def _run_compare_target(
             retryable=True,
             details={"timeout_seconds": timeout_s},
         )
-
 
 @router.post("/compare", response_model=CompareResponseDTO)
 async def compare(
@@ -474,6 +165,17 @@ async def compare(
         enabled=research_mode,
     )
 
+    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    provider_api_keys: dict[str, str] = {}
+    if API_DB_ENABLED:
+        req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
+        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        providers = [(target.provider or "").strip().lower() for target in request.targets]
+        provider_api_keys = _resolve_runtime_byok_provider_keys(
+            resolution=persistence_resolution,
+            providers=providers,
+        )
+
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
     kwargs = {}
@@ -481,19 +183,9 @@ async def compare(
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    if provider_api_keys:
+        kwargs["provider_api_keys"] = provider_api_keys
 
-    canonical_request_group_id = str(uuid4())
-
-    resolution = None
-    if API_DB_ENABLED:
-        middleware_request_id = getattr(http_request.state, "request_id", "unknown")
-        resolution = await asyncio.to_thread(
-            _resolve_api_key_for_request,
-            api_key=api_key,
-            request_id=middleware_request_id,
-        )
-
-    research_mode = request.research_mode or "off"
     response = await asyncio.to_thread(
         orchestrator.compare,
         prompt=effective_prompt,
@@ -501,39 +193,43 @@ async def compare(
         context=context,
         timeout_s=request.timeout_s,
         token_tracker=None,
-        research_mode=research_mode,
-        request_group_id=canonical_request_group_id,
         **kwargs,
-    )
-
-    await asyncio.to_thread(
-        _persist_api_compare_interaction,
-        api_key=api_key,
-        prompt=request.prompt,
-        compare_response=response,
-        request_context=request.context,
-        research_mode=research_mode,
-        resolution=resolution,
     )
 
     dto = CompareResponseDTO.from_multi_unified_response(response)
 
-    # Persist each model's response to history DB (best-effort)
-    try:
-        from server.database import save_chat
-        for r in dto.responses:
-            save_chat(
+    if API_DB_ENABLED and persistence_resolution is not None:
+        try:
+            persistable = [r for r in response.responses if r is not None]
+            _persist_compare_interaction(
+                api_key=api_key,
+                resolution=persistence_resolution,
                 prompt=request.prompt,
-                provider=r.provider,
-                model=r.model,
-                response=r.text,
-                latency_ms=r.latency_ms,
-                tokens=r.token_usage.total_tokens if r.token_usage else None,
-                cost=r.estimated_cost,
-                mode="compare",
+                responses=persistable,
+                request_group_id=dto.request_group_id,
+                requested_session_id=request.context.session_id if request.context else None,
+                research_mode=research_mode,
             )
-    except Exception:
-        pass
+        except Exception:
+            logger.exception("Compare persistence failed in DB mode")
+    else:
+        # Legacy/local fallback when DATABASE_URL is not configured.
+        try:
+            from server.database import save_chat
+
+            for r in dto.responses:
+                save_chat(
+                    prompt=request.prompt,
+                    provider=r.provider,
+                    model=r.model,
+                    response=r.text,
+                    latency_ms=r.latency_ms,
+                    tokens=r.token_usage.total_tokens if r.token_usage else None,
+                    cost=r.estimated_cost,
+                    mode="compare",
+                )
+        except Exception:
+            pass
 
     return dto
 
@@ -541,20 +237,21 @@ async def compare(
 @router.post("/compare/stream")
 async def compare_stream(
     request: CompareRequest,
+    http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """Stream compare responses as NDJSON events, then emit aggregate summary."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum {MAX_COMPARE_TARGETS} targets allowed"
+            detail=f"Maximum {MAX_COMPARE_TARGETS} targets allowed",
         )
 
     if request.context and len(request.targets) > 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Context not allowed with more than 2 targets"
+            detail="Context not allowed with more than 2 targets",
         )
 
     request.context = validate_and_trim_context(request.context)
@@ -565,24 +262,41 @@ async def compare_stream(
         enabled=research_mode,
     )
 
+    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    provider_api_keys: dict[str, str] = {}
+    if API_DB_ENABLED:
+        req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
+        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        providers = [(target.provider or "").strip().lower() for target in request.targets]
+        provider_api_keys = _resolve_runtime_byok_provider_keys(
+            resolution=persistence_resolution,
+            providers=providers,
+        )
+
     kwargs = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    if provider_api_keys:
+        kwargs["provider_api_keys"] = provider_api_keys
+
+    request_group_id = str(uuid.uuid4())
 
     async def event_stream():
-        yield _to_ndjson({
-            "type": "start",
-            "mode": "compare",
-            "target_count": len(request.targets),
-            "research_mode": research_mode,
-            "web_sources": research_meta.get("source_count", 0),
-            "web_source_items": research_meta.get("sources", []),
-        })
+        yield _to_ndjson(
+            {
+                "type": "start",
+                "mode": "compare",
+                "target_count": len(request.targets),
+                "research_mode": research_mode,
+                "web_sources": research_meta.get("source_count", 0),
+                "web_source_items": research_meta.get("sources", []),
+            }
+        )
 
+        ordered_responses: list[UnifiedResponse | None] = [None] * len(request.targets)
         try:
-            ordered_responses = [None] * len(request.targets)
             tasks = []
 
             for i, target in enumerate(request.targets):
@@ -597,24 +311,28 @@ async def compare_stream(
                         message=f"Invalid model config: provider='{provider}', model='{model}'",
                         retryable=False,
                     )
+                    ordered_responses[i] = bad
                     bad_dto = ChatResponseDTO.from_unified_response(bad)
-                    ordered_responses[i] = bad_dto
 
-                    yield _to_ndjson({
-                        "type": "response_start",
-                        "index": i,
-                        "provider": bad_dto.provider,
-                        "model": bad_dto.model,
-                    })
+                    yield _to_ndjson(
+                        {
+                            "type": "response_start",
+                            "index": i,
+                            "provider": bad_dto.provider,
+                            "model": bad_dto.model,
+                        }
+                    )
                     stream_text = f"Error: {bad_dto.error.message}" if bad_dto.error else ""
                     for line in _iter_stream_lines(stream_text):
                         yield _to_ndjson({"type": "line", "index": i, "text": line})
                         await asyncio.sleep(STREAM_LINE_DELAY_S)
-                    yield _to_ndjson({
-                        "type": "response_done",
-                        "index": i,
-                        "response": jsonable_encoder(bad_dto),
-                    })
+                    yield _to_ndjson(
+                        {
+                            "type": "response_done",
+                            "index": i,
+                            "response": jsonable_encoder(bad_dto),
+                        }
+                    )
                     continue
 
                 tasks.append(
@@ -634,15 +352,17 @@ async def compare_stream(
 
             for task in asyncio.as_completed(tasks):
                 idx, response = await task
+                ordered_responses[idx] = response
                 dto = ChatResponseDTO.from_unified_response(response)
-                ordered_responses[idx] = dto
 
-                yield _to_ndjson({
-                    "type": "response_start",
-                    "index": idx,
-                    "provider": dto.provider,
-                    "model": dto.model,
-                })
+                yield _to_ndjson(
+                    {
+                        "type": "response_start",
+                        "index": idx,
+                        "provider": dto.provider,
+                        "model": dto.model,
+                    }
+                )
 
                 stream_text = dto.text or ""
                 if not stream_text and dto.error:
@@ -651,15 +371,19 @@ async def compare_stream(
                     yield _to_ndjson({"type": "line", "index": idx, "text": line})
                     await asyncio.sleep(STREAM_LINE_DELAY_S)
 
-                yield _to_ndjson({
-                    "type": "response_done",
-                    "index": idx,
-                    "response": jsonable_encoder(dto),
-                })
+                yield _to_ndjson(
+                    {
+                        "type": "response_done",
+                        "index": idx,
+                        "response": jsonable_encoder(dto),
+                    }
+                )
 
-            dtos = [r for r in ordered_responses if r is not None]
+            raw_responses = [r for r in ordered_responses if r is not None]
+            dtos = [ChatResponseDTO.from_unified_response(r) for r in raw_responses]
+
             compare_payload = {
-                "request_group_id": str(uuid.uuid4()),
+                "request_group_id": request_group_id,
                 "responses": [jsonable_encoder(r) for r in dtos],
                 "success_count": sum(1 for r in dtos if r.error is None),
                 "error_count": sum(1 for r in dtos if r.error is not None),
@@ -670,24 +394,63 @@ async def compare_stream(
 
             yield _to_ndjson({"type": "done", "mode": "compare", "compare": compare_payload})
 
-            # Persist each model response to history DB (best-effort)
-            try:
-                from server.database import save_chat
-                for r in dtos:
-                    save_chat(
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    _persist_compare_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
                         prompt=request.prompt,
-                        provider=r.provider,
-                        model=r.model,
-                        response=r.text,
-                        latency_ms=r.latency_ms,
-                        tokens=r.token_usage.total_tokens if r.token_usage else None,
-                        cost=r.estimated_cost,
-                        mode="compare",
+                        responses=raw_responses,
+                        request_group_id=request_group_id,
+                        requested_session_id=request.context.session_id if request.context else None,
+                        research_mode=research_mode,
                     )
-            except Exception:
-                pass
+                except Exception:
+                    logger.exception("Compare stream persistence failed in DB mode")
+            else:
+                # Legacy/local fallback when DATABASE_URL is not configured.
+                try:
+                    from server.database import save_chat
+
+                    for r in dtos:
+                        save_chat(
+                            prompt=request.prompt,
+                            provider=r.provider,
+                            model=r.model,
+                            response=r.text,
+                            latency_ms=r.latency_ms,
+                            tokens=r.token_usage.total_tokens if r.token_usage else None,
+                            cost=r.estimated_cost,
+                            mode="compare",
+                        )
+                except Exception:
+                    pass
 
         except Exception as exc:
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    partial_responses = [r for r in ordered_responses if r is not None]
+                    if not partial_responses:
+                        partial_responses = [
+                            persistence_service.build_error_response(
+                                provider="unknown",
+                                model="unknown",
+                                message=str(exc),
+                                code="provider_error",
+                                retryable=True,
+                            )
+                        ]
+                    _persist_compare_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
+                        prompt=request.prompt,
+                        responses=partial_responses,
+                        request_group_id=request_group_id,
+                        requested_session_id=request.context.session_id if request.context else None,
+                        research_mode=research_mode,
+                    )
+                except Exception:
+                    logger.exception("Compare stream error persistence failed in DB mode")
             yield _to_ndjson({"type": "error", "message": str(exc)})
 
     return StreamingResponse(

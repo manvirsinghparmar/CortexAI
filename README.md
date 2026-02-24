@@ -1,365 +1,549 @@
-# CortexAI - Multi-Provider LLM CLI + API
+# CortexAI - B2B LLM Gateway (CLI + API + Frontend)
 
-Python project for running chat/comparison workflows across OpenAI, Gemini, DeepSeek, and Grok with:
-- Smart tier-based routing (`T0` to `T3`)
-- Unified response contract across providers
-- FastAPI endpoints for app integration
-- Optional DB persistence and CLI usage caps
-- Optional web research (Tavily)
+CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek, and Grok with:
+- API-first chat/compare/streaming
+- smart routing + fallback
+- full DB audit trail in DB mode
+- BYOK tenant key support
+- usage/cost/savings reporting
 
-## What Is In This Repo
+## Launch-Ready Capabilities
 
-- CLI app: `main.py`
-- API server: `run_server.py` and `server/`
-- Orchestration/routing: `orchestrator/`
-- Provider clients: `api/`
-- Shared response models: `models/`
-- Config and model registry: `config/`
-- Optional DB persistence: `db/`
-- Tests: `tests/`
+- API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`
+- Integration diagnostics endpoint: `/v1/whoami`
+- Request attribution: `users`, `api_keys`, `sessions`, `messages`, `llm_requests`, `llm_responses`
+- Routing telemetry: `routing_decisions`, `routing_attempts`
+- Governance: `usage_daily`, daily caps, per-key rate limit, circuit breaker
+- Savings telemetry: per-request baseline vs actual cost (`llm_savings`)
+- Reporting/export: `/v1/usage`, `/v1/savings`, CSV export endpoints
+- BYOK lifecycle: set/status/delete with encrypted-at-rest secrets
+- Privacy controls: metadata-only persistence and optional PII redaction
+- Optional prompt optimization endpoint: `/v1/optimize`
+- Release gate: compile checks + full tests + DB smoke
 
-## Key Features
+## Runtime Modes
 
-- Multi-provider clients with one response shape (`UnifiedResponse`)
-- Smart routing modes:
-  - `smart`: automatic tier/model selection
-  - `cheap`: force start from cheap tier (`T0`)
-  - `strong`: force start from strong tier (`T2`)
-- Tier escalation/fallback on low-quality responses, timeouts, provider errors, and refusals
-- Explicit model override (`provider + model`) with registry validation
-- CLI multiline paste mode for code (`/paste`, finish with `/end`)
-- API auth via `X-API-Key`
-- Compare endpoint for side-by-side model results
-- DB-backed API persistence for `/v1/chat` and `/v1/compare`
-- Canonical compare `request_group_id` across API response, orchestrator logs, and DB rows
-- Token/cost tracking and structured JSON logs
+- `DATABASE_URL` set (DB mode):
+  - FastAPI persists to repository-backed SQLAlchemy tables (same artifact family as CLI).
+  - Daily caps, rate limits, BYOK settings, savings, and reporting endpoints are active.
+- `DATABASE_URL` not set (fallback mode):
+  - API still works.
+  - History endpoints use local SQLite `cortexai_history.db`.
+  - DB-only endpoints (`/v1/usage`, `/v1/savings`, `/v1/byok`) return `501`.
 
-## Setup
+## Quick Start
 
-1. Create and activate a virtual environment:
-
+1. Create and activate a virtual environment.
 ```bash
 python -m venv venv
-# Windows:
 venv\Scripts\activate
 ```
 
-2. Install dependencies:
-
+2. Install dependencies.
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-3. Create `.env` from `.env.example` and set keys:
+3. Configure `.env`.
 
+Minimum API setup:
 ```ini
-MODEL_TYPE=openai
+API_KEYS=dev-key-1
 OPENAI_API_KEY=...
 GOOGLE_GEMINI_API_KEY=...
 DEEPSEEK_API_KEY=...
 GROK_API_KEY=...
-API_KEYS=dev-key-1,dev-key-2
 ```
 
-Optional:
-- `DATABASE_URL` to enable DB persistence
-- `TAVILY_API_KEY` to enable web research
-- `ENABLE_PROMPT_OPTIMIZATION=true` for prompt optimization
-- `AUTO_REGISTER_UNMAPPED_API_KEYS` / `ALLOW_UNMAPPED_API_KEY_PERSIST` for unmapped-key persistence behavior
+Enable DB mode:
+```ini
+DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname
+DB_SCHEMA=public
+AUTO_REGISTER_UNMAPPED_API_KEYS=true
+```
+
+## Key Environment Variables
+
+```ini
+# Governance
+DAILY_TOKEN_CAP=
+DAILY_COST_CAP=
+DAILY_CAP_SCOPE=api_key   # api_key|user
+REQUESTS_PER_MINUTE=60
+REPORT_MAX_RANGE_DAYS=366 # reporting/export date-range guard (<=0 disables)
+
+# Circuit breaker
+CIRCUIT_FAILURE_THRESHOLD=5
+CIRCUIT_WINDOW_SECONDS=60
+CIRCUIT_COOLDOWN_SECONDS=120
+
+# Storage/privacy
+STORAGE_POLICY=metadata   # full|metadata
+REDACT_PII=false          # true|false
+
+# BYOK encryption
+MASTER_KEY=replace-with-strong-random-secret
+
+# Savings baseline
+BASELINE_MODEL_ID=openai:gpt-4o-mini
+# or BASELINE_PROVIDER=openai + BASELINE_MODEL=gpt-4o-mini
+```
+
+## Pricing Configuration
+
+- Runtime token-cost estimation uses `config/pricing.py`.
+- Smart-router model economics use `config/model_registry.yaml`.
+- Keep both files in sync when provider pricing changes.
+- Current pricing tables were refreshed on `2026-02-22`.
+- Validation command:
+```bash
+python -m pytest tests/test_registry_pricing_alignment.py -q
+```
 
 ## Run
-
-CLI:
-
-```bash
-python main.py
-```
-
-API:
 
 ```bash
 python run_server.py --reload
 ```
 
-Health check:
+Useful URLs:
+- Health: `http://127.0.0.1:8000/health`
+- Swagger: `http://127.0.0.1:8000/docs`
+- Frontend: `http://127.0.0.1:8000/`
 
-```bash
-curl http://127.0.0.1:8000/health
+## Authentication
+
+All `/v1/*` routes require:
+```http
+X-API-Key: <tenant-api-key>
 ```
 
-## CLI Commands
+Optional request correlation:
+```http
+X-Request-ID: <custom-id>
+```
 
-- `help` - show commands
-- `stats` - session token/cost stats
-- `/paste` - enter multiline mode
-- `/end` - submit multiline text
-- `/cancel` - cancel multiline input
-- `/reset` - clear conversation history
-- `/history` - show recent conversation
-- `/new` - create a new session
-- `/dbstats` - show DB usage (when DB enabled)
-- `exit` / `quit`
-
-Notes:
-- If pasted text looks like code and has no explicit task, CLI auto-prefixes: "Please review and refactor this code..."
-- Daily token/cost caps (`DAILY_TOKEN_CAP`, `DAILY_COST_CAP`) are enforced in CLI when DB is enabled.
+Integration debug snapshot:
+```bash
+curl -H "X-API-Key: dev-key-1" http://127.0.0.1:8000/v1/whoami
+```
+Returns owner IDs (in DB mode), active storage policy, baseline model, and guardrail config snapshot.
+Response includes:
+- `api_key_id`, `user_id`, `plan_tier`
+- `storage_policy`, `redact_pii`
+- `baseline.provider`, `baseline.model`, `baseline.source`
+- `rate_limits.requests_per_minute`, `rate_limits.daily_cap_scope`
+- `breakers.failure_threshold`, `breakers.window_seconds`, `breakers.cooldown_seconds`
 
 ## API Endpoints
 
 - `GET /health`
 - `POST /v1/chat`
+- `POST /v1/chat/stream`
 - `POST /v1/compare`
+- `POST /v1/compare/stream`
+- `POST /v1/optimize`
+- `GET /v1/history`
+- `DELETE /v1/history/{entry_id}`
+- `DELETE /v1/history`
+- `GET /v1/whoami`
+- `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
+- `GET /v1/savings/export?format=csv&from=...&to=...&group_by=...`
+- `POST /v1/byok`
+- `GET /v1/byok/status`
+- `DELETE /v1/byok?provider=openai` (or omit provider to delete all)
+- `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 
-### `POST /v1/chat`
+## Routing Modes
 
-`provider` is optional when using smart routing.
+For chat requests:
+- Explicit `provider` + `model`: deterministic target.
+- `routing.smart_mode=true`: smart selection path.
+- `routing.research_mode=true`: optional web-enriched prompt flow.
 
-Example (auto-routing):
+## Compare and `request_group_id`
 
+`/v1/compare` and `/v1/compare/stream` return a `request_group_id` that groups all per-target persisted rows.
+- Each target persists its own request/response pair.
+- All target rows share the same `request_group_id`.
+- Use this ID to debug failed attempts via admin route.
+
+## Streaming NDJSON Contract
+
+`/v1/chat/stream` events:
+- `start`
+- `line`
+- `response_done`
+- `done`
+- `error`
+
+`/v1/compare/stream` events:
+- `start`
+- `response_start`
+- `line`
+- `response_done`
+- `done` (contains aggregate compare payload with `request_group_id`)
+- `error`
+
+## BYOK (Bring Your Own Keys)
+
+Security model:
+- Provider secrets are encrypted at rest using `MASTER_KEY`.
+- Raw provider secrets are never returned from status APIs.
+- Runtime requests resolve tenant BYOK keys per provider when available.
+
+At-rest verification (DB spot check):
+```sql
+SELECT provider, encrypted_key, key_last4
+FROM byok_provider_keys
+ORDER BY updated_at DESC
+LIMIT 20;
+```
+Expected: `encrypted_key` should never match original plaintext keys.
+
+`MASTER_KEY` rotation (current model):
+1. Set `OLD_MASTER_KEY` outside app runtime and decrypt existing rows in a one-time admin script.
+2. Re-encrypt with new `MASTER_KEY`.
+3. Restart API with only the new `MASTER_KEY`.
+4. Spot-check `byok_provider_keys` and run `/v1/byok/status`.
+
+Set/update:
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/chat \
+curl -X POST http://127.0.0.1:8000/v1/byok \
   -H "X-API-Key: dev-key-1" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Fix this Python traceback",
-    "routing_mode": "smart"
+    "provider_keys": {"openai": "sk-tenant-openai-key"},
+    "baseline_provider": "openai",
+    "baseline_model": "gpt-4o-mini",
+    "requests_per_minute": 120
   }'
 ```
 
-Example (explicit model):
-
+Status:
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/chat \
-  -H "X-API-Key: dev-key-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Explain decorators",
-    "provider": "openai",
-    "model": "gpt-4o-mini"
-  }'
+curl -H "X-API-Key: dev-key-1" http://127.0.0.1:8000/v1/byok/status
 ```
 
-### `POST /v1/compare`
-
-- 2 to 4 targets required
-- Context is rejected when more than 2 targets are sent
-
+Delete:
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/compare \
-  -H "X-API-Key: dev-key-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Summarize this API design",
-    "targets": [
-      {"provider": "openai", "model": "gpt-4.1-mini"},
-      {"provider": "gemini", "model": "gemini-2.5-flash-lite"}
-    ]
-  }'
+curl -X DELETE -H "X-API-Key: dev-key-1" "http://127.0.0.1:8000/v1/byok?provider=openai"
 ```
 
-API guardrails:
-- Context trimmed to last 10 messages
-- Context hard limit: 8000 chars
-- `max_tokens` clamped to 1024
+## Usage and Savings Reporting
 
-Important:
-- API currently does not enforce CLI daily usage caps.
-
-API key DB registration (for persistence attribution):
-- `python tools/create_api_key.py --email api@cortexai.local --name "API Service User" --label "postman"`
-- For existing key: `python tools/create_api_key.py --email api@cortexai.local --key "dev-key-1" --label "env-dev-key"`
-- Zero-arg dev helper: `python tools/register_dev_key.py`
-
-API key persistence defaults:
-- `AUTO_REGISTER_UNMAPPED_API_KEYS=false`
-- `ALLOW_UNMAPPED_API_KEY_PERSIST=false`
-
-With both defaults, unmapped keys are rejected with `403` (safer testing default).
-
-## DB Migrations for API Persistence
-
+Usage:
 ```bash
-psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
-psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
+curl -H "X-API-Key: dev-key-1" \
+  "http://127.0.0.1:8000/v1/usage?from=2026-02-01&to=2026-02-22&group_by=day"
 ```
 
-What these add:
-- Owner invariant trigger for `llm_requests.user_id` vs `api_keys.user_id` when `api_key_id` is set
-- `llm_requests.request_group_id` + indexes for compare run grouping
-
-## Smart Routing
-
-Routing is driven by:
-- `orchestrator/prompt_analyzer.py` (detects code/math/analysis/factual/strict patterns)
-- `orchestrator/tier_decider.py` (maps prompt features to `T0`/`T1`/`T2`/`T3`)
-- `orchestrator/model_selector.py` (tag-aware ranking + cost/context constraints)
-- `orchestrator/response_validator.py` (validates quality; detects refusal patterns)
-- `orchestrator/fallback_manager.py` (retry same tier vs escalate)
-- `orchestrator/smart_router.py` (planning and attempt metadata)
-
-Model inventory is in `config/model_registry.yaml`.
-
-If `provider + model` are explicitly given:
-- Routing is bypassed
-- Selection is validated against registry
-- Unknown/disabled model returns `bad_request`
-
-## Discover Supported Models
-
-List models exposed by each provider account:
-
+Savings:
 ```bash
-list-models.cmd
+curl -H "X-API-Key: dev-key-1" \
+  "http://127.0.0.1:8000/v1/savings?from=2026-02-01&to=2026-02-22&group_by=model"
 ```
 
-PowerShell:
-
-```powershell
-.\list-models.ps1
-```
-
-Direct Python:
-
+CSV export (invoicing hook):
 ```bash
-python -c "from dotenv import load_dotenv; load_dotenv(); from utils.model_utils import ModelUtils; ModelUtils.list_all_available_models()"
+curl -H "X-API-Key: dev-key-1" \
+  "http://127.0.0.1:8000/v1/usage/export?format=csv&from=2026-02-01&to=2026-02-22&group_by=provider"
 ```
 
-Gemini note:
-- If capability metadata is missing, script prints raw models returned by API.
+Export determinism:
+- CSV column order is fixed.
+- Response includes `X-Export-Columns` for schema verification in ingestion jobs.
+- Large date ranges are bounded by `REPORT_MAX_RANGE_DAYS` to keep exports responsive.
 
-## Testing
+## Error Codes
 
-Run all tests:
+Common `detail.code` values:
+- `usage_limit_exceeded`
+- `rate_limited`
+- `provider_error`
+- `timeout`
+- `bad_request`
+- `invalid_model`
+- `unauthorized`
 
+## Minimal Python SDK Snippet
+
+```python
+import requests
+
+class CortexClient:
+    def __init__(self, base_url: str, api_key: str):
+        self.base_url = base_url.rstrip("/")
+        self.headers = {"X-API-Key": api_key}
+
+    def chat(self, prompt: str, provider: str | None = None, model: str | None = None):
+        payload = {"prompt": prompt}
+        if provider:
+            payload["provider"] = provider
+        if model:
+            payload["model"] = model
+        r = requests.post(f"{self.base_url}/v1/chat", json=payload, headers=self.headers, timeout=60)
+        r.raise_for_status()
+        return r.json()
+
+    def compare(self, prompt: str, targets: list[dict]):
+        payload = {"prompt": prompt, "targets": targets}
+        r = requests.post(f"{self.base_url}/v1/compare", json=payload, headers=self.headers, timeout=120)
+        r.raise_for_status()
+        return r.json()
+
+    def usage(self, from_date: str, to_date: str, group_by: str = "day"):
+        r = requests.get(
+            f"{self.base_url}/v1/usage",
+            params={"from": from_date, "to": to_date, "group_by": group_by},
+            headers=self.headers,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+```
+
+## Reliability and Guardrails
+
+- Daily cost/token caps are enforced only in DB mode.
+- Rate limiting is per API key (or key owner fallback when unmapped).
+- Circuit breaker opens per `provider:model` and allows automatic fallback.
+- Circuit breaker scope is currently global per `provider:model` (not tenant-scoped).
+- Retry/fallback paths are bounded; no unbounded loops.
+
+## Privacy and Retention
+
+- `STORAGE_POLICY=metadata`: no raw prompt/response text persistence.
+- `STORAGE_POLICY=full`: content persistence enabled.
+- `REDACT_PII=true`: regex redaction for emails, phones, and card-like numbers before DB storage.
+
+## Release Gate
+
+Use this before launch/deploy:
 ```bash
-pytest
+python scripts/release_gate.py
 ```
 
-Run only non-integration tests:
+It runs:
+- `python -m py_compile ...`
+- `pytest -q`
+- DB mode smoke test (`/v1/chat` + DB row assertions for `llm_requests` and `usage_daily`)
 
+## Tenant Onboarding Script
+
+One-command onboarding (create tenant user + api key + baseline + optional BYOK):
 ```bash
-pytest -m "not integration"
+python scripts/onboard_tenant.py \
+  --email founder@startup.com \
+  --name "Startup Tenant" \
+  --baseline-model-id openai:gpt-4o-mini \
+  --requests-per-minute 60 \
+  --byok-openai sk-tenant-openai-key \
+  --base-url http://127.0.0.1:8000
 ```
 
-Run API integration test file (server must be running):
+The script prints:
+- `user_id`, `api_key_id`
+- generated or assigned API key
+- ready-to-run `curl` examples including `/v1/whoami`
 
+## Monthly Proof Pack Script
+
+Generate customer proof pack (CSV + Markdown + HTML):
 ```bash
-pytest tests/test_api.py -v
+python scripts/generate_proof_pack.py --api-key dev-key-1 --month 2026-02
 ```
 
-## Current Project Structure
+Outputs:
+- `summary.csv` (spend, baseline, savings, error rate, config snapshot)
+- `top_models.csv`
+- `proof_pack.md`
+- `proof_pack.html` (print to PDF if needed)
+
+## Tests
+
+Run full suite:
+```bash
+python -m pytest -q
+```
+
+Run B2B launch tests only:
+```bash
+python -m pytest tests/test_b2b_launch_features.py -q
+```
+
+Run full B2B API checklist against a live server:
+```bash
+python scripts/e2e_b2b_checklist.py --base-url http://127.0.0.1:8000 --api-key dev-key-1
+```
+
+Postman collection:
+- `docs/postman/CortexAI_B2B.postman_collection.json`
+
+## Project Structure
 
 ```text
 OpenAIProject/
+  main.py
+  run_server.py
+  list-models.cmd
+  README.md
+  requirements.txt
+  requirements-dev.txt
+  pyproject.toml
+  pytest.ini
+
   api/
     base_client.py
     openai_client.py
     google_gemini_client.py
     deepseek_client.py
     grok_client.py
+
   config/
     config.py
     pricing.py
     model_registry.yaml
+
   context/
     conversation_manager.py
+
   db/
     engine.py
+    migrations/
+      20260218_add_request_group_id_to_llm_requests.sql
+      20260218_llm_requests_api_key_owner_guard.sql
+      20260222_b2b_launch_tables.sql
+      20260222_go_live_hardening.sql
+    repository.py
     session.py
     tables.py
-    repository.py
+
+  docs/
+    CHANGELOG.md
+    COMPARE_MODE_GUIDE.md
+    DATABASE_INTEGRATION_COMPLETE.md
+    FASTAPI_README.md
+    LOGGING.md
+    PROJECT_MAP.md
+    REFACTORING_SUMMARY.md
+    TAVILY_INTEGRATION.md
+    UNIFIED_RESPONSE_CONTRACT.md
+    postman/
+      CortexAI_B2B.postman_collection.json
+
+  frontend/
+    index.html
+    app.js
+    style.css
+    smart-routing-state.js
+    layout-smoke.test.mjs
+    smart-routing-state.test.mjs
+
   models/
     unified_response.py
     multi_unified_response.py
     user_context.py
+
   orchestrator/
     core.py
     multi_orchestrator.py
-    prompt_analyzer.py
-    tier_decider.py
+    model_registry.py
     model_selector.py
+    prompt_analyzer.py
     response_validator.py
     fallback_manager.py
     smart_router.py
-    model_registry.py
+    tier_decider.py
     routing_types.py
+
+  scripts/
+    e2e_b2b_checklist.py
+    onboard_tenant.py
+    generate_proof_pack.py
+    release_gate.py
+    db_mode_smoke.py
+
   server/
     app.py
     dependencies.py
     middleware.py
     utils.py
+    database.py
+    persistence.py
+    privacy.py
+    savings.py
+    usage_reporting.py
+    byok_service.py
+    rate_limit.py
+    circuit_breaker.py
     routes/
       health.py
       chat.py
       compare.py
+      optimize.py
+      history.py
+      reporting.py
+      byok.py
+      admin.py
+      whoami.py
     schemas/
       requests.py
       responses.py
-  tools/web/
-    tavily_client.py
-    tavily_service.py
-    research_decider.py
-    research_pack.py
-    research_state.py
-    research_state_store.py
-    session_state.py
-    intent.py
-    cache.py
-    contracts.py
-    factory.py
+
+  tools/
+    create_api_key.py
+    register_dev_key.py
+    web/
+      tavily_client.py
+      tavily_service.py
+      research_decider.py
+      research_pack.py
+      research_state.py
+      research_state_store.py
+      session_state.py
+      intent.py
+      cache.py
+      contracts.py
+      factory.py
+
   utils/
     logger.py
-    token_tracker.py
+    api_key_utils.py
     cost_calculator.py
     model_utils.py
     prompt_optimizer.py
-    GeminiAvailableModels.py
+    token_tracker.py
+    web_research.py
+
   tests/
-    test_fastapi_contract_and_guardrails.py
-    test_routing_regression.py
-    test_model_selector.py
-    test_tier_decider.py
-    test_prompt_analyzer.py
-    test_response_validator.py
-    test_fallback_manager.py
-    test_registry_pricing_alignment.py
-    test_model_utils.py
+    conftest.py
     test_api.py
-    ...
-  main.py
-  run_server.py
-  list-models.cmd
-  list-models.ps1
-  README.md
-  .agent-context.md
+    test_api_key_hashing.py
+    test_api_persistence_guardrails.py
+    test_b2b_launch_features.py
+    test_fastapi_contract_and_guardrails.py
+    test_multi_compare_mode.py
+    test_prompt_optimizer.py
+    test_routing_regression.py
+    ... (additional unit/integration suites)
 ```
 
-## Docs
+## What to Edit for Common Changes
 
-- `docs/FASTAPI_README.md`
-- `docs/UNIFIED_RESPONSE_CONTRACT.md`
-- `docs/LOGGING.md`
-- `docs/COMPARE_MODE_GUIDE.md`
-- `docs/PROJECT_MAP.md`
-- `docs/CHANGELOG.md`
+- Add a new API endpoint: `server/routes/*.py` + wire router in `server/app.py` + request/response models in `server/schemas/`.
+- Add business logic/service code: `server/*.py` (keep route handlers thin; move logic into services).
+- Add or change provider behavior: `api/*.py` and orchestration flow in `orchestrator/core.py`.
+- Change smart routing rules: `orchestrator/prompt_analyzer.py`, `orchestrator/tier_decider.py`, `orchestrator/model_selector.py`, `orchestrator/smart_router.py`.
+- Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
+- Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).
+- Change usage/savings/BYOK behavior: `server/usage_reporting.py`, `server/savings.py`, `server/byok_service.py`, and related routes under `server/routes/`.
+- Add/adjust guardrails: `server/rate_limit.py`, `server/circuit_breaker.py`, privacy policy in `server/privacy.py`.
+- Add tenant/dev tooling scripts: `scripts/` (runtime checks/reporting) and `tools/` (operator/dev helpers).
+- Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
+- Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-## Troubleshooting
-
-`.\.venv\Scripts\python.exe` not found:
-- Use your actual environment path (`venv\Scripts\python.exe`) or just `python`
-- `list-models.cmd` / `list-models.ps1` already fall back to `python`
-
-`tests/test_api.py` failing with connection error:
-- Start API first: `python run_server.py`
-
-`/v1/chat` returns auth error:
-- Set `API_KEYS` in `.env`
-- Send `X-API-Key` header
-
-OpenAI `Unsupported parameter: 'max_tokens'` with newer models:
-- Client now auto-retries with `max_completion_tokens`.
-- Update to latest code and restart server.
-
----
-
-Last updated: 2026-02-18
+Last updated: 2026-02-22

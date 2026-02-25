@@ -31,10 +31,10 @@ def is_metadata_only() -> bool:
     if policy in {"full", "store_full"}:
         return False
 
-    # Enterprise-safe default: metadata-only when no explicit storage policy is provided.
+    # Default to full persistence unless explicitly configured for metadata-only mode.
     if os.getenv("METADATA_ONLY") is None:
-        return True
-    return env_bool("METADATA_ONLY", default=True)
+        return False
+    return env_bool("METADATA_ONLY", default=False)
 
 
 def redact_pii_enabled() -> bool:
@@ -136,6 +136,29 @@ def _redact_nested(value: Any) -> Any:
     return value
 
 
+def _sanitize_web_source_items(raw_items: Any) -> list[dict[str, str]]:
+    safe_items: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    if not isinstance(raw_items, list):
+        return safe_items
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        normalized = url.lower()
+        if normalized in seen_urls:
+            continue
+        seen_urls.add(normalized)
+        title = str(item.get("title") or "").strip() or url
+        safe_items.append({"title": title, "url": url})
+        if len(safe_items) >= 8:
+            break
+    return safe_items
+
+
 def sanitize_routing_payload_for_storage(
     routing_metadata: dict[str, Any],
     attempts: list[dict[str, Any]],
@@ -171,6 +194,12 @@ def sanitize_routing_payload_for_storage(
             )
         if slim_attempts:
             base["attempts"] = slim_attempts
+        web_source_items = _sanitize_web_source_items(
+            routing_metadata.get("web_source_items") or routing_metadata.get("sources")
+        )
+        if web_source_items:
+            base["web_source_items"] = web_source_items
+            base["web_sources"] = len(web_source_items)
         return base, slim_attempts, {}
 
     if redact_pii_enabled():

@@ -26,6 +26,7 @@ from db import (
     get_active_session,
     get_api_key_settings,
     get_failed_routing_attempts_by_request_group,
+    get_session_by_id,
     get_or_create_service_user,
     get_user_by_api_key,
     save_compare_summary,
@@ -498,17 +499,84 @@ def get_or_create_api_session(
     *,
     mode: str,
     title: str,
+    force_new_session: bool = False,
 ) -> UUID:
     """Resolve API session ownership safely; create one when needed."""
     provided = coerce_uuid(requested_session_id)
-    if provided and verify_session_belongs_to_user(db_session, provided, user_id):
-        return provided
+    requested_mode = str(mode or "").strip().lower()
+    provided_for_create: UUID | None = None
+
+    if provided:
+        existing_session = get_session_by_id(db_session, provided)
+        if existing_session:
+            session_mode = str(existing_session.get("mode") or "").strip().lower()
+            if (
+                verify_session_belongs_to_user(db_session, provided, user_id)
+                and session_mode == requested_mode
+            ):
+                return provided
+            # Existing session belongs to another mode or user; never reuse its id.
+            provided_for_create = None
+        else:
+            # Caller may provide a fresh UUID for a brand new session.
+            provided_for_create = provided
+
+    if force_new_session:
+        return create_session(
+            db_session,
+            user_id,
+            mode=mode,
+            title=title,
+            session_id=provided_for_create,
+        )
 
     active = get_active_session(db_session, user_id, mode=mode)
     if active:
         return active
 
-    return create_session(db_session, user_id, mode=mode, title=title)
+    return create_session(
+        db_session,
+        user_id,
+        mode=mode,
+        title=title,
+        session_id=provided_for_create,
+    )
+
+
+def _normalize_web_source_items(raw_items: object) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    if not isinstance(raw_items, list):
+        return items
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        normalized_url = url.lower()
+        if normalized_url in seen_urls:
+            continue
+        seen_urls.add(normalized_url)
+        title = str(item.get("title") or "").strip() or url
+        items.append({"title": title, "url": url})
+        if len(items) >= 8:
+            break
+
+    return items
+
+
+def extract_web_source_items(response: UnifiedResponse) -> list[dict[str, str]]:
+    metadata = response.metadata if isinstance(response.metadata, dict) else {}
+    if not metadata:
+        return []
+
+    source_candidates = metadata.get("web_source_items")
+    if not isinstance(source_candidates, list):
+        source_candidates = metadata.get("sources")
+
+    return _normalize_web_source_items(source_candidates)
 
 
 def extract_routing_payload(response: UnifiedResponse) -> tuple[dict, list[dict], dict]:
@@ -537,6 +605,15 @@ def persist_routing_telemetry(
 ) -> None:
     """Persist routing decision + attempts when metadata is present."""
     routing_metadata, attempt_rows, features = extract_routing_payload(response)
+    web_source_items = extract_web_source_items(response)
+    if web_source_items:
+        base_routing = dict(routing_metadata or {})
+        base_routing.setdefault("mode", "explicit")
+        base_routing.setdefault("attempt_count", max(len(attempt_rows), 1))
+        base_routing.setdefault("fallback_used", False)
+        base_routing["web_source_items"] = web_source_items
+        base_routing["web_sources"] = len(web_source_items)
+        routing_metadata = base_routing
     if not routing_metadata:
         return
 
@@ -605,6 +682,7 @@ def persist_chat_interaction(
     response: UnifiedResponse,
     requested_session_id: str | None,
     research_mode: bool,
+    force_new_session: bool = False,
 ) -> None:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
@@ -614,6 +692,7 @@ def persist_chat_interaction(
             requested_session_id,
             mode="ask",
             title="API Chat",
+            force_new_session=force_new_session,
         )
 
         stored_user_message = privacy_service.sanitize_user_message_for_storage(prompt)
@@ -629,7 +708,8 @@ def persist_chat_interaction(
             prompt=prompt,
             session_id=session_id,
             api_key_id=resolution.api_key_id,
-            store_prompt=False,
+            store_prompt=True,
+            prompt_text_override=stored_user_message,
         )
         stored_response = privacy_service.sanitize_response_for_storage(response)
         create_llm_response(db_session, llm_request_id, stored_response)
@@ -684,6 +764,7 @@ def persist_compare_interaction(
     request_group_id: str,
     requested_session_id: str | None,
     research_mode: bool,
+    force_new_session: bool = False,
 ) -> None:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:
@@ -693,6 +774,7 @@ def persist_compare_interaction(
             requested_session_id,
             mode="compare",
             title="API Compare",
+            force_new_session=force_new_session,
         )
 
         group_uuid = coerce_uuid(request_group_id)
@@ -713,7 +795,8 @@ def persist_compare_interaction(
                 session_id=session_id,
                 request_group_id=group_uuid,
                 api_key_id=resolution.api_key_id,
-                store_prompt=False,
+                store_prompt=True,
+                prompt_text_override=stored_user_message,
             )
             stored_response = privacy_service.sanitize_response_for_storage(response)
             stored_compare_responses.append(stored_response)

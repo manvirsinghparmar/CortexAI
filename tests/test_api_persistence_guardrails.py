@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 from uuid import UUID, uuid4
@@ -133,6 +132,8 @@ def _fake_db_uow_factory(session_obj):
 @pytest.fixture()
 def fastapi_client(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
 
     app = create_app()
     chat_route.API_DB_ENABLED = False
@@ -489,6 +490,7 @@ def db_mode_fastapi_client(monkeypatch):
     db_url = f"sqlite+pysqlite:///{db_file.as_posix()}"
 
     monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     monkeypatch.setenv("DB_SCHEMA", "main")
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("AUTO_REGISTER_UNMAPPED_API_KEYS", "true")
@@ -956,41 +958,139 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
-def test_api_works_without_db_and_history_endpoints_still_function(fastapi_client, monkeypatch):
+def test_history_can_filter_by_session_id_and_new_session_flag(db_mode_fastapi_client):
+    client, _fake_orch = db_mode_fastapi_client
+
+    session_a = str(uuid4())
+    session_b = str(uuid4())
+
+    first = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "session A first",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "context": {
+                "session_id": session_a,
+                "new_session": True,
+                "conversation_history": [],
+            },
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "session A second",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "context": {
+                "session_id": session_a,
+                "new_session": False,
+                "conversation_history": [],
+            },
+        },
+    )
+    assert second.status_code == 200
+
+    third = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "session B first",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "context": {
+                "session_id": session_b,
+                "new_session": True,
+                "conversation_history": [],
+            },
+        },
+    )
+    assert third.status_code == 200
+
+    only_a = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_a, "limit": 200},
+    )
+    assert only_a.status_code == 200
+    payload_a = only_a.json()
+    assert len(payload_a) == 2
+    assert {item["session_id"] for item in payload_a} == {session_a}
+
+    only_b = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_b, "limit": 200},
+    )
+    assert only_b.status_code == 200
+    payload_b = only_b.json()
+    assert len(payload_b) == 1
+    assert payload_b[0]["session_id"] == session_b
+
+
+@pytest.mark.integration
+def test_history_includes_web_source_items_when_research_is_used(
+    db_mode_fastapi_client,
+    monkeypatch,
+):
+    client, _fake_orch = db_mode_fastapi_client
+
+    async def _fake_maybe_enrich_prompt_with_web(
+        prompt: str,
+        *,
+        enabled: bool,
+        max_results: int = 5,
+        timeout_s: float = 8.0,
+    ):
+        del max_results, timeout_s
+        if not enabled:
+            return prompt, {"enabled": False, "used": False, "source_count": 0, "sources": []}
+        return prompt, {
+            "enabled": True,
+            "used": True,
+            "source_count": 1,
+            "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
+        }
+
+    monkeypatch.setattr(chat_route, "maybe_enrich_prompt_with_web", _fake_maybe_enrich_prompt_with_web)
+
+    response = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "Use web research and keep citations",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "routing": {"research_mode": True, "smart_mode": True},
+        },
+    )
+    assert response.status_code == 200
+
+    history_response = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"limit": 20},
+    )
+    assert history_response.status_code == 200
+    payload = history_response.json()
+    assert payload
+    assert payload[0]["web_source_items"] == [
+        {"title": "Example Source", "url": "https://example.com/report"}
+    ]
+
+
+@pytest.mark.integration
+def test_api_works_without_db_and_history_endpoints_require_db(fastapi_client):
     client, fake_orch = fastapi_client
 
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
-
-    sqlite_saves = []
-    monkeypatch.setattr(
-        "server.database.save_chat",
-        lambda **kwargs: sqlite_saves.append(kwargs),
-    )
-
-    monkeypatch.setattr(
-        history_route,
-        "get_history",
-        lambda limit=100: [
-            {
-                "id": 1,
-                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "mode": "chat",
-                "prompt": "hello",
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "response": "ok",
-                "latency_ms": 10,
-                "tokens": 5,
-                "cost": 0.00001,
-            }
-        ],
-    )
-    monkeypatch.setattr(history_route, "delete_history_entry", lambda _entry_id: True)
-
-    cleared = []
-    monkeypatch.setattr(history_route, "clear_all_history", lambda: cleared.append(True))
 
     chat_response = client.post(
         "/v1/chat",
@@ -1013,19 +1113,16 @@ def test_api_works_without_db_and_history_endpoints_still_function(fastapi_clien
     assert compare_response.status_code == 200
 
     history_list = client.get("/v1/history", headers={"X-API-Key": "dev-key-1"})
-    assert history_list.status_code == 200
-    assert isinstance(history_list.json(), list)
+    assert history_list.status_code == 501
 
     history_delete = client.delete("/v1/history/1", headers={"X-API-Key": "dev-key-1"})
-    assert history_delete.status_code == 204
+    assert history_delete.status_code == 501
 
     history_clear = client.delete("/v1/history", headers={"X-API-Key": "dev-key-1"})
-    assert history_clear.status_code == 204
+    assert history_clear.status_code == 501
 
     assert fake_orch.ask_calls >= 1
     assert fake_orch.compare_calls >= 1
-    assert len(sqlite_saves) >= 1
-    assert cleared == [True]
 
 
 @pytest.mark.unit

@@ -23,13 +23,13 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 
 ## Runtime Modes
 
-- `DATABASE_URL` set (DB mode):
+- `DATABASE_URL` is required at startup:
+  - `DATABASE_URL` must be PostgreSQL (`postgresql://` or `postgresql+psycopg://`).
   - FastAPI persists to repository-backed SQLAlchemy tables (same artifact family as CLI).
+  - Chat history endpoints read/write only from PostgreSQL tables.
   - Daily caps, rate limits, BYOK settings, savings, and reporting endpoints are active.
-- `DATABASE_URL` not set (fallback mode):
-  - API still works.
-  - History endpoints use local SQLite `cortexai_history.db`.
-  - DB-only endpoints (`/v1/usage`, `/v1/savings`, `/v1/byok`) return `501`.
+  - API startup fails fast when `DATABASE_URL` is missing.
+  - Optional dev override: `ALLOW_NON_POSTGRES_DATABASE_URL=true` (not recommended for production).
 
 ## Quick Start
 
@@ -78,8 +78,16 @@ CIRCUIT_FAILURE_THRESHOLD=5
 CIRCUIT_WINDOW_SECONDS=60
 CIRCUIT_COOLDOWN_SECONDS=120
 
+# Ask smart routing controls (optional)
+ENABLE_TRUE_SMART_CHAT_ROUTING=true
+SMART_CHAT_MAX_COST_USD=
+SMART_CHAT_MAX_TOTAL_LATENCY_MS=
+SMART_CHAT_MIN_CONTEXT_LIMIT=
+SMART_CHAT_PREFERRED_PROVIDER=      # openai|gemini|deepseek|grok
+SMART_CHAT_ALLOWED_PROVIDERS=       # comma-separated, e.g. openai,gemini
+
 # Storage/privacy
-STORAGE_POLICY=metadata   # full|metadata
+STORAGE_POLICY=full       # full|metadata (default: full when unset)
 REDACT_PII=false          # true|false
 
 # BYOK encryption
@@ -159,10 +167,16 @@ Response includes:
 
 ## Routing Modes
 
-For chat requests:
+For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - Explicit `provider` + `model`: deterministic target.
-- `routing.smart_mode=true`: smart selection path.
+- `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
+- `routing.smart_mode=false`: legacy deterministic auto-pick path.
 - `routing.research_mode=true`: optional web-enriched prompt flow.
+
+For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
+- Targets are always explicit (`targets[]`).
+- `routing.smart_mode` is ignored by design in compare mode.
+- `routing.research_mode=true` is still honored.
 
 ## Compare and `request_group_id`
 
@@ -316,6 +330,7 @@ class CortexClient:
 
 ## Privacy and Retention
 
+- default (unset): `STORAGE_POLICY=full` behavior.
 - `STORAGE_POLICY=metadata`: no raw prompt/response text persistence.
 - `STORAGE_POLICY=full`: content persistence enabled.
 - `REDACT_PII=true`: regex redaction for emails, phones, and card-like numbers before DB storage.
@@ -390,6 +405,7 @@ OpenAIProject/
   main.py
   run_server.py
   list-models.cmd
+  quick_test_optimizer.py
   README.md
   requirements.txt
   requirements-dev.txt
@@ -398,20 +414,23 @@ OpenAIProject/
 
   api/
     base_client.py
-    openai_client.py
-    google_gemini_client.py
     deepseek_client.py
+    google_gemini_client.py
     grok_client.py
+    openai_client.py
 
   config/
+    __init__.py
     config.py
-    pricing.py
     model_registry.yaml
+    pricing.py
 
   context/
+    __init__.py
     conversation_manager.py
 
   db/
+    __init__.py
     engine.py
     migrations/
       20260218_add_request_group_id_to_llm_requests.sql
@@ -444,53 +463,57 @@ OpenAIProject/
     smart-routing-state.test.mjs
 
   models/
-    unified_response.py
+    __init__.py
     multi_unified_response.py
+    unified_response.py
     user_context.py
 
   orchestrator/
+    __init__.py
     core.py
-    multi_orchestrator.py
+    fallback_manager.py
     model_registry.py
     model_selector.py
+    multi_orchestrator.py
     prompt_analyzer.py
     response_validator.py
-    fallback_manager.py
+    routing_types.py
     smart_router.py
     tier_decider.py
-    routing_types.py
 
   scripts/
-    e2e_b2b_checklist.py
-    onboard_tenant.py
-    generate_proof_pack.py
-    release_gate.py
     db_mode_smoke.py
+    e2e_b2b_checklist.py
+    generate_proof_pack.py
+    onboard_tenant.py
+    release_gate.py
 
   server/
+    __init__.py
     app.py
+    byok_service.py
+    circuit_breaker.py
     dependencies.py
     middleware.py
-    utils.py
-    database.py
     persistence.py
     privacy.py
+    rate_limit.py
     savings.py
     usage_reporting.py
-    byok_service.py
-    rate_limit.py
-    circuit_breaker.py
+    utils.py
     routes/
-      health.py
+      __init__.py
+      admin.py
+      byok.py
       chat.py
       compare.py
-      optimize.py
+      health.py
       history.py
+      optimize.py
       reporting.py
-      byok.py
-      admin.py
       whoami.py
     schemas/
+      __init__.py
       requests.py
       responses.py
 
@@ -498,37 +521,54 @@ OpenAIProject/
     create_api_key.py
     register_dev_key.py
     web/
-      tavily_client.py
-      tavily_service.py
+      __init__.py
+      cache.py
+      contracts.py
+      factory.py
+      intent.py
       research_decider.py
       research_pack.py
       research_state.py
       research_state_store.py
       session_state.py
-      intent.py
-      cache.py
-      contracts.py
-      factory.py
+      tavily_client.py
+      tavily_service.py
 
   utils/
-    logger.py
+    __init__.py
+    GeminiAvailableModels.py
     api_key_utils.py
     cost_calculator.py
+    logger.py
     model_utils.py
     prompt_optimizer.py
     token_tracker.py
     web_research.py
 
   tests/
+    __init__.py
     conftest.py
+    README.md
     test_api.py
     test_api_key_hashing.py
     test_api_persistence_guardrails.py
     test_b2b_launch_features.py
+    test_compare_session_totals.py
+    test_conversation.py
+    test_fallback_manager.py
     test_fastapi_contract_and_guardrails.py
+    test_model_selector.py
+    test_model_utils.py
     test_multi_compare_mode.py
+    test_pricing.py
+    test_prompt_analyzer.py
     test_prompt_optimizer.py
+    test_registry_pricing_alignment.py
+    test_response_validator.py
     test_routing_regression.py
+    test_smart_router_metadata.py
+    test_tier_decider.py
+    test_unified_response_contract.py
     ... (additional unit/integration suites)
 ```
 
@@ -546,4 +586,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-02-22
+Last updated: 2026-02-25

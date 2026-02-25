@@ -1,20 +1,20 @@
 /**
- * CortexAI Frontend — app.js (v2 — Scrollytelling Edition)
+ * CortexAI Frontend â€” app.js (v2 â€” Scrollytelling Edition)
  */
 
-/* ─── Config ──────────────────────────────── */
+/* â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const API_BASE = "http://127.0.0.1:8000";
 const API_KEY = "dev-key-1";
 
-/* ─── Provider Catalog ────────────────────── */
-// One entry per provider — icon shows in the dropdown, model is the default sent to API
+/* â”€â”€â”€ Provider Catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+// One entry per provider â€” icon shows in the dropdown, model is the default sent to API
 const PROVIDERS = [
-    { key: "gemini", label: "Gemini", icon: "⭐", model: "gemini-2.5-flash" },
-    { key: "openai", label: "ChatGPT", icon: "🎯", model: "gpt-4o" },
-    { key: "deepseek", label: "DeepSeek", icon: "🧠", model: "deepseek-chat" },
-    { key: "grok", label: "Grok", icon: "🤖", model: "grok-4-latest" },
+    { key: "gemini", label: "Gemini", icon: "\u2B50", model: "gemini-2.5-flash" },
+    { key: "openai", label: "ChatGPT", icon: "\uD83C\uDFAF", model: "gpt-4o" },
+    { key: "deepseek", label: "DeepSeek", icon: "\uD83E\uDDE0", model: "deepseek-chat" },
+    { key: "grok", label: "Grok", icon: "\uD83E\uDD16", model: "grok-4-latest" },
 ];
-// Quick lookup for response card labels (provider key → display label)
+// Quick lookup for response card labels (provider key â†’ display label)
 const PROVIDER_LABELS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.label]));
 const PROVIDER_ICONS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.icon]));
 // Default model per provider (for API calls)
@@ -28,18 +28,35 @@ const ACTIVE_ROUTING_INDICATORS = {
     web: "Web",
     rewrite: "Rewrite",
 };
+const COMPARE_CONTEXT_MODEL_TEXT_LIMIT = 260;
+const COMPARE_CONTEXT_TOTAL_LIMIT = 2200;
 
-/* ─── State ───────────────────────────────── */
+const LEGACY_SESSION_STORAGE_KEY = "cortex_active_session_id";
+const SESSION_STORAGE_KEY_BY_MODE = {
+    single: "cortex_active_session_id_single",
+    compare: "cortex_active_session_id_compare",
+};
+const MAX_CONTEXT_MESSAGES_UI = 20;
+
+/* â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 let currentMode = "single";
 let compareSlotCount = 2;
 let conversationHistory = [];
+let activeSessionId = null;
+const activeSessionIdByMode = {
+    single: null,
+    compare: null,
+};
+let pendingNewSession = false;
 let optimizeEnabled = false;
 let smartModeEnabled = true;
 let askResearchModeEnabled = true;
 let compareResearchModeEnabled = false;
 let isSubmitting = false;
 let hasReceivedFirstStreamResponse = false;
+let historyUiReady = false;
 let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
+let _historyData = [];   // full fetched list
 const pendingWebSourcesByCard = new Map();
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
@@ -63,7 +80,7 @@ const SmartRoutingState = window.CortexSmartRoutingState || {
     },
 };
 
-/* ─── DOM References ──────────────────────── */
+/* â”€â”€â”€ DOM References â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const $ = id => document.getElementById(id);
 const el = {
     hero: $("hero"),
@@ -107,9 +124,9 @@ const el = {
     optOptimizedText: $("optOptimizedText"),
 };
 
-/* ═══════════════════════════════════════════
-   SCROLL BEHAVIOUR — Hero fade + Compact bar
-═══════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   SCROLL BEHAVIOUR â€” Hero fade + Compact bar
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 (function initScrollBehaviour() {
     const hasHero = Boolean(el.hero && el.heroContent);
@@ -129,7 +146,7 @@ const el = {
 
         if (hasHero) {
             const heroH = el.hero.offsetHeight;
-            const prog = Math.min(scrollY / (heroH * 0.7), 1); // 0 → 1 over 70% of hero height
+            const prog = Math.min(scrollY / (heroH * 0.7), 1); // 0 â†’ 1 over 70% of hero height
 
             // Fade + slide the hero content
             el.heroContent.style.opacity = 1 - prog;
@@ -154,7 +171,7 @@ const el = {
     updateHero();
 
     if (hasHero) {
-        // 2. IntersectionObserver — show compact bar once hero is mostly gone
+        // 2. IntersectionObserver â€” show compact bar once hero is mostly gone
         const observer = new IntersectionObserver(
             ([entry]) => {
                 const showBar = !entry.isIntersecting;
@@ -167,9 +184,9 @@ const el = {
     }
 })();
 
-/* ═══════════════════════════════════════════
-   COMPACT BAR — SYNC
-═══════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   COMPACT BAR â€” SYNC
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function updateCompactBar() {
     // Mode buttons
@@ -218,9 +235,9 @@ el.cBtnCompare.addEventListener("click", () => setMode("compare"));
 el.compactSendBtn.addEventListener("click", handleSubmit);
 
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    DROPDOWNS
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
     const { allowEmpty = false, emptyLabel = "Select a model" } = options;
@@ -279,6 +296,146 @@ function parseKey(key) {
     const idx = (key || "").indexOf(":");
     if (idx < 0) return { provider: "", model: key };
     return { provider: key.slice(0, idx), model: key.slice(idx + 1) };
+}
+
+function truncateContextText(value, limit) {
+    const maxChars = Number(limit);
+    if (!Number.isFinite(maxChars) || maxChars <= 0) return "";
+    const text = String(value || "").trim();
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
+}
+
+function buildCompareAssistantContext(responses) {
+    const safeResponses = Array.isArray(responses) ? responses.filter(Boolean) : [];
+    if (safeResponses.length === 0) return "";
+
+    const lines = ["Compared model responses:"];
+    safeResponses.forEach((resp, index) => {
+        const providerRaw = String(resp.provider || "").trim().toLowerCase();
+        const modelRaw = String(resp.model || "").trim();
+        const providerLabel =
+            PROVIDER_LABELS[providerRaw] ||
+            String(resp.provider || "").trim() ||
+            `Model ${index + 1}`;
+        const modelLabel = modelRaw || `model-${index + 1}`;
+        const slotLabel = `${providerLabel} · ${modelLabel}`;
+
+        let responseText = "";
+        const errorMessage = String(resp?.error?.message || "").trim();
+        if (errorMessage) {
+            responseText = `Error: ${errorMessage}`;
+        } else {
+            responseText = String(resp.text || "").trim() || "(empty response)";
+        }
+
+        const compactText = responseText.replace(/\s+/g, " ").trim();
+        lines.push(`${slotLabel}: ${truncateContextText(compactText, COMPARE_CONTEXT_MODEL_TEXT_LIMIT)}`);
+    });
+
+    return truncateContextText(lines.join("\n"), COMPARE_CONTEXT_TOTAL_LIMIT);
+}
+
+function normalizeUiMode(value) {
+    return value === "compare" ? "compare" : "single";
+}
+
+function historyModeForUiMode(mode = currentMode) {
+    return normalizeUiMode(mode) === "compare" ? "compare" : "chat";
+}
+
+function normalizeSessionId(value) {
+    const raw = String(value || "").trim();
+    return raw ? raw.toLowerCase() : null;
+}
+
+function loadActiveSessionId(mode = currentMode) {
+    const safeMode = normalizeUiMode(mode);
+    const storageKey = SESSION_STORAGE_KEY_BY_MODE[safeMode];
+    try {
+        const scopedValue = normalizeSessionId(window.localStorage.getItem(storageKey));
+        if (scopedValue) {
+            return scopedValue;
+        }
+        if (safeMode === "single") {
+            return normalizeSessionId(window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY));
+        }
+        return null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function persistActiveSessionId(mode = currentMode) {
+    const safeMode = normalizeUiMode(mode);
+    const storageKey = SESSION_STORAGE_KEY_BY_MODE[safeMode];
+    const value = normalizeSessionId(
+        safeMode === currentMode ? activeSessionId : activeSessionIdByMode[safeMode]
+    );
+
+    try {
+        if (!value) {
+            window.localStorage.removeItem(storageKey);
+            if (safeMode === "single") {
+                window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+            }
+            return;
+        }
+        window.localStorage.setItem(storageKey, value);
+        if (safeMode === "single") {
+            window.localStorage.setItem(LEGACY_SESSION_STORAGE_KEY, value);
+        }
+    } catch (_) { /* ignore storage failures */ }
+}
+
+function setActiveSessionIdForMode(mode, sessionId, { persist = true } = {}) {
+    const safeMode = normalizeUiMode(mode);
+    const normalized = normalizeSessionId(sessionId);
+    activeSessionIdByMode[safeMode] = normalized;
+    if (safeMode === currentMode) {
+        activeSessionId = normalized;
+    }
+    if (persist) {
+        persistActiveSessionId(safeMode);
+    }
+    return normalized;
+}
+
+function createSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+    }
+    const hex = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+    return hex.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === "x" ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function ensureActiveSessionId() {
+    const safeMode = normalizeUiMode(currentMode);
+    const existing = normalizeSessionId(activeSessionIdByMode[safeMode] || activeSessionId);
+    if (existing) {
+        activeSessionId = existing;
+        activeSessionIdByMode[safeMode] = existing;
+        return existing;
+    }
+    const created = normalizeSessionId(createSessionId());
+    setActiveSessionIdForMode(safeMode, created);
+    activeSessionId = created;
+    return created;
+}
+
+function startNewChatSession() {
+    const safeMode = normalizeUiMode(currentMode);
+    activeSessionId = normalizeSessionId(createSessionId());
+    activeSessionIdByMode[safeMode] = activeSessionId;
+    pendingNewSession = true;
+    conversationHistory = [];
+    clearResults();
+    clearError();
+    persistActiveSessionId(safeMode);
 }
 
 function hasSelectedSingleModel() {
@@ -360,14 +517,14 @@ function updateSingleModelRoutingUI() {
     updateSendButtonState();
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    MODE
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function setMode(mode) {
-    currentMode = mode;
+    currentMode = normalizeUiMode(mode);
 
-    const isSingle = mode === "single";
+    const isSingle = currentMode === "single";
     el.btnSingleMode.classList.toggle("active", isSingle);
     el.btnCompareMode.classList.toggle("active", !isSingle);
     el.btnSingleMode.setAttribute("aria-selected", isSingle);
@@ -376,11 +533,26 @@ function setMode(mode) {
     if (!isSingle) syncCompareDropdowns();
     updateSingleModelRoutingUI();
 
-    clearResults();
-    conversationHistory = [];
-    updateRoutingButtons();
-    updateCompactBar();
-    updateSendButtonState();
+    const safeMode = normalizeUiMode(currentMode);
+    if (!activeSessionIdByMode[safeMode]) {
+        activeSessionIdByMode[safeMode] = loadActiveSessionId(safeMode);
+    }
+    activeSessionId = normalizeSessionId(activeSessionIdByMode[safeMode]);
+
+    const modeLabel = historyModeForUiMode(safeMode);
+    if (activeSessionId) {
+        hydrateConversationHistoryFromSession(activeSessionId, _historyData, modeLabel);
+        renderSessionTranscript(activeSessionId, _historyData, modeLabel);
+        pendingNewSession = false;
+    } else {
+        conversationHistory = [];
+        pendingNewSession = true;
+        clearResults();
+    }
+
+    if (historyUiReady) {
+        renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+    }
 }
 
 function isSingleModelOverrideActive() {
@@ -391,9 +563,9 @@ function isSingleManualModePendingSelection() {
     return SmartRoutingState.isManualSelectionPending(currentMode, smartModeEnabled, el.singleModel.value || "");
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    SLOT COUNT
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 if (el.compareAddModelBtn) {
     el.compareAddModelBtn.addEventListener("click", () => {
@@ -403,9 +575,9 @@ if (el.compareAddModelBtn) {
     });
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    PROMPT OPTIMIZATION TOGGLE
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 el.routeOptimizeBtn.addEventListener("click", () => {
     optimizeEnabled = !optimizeEnabled;
@@ -484,17 +656,17 @@ function getRoutingPayload() {
     };
 }
 
-/* ═══════════════════════════════════════════
-   PROMPT FOCUS — card glow effect
-═══════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   PROMPT FOCUS â€” card glow effect
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 el.promptInput.addEventListener("focus", () => el.promptCard.classList.add("focused"));
 el.promptInput.addEventListener("blur", () => el.promptCard.classList.remove("focused"));
 el.promptInput.addEventListener("input", updateSendButtonState);
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    EXAMPLE CHIPS
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 document.querySelectorAll(".chip").forEach(chip => {
     chip.addEventListener("click", () => {
@@ -506,9 +678,9 @@ document.querySelectorAll(".chip").forEach(chip => {
     });
 });
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    KEYBOARD SHORTCUT
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 el.promptInput.addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -517,32 +689,32 @@ el.promptInput.addEventListener("keydown", e => {
     }
 });
 
-/* ═══════════════════════════════════════════
-   OPT PANEL — View / close
-═══════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   OPT PANEL â€” View / close
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-// Toggle the panel when ✨ View Optimized is clicked
+// Toggle the panel when View Optimized is clicked
 el.optViewBtn.addEventListener("click", () => {
     const isHidden = el.optPanel.classList.toggle("hidden");
     el.optViewBtn.textContent = isHidden
-        ? (lastOptimizeResult?.wasOptimized ? "✨ View Optimized" : "ℹ️ Optimization Off (server)")
-        : "✕ Close";
+        ? (lastOptimizeResult?.wasOptimized ? "View Optimized" : "Optimization Off (server)")
+        : "Close";
 });
 
-// Close the panel via its ✕ button
+// Close the panel via its close button
 el.optPanelClose.addEventListener("click", () => {
     el.optPanel.classList.add("hidden");
     if (lastOptimizeResult) {
         el.optViewBtn.textContent = lastOptimizeResult.wasOptimized
-            ? "✨ View Optimized"
-            : "ℹ️ Optimization Off (server)";
+            ? "View Optimized"
+            : "Optimization Off (server)";
     }
 });
 
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    OPTIMIZE PROMPT CALL
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function callOptimize(prompt) {
     const data = await callAPI("/v1/optimize", { prompt });
@@ -558,8 +730,8 @@ async function callOptimize(prompt) {
     // Show / update the View Optimized button
     el.optViewBtn.classList.remove("hidden");
     el.optViewBtn.textContent = data.was_optimized
-        ? "✨ View Optimized"
-        : "ℹ️ Optimization Off (server)";
+        ? "View Optimized"
+        : "Optimization Off (server)";
 
     // Pre-fill the panel texts
     el.optOriginalText.textContent = data.original_prompt;
@@ -568,15 +740,17 @@ async function callOptimize(prompt) {
     return data.optimized_prompt;
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    SUBMIT
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 el.submitBtn.addEventListener("click", handleSubmit);
 
 async function handleSubmit() {
     const rawPrompt = el.promptInput.value.trim();
     if (!rawPrompt) { el.promptInput.focus(); return; }
+    el.promptInput.value = "";
+    updateSendButtonState();
 
     clearError();
     setLoading(true);
@@ -608,9 +782,9 @@ async function handleSubmit() {
     }
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    SINGLE CHAT
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function doSingleChat(prompt) {
     const { provider, model } = parseKey(el.singleModel.value);
@@ -621,33 +795,39 @@ async function doSingleChat(prompt) {
         return;
     }
 
+    const sessionId = ensureActiveSessionId();
+
     const body = {
         prompt,
         ...(useManualModel ? { provider, model } : {}),
         routing: getRoutingPayload(),
-        ...(conversationHistory.length > 0 ? {
-            context: { session_id: "ui-session", conversation_history: conversationHistory }
-        } : {}),
+        context: {
+            session_id: sessionId,
+            conversation_history: conversationHistory,
+            new_session: pendingNewSession,
+        },
     };
 
-    initStreamingResults(
+    const streamState = initStreamingResults(
         [useManualModel ? { provider, model } : { provider: "Auto", model: "Auto-selected model" }],
-        false
+        false,
+        { append: true, promptText: prompt }
     );
+    const cardIndex = streamState.indexMap[0];
 
     let finalResponse = null;
     await callAPIStream("/v1/chat/stream", body, async event => {
         if (event.type === "start") {
-            setPendingWebSources([0], event.web_source_items || []);
+            setPendingWebSources([cardIndex], event.web_source_items || []);
             return;
         }
         if (event.type === "line") {
-            appendStreamLine(0, event.text || "");
+            appendStreamLine(cardIndex, event.text || "");
             return;
         }
         if (event.type === "response_done" && event.response) {
             finalResponse = event.response;
-            finalizeStreamCard(0, finalResponse);
+            finalizeStreamCard(cardIndex, finalResponse);
             return;
         }
         if (event.type === "error") {
@@ -661,41 +841,59 @@ async function doSingleChat(prompt) {
 
     conversationHistory.push({ role: "user", content: prompt });
     conversationHistory.push({ role: "assistant", content: finalResponse.text || "" });
-    if (conversationHistory.length > 20) {
-        conversationHistory = conversationHistory.slice(-20);
+    if (conversationHistory.length > MAX_CONTEXT_MESSAGES_UI) {
+        conversationHistory = conversationHistory.slice(-MAX_CONTEXT_MESSAGES_UI);
     }
+    pendingNewSession = false;
+    persistActiveSessionId();
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    COMPARE
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function doCompare(prompt) {
     const selects = getActiveCompareSelects();
     const targets = selects.map(sel => parseKey(sel.value));
+    const sessionId = ensureActiveSessionId();
 
     if (new Set(targets.map(t => `${t.provider}:${t.model}`)).size < targets.length) {
         showError("Please select different models for each slot.");
         return;
     }
 
-    initStreamingResults(targets, true);
+    const streamState = initStreamingResults(targets, true, { append: true, promptText: prompt });
 
     const responses = new Array(targets.length).fill(null);
     let comparePayload = null;
 
-    await callAPIStream("/v1/compare/stream", { prompt, targets, routing: getRoutingPayload() }, async event => {
+    await callAPIStream("/v1/compare/stream", {
+        prompt,
+        targets,
+        routing: getRoutingPayload(),
+        context: {
+            session_id: sessionId,
+            conversation_history: conversationHistory,
+            new_session: pendingNewSession,
+        },
+    }, async event => {
         if (event.type === "start") {
-            setPendingWebSources(targets.map((_, i) => i), event.web_source_items || []);
+            setPendingWebSources(streamState.indexMap, event.web_source_items || []);
             return;
         }
         if (event.type === "line" && Number.isInteger(event.index)) {
-            appendStreamLine(event.index, event.text || "");
+            const cardIndex = streamState.indexMap[event.index];
+            if (cardIndex !== undefined) {
+                appendStreamLine(cardIndex, event.text || "");
+            }
             return;
         }
         if (event.type === "response_done" && Number.isInteger(event.index) && event.response) {
             responses[event.index] = event.response;
-            finalizeStreamCard(event.index, event.response);
+            const cardIndex = streamState.indexMap[event.index];
+            if (cardIndex !== undefined) {
+                finalizeStreamCard(cardIndex, event.response);
+            }
             return;
         }
         if (event.type === "done" && event.compare) {
@@ -718,11 +916,24 @@ async function doCompare(prompt) {
     }
 
     renderCompareSummary(comparePayload);
+    const compareResponsesForContext = Array.isArray(comparePayload?.responses)
+        ? comparePayload.responses
+        : responses.filter(Boolean);
+    const compareAssistantContext = buildCompareAssistantContext(compareResponsesForContext);
+    conversationHistory.push({ role: "user", content: prompt });
+    if (compareAssistantContext) {
+        conversationHistory.push({ role: "assistant", content: compareAssistantContext });
+    }
+    if (conversationHistory.length > MAX_CONTEXT_MESSAGES_UI) {
+        conversationHistory = conversationHistory.slice(-MAX_CONTEXT_MESSAGES_UI);
+    }
+    pendingNewSession = false;
+    persistActiveSessionId();
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    API
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function callAPI(path, body) {
     const resp = await fetch(`${API_BASE}${path}`, {
@@ -826,24 +1037,32 @@ function toSafeHttpUrl(url) {
     }
 }
 
+function sourceDomainLabel(url) {
+    try {
+        const parsed = new URL(String(url || ""));
+        return parsed.hostname.replace(/^www\./, "") || parsed.hostname;
+    } catch {
+        return "";
+    }
+}
+
 function buildWebSourceIconsHtml(sources) {
     const chips = sources.map((source, idx) => {
         const faviconUrl = `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
+        const domain = sourceDomainLabel(source.url);
         return `
-          <a class="web-source-icon-link"
+          <a class="source-chip"
              href="${escHtml(source.url)}"
              target="_blank"
              rel="noopener noreferrer"
              title="${escHtml(source.title)}">
-            <img class="web-source-icon" src="${faviconUrl}" alt="" loading="lazy" decoding="async" />
+            <img class="source-chip-icon" src="${faviconUrl}" alt="" loading="lazy" decoding="async" />
+            <span class="source-chip-label">${escHtml(domain || source.title)}</span>
             <span class="sr-only">Source ${idx + 1}: ${escHtml(source.title)}</span>
           </a>
         `;
     }).join("");
-    return `
-      <span class="web-source-label">Sources</span>
-      <span class="web-source-icons">${chips}</span>
-    `;
+    return chips;
 }
 
 function setPendingWebSources(indexes, rawSources) {
@@ -867,16 +1086,18 @@ function applyPendingWebSources(index, shouldShow = true) {
     wrap.innerHTML = buildWebSourceIconsHtml(sources);
 }
 
-function initStreamingResults(targets, isMulti) {
-    pendingWebSourcesByCard.clear();
-    el.resultsSection.classList.remove("hidden");
-    el.resultsGrid.className = isMulti ? "results-grid multi" : "results-grid";
-    el.resultsGrid.style.gridTemplateColumns = isMulti ? `repeat(${targets.length}, 1fr)` : "";
-    el.resultsGrid.innerHTML = targets.map((target, index) => buildStreamingCard(target, index)).join("");
-
-    setTimeout(() => {
-        el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
+function getNextStreamCardIndex() {
+    const cards = el.resultsGrid.querySelectorAll("[id^='chat-msg-']");
+    let maxIndex = -1;
+    cards.forEach(card => {
+        const match = /chat-msg-(\d+)$/.exec(card.id || "");
+        if (!match) return;
+        const idx = Number(match[1]);
+        if (Number.isInteger(idx) && idx > maxIndex) {
+            maxIndex = idx;
+        }
+    });
+    return maxIndex + 1;
 }
 
 function buildActionIcon(action) {
@@ -904,69 +1125,252 @@ function buildActionIcon(action) {
 function buildResponseActionButtons(index) {
     return `
       <div class="response-actions" role="group" aria-label="Response actions">
-        <button type="button"
-                class="response-action-btn"
-                data-action="copy"
-                data-index="${index}"
-                aria-label="Copy response"
-                title="Copy response">
-          ${buildActionIcon("copy")}
-        </button>
-        <button type="button"
-                class="response-action-btn"
-                data-action="like"
-                data-index="${index}"
-                aria-label="Like response"
-                aria-pressed="false"
-                title="Like response">
-          ${buildActionIcon("like")}
-        </button>
-        <button type="button"
-                class="response-action-btn"
-                data-action="dislike"
-                data-index="${index}"
-                aria-label="Dislike response"
-                aria-pressed="false"
-                title="Dislike response">
-          ${buildActionIcon("dislike")}
-        </button>
+        <div class="response-action-group response-action-group-copy" role="group" aria-label="Copy action">
+          <button type="button"
+                  class="response-action-btn"
+                  data-action="copy"
+                  data-index="${index}"
+                  aria-label="Copy response"
+                  title="Copy response">
+            ${buildActionIcon("copy")}
+          </button>
+        </div>
+        <div class="response-action-group response-action-group-feedback" role="group" aria-label="Feedback actions">
+          <button type="button"
+                  class="response-action-btn"
+                  data-action="like"
+                  data-index="${index}"
+                  aria-label="Like response"
+                  aria-pressed="false"
+                  title="Like response">
+            ${buildActionIcon("like")}
+          </button>
+          <button type="button"
+                  class="response-action-btn"
+                  data-action="dislike"
+                  data-index="${index}"
+                  aria-label="Dislike response"
+                  aria-pressed="false"
+                  title="Dislike response">
+            ${buildActionIcon("dislike")}
+          </button>
+        </div>
       </div>`;
 }
 
-function buildStreamingCard(target, index) {
-    const provider = target.provider || "";
-    const label = PROVIDER_LABELS[provider] || provider || "Model";
-    const modelSuffix = target.model ? ` · ${target.model}` : "";
-    const icon = PROVIDER_ICONS[provider] || "🤖";
-    const delay = index * 60;
+function getTokenUsageTotal(tokenUsage) {
+    if (!tokenUsage || !Object.prototype.hasOwnProperty.call(tokenUsage, "total_tokens")) {
+        return null;
+    }
+    const value = Number(tokenUsage.total_tokens);
+    return Number.isFinite(value) ? value : null;
+}
+
+function buildTokenUsageText(tokenUsage, index = null) {
+    const total = getTokenUsageTotal(tokenUsage);
+    const idAttr = index === null ? "" : ` id="response-token-usage-${index}"`;
+    const hiddenClass = total === null ? " hidden" : "";
+    const text = total === null ? "" : `Tokens: ${total.toLocaleString()}`;
+    return `<span class="response-token-usage${hiddenClass}"${idAttr}>${escHtml(text)}</span>`;
+}
+
+function buildResponseProviderMeta(summary, index = null) {
+    const safeSummary = String(summary || "").trim() || "Assistant";
+    const idAttr = index === null ? "" : ` id="response-provider-summary-${index}"`;
+    return `<div class="response-provider-meta"${idAttr} title="${escHtml(safeSummary)}">${escHtml(safeSummary)}</div>`;
+}
+
+function getProviderPresentation(providerRaw, modelRaw) {
+    const provider = String(providerRaw || "").trim().toLowerCase();
+    const modelText = String(modelRaw || "").trim();
+    const label = PROVIDER_LABELS[provider] || String(providerRaw || "").trim() || "Assistant";
+    const icon = PROVIDER_ICONS[provider] || "";
+    const summary = modelText ? `${label} \u00B7 ${modelText}` : label;
+    return { provider, modelText, label, icon, summary };
+}
+
+function buildCompareModelHeader(providerRaw, modelRaw) {
+    const { icon, summary } = getProviderPresentation(providerRaw, modelRaw);
+    return `
+      <div class="compare-model-header" title="${escHtml(summary)}">
+        ${icon ? `<span class="compare-model-icon" aria-hidden="true">${escHtml(icon)}</span>` : ""}
+        <span class="compare-model-label">${escHtml(summary)}</span>
+      </div>`;
+}
+
+function getCompareGridClass(columnCount) {
+    if (columnCount >= 3) return "compare-grid compare-grid-3";
+    if (columnCount === 2) return "compare-grid compare-grid-2";
+    return "compare-grid compare-grid-1";
+}
+
+function buildUserMessageBubble(promptText, delay = 0) {
+    const userPrompt = String(promptText || "").trim();
+    if (!userPrompt) return "";
+    return `
+    <div class="chat-message chat-message-user"
+         style="animation: messageIn .2s ease-out ${delay}ms both;">
+      <div class="chat-bubble chat-bubble-user">
+        <p class="chat-user-text">${escHtml(userPrompt)}</p>
+      </div>
+    </div>`;
+}
+
+function buildStreamingCard(target, index, delay = 0, showProvider = true, options = {}) {
+    const compareView = Boolean(options.compareView);
+    const { summary } = getProviderPresentation(target.provider, target.model);
+    const providerSummary = escHtml(summary);
+    const providerSummaryHtml = showProvider ? `<div class="message-provider">${providerSummary}</div>` : "";
+    const footerProviderSummaryHtml = buildResponseProviderMeta(summary, index);
 
     return `
-    <div class="response-card loading-card" id="response-card-${index}"
-         style="animation: cardIn 0.4s cubic-bezier(.4,0,.2,1) ${delay}ms both;">
-      <div class="response-card-header">
-        <span class="model-badge" id="response-model-badge-${index}">
-          <span class="provider-icon">${icon}</span>
-          ${escHtml(label + modelSuffix)}
-        </span>
-      </div>
-      <div class="response-card-body">
-        <p class="response-text" id="response-text-${index}" data-empty="true">Waiting for response…</p>
-      </div>
-      <div class="response-card-footer">
-        <div class="response-stats">
-          <div class="stat-item">
-            <span class="stat-label">Tokens</span>
-            <span class="stat-value" id="response-tokens-${index}">0</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Finish</span>
-            <span class="stat-value" id="response-finish-${index}">-</span>
+    <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} is-streaming" id="chat-msg-${index}"
+         style="animation: messageIn .2s ease-out ${delay}ms both;">
+      <div class="chat-bubble chat-bubble-ai">
+        ${providerSummaryHtml}
+        <div class="typing-indicator" id="response-typing-${index}" role="status" aria-live="polite">
+          <span class="typing-indicator-label" aria-hidden="true">Thinking</span>
+          <span class="typing-indicator-dots" aria-hidden="true">
+            <span class="typing-indicator-dot">.</span>
+            <span class="typing-indicator-dot">.</span>
+            <span class="typing-indicator-dot">.</span>
+          </span>
+          <span class="sr-only">Assistant is thinking</span>
+        </div>
+        <p class="response-text hidden" id="response-text-${index}" data-empty="true"></p>
+        <div class="message-footer">
+          <div class="web-source-strip hidden" id="response-sources-${index}" aria-label="Web sources"></div>
+          <div class="message-footer-controls">
+            ${footerProviderSummaryHtml}
+            <div class="message-footer-meta">
+              ${buildTokenUsageText(null, index)}
+              ${buildResponseActionButtons(index)}
+            </div>
           </div>
         </div>
-        ${buildResponseActionButtons(index)}
       </div>
-      <div class="web-source-strip hidden" id="response-sources-${index}" aria-label="Web sources"></div>
     </div>`;
+}
+
+function buildCompareStreamingTurn(promptText, targets, indexMap) {
+    const gridClass = getCompareGridClass(targets.length);
+    const columnsHtml = targets.map((target, offset) => {
+        const cardIndex = indexMap[offset];
+        return `
+          <article class="compare-column">
+            ${buildCompareModelHeader(target.provider, target.model)}
+            ${buildStreamingCard(target, cardIndex, offset * 35, false, { compareView: true })}
+          </article>`;
+    }).join("");
+
+    return `
+      <section class="compare-turn compare-turn-streaming">
+        ${buildUserMessageBubble(promptText)}
+        <div class="${gridClass}">
+          ${columnsHtml}
+        </div>
+      </section>`;
+}
+
+function buildCompareTurn(promptText, responses, startIndex = 0) {
+    const safeResponses = Array.isArray(responses) ? responses.filter(Boolean) : [];
+    if (safeResponses.length === 0) {
+        return { html: "", nextIndex: startIndex };
+    }
+
+    let nextIndex = startIndex;
+    const gridClass = getCompareGridClass(safeResponses.length);
+    const columnsHtml = safeResponses.map(resp => {
+        const index = nextIndex++;
+        return `
+          <article class="compare-column">
+            ${buildCompareModelHeader(resp.provider, resp.model)}
+            ${buildResponseCard(resp, index, false, { compareView: true })}
+          </article>`;
+    }).join("");
+
+    return {
+        html: `
+          <section class="compare-turn">
+            ${buildUserMessageBubble(promptText)}
+            <div class="${gridClass}">
+              ${columnsHtml}
+            </div>
+          </section>`,
+        nextIndex,
+    };
+}
+
+function initStreamingResults(targets, isMulti, options = {}) {
+    if (isMulti) {
+        return initCompareStreamingResults(targets, options);
+    }
+
+    const append = Boolean(options.append);
+    const promptText = String(options.promptText || "");
+
+    pendingWebSourcesByCard.clear();
+    el.resultsSection.classList.remove("hidden");
+    el.resultsGrid.className = "results-grid";
+    el.resultsGrid.style.gridTemplateColumns = "";
+
+    if (!append) {
+        el.resultsGrid.innerHTML = "";
+    }
+
+    const baseIndex = append ? getNextStreamCardIndex() : 0;
+    const indexMap = targets.map((_, offset) => baseIndex + offset);
+
+    let html = "";
+    if (promptText) {
+        html += buildUserMessageBubble(promptText);
+    }
+    html += targets.map((target, offset) => {
+        const cardIndex = indexMap[offset];
+        return buildStreamingCard(target, cardIndex, offset * 35, isMulti);
+    }).join("");
+
+    if (append) {
+        el.resultsGrid.insertAdjacentHTML("beforeend", html);
+    } else {
+        el.resultsGrid.innerHTML = html;
+    }
+
+    setTimeout(() => {
+        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+    }, 60);
+
+    return { indexMap };
+}
+
+function initCompareStreamingResults(targets, options = {}) {
+    const append = options.append === undefined ? true : Boolean(options.append);
+    const promptText = String(options.promptText || "");
+
+    pendingWebSourcesByCard.clear();
+    el.resultsSection.classList.remove("hidden");
+    el.resultsGrid.className = "results-grid compare-transcript";
+    el.resultsGrid.style.gridTemplateColumns = "";
+
+    if (!append) {
+        el.resultsGrid.innerHTML = "";
+    }
+
+    const baseIndex = append ? getNextStreamCardIndex() : 0;
+    const indexMap = targets.map((_, offset) => baseIndex + offset);
+    const turnHtml = buildCompareStreamingTurn(promptText, targets, indexMap);
+
+    if (append) {
+        el.resultsGrid.insertAdjacentHTML("beforeend", turnHtml);
+    } else {
+        el.resultsGrid.innerHTML = turnHtml;
+    }
+
+    setTimeout(() => {
+        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+    }, 60);
+
+    return { indexMap };
 }
 
 function appendStreamLine(index, text) {
@@ -976,45 +1380,48 @@ function appendStreamLine(index, text) {
     if (textEl.dataset.empty === "true") {
         textEl.textContent = "";
         textEl.dataset.empty = "false";
+        textEl.classList.remove("hidden");
+        const typingEl = document.getElementById(`response-typing-${index}`);
+        if (typingEl) typingEl.classList.add("hidden");
     }
     textEl.textContent += text;
 }
 
 function finalizeStreamCard(index, resp) {
-    const card = document.getElementById(`response-card-${index}`);
+    const card = document.getElementById(`chat-msg-${index}`);
     if (!card) return;
     markFirstStreamResponseSeen();
 
     const hasError = !!resp.error;
     const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
-    const tokens = resp.token_usage ? resp.token_usage.total_tokens : 0;
-    const finish = resp.finish_reason || "—";
-    const provider = resp.provider || "";
-    const label = PROVIDER_LABELS[provider] || provider || "Model";
-    const modelSuffix = resp.model ? ` · ${resp.model}` : "";
-    const icon = PROVIDER_ICONS[provider] || "🤖";
+    const tokens = getTokenUsageTotal(resp.token_usage);
+    const { summary } = getProviderPresentation(resp.provider, resp.model);
 
     const textEl = document.getElementById(`response-text-${index}`);
-    const tokensEl = document.getElementById(`response-tokens-${index}`);
-    const finishEl = document.getElementById(`response-finish-${index}`);
-    const badgeEl = document.getElementById(`response-model-badge-${index}`);
+    const typingEl = document.getElementById(`response-typing-${index}`);
+    const tokensEl = document.getElementById(`response-token-usage-${index}`);
+    const summaryEl = document.getElementById(`response-provider-summary-${index}`);
 
     if (textEl) {
         textEl.textContent = text;
         textEl.dataset.empty = "false";
+        textEl.classList.remove("hidden");
         textEl.classList.toggle("error-text", hasError);
     }
-    if (tokensEl) tokensEl.textContent = tokens.toLocaleString();
-    if (finishEl) finishEl.textContent = finish;
-    if (badgeEl) {
-        badgeEl.innerHTML = `
-          <span class="provider-icon">${icon}</span>
-          ${escHtml(label + modelSuffix)}
-        `;
+    if (typingEl) typingEl.classList.add("hidden");
+    if (tokensEl) {
+        if (tokens === null) {
+            tokensEl.textContent = "";
+            tokensEl.classList.add("hidden");
+        } else {
+            tokensEl.textContent = `Tokens: ${tokens.toLocaleString()}`;
+            tokensEl.classList.remove("hidden");
+        }
     }
+    if (summaryEl) summaryEl.textContent = summary;
 
-    card.classList.remove("loading-card");
-    card.classList.toggle("error-card", hasError);
+    card.classList.remove("is-streaming");
+    card.classList.toggle("is-error", hasError);
     applyPendingWebSources(index, !hasError);
 }
 
@@ -1022,6 +1429,9 @@ function renderCompareSummary(data) {
     const existing = el.resultsGrid.querySelector(".compare-summary-card");
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
+    setTimeout(() => {
+        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+    }, 40);
 }
 
 async function copyTextToClipboard(text) {
@@ -1056,7 +1466,7 @@ function setActionPressed(button, pressed) {
 }
 
 function handleReactionAction(button, action) {
-    const card = button.closest(".response-card");
+    const card = button.closest(".chat-message-ai");
     if (!card) return;
     const likeBtn = card.querySelector('.response-action-btn[data-action="like"]');
     const dislikeBtn = card.querySelector('.response-action-btn[data-action="dislike"]');
@@ -1074,7 +1484,7 @@ async function handleCopyAction(button) {
     const index = button.dataset.index || "";
     const textEl =
         document.getElementById(`response-text-${index}`) ||
-        button.closest(".response-card")?.querySelector(".response-text");
+        button.closest(".chat-message-ai")?.querySelector(".response-text");
     const text = textEl ? textEl.textContent : "";
     const copied = await copyTextToClipboard(text);
     button.classList.toggle("copied", copied);
@@ -1101,62 +1511,57 @@ el.resultsGrid.addEventListener("click", event => {
     }
 });
 
-/* ═══════════════════════════════════════════
-   RENDER RESULTS — staggered card animation
-═══════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   RENDER RESULTS â€” staggered card animation
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function showResults(responses, isMulti, compareData) {
     el.resultsSection.classList.remove("hidden");
-    el.resultsGrid.className = isMulti ? "results-grid multi" : "results-grid";
-
-    if (!isMulti) {
-        el.resultsGrid.style.gridTemplateColumns = "";
-        el.resultsGrid.insertAdjacentHTML("afterbegin", buildResponseCard(responses[0], 0));
+    el.resultsGrid.className = isMulti ? "results-grid compare-transcript" : "results-grid";
+    el.resultsGrid.style.gridTemplateColumns = "";
+    if (isMulti) {
+        const promptText = String(compareData?.prompt || "");
+        const compareTurn = buildCompareTurn(promptText, responses, 0);
+        el.resultsGrid.innerHTML = compareTurn.html;
     } else {
-        // Explicitly match columns to card count — prevents empty 3rd column with 2 cards
-        el.resultsGrid.style.gridTemplateColumns = `repeat(${responses.length}, 1fr)`;
-        el.resultsGrid.innerHTML = responses.map((r, i) => buildResponseCard(r, i)).join("");
-        if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
+        el.resultsGrid.innerHTML = responses.map((r, i) => buildResponseCard(r, i, isMulti)).join("");
     }
+    if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
 
-    // Smooth scroll to results
     setTimeout(() => {
-        el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
     }, 80);
 }
 
 
-function buildResponseCard(resp, index) {
+function buildResponseCard(resp, index, showProvider = true, options = {}) {
+    const compareView = Boolean(options.compareView);
     const hasError = !!resp.error;
     const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
-    const tokens = resp.token_usage ? resp.token_usage.total_tokens : 0;
-    const delay = index * 60;
+    const { summary } = getProviderPresentation(resp.provider, resp.model);
+    const webSources = normalizeWebSources(resp.web_source_items || []);
+    const providerSummaryHtml = showProvider
+        ? `<div class="message-provider">${escHtml(summary)}</div>`
+        : "";
+    const sourceStripHtml = webSources.length > 0 ? buildWebSourceIconsHtml(webSources) : "";
 
     return `
-    <div class="response-card ${hasError ? "error-card" : ""}"
-         id="response-card-${index}"
-         style="animation: cardIn 0.4s cubic-bezier(.4,0,.2,1) ${delay}ms both;">
-      <div class="response-card-header">
-        <span class="model-badge">
-          <span class="provider-icon">${PROVIDER_ICONS[resp.provider] || "🤖"}</span>
-          ${escHtml(PROVIDER_LABELS[resp.provider] || resp.provider)}
-        </span>
-      </div>
-      <div class="response-card-body">
+    <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} ${hasError ? "is-error" : ""}"
+         id="chat-msg-${index}"
+         style="animation: messageIn .2s ease-out both;">
+      <div class="chat-bubble chat-bubble-ai">
+        ${providerSummaryHtml}
         <p class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${escHtml(text)}</p>
-      </div>
-      <div class="response-card-footer">
-        <div class="response-stats">
-          <div class="stat-item">
-            <span class="stat-label">Tokens</span>
-            <span class="stat-value">${tokens.toLocaleString()}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Finish</span>
-            <span class="stat-value">${escHtml(resp.finish_reason || "-")}</span>
+        <div class="message-footer">
+          <div class="web-source-strip${webSources.length > 0 ? "" : " hidden"}" id="response-sources-${index}" aria-label="Web sources">${sourceStripHtml}</div>
+          <div class="message-footer-controls">
+            ${buildResponseProviderMeta(summary)}
+            <div class="message-footer-meta">
+              ${buildTokenUsageText(resp.token_usage)}
+              ${buildResponseActionButtons(index)}
+            </div>
           </div>
         </div>
-        ${buildResponseActionButtons(index)}
       </div>
     </div>`;
 }
@@ -1164,34 +1569,29 @@ function buildResponseCard(resp, index) {
 function buildCompareSummary(data) {
     const count = Array.isArray(data.responses) ? data.responses.length : 0;
     return `
-    <div class="response-card compare-summary-card" style="grid-column:1/-1;background:#FAFAFA;animation:cardIn 0.4s cubic-bezier(.4,0,.2,1) ${count * 60}ms both;">
-      <div class="response-card-body" style="padding:12px 16px;">
-        <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
-          <div class="stat-item">
-            <span class="stat-label">Total Tokens</span>
-            <span class="stat-value">${(data.total_tokens || 0).toLocaleString()}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Successful</span>
-            <span class="stat-value">${data.success_count || 0} / ${count}</span>
-          </div>
+    <div class="chat-message chat-message-system compare-summary-card" style="animation: messageIn .2s ease-out both;">
+      <div class="chat-bubble chat-bubble-system">
+        <div class="compare-summary-line">
+          <span>Compared ${count} model${count === 1 ? "" : "s"}</span>
+          <span>${(data.total_tokens || 0).toLocaleString()} tokens</span>
+          <span>${data.success_count || 0}/${count} successful</span>
         </div>
       </div>
     </div>`;
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    CLEAR / ERROR / LOADING
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-el.clearBtn.addEventListener("click", () => { clearResults(); conversationHistory = []; });
+el.clearBtn.addEventListener("click", () => { clearResults(); });
 
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
     pendingWebSourcesByCard.clear();
     hasReceivedFirstStreamResponse = false;
-    setComposerDocked(false);
+    setComposerDocked(true);
 }
 
 function showError(msg) {
@@ -1214,9 +1614,9 @@ function setLoading(loading) {
     updateSendButtonState();
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    INIT
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 (function init() {
     buildOptions(el.singleModel, new Set());
@@ -1238,14 +1638,17 @@ function setLoading(loading) {
 
     updateRoutingButtons();
     updateSingleModelRoutingUI();
-    setComposerDocked(false);
+    setComposerDocked(true);
+    activeSessionIdByMode.single = loadActiveSessionId("single");
+    activeSessionIdByMode.compare = loadActiveSessionId("compare");
+    activeSessionId = normalizeSessionId(activeSessionIdByMode.single);
     setMode("single");
     updateSendButtonState();
 })();
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    UTILS
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function escHtml(str) {
     return String(str)
@@ -1255,19 +1658,227 @@ function escHtml(str) {
         .replace(/"/g, "&quot;");
 }
 
-/* ═══════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    HISTORY SIDEBAR
-═══════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 const historyEl = {
     sidebar: $("historySidebar"),
+    newChatBtn: $("historyNewChatBtn"),
     clearAllBtn: $("historyClearAllBtn"),
     list: $("historyList"),
     empty: $("historyEmpty"),
     search: $("historySearch"),
 };
+historyUiReady = true;
 
-let _historyData = [];   // full fetched list
+function normalizeHistoryModeLabel(value) {
+    return String(value || "").trim().toLowerCase() === "compare" ? "compare" : "chat";
+}
+
+function getSessionEntries(data, sessionId, modeLabel = null) {
+    const normalized = normalizeSessionId(sessionId);
+    if (!normalized) return [];
+    const requiredMode = modeLabel ? normalizeHistoryModeLabel(modeLabel) : null;
+    return data.filter(entry => {
+        if (normalizeSessionId(entry.session_id) !== normalized) return false;
+        if (!requiredMode) return true;
+        return normalizeHistoryModeLabel(entry.mode) === requiredMode;
+    });
+}
+
+function sortHistoryEntries(entries) {
+    return [...entries].sort((a, b) => {
+        const left = parseHistoryTimestamp(a.timestamp);
+        const right = parseHistoryTimestamp(b.timestamp);
+        return left - right;
+    });
+}
+
+function buildConversationHistoryFromEntries(entries) {
+    const rebuilt = [];
+    const ordered = sortHistoryEntries(entries);
+    let activeCompareTurn = null;
+
+    const flushCompareTurn = () => {
+        if (!activeCompareTurn) return;
+        if (activeCompareTurn.prompt && !isPromptPlaceholder(activeCompareTurn.prompt)) {
+            rebuilt.push({ role: "user", content: activeCompareTurn.prompt });
+        }
+        const assistantContext = buildCompareAssistantContext(activeCompareTurn.responses);
+        if (assistantContext) {
+            rebuilt.push({ role: "assistant", content: assistantContext });
+        }
+        activeCompareTurn = null;
+    };
+
+    ordered.forEach(entry => {
+        const mode = String(entry.mode || "").trim().toLowerCase();
+        const prompt = String(entry.prompt || "").trim();
+        const response = String(entry.response || "").trim();
+        const validPrompt = prompt && !isPromptPlaceholder(prompt);
+
+        if (mode === "compare") {
+            if (!activeCompareTurn || (validPrompt && prompt !== activeCompareTurn.prompt)) {
+                flushCompareTurn();
+                activeCompareTurn = {
+                    prompt: validPrompt ? prompt : "[prompt not stored]",
+                    responses: [],
+                };
+            } else if (validPrompt && activeCompareTurn.prompt === "[prompt not stored]") {
+                activeCompareTurn.prompt = prompt;
+            }
+
+            if (response) {
+                activeCompareTurn.responses.push(buildHistoricalAssistantCardPayload(entry));
+            }
+            return;
+        }
+
+        flushCompareTurn();
+        if (validPrompt) {
+            rebuilt.push({ role: "user", content: prompt });
+        }
+        if (response && !isResponsePlaceholder(response)) {
+            rebuilt.push({ role: "assistant", content: response });
+        }
+    });
+    flushCompareTurn();
+
+    return rebuilt.slice(-MAX_CONTEXT_MESSAGES_UI);
+}
+
+function hydrateConversationHistoryFromEntries(entries) {
+    conversationHistory = buildConversationHistoryFromEntries(entries);
+}
+
+function hydrateConversationHistoryFromSession(
+    sessionId,
+    data = _historyData,
+    modeLabel = historyModeForUiMode()
+) {
+    const entries = getSessionEntries(data, sessionId, modeLabel);
+    hydrateConversationHistoryFromEntries(entries);
+}
+
+function buildHistoricalAssistantCardPayload(entry) {
+    const response = String(entry.response || "").trim();
+    const hasError = isResponsePlaceholder(response);
+    const errorMessage = hasError ? response.replace(/^\[error\]\s*/i, "").trim() : "";
+    const tokens = Number(entry.tokens);
+    const provider = String(entry.provider || "").trim().toLowerCase();
+    const model = String(entry.model || "").trim();
+    const webSourceItems = normalizeWebSources(entry.web_source_items || []);
+
+    return {
+        text: hasError ? `Error: ${errorMessage || "Request failed"}` : response,
+        provider,
+        model,
+        web_source_items: webSourceItems,
+        finish_reason: hasError ? "error" : "completed",
+        token_usage: { total_tokens: Number.isFinite(tokens) ? tokens : 0 },
+        ...(hasError ? { error: { message: errorMessage || "Request failed" } } : {}),
+    };
+}
+
+function renderConversationFromEntries(entries) {
+    const ordered = sortHistoryEntries(entries);
+    const htmlParts = [];
+    let cardIndex = 0;
+    let activeCompareTurn = null;
+
+    const flushCompareTurn = () => {
+        if (!activeCompareTurn || activeCompareTurn.responses.length === 0) {
+            activeCompareTurn = null;
+            return;
+        }
+        const builtTurn = buildCompareTurn(activeCompareTurn.prompt, activeCompareTurn.responses, cardIndex);
+        if (builtTurn.html) {
+            htmlParts.push(builtTurn.html);
+            cardIndex = builtTurn.nextIndex;
+        }
+        activeCompareTurn = null;
+    };
+
+    ordered.forEach(entry => {
+        const mode = String(entry.mode || "").trim().toLowerCase();
+        const prompt = String(entry.prompt || "").trim();
+        const response = String(entry.response || "").trim();
+        const validPrompt = prompt && !isPromptPlaceholder(prompt);
+
+        if (mode === "compare") {
+            if (!activeCompareTurn || (validPrompt && prompt !== activeCompareTurn.prompt)) {
+                flushCompareTurn();
+                activeCompareTurn = {
+                    prompt: validPrompt ? prompt : "[prompt not stored]",
+                    responses: [],
+                };
+            } else if (validPrompt && activeCompareTurn.prompt === "[prompt not stored]") {
+                activeCompareTurn.prompt = prompt;
+            }
+
+            if (response) {
+                activeCompareTurn.responses.push(buildHistoricalAssistantCardPayload(entry));
+            }
+            return;
+        }
+
+        flushCompareTurn();
+
+        if (validPrompt) {
+            htmlParts.push(buildUserMessageBubble(prompt));
+        }
+        if (response) {
+            htmlParts.push(buildResponseCard(buildHistoricalAssistantCardPayload(entry), cardIndex, true));
+            cardIndex += 1;
+        }
+    });
+    flushCompareTurn();
+
+    pendingWebSourcesByCard.clear();
+    if (htmlParts.length === 0) {
+        clearResults();
+        return false;
+    }
+
+    el.resultsSection.classList.remove("hidden");
+    const hasCompareTurns = htmlParts.some(part => part.includes("compare-turn"));
+    el.resultsGrid.className = hasCompareTurns ? "results-grid compare-transcript" : "results-grid";
+    el.resultsGrid.style.gridTemplateColumns = "";
+    el.resultsGrid.innerHTML = htmlParts.join("");
+    hasReceivedFirstStreamResponse = true;
+    setComposerDocked(true);
+    setTimeout(() => {
+        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+    }, 40);
+    return true;
+}
+
+function renderSessionTranscript(sessionId, data = _historyData, modeLabel = historyModeForUiMode()) {
+    const entries = getSessionEntries(data, sessionId, modeLabel);
+    return renderConversationFromEntries(entries);
+}
+
+function setActiveSession(sessionId, { markNew = false, mode = currentMode } = {}) {
+    const safeMode = normalizeUiMode(mode);
+    activeSessionId = normalizeSessionId(sessionId) || normalizeSessionId(createSessionId());
+    setActiveSessionIdForMode(safeMode, activeSessionId);
+    pendingNewSession = Boolean(markNew);
+    const sessionEntries = getSessionEntries(
+        _historyData,
+        activeSessionId,
+        historyModeForUiMode(safeMode)
+    );
+    hydrateConversationHistoryFromEntries(sessionEntries);
+    renderConversationFromEntries(sessionEntries);
+    renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+}
+
+historyEl.newChatBtn.addEventListener("click", () => {
+    startNewChatSession();
+    renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+    el.promptInput.focus();
+});
 
 historyEl.clearAllBtn.addEventListener("click", async () => {
     if (!confirm("Delete all history?")) return;
@@ -1275,98 +1886,276 @@ historyEl.clearAllBtn.addEventListener("click", async () => {
         method: "DELETE",
         headers: { "X-API-Key": API_KEY },
     });
-    loadHistory();
+    conversationHistory = [];
+    pendingNewSession = true;
+    activeSessionId = null;
+    activeSessionIdByMode.single = null;
+    activeSessionIdByMode.compare = null;
+    persistActiveSessionId("single");
+    persistActiveSessionId("compare");
+    loadHistory({ restoreActiveTranscript: true });
 });
 
 historyEl.search.addEventListener("input", () => {
     renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
 });
 
-loadHistory();
+loadHistory({ restoreActiveTranscript: true });
 
-async function loadHistory() {
+async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
-        const resp = await fetch(`${API_BASE}/v1/history?limit=200`, {
+        const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
             headers: { "X-API-Key": API_KEY },
         });
         if (!resp.ok) return;
         _historyData = await resp.json();
+
+        const safeMode = normalizeUiMode(currentMode);
+        const modeLabel = historyModeForUiMode(safeMode);
+        if (!activeSessionIdByMode[safeMode]) {
+            activeSessionIdByMode[safeMode] = loadActiveSessionId(safeMode);
+        }
+        activeSessionId = normalizeSessionId(activeSessionIdByMode[safeMode]);
+
+        if (!activeSessionId) {
+            const mostRecentWithSession = _historyData.find(entry =>
+                normalizeSessionId(entry.session_id) &&
+                normalizeHistoryModeLabel(entry.mode) === modeLabel
+            );
+            if (mostRecentWithSession) {
+                activeSessionId = normalizeSessionId(mostRecentWithSession.session_id);
+                setActiveSessionIdForMode(safeMode, activeSessionId);
+            }
+        }
+
+        if (activeSessionId) {
+            hydrateConversationHistoryFromSession(activeSessionId, _historyData, modeLabel);
+            if (restoreActiveTranscript) {
+                renderSessionTranscript(activeSessionId, _historyData, modeLabel);
+            }
+        } else if (restoreActiveTranscript) {
+            conversationHistory = [];
+            clearResults();
+        }
+
         renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
     } catch (_) { /* silent */ }
 }
 
-function renderHistory(data, filter = "") {
-    const filtered = filter
-        ? data.filter(e =>
-            e.prompt.toLowerCase().includes(filter) ||
-            e.provider.toLowerCase().includes(filter) ||
-            e.model.toLowerCase().includes(filter))
-        : data;
+function parseHistoryTimestamp(value) {
+    const ts = Date.parse(value || "");
+    return Number.isFinite(ts) ? ts : 0;
+}
 
-    if (filtered.length === 0) {
+function isPromptPlaceholder(prompt) {
+    const text = String(prompt || "").trim().toLowerCase();
+    return text.startsWith("[prompt hash:") || text.startsWith("[prompt not stored]");
+}
+
+function isResponsePlaceholder(response) {
+    return String(response || "").trim().toLowerCase().startsWith("[error]");
+}
+
+function pickFirstPrompt(entries) {
+    const preferred = entries.find(entry => {
+        const prompt = String(entry.prompt || "").trim();
+        return prompt && !isPromptPlaceholder(prompt);
+    });
+    if (preferred) return String(preferred.prompt || "").trim();
+    const fallback = entries.find(entry => String(entry.prompt || "").trim());
+    return fallback ? String(fallback.prompt || "").trim() : "";
+}
+
+function pickLatestResponse(entries) {
+    const reversed = [...entries].reverse();
+    const preferred = reversed.find(entry => {
+        const response = String(entry.response || "").trim();
+        return response && !isResponsePlaceholder(response);
+    });
+    if (preferred) return String(preferred.response || "").trim();
+    const fallback = reversed.find(entry => String(entry.response || "").trim());
+    return fallback ? String(fallback.response || "").trim() : "";
+}
+
+function formatHistoryUsd(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return null;
+    const safe = Math.max(0, amount);
+    const precision = safe >= 1 ? 2 : 4;
+    return `$${safe.toLocaleString(undefined, {
+        minimumFractionDigits: precision,
+        maximumFractionDigits: precision,
+    })}`;
+}
+
+function buildHistoryThreads(data) {
+    const grouped = new Map();
+    data.forEach(entry => {
+        const sessionId = normalizeSessionId(entry.session_id);
+        const modeLabel = normalizeHistoryModeLabel(entry.mode);
+        const key = sessionId ? `session:${modeLabel}:${sessionId}` : `entry:${modeLabel}:${entry.id}`;
+        if (!grouped.has(key)) {
+            grouped.set(key, { key, sessionId, modeLabel, entries: [] });
+        }
+        grouped.get(key).entries.push(entry);
+    });
+
+    const threads = [];
+    grouped.forEach(thread => {
+        const entries = [...thread.entries].sort((a, b) => {
+            return parseHistoryTimestamp(a.timestamp) - parseHistoryTimestamp(b.timestamp);
+        });
+        const latestEntry = entries[entries.length - 1] || {};
+        const latestTimestampMs = parseHistoryTimestamp(latestEntry.timestamp);
+        const firstPrompt = pickFirstPrompt(entries);
+        const latestResponse = pickLatestResponse(entries);
+        const modeLabel = thread.modeLabel || normalizeHistoryModeLabel(latestEntry.mode);
+        const providerSet = new Set(entries.map(entry => String(entry.provider || "").trim().toLowerCase()).filter(Boolean));
+        const provider = providerSet.size > 1 ? "mixed" : String(latestEntry.provider || "");
+        const modelSet = new Set(entries.map(entry => String(entry.model || "").trim()).filter(Boolean));
+        const model = modelSet.size > 1 ? "mixed" : String(latestEntry.model || "");
+        const totalTokens = entries.reduce((sum, entry) => {
+            const n = Number(entry.tokens);
+            return Number.isFinite(n) ? sum + n : sum;
+        }, 0);
+        const totalCost = entries.reduce((sum, entry) => {
+            const n = Number(entry.cost);
+            return Number.isFinite(n) ? sum + n : sum;
+        }, 0);
+        const hasCost = entries.some(entry => Number.isFinite(Number(entry.cost)));
+        const searchBlob = entries
+            .map(entry => [entry.prompt, entry.response, entry.provider, entry.model].join(" ").toLowerCase())
+            .join(" ");
+
+        threads.push({
+            key: thread.key,
+            sessionId: thread.sessionId,
+            entries,
+            latestEntry,
+            latestTimestampMs,
+            firstPrompt,
+            latestResponse,
+            modeLabel,
+            provider,
+            model,
+            totalTokens,
+            totalCost,
+            hasCost,
+            searchBlob,
+        });
+    });
+
+    return threads.sort((a, b) => b.latestTimestampMs - a.latestTimestampMs);
+}
+
+function renderHistory(data, filter = "") {
+    const needle = String(filter || "").trim().toLowerCase();
+    const threads = buildHistoryThreads(data);
+    const filteredThreads = needle
+        ? threads.filter(thread => thread.searchBlob.includes(needle))
+        : threads;
+
+    if (filteredThreads.length === 0) {
         historyEl.list.innerHTML = "";
         historyEl.empty.style.display = "flex";
         return;
     }
     historyEl.empty.style.display = "none";
 
-    historyEl.list.innerHTML = filtered.map(entry => {
-        const icon = entry.mode === "compare" ? "⚖️" : "💬";
-        const date = new Date(entry.timestamp).toLocaleString(undefined, {
-            month: "short", day: "numeric",
-            hour: "2-digit", minute: "2-digit",
-        });
-        const promptSnippet = escHtml(entry.prompt.length > 80
-            ? entry.prompt.slice(0, 80) + "…"
-            : entry.prompt);
-        const responseSnippet = escHtml(entry.response.length > 120
-            ? entry.response.slice(0, 120) + "…"
-            : entry.response);
-        const tokStr = entry.tokens != null ? entry.tokens.toLocaleString() : "—";
-        const modeLabel = entry.mode === "compare" ? "compare" : "chat";
+    historyEl.list.innerHTML = filteredThreads.map(thread => {
+        const rawPrompt = thread.firstPrompt || "[prompt not stored]";
+        const promptSnippet = escHtml(rawPrompt.length > 80
+            ? rawPrompt.slice(0, 80) + "..."
+            : rawPrompt);
+        const tokStr = thread.totalTokens ? thread.totalTokens.toLocaleString() : "-";
+        const totalCostLabel = thread.hasCost ? formatHistoryUsd(thread.totalCost) : null;
+        const isActive = thread.modeLabel === historyModeForUiMode(currentMode)
+            && thread.sessionId
+            && thread.sessionId === activeSessionId;
+        const activeClass = isActive ? " is-active-session" : "";
 
-        return `<li class="history-entry" data-id="${entry.id}">
+        return `<li class="history-entry${activeClass}" data-thread-key="${escHtml(thread.key)}" data-session-id="${escHtml(thread.sessionId || "")}">
           <div class="history-entry-top">
-            <span class="history-mode-badge history-mode-${modeLabel}">${icon} ${modeLabel}</span>
-            <span class="history-provider-badge">${escHtml(entry.provider)}</span>
-            <span class="history-date">${date}</span>
-            <button class="history-delete-btn" data-id="${entry.id}" title="Delete entry" aria-label="Delete">🗑</button>
+            <span class="history-mode-badge history-mode-${thread.modeLabel}">${thread.modeLabel === "compare" ? "Compare" : "Chat"}</span>
           </div>
           <div class="history-prompt">${promptSnippet}</div>
-          <div class="history-response">${responseSnippet}</div>
           <div class="history-meta">
-            <span>Tokens: ${tokStr}</span>
+            <span class="history-meta-left">
+              <span class="history-token-text">Tokens: ${tokStr}</span>
+              ${totalCostLabel ? `<span class="history-cost-text">Est. cost: ${escHtml(totalCostLabel)}</span>` : ""}
+            </span>
+            <button class="history-delete-btn" data-thread-key="${escHtml(thread.key)}" title="Delete chat thread" aria-label="Delete thread">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7">
+                <path d="M4 7H20"></path>
+                <path d="M9 7V5.6C9 4.72 9.72 4 10.6 4H13.4C14.28 4 15 4.72 15 5.6V7"></path>
+                <rect x="6.5" y="7" width="11" height="13" rx="2"></rect>
+                <path d="M10 11V17"></path>
+                <path d="M14 11V17"></path>
+              </svg>
+              <span class="sr-only">Delete thread</span>
+            </button>
           </div>
         </li>`;
     }).join("");
 
-    // Delete button listeners
+    const threadByKey = new Map(filteredThreads.map(thread => [thread.key, thread]));
+
     historyEl.list.querySelectorAll(".history-delete-btn").forEach(btn => {
         btn.addEventListener("click", async (e) => {
             e.stopPropagation();
-            const id = btn.dataset.id;
-            await fetch(`${API_BASE}/v1/history/${id}`, {
-                method: "DELETE",
-                headers: { "X-API-Key": API_KEY },
-            });
-            loadHistory();
+            const thread = threadByKey.get(btn.dataset.threadKey || "");
+            if (!thread || !thread.entries.length) return;
+
+            for (const entry of thread.entries) {
+                await fetch(`${API_BASE}/v1/history/${entry.id}`, {
+                    method: "DELETE",
+                    headers: { "X-API-Key": API_KEY },
+                });
+            }
+
+            if (thread.sessionId && thread.sessionId === activeSessionId) {
+                startNewChatSession();
+            }
+            await loadHistory();
         });
     });
 
-    // Click entry to replay prompt in textarea
     historyEl.list.querySelectorAll(".history-entry").forEach(item => {
         item.addEventListener("click", (e) => {
             if (e.target.classList.contains("history-delete-btn")) return;
-            const entry = filtered.find(en => en.id === Number(item.dataset.id));
-            if (!entry) return;
-            el.promptInput.value = entry.prompt;
+            const thread = threadByKey.get(item.dataset.threadKey || "");
+            if (!thread) return;
+
+            const targetMode = thread.modeLabel === "compare" ? "compare" : "single";
+            if (currentMode !== targetMode) {
+                setMode(targetMode);
+            }
+
+            const clickedSessionId = normalizeSessionId(thread.sessionId);
+            if (clickedSessionId) {
+                setActiveSession(clickedSessionId, { markNew: false, mode: targetMode });
+            } else {
+                activeSessionId = normalizeSessionId(createSessionId());
+                setActiveSessionIdForMode(targetMode, activeSessionId);
+                pendingNewSession = true;
+                hydrateConversationHistoryFromEntries(thread.entries);
+                renderConversationFromEntries(thread.entries);
+                renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
+            }
+
+            el.promptInput.value = "";
             el.promptInput.focus();
             updateSendButtonState();
-            document.getElementById("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+            if (!el.resultsSection.classList.contains("hidden")) {
+                el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+                el.resultsSection.scrollIntoView({ behavior: "smooth", block: "end" });
+                setTimeout(() => {
+                    el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+                }, 60);
+            } else {
+                document.getElementById("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+            }
         });
     });
 }
-
-
-
 

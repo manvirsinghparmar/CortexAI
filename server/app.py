@@ -6,18 +6,37 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
 from server.routes import admin, byok, chat, compare, health, history, optimize, reporting, whoami
-from server.database import init_db
 from utils.logger import get_logger
 import os
 
 logger = get_logger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
     logger.info("FastAPI server starting up")
-    init_db()
+
+    database_url = (os.getenv("DATABASE_URL") or "").strip()
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required. PostgreSQL is the only supported runtime data store."
+        )
+    if not database_url.startswith(("postgresql://", "postgresql+")):
+        if _env_bool("ALLOW_NON_POSTGRES_DATABASE_URL", default=False):
+            logger.warning("Non-PostgreSQL DATABASE_URL accepted by ALLOW_NON_POSTGRES_DATABASE_URL")
+        else:
+            raise RuntimeError(
+                "DATABASE_URL must use a PostgreSQL URL "
+                "(postgresql:// or postgresql+psycopg://)."
+            )
 
     required_keys = ["API_KEYS"]
     missing = [k for k in required_keys if not os.getenv(k)]

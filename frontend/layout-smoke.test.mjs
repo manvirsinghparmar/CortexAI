@@ -7,6 +7,8 @@ const htmlPath = path.join(process.cwd(), "frontend", "index.html");
 const html = fs.readFileSync(htmlPath, "utf8");
 const appJsPath = path.join(process.cwd(), "frontend", "app.js");
 const appJs = fs.readFileSync(appJsPath, "utf8");
+const styleCssPath = path.join(process.cwd(), "frontend", "style.css");
+const styleCss = fs.readFileSync(styleCssPath, "utf8");
 
 test("dedicated smart routing card is removed", () => {
     assert.doesNotMatch(html, /routing-card/);
@@ -65,6 +67,45 @@ test("compare mode is inline and no longer uses separate model-selection card", 
     assert.match(html, /id="compareAddModelBtn"[\s\S]*\+ Add Model/);
 });
 
+test("compare transcript renders turn-based side-by-side columns with model headers", () => {
+    assert.match(appJs, /function buildCompareModelHeader\(providerRaw, modelRaw\)/);
+    assert.match(appJs, /class="compare-model-header"/);
+    assert.match(appJs, /function buildCompareStreamingTurn\(promptText, targets, indexMap\)/);
+    assert.match(appJs, /function buildCompareTurn\(promptText, responses, startIndex = 0\)/);
+    assert.match(appJs, /<section class="compare-turn/);
+    assert.match(appJs, /const gridClass = getCompareGridClass\(targets\.length\);/);
+    assert.match(appJs, /const gridClass = getCompareGridClass\(safeResponses\.length\);/);
+    assert.match(appJs, /buildStreamingCard\(target, cardIndex, offset \* 35, false, \{ compareView: true \}\)/);
+    assert.match(appJs, /buildResponseCard\(resp, index, false, \{ compareView: true \}\)/);
+});
+
+test("compare mode sends session context and preserves prompt history between turns", () => {
+    assert.match(appJs, /async function doCompare\(prompt\) \{[\s\S]*const sessionId = ensureActiveSessionId\(\);/);
+    assert.match(appJs, /await callAPIStream\("\/v1\/compare\/stream", \{[\s\S]*context: \{[\s\S]*session_id: sessionId,[\s\S]*conversation_history: conversationHistory,[\s\S]*new_session: pendingNewSession,/);
+    assert.match(appJs, /const compareAssistantContext = buildCompareAssistantContext\(compareResponsesForContext\);/);
+    assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
+});
+
+test("compare history hydration keeps prior user prompts without duplicating per-model assistant turns", () => {
+    assert.match(appJs, /function buildConversationHistoryFromEntries\(entries\) \{[\s\S]*const flushCompareTurn = \(\) => \{/);
+    assert.match(appJs, /const assistantContext = buildCompareAssistantContext\(activeCompareTurn\.responses\);/);
+    assert.match(appJs, /if \(assistantContext\) \{[\s\S]*rebuilt\.push\(\{ role: "assistant", content: assistantContext \}\);/);
+});
+
+test("mode-scoped session ids are persisted separately for Ask and Compare", () => {
+    assert.match(appJs, /const SESSION_STORAGE_KEY_BY_MODE = \{/);
+    assert.match(appJs, /single:\s*"cortex_active_session_id_single"/);
+    assert.match(appJs, /compare:\s*"cortex_active_session_id_compare"/);
+    assert.match(appJs, /const activeSessionIdByMode = \{/);
+    assert.match(appJs, /function historyModeForUiMode\(mode = currentMode\)/);
+});
+
+test("history threads are grouped by mode and session to avoid cross-mode merging", () => {
+    assert.match(appJs, /function buildHistoryThreads\(data\) \{[\s\S]*const modeLabel = normalizeHistoryModeLabel\(entry\.mode\);/);
+    assert.match(appJs, /const key = sessionId \? `session:\$\{modeLabel\}:\$\{sessionId\}` : `entry:\$\{modeLabel\}:\$\{entry\.id\}`;/);
+    assert.match(appJs, /const isActive = thread\.modeLabel === historyModeForUiMode\(currentMode\)/);
+});
+
 test("header keeps only slim nav links without subtitle block", () => {
     assert.match(html, /<button class="top-nav-link" type="button">History<\/button>/);
     assert.match(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
@@ -84,7 +125,8 @@ test("response cards and history hide price and latency metadata", () => {
     assert.doesNotMatch(appJs, /response-cost-/);
     assert.doesNotMatch(appJs, /response-latency-/);
     assert.doesNotMatch(appJs, /Latency:/);
-    assert.match(appJs, /<span>Tokens: \$\{tokStr\}<\/span>/);
+    assert.match(appJs, /<span class="history-token-text">Tokens: \$\{tokStr\}<\/span>/);
+    assert.match(appJs, /history-cost-text/);
 });
 
 test("ask mode defaults Web toggle to enabled", () => {
@@ -101,4 +143,78 @@ test("response cards provide copy, like, and dislike actions", () => {
     assert.match(appJs, /function handleCopyAction\(button\)/);
     assert.match(appJs, /function handleReactionAction\(button, action\)/);
     assert.match(appJs, /el\.resultsGrid\.addEventListener\("click", event =>/);
+});
+
+test("streaming placeholder shows Thinking label with animated dots and reduced-motion fallback", () => {
+    assert.match(appJs, /class="typing-indicator"/);
+    assert.match(appJs, /class="typing-indicator-label" aria-hidden="true">Thinking<\/span>/);
+    assert.match(appJs, /class="typing-indicator-dot">\.<\/span>/);
+    assert.match(appJs, /role="status" aria-live="polite"/);
+    assert.match(styleCss, /\.typing-indicator-label \{/);
+    assert.match(styleCss, /\.typing-indicator-dot \{/);
+    assert.match(styleCss, /@keyframes thinkingDot \{/);
+    assert.match(styleCss, /@media \(prefers-reduced-motion: reduce\) \{/);
+    assert.match(styleCss, /\.chat-message-ai\.is-streaming \.message-footer \{/);
+    assert.match(styleCss, /display: none;/);
+    assert.doesNotMatch(styleCss, /@keyframes typingPulse \{/);
+});
+
+test("chat action controls use persistent premium footer layout", () => {
+    assert.match(appJs, /response-action-group-copy/);
+    assert.match(appJs, /response-action-group-feedback/);
+    assert.match(appJs, /class="message-footer"/);
+    assert.match(appJs, /buildTokenUsageText\(resp\.token_usage\)/);
+    assert.doesNotMatch(appJs, /message-details/);
+    assert.match(styleCss, /\.message-footer \{/);
+    assert.match(styleCss, /\.message-footer-meta \{/);
+    assert.match(styleCss, /\.response-token-usage \{/);
+    assert.doesNotMatch(styleCss, /\.chat-bubble-ai:hover \.response-actions,/);
+    assert.match(styleCss, /width: 38px;/);
+    assert.match(styleCss, /height: 38px;/);
+    assert.match(styleCss, /width: 19px;/);
+    assert.match(styleCss, /\.response-action-group \+ \.response-action-group \{/);
+    assert.match(styleCss, /margin-left: 13px;/);
+});
+
+test("history thread selection restores transcript instead of reusing last prompt text", () => {
+    assert.match(appJs, /function renderConversationFromEntries\(entries\)/);
+    assert.match(appJs, /renderConversationFromEntries\(sessionEntries\);/);
+    assert.match(appJs, /el\.promptInput\.value = "";/);
+    assert.doesNotMatch(
+        appJs,
+        /el\.promptInput\.value = !isPromptPlaceholder\(thread\.latestPrompt\) \? thread\.latestPrompt : "";/,
+    );
+});
+
+test("history sidebar titles use the first prompt in a thread", () => {
+    assert.match(appJs, /function pickFirstPrompt\(entries\)/);
+    assert.match(appJs, /const firstPrompt = pickFirstPrompt\(entries\);/);
+    assert.match(appJs, /const rawPrompt = thread\.firstPrompt \|\| "\[prompt not stored\]";/);
+    assert.doesNotMatch(appJs, /const rawPrompt = thread\.latestPrompt \|\| "\[prompt not stored\]";/);
+});
+
+test("history sidebar items do not render provider/model labels", () => {
+    assert.doesNotMatch(appJs, /history-provider-model/);
+});
+
+test("history thread selection scrolls to the bottom of restored messages", () => {
+    assert.match(appJs, /el\.resultsSection\.scrollIntoView\(\{ behavior: "smooth", block: "end" \}\);/);
+    assert.match(appJs, /if \(!el\.resultsSection\.classList\.contains\("hidden"\)\) \{/);
+    assert.match(appJs, /el\.resultsSection\.scrollTop = el\.resultsSection\.scrollHeight;/);
+});
+
+test("historical transcripts render persisted web source citations", () => {
+    assert.match(appJs, /const webSourceItems = normalizeWebSources\(entry\.web_source_items \|\| \[\]\);/);
+    assert.match(appJs, /const webSources = normalizeWebSources\(resp\.web_source_items \|\| \[\]\);/);
+    assert.match(appJs, /class="web-source-strip\$\{webSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Web sources"/);
+});
+
+test("compare layout styles support equal-width columns and responsive stacking", () => {
+    assert.match(styleCss, /\.results-grid\.compare-transcript \{/);
+    assert.match(styleCss, /\.compare-grid \{/);
+    assert.match(styleCss, /\.compare-grid\.compare-grid-2 \{/);
+    assert.match(styleCss, /\.compare-grid\.compare-grid-3 \{/);
+    assert.match(styleCss, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+    assert.match(styleCss, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+    assert.match(styleCss, /@media \(max-width: 980px\) \{[\s\S]*\.compare-grid\.compare-grid-2,[\s\S]*\.compare-grid\.compare-grid-3 \{[\s\S]*grid-template-columns: minmax\(0, 1fr\);/);
 });

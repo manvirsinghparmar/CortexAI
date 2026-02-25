@@ -12,7 +12,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20260225a" />
 </head>
 
 <body>
@@ -52,11 +52,21 @@
                 <span>History</span>
             </div>
             <div class="history-sidebar-actions">
-                <button class="history-clear-btn" id="historyClearAllBtn" title="Clear all history">Clear All</button>
+                <button class="history-btn history-btn-primary" id="historyNewChatBtn" title="Start a new chat thread"
+                    aria-label="Start new chat">
+                    <svg class="history-btn-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none"
+                        stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20H5a1 1 0 0 1-1-1v-7"></path>
+                        <path d="M20.65 7.35a2.1 2.1 0 0 0-2.97-2.97L8 14.06V18h3.94l8.71-8.65Z"></path>
+                    </svg>
+                    <span>New chat</span>
+                </button>
+                <button class="history-btn history-btn-secondary" id="historyClearAllBtn" title="Clear all history">Clear</button>
             </div>
         </div>
         <div class="history-search-wrap">
-            <input type="text" id="historySearch" class="history-search" placeholder="Search history..."
+            <span class="history-search-icon" aria-hidden="true">&#128269;</span>
+            <input type="text" id="historySearch" class="history-search" placeholder="Search history"
                 aria-label="Search history" />
         </div>
         <ul class="history-list" id="historyList" role="list"></ul>
@@ -209,8 +219,8 @@
         <p>CortexAI - Unified AI Comparison Engine</p>
     </footer>
 
-    <script src="smart-routing-state.js"></script>
-    <script src="app.js"></script>
+    <script src="smart-routing-state.js?v=20260225a"></script>
+    <script src="app.js?v=20260225a"></script>
 </body>
 
 </html>

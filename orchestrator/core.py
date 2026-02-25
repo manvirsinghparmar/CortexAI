@@ -823,6 +823,39 @@ These rules prevent misinformation. Follow them carefully.""",
             return Tier.T2
         return None
 
+    def preview_smart_target(
+        self,
+        *,
+        prompt: str,
+        context: UserContext | None = None,
+        routing_mode: str = "smart",
+        routing_constraints: dict[str, Any] | None = None,
+    ) -> tuple[str, str] | None:
+        """
+        Return the first planned smart-routing candidate without invoking providers.
+
+        This is used by API streaming routes to emit a stable `start` event
+        (provider/model) before the response is generated.
+        """
+        try:
+            if not self._smart_router or not self._model_registry:
+                return None
+
+            constraints = self._build_routing_constraints(routing_constraints)
+            _features, _tier, ordered_candidates, _metadata = self._smart_router.route_once_plan(
+                prompt=prompt,
+                context=context,
+                routing_mode=(routing_mode or "smart").lower().strip() or "smart",
+                constraints=constraints,
+            )
+            if not ordered_candidates:
+                return None
+            first = ordered_candidates[0]
+            return first.provider, first.model_name
+        except Exception:
+            logger.exception("preview_smart_target() failed")
+            return None
+
     def _validate_explicit_model_selection(
         self, model_type: str | None, model_name: str | None
     ) -> tuple[bool, str]:

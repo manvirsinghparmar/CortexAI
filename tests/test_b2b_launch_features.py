@@ -452,6 +452,7 @@ def b2b_db_client(monkeypatch):
     db_url = f"sqlite+pysqlite:///{db_file.as_posix()}"
 
     monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     monkeypatch.setenv("DB_SCHEMA", "main")
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("AUTO_REGISTER_UNMAPPED_API_KEYS", "true")
@@ -659,6 +660,8 @@ def test_reporting_returns_501_when_db_mode_off(monkeypatch):
     from server.routes import whoami as whoami_route
 
     monkeypatch.setenv("API_KEYS", "dev-key-1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     app = create_app()
     reporting_route.API_DB_ENABLED = False
     chat_route.API_DB_ENABLED = False

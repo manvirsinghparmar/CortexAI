@@ -13,6 +13,7 @@ class ConversationHistoryItem(BaseModel):
 class UserContextRequest(BaseModel):
     session_id: Optional[str] = None
     conversation_history: Optional[List[ConversationHistoryItem]] = None
+    new_session: bool = False
 
 
 class ChatRoutingRequest(BaseModel):

@@ -9,6 +9,7 @@ Design principles:
 """
 
 import hashlib
+import json
 import zlib
 from datetime import date, timedelta
 from typing import Any
@@ -123,6 +124,16 @@ def generate_api_key(prefix: str = "cortex") -> str:
         str: API key (raw, return-once secret)
     """
     return _generate_api_key(prefix)
+
+
+def coerce_uuid(value: str | None) -> UUID | None:
+    """Parse a UUID string safely."""
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -326,7 +337,13 @@ def update_api_key_last_used(db: Session, api_key: str) -> None:
 # ============================================================================
 
 
-def create_session(db: Session, user_id: UUID, mode: str = "ask", title: str | None = None) -> UUID:
+def create_session(
+    db: Session,
+    user_id: UUID,
+    mode: str = "ask",
+    title: str | None = None,
+    session_id: UUID | None = None,
+) -> UUID:
     """
     Create a new chat session.
 
@@ -335,6 +352,7 @@ def create_session(db: Session, user_id: UUID, mode: str = "ask", title: str | N
         user_id: User ID
         mode: Session mode ('ask', 'compare', 'eval', 'research')
         title: Optional session title
+        session_id: Optional explicit session UUID
 
     Returns:
         UUID: session_id
@@ -346,15 +364,15 @@ def create_session(db: Session, user_id: UUID, mode: str = "ask", title: str | N
 
     sessions = get_table("sessions")
 
-    stmt = (
-        insert(sessions)
-        .values(
-            user_id=user_id,
-            title=title,
-            mode=mode,
-        )
-        .returning(sessions.c.id)
-    )
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "title": title,
+        "mode": mode,
+    }
+    if session_id is not None and "id" in {col.name for col in sessions.columns}:
+        values["id"] = str(session_id)
+
+    stmt = insert(sessions).values(**values).returning(sessions.c.id)
 
     session_id = db.execute(stmt).scalar_one()
 
@@ -646,6 +664,7 @@ def create_llm_request(
     api_key_id: UUID | None = None,
     input_tokens_est: int | None = None,
     store_prompt: bool = False,
+    prompt_text_override: str | None = None,
 ) -> UUID:
     """
     Insert a row into llm_requests table.
@@ -662,7 +681,8 @@ def create_llm_request(
         request_group_id: Optional grouping UUID for multi-response flows (e.g., compare mode)
         api_key_id: Optional API key ID (if request via API)
         input_tokens_est: Optional estimated input tokens
-        store_prompt: Whether to store raw prompt text (default: False for privacy)
+        store_prompt: Whether to store prompt text
+        prompt_text_override: Optional prompt text value to store when store_prompt=True
 
     Returns:
         UUID: The llm_requests.id of the inserted row
@@ -684,7 +704,10 @@ def create_llm_request(
         "model": model,
         "prompt_sha256": prompt_sha256,
         "prompt_stored": store_prompt,
-        "prompt_text": prompt if store_prompt else None,
+        "prompt_text": (
+            prompt_text_override if (store_prompt and prompt_text_override is not None)
+            else (prompt if store_prompt else None)
+        ),
         "input_tokens_est": input_tokens_est,
         "api_key_id": api_key_id,
     }
@@ -1764,6 +1787,54 @@ def _history_entry_id(request_pk: Any, request_id: str | None) -> int:
     return int(zlib.crc32(source.encode("utf-8")) & 0x7FFFFFFF)
 
 
+def _normalize_history_web_source_items(raw_items: Any) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    if not isinstance(raw_items, list):
+        return items
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        normalized_url = url.lower()
+        if normalized_url in seen_urls:
+            continue
+        seen_urls.add(normalized_url)
+        title = str(item.get("title") or "").strip() or url
+        items.append({"title": title, "url": url})
+        if len(items) >= 8:
+            break
+
+    return items
+
+
+def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]]:
+    trace_payload: dict[str, Any] | None = None
+
+    if isinstance(routing_trace, dict):
+        trace_payload = routing_trace
+    elif isinstance(routing_trace, str):
+        text = routing_trace.strip()
+        if text:
+            try:
+                decoded = json.loads(text)
+                if isinstance(decoded, dict):
+                    trace_payload = decoded
+            except Exception:
+                trace_payload = None
+
+    if not trace_payload:
+        return []
+
+    raw_items = trace_payload.get("web_source_items")
+    if not isinstance(raw_items, list):
+        raw_items = trace_payload.get("sources")
+    return _normalize_history_web_source_items(raw_items)
+
+
 def _to_history_timestamp(raw_value: Any) -> str:
     """Normalize DB timestamp-like values to ISO8601 with trailing Z when possible."""
     if raw_value is None:
@@ -1786,7 +1857,12 @@ def _to_history_timestamp(raw_value: Any) -> str:
     return text
 
 
-def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> list[dict[str, Any]]:
+def get_llm_history_entries(
+    db: Session,
+    user_id: UUID,
+    limit: int = 100,
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Return API history entries from llm_requests/llm_responses for one user.
 
@@ -1796,14 +1872,21 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
 
     llm_requests = get_table("llm_requests")
     llm_responses = get_table("llm_responses")
+    routing_decisions = None
+    try:
+        routing_decisions = get_table("routing_decisions")
+    except Exception:
+        routing_decisions = None
 
     req_cols = {col.name for col in llm_requests.columns}
     resp_cols = {col.name for col in llm_responses.columns}
+    routing_cols = {col.name for col in routing_decisions.columns} if routing_decisions is not None else set()
 
     req_created_col = llm_requests.c.created_at if "created_at" in req_cols else None
     req_mode_col = llm_requests.c.route_mode if "route_mode" in req_cols else None
     req_prompt_col = llm_requests.c.prompt_text if "prompt_text" in req_cols else None
     req_prompt_hash_col = llm_requests.c.prompt_sha256 if "prompt_sha256" in req_cols else None
+    req_session_col = llm_requests.c.session_id if "session_id" in req_cols else None
     req_provider_col = llm_requests.c.provider if "provider" in req_cols else None
     req_model_col = llm_requests.c.model if "model" in req_cols else None
 
@@ -1812,9 +1895,20 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
+    routing_req_col = (
+        routing_decisions.c.llm_request_id
+        if routing_decisions is not None and "llm_request_id" in routing_cols
+        else None
+    )
+    routing_trace_col = (
+        routing_decisions.c.trace
+        if routing_decisions is not None and "trace" in routing_cols
+        else None
+    )
 
     prompt_expr = req_prompt_col if req_prompt_col is not None else literal(None)
     prompt_hash_expr = req_prompt_hash_col if req_prompt_hash_col is not None else literal(None)
+    session_expr = req_session_col if req_session_col is not None else literal(None)
     provider_expr = req_provider_col if req_provider_col is not None else literal("unknown")
     model_expr = req_model_col if req_model_col is not None else literal("unknown")
     mode_expr = req_mode_col if req_mode_col is not None else literal("chat")
@@ -1824,13 +1918,24 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
     tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
     error_expr = resp_error_col if resp_error_col is not None else literal(None)
+    routing_trace_expr = routing_trace_col if routing_trace_col is not None else literal(None)
 
     order_col = req_created_col if req_created_col is not None else llm_requests.c.id
+    from_clause = llm_requests.outerjoin(
+        llm_responses,
+        llm_responses.c.llm_request_id == llm_requests.c.id,
+    )
+    if routing_req_col is not None and routing_decisions is not None:
+        from_clause = from_clause.outerjoin(
+            routing_decisions,
+            routing_req_col == llm_requests.c.id,
+        )
 
     stmt = (
         select(
             llm_requests.c.id.label("request_pk"),
             llm_requests.c.request_id.label("request_id"),
+            session_expr.label("session_id"),
             mode_expr.label("mode"),
             prompt_expr.label("prompt_text"),
             prompt_hash_expr.label("prompt_hash"),
@@ -1842,17 +1947,27 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
             tokens_expr.label("tokens"),
             cost_expr.label("cost"),
             error_expr.label("error_message"),
+            routing_trace_expr.label("routing_trace"),
         )
-        .select_from(
-            llm_requests.outerjoin(
-                llm_responses,
-                llm_responses.c.llm_request_id == llm_requests.c.id,
-            )
-        )
+        .select_from(from_clause)
         .where(llm_requests.c.user_id == user_id)
         .order_by(desc(order_col))
         .limit(max(1, int(limit)))
     )
+
+    if session_id and req_session_col is not None:
+        parsed_session_id = coerce_uuid(session_id)
+        if parsed_session_id is None:
+            return []
+
+        session_text = str(parsed_session_id).lower()
+        session_col_text = func.lower(cast(req_session_col, String))
+        stmt = stmt.where(
+            or_(
+                session_col_text == session_text,
+                func.replace(session_col_text, "-", "") == parsed_session_id.hex.lower(),
+            )
+        )
 
     rows = db.execute(stmt).fetchall()
     entries: list[dict[str, Any]] = []
@@ -1873,10 +1988,12 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
         response_text = payload.get("response_text") or ""
         if not response_text and payload.get("error_message"):
             response_text = f"[error] {payload['error_message']}"
+        web_source_items = _extract_history_web_source_items(payload.get("routing_trace"))
 
         entries.append(
             {
                 "id": _history_entry_id(payload.get("request_pk"), payload.get("request_id")),
+                "session_id": str(payload["session_id"]) if payload.get("session_id") is not None else None,
                 "timestamp": _to_history_timestamp(payload.get("created_at")),
                 "mode": mode,
                 "prompt": str(prompt_text),
@@ -1886,6 +2003,7 @@ def get_llm_history_entries(db: Session, user_id: UUID, limit: int = 100) -> lis
                 "latency_ms": payload.get("latency_ms"),
                 "tokens": payload.get("tokens"),
                 "cost": float(payload["cost"]) if payload.get("cost") is not None else None,
+                "web_source_items": web_source_items,
             }
         )
 

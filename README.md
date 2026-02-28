@@ -415,10 +415,12 @@ OpenAIProject/
 
   api/
     base_client.py
+    client_registry.py
     deepseek_client.py
     google_gemini_client.py
     grok_client.py
     openai_client.py
+    provider_adapter.py
 
   config/
     __init__.py
@@ -579,7 +581,7 @@ OpenAIProject/
 
 - Add a new API endpoint: `server/routes/*.py` + wire router in `server/app.py` + request/response models in `server/schemas/`.
 - Add business logic/service code: `server/*.py` (keep route handlers thin; move logic into services).
-- Add or change provider behavior: `api/*.py`, orchestration flow in `orchestrator/core.py`, and provider metadata in `config/providers.yaml`.
+- Add or change provider behavior: `api/*.py`, `api/client_registry.py`, orchestration flow in `orchestrator/core.py`, and provider metadata in `config/providers.yaml`.
 - Change smart routing rules: `orchestrator/prompt_analyzer.py`, `orchestrator/tier_decider.py`, `orchestrator/model_selector.py`, `orchestrator/smart_router.py`.
 - Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).

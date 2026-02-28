@@ -24,6 +24,7 @@ This test suite provides comprehensive testing for the OpenAI Project, including
 | `test_fastapi_contract_and_guardrails.py` | API contract validation | 8 tests | Input validation, safety guarantees |
 | `test_baseline_safety_rails.py` | Provider safety rails | 20+ tests | Schema/provider/byok/orchestrator regression contracts |
 | `test_provider_catalog.py` | Provider catalog contract | 6 tests | SSoT mapping and module wiring checks |
+| `test_client_registry_and_schema_dynamic.py` | Registry + dynamic schema | 7 tests | Adapter registry factory behavior, catalog-driven schema acceptance |
 | `test_multi_compare_mode.py` | Multi-provider comparison | 15+ tests | Concurrent execution, error handling |
 | `test_prompt_optimizer.py` | Prompt optimization | 20+ tests | Input validation, self-correction |
 | `test_conversation.py` | Conversation management | 10+ tests | Multi-turn support, auto-trimming |

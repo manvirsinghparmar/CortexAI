@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.base_client import BaseAIClient
+from api.client_registry import ClientRegistry
 from models.unified_response import (
     MultiUnifiedResponse,
     NormalizedError,
@@ -65,6 +66,7 @@ class CortexOrchestrator:
     def __init__(self):
         self._multi_orchestrator = MultiModelOrchestrator()
         self._client_cache: dict[str, BaseAIClient] = {}
+        self._client_registry = ClientRegistry.from_catalog()
         self._research_states: dict[str, Any] = {}  # session_id -> ResearchState
         self._research_lock = threading.Lock()  # thread-safe access to states
         self._smart_router: SmartRouter | None = None
@@ -173,49 +175,17 @@ class CortexOrchestrator:
         if cache_key in self._client_cache:
             return self._client_cache[cache_key]
 
-        if model_type == "openai":
-            from api.openai_client import OpenAIClient
-
-            api_key = api_key_override or os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY not found in environment variables")
-            model_name = model_name or os.getenv("DEFAULT_OPENAI_MODEL", "gpt-3.5-turbo")
-            client = OpenAIClient(api_key=api_key, model_name=model_name)
-
-        elif model_type == "gemini":
-            from api.google_gemini_client import GeminiClient
-
-            api_key = api_key_override or os.getenv("GOOGLE_GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_GEMINI_API_KEY not found in environment variables")
-            model_name = model_name or os.getenv("DEFAULT_GEMINI_MODEL", "gemini-2.5-flash-lite")
-            client = GeminiClient(api_key=api_key, model_name=model_name)
-
-        elif model_type == "deepseek":
-            from api.deepseek_client import DeepSeekClient
-
-            api_key = api_key_override or os.getenv("DEEPSEEK_API_KEY")
-            if not api_key:
-                raise ValueError("DEEPSEEK_API_KEY not found in environment variables")
-            model_name = model_name or os.getenv("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat")
-            client = DeepSeekClient(api_key=api_key, model_name=model_name)
-
-        elif model_type == "grok":
-            from api.grok_client import GrokClient
-
-            api_key = api_key_override or os.getenv("GROK_API_KEY")
-            if not api_key:
-                raise ValueError("GROK_API_KEY not found in environment variables")
-            model_name = model_name or os.getenv("DEFAULT_GROK_MODEL", "grok-4-latest")
-            client = GrokClient(api_key=api_key, model_name=model_name)
-
-        else:
-            raise ValueError(f"Unsupported MODEL_TYPE: {model_type}")
+        client = self._client_registry.create_client(
+            model_type,
+            model_name=model_name,
+            api_key_override=api_key_override,
+        )
+        resolved_model = client.model_name or model_name
 
         self._client_cache[cache_key] = client
         logger.info(
             "Initialized client",
-            extra={"extra_fields": {"provider": model_type, "model": model_name}},
+            extra={"extra_fields": {"provider": model_type, "model": resolved_model}},
         )
         return client
 

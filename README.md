@@ -102,6 +102,7 @@ BASELINE_MODEL_ID=openai:gpt-4o-mini
 
 - Runtime token-cost estimation uses `config/pricing.py`.
 - Smart-router model economics use `config/model_registry.yaml`.
+- Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
 - Current pricing tables were refreshed on `2026-02-22`.
 - Validation command:
@@ -423,6 +424,8 @@ OpenAIProject/
     __init__.py
     config.py
     model_registry.yaml
+    provider_catalog.py
+    providers.yaml
     pricing.py
 
   context/
@@ -576,7 +579,7 @@ OpenAIProject/
 
 - Add a new API endpoint: `server/routes/*.py` + wire router in `server/app.py` + request/response models in `server/schemas/`.
 - Add business logic/service code: `server/*.py` (keep route handlers thin; move logic into services).
-- Add or change provider behavior: `api/*.py` and orchestration flow in `orchestrator/core.py`.
+- Add or change provider behavior: `api/*.py`, orchestration flow in `orchestrator/core.py`, and provider metadata in `config/providers.yaml`.
 - Change smart routing rules: `orchestrator/prompt_analyzer.py`, `orchestrator/tier_decider.py`, `orchestrator/model_selector.py`, `orchestrator/smart_router.py`.
 - Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).

@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from config.provider_catalog import get_byok_supported_providers
 from db import (
     delete_byok_provider_keys,
     get_api_key_settings,
@@ -23,7 +24,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-ALLOWED_PROVIDERS = {"openai", "gemini", "deepseek", "grok"}
+ALLOWED_PROVIDERS = set(get_byok_supported_providers())
 ENC_VERSION = "v1"
 
 

@@ -4,23 +4,35 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from config.provider_catalog import (
+    get_provider_api_key_envs,
+    get_provider_compare_default_models,
+    get_provider_default_model_envs,
+    get_provider_default_models,
+    get_provider_ids,
+    get_provider_labels,
+)
+
+_PROVIDER_IDS = get_provider_ids()
+if not _PROVIDER_IDS:
+    raise ValueError("Provider catalog must define at least one provider")
+
+_PROVIDER_API_KEY_ENVS = get_provider_api_key_envs()
+_PROVIDER_DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
+_PROVIDER_DEFAULT_MODELS = get_provider_default_models()
+_PROVIDER_COMPARE_MODELS = get_provider_compare_default_models()
+_PROVIDER_LABELS = get_provider_labels()
+
 # Compare mode target configurations
 # Each entry is treated as unique (same provider with different models allowed)
 COMPARE_TARGETS = [
-    {"provider": "openai", "model": "gpt-4.1-mini"},
-    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-    {"provider": "deepseek", "model": "deepseek-chat"},
-    {"provider": "grok", "model": "grok-4-1-fast-non-reasoning"},
+    {"provider": provider, "model": model}
+    for provider, model in _PROVIDER_COMPARE_MODELS.items()
+    if model
 ]
 
 
-class ModelType(Enum):
-    """Supported model types."""
-
-    OPENAI = "openai"
-    GEMINI = "gemini"
-    DEEPSEEK = "deepseek"
-    GROK = "grok"
+ModelType = Enum("ModelType", {provider.upper(): provider for provider in _PROVIDER_IDS})
 
 
 class Config:
@@ -28,71 +40,76 @@ class Config:
 
     def __init__(self):
         """Initialize configuration with environment variables."""
-        # Load environment variables from .env file if it exists
         env_path = Path(__file__).parent.parent / ".env"
         if env_path.exists():
             load_dotenv(dotenv_path=env_path)
 
-        # API Configuration
-        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-        self.GOOGLE_GEMINI_API_KEY = os.getenv("GOOGLE_GEMINI_API_KEY")
-        self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+        self.PROVIDER_IDS = list(_PROVIDER_IDS)
+        self.PROVIDER_API_KEY_ENVS = dict(_PROVIDER_API_KEY_ENVS)
+        self.PROVIDER_DEFAULT_MODEL_ENVS = dict(_PROVIDER_DEFAULT_MODEL_ENVS)
+        self.PROVIDER_DEFAULT_MODELS = dict(_PROVIDER_DEFAULT_MODELS)
+        self.PROVIDER_LABELS = dict(_PROVIDER_LABELS)
 
-        # Model Configuration
-        self.MODEL_TYPE = os.getenv("MODEL_TYPE", ModelType.OPENAI.value)
-        self.DEFAULT_OPENAI_MODEL = os.getenv("DEFAULT_OPENAI_MODEL")
-        self.DEFAULT_GEMINI_MODEL = os.getenv("DEFAULT_GEMINI_MODEL")
-        self.DEFAULT_DEEPSEEK_MODEL = os.getenv("DEFAULT_DEEPSEEK_MODEL")
+        self.PROVIDER_API_KEYS = {
+            provider: os.getenv(env_name)
+            for provider, env_name in self.PROVIDER_API_KEY_ENVS.items()
+        }
+        self.DEFAULT_MODELS_BY_PROVIDER = {
+            provider: self._resolve_default_model(provider)
+            for provider in self.PROVIDER_IDS
+        }
 
-        if ModelType.OPENAI.value == self.MODEL_TYPE:
-            self.DEFAULT_MODEL = self.DEFAULT_OPENAI_MODEL or os.getenv(
-                "DEFAULT_MODEL", "gpt-4o-mini"
-            )
-        elif ModelType.GEMINI.value == self.MODEL_TYPE:
-            self.DEFAULT_MODEL = self.DEFAULT_GEMINI_MODEL or os.getenv(
-                "DEFAULT_MODEL", "gemini-2.5-flash-lite"
-            )
-        elif ModelType.DEEPSEEK.value == self.MODEL_TYPE:
-            self.DEFAULT_MODEL = self.DEFAULT_DEEPSEEK_MODEL or os.getenv(
-                "DEFAULT_MODEL", "deepseek-chat"
-            )
-        elif ModelType.GROK.value == self.MODEL_TYPE:
-            self.DEFAULT_MODEL = os.getenv("DEFAULT_GROK_MODEL") or os.getenv(
-                "DEFAULT_MODEL", "grok-4-1-fast-non-reasoning"
-            )
-        else:
-            self.DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+        # Backward-compatible fields kept for older code paths.
+        self.OPENAI_API_KEY = self.PROVIDER_API_KEYS.get("openai")
+        self.GOOGLE_GEMINI_API_KEY = self.PROVIDER_API_KEYS.get("gemini")
+        self.DEEPSEEK_API_KEY = self.PROVIDER_API_KEYS.get("deepseek")
+        self.GROK_API_KEY = self.PROVIDER_API_KEYS.get("grok")
+
+        self.DEFAULT_OPENAI_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("openai")
+        self.DEFAULT_GEMINI_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("gemini")
+        self.DEFAULT_DEEPSEEK_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("deepseek")
+        self.DEFAULT_GROK_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("grok")
+
+        default_provider = self.PROVIDER_IDS[0]
+        self.MODEL_TYPE = (os.getenv("MODEL_TYPE", default_provider) or default_provider).strip().lower()
+        self.DEFAULT_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get(
+            self.MODEL_TYPE,
+            os.getenv("DEFAULT_MODEL", self.PROVIDER_DEFAULT_MODELS.get(default_provider, "")),
+        )
+
+    def _resolve_default_model(self, provider: str) -> str:
+        env_key = self.PROVIDER_DEFAULT_MODEL_ENVS.get(provider)
+        fallback = self.PROVIDER_DEFAULT_MODELS.get(provider) or os.getenv("DEFAULT_MODEL", "")
+        if not env_key:
+            return fallback
+        return os.getenv(env_key, fallback)
 
     def validate(self) -> bool:
         """
-        Validate that all required configuration is present based on the selected model type.
+        Validate that required configuration is present for the selected provider.
 
         Returns:
             bool: True if configuration is valid, False otherwise
         """
-        if ModelType.OPENAI.value == self.MODEL_TYPE:
-            if not self.OPENAI_API_KEY:
-                print("Error: OPENAI_API_KEY is not set. Please set it in the .env file.")
-                return False
-        elif ModelType.GEMINI.value == self.MODEL_TYPE:
-            if not self.GOOGLE_GEMINI_API_KEY:
-                print("Error: GOOGLE_GEMINI_API_KEY is not set. Please set it in the .env file.")
-                return False
-        elif ModelType.DEEPSEEK.value == self.MODEL_TYPE:
-            if not self.DEEPSEEK_API_KEY:
-                print("Error: DEEPSEEK_API_KEY is not set. Please set it in the .env file.")
-                return False
-        elif ModelType.GROK.value == self.MODEL_TYPE:
-            if not os.getenv("GROK_API_KEY"):
-                print("Error: GROK_API_KEY is not set. Please set it in the .env file.")
-                return False
-        else:
+        if self.MODEL_TYPE not in self.PROVIDER_IDS:
             print(
-                f"Error: Unknown MODEL_TYPE '{self.MODEL_TYPE}'. Must be one of: {', '.join([e.value for e in ModelType])}"
+                "Error: Unknown MODEL_TYPE "
+                f"'{self.MODEL_TYPE}'. Must be one of: {', '.join(self.PROVIDER_IDS)}"
             )
             return False
 
-        return True
+        env_name = self.PROVIDER_API_KEY_ENVS.get(self.MODEL_TYPE)
+        api_key = self.PROVIDER_API_KEYS.get(self.MODEL_TYPE)
+        if api_key:
+            return True
+
+        if env_name:
+            print(f"Error: {env_name} is not set. Please set it in the .env file.")
+        else:
+            print(
+                f"Error: API key environment mapping missing for MODEL_TYPE '{self.MODEL_TYPE}'."
+            )
+        return False
 
     def get_model_info(self) -> str:
         """
@@ -101,10 +118,7 @@ class Config:
         Returns:
             str: Formatted string with model information
         """
-        if ModelType.OPENAI.value == self.MODEL_TYPE:
-            return f"OpenAI ({self.DEFAULT_MODEL})"
-        elif ModelType.GEMINI.value == self.MODEL_TYPE:
-            return f"Google Gemini ({self.DEFAULT_MODEL})"
-        elif ModelType.DEEPSEEK.value == self.MODEL_TYPE:
-            return f"DeepSeek ({self.DEFAULT_MODEL})"
-        return "Unknown"
+        if self.MODEL_TYPE not in self.PROVIDER_IDS:
+            return "Unknown"
+        label = self.PROVIDER_LABELS.get(self.MODEL_TYPE, self.MODEL_TYPE.title())
+        return f"{label} ({self.DEFAULT_MODEL})"

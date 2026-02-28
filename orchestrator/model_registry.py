@@ -122,3 +122,21 @@ class ModelRegistry:
         for candidates in self._providers.values():
             out.extend([c for c in candidates if c.enabled])
         return out
+
+    def list_models(
+        self,
+        provider: str | None = None,
+        *,
+        include_disabled: bool = True,
+    ) -> list[ModelCandidate]:
+        provider_norm = (provider or "").strip().lower()
+        if provider_norm:
+            candidates = list(self._providers.get(provider_norm, []))
+        else:
+            candidates = []
+            for provider_candidates in self._providers.values():
+                candidates.extend(provider_candidates)
+
+        if include_disabled:
+            return candidates
+        return [candidate for candidate in candidates if candidate.enabled]

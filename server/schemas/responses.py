@@ -88,6 +88,44 @@ class HealthResponseDTO(BaseModel):
     version: str = "1.0.0"
 
 
+class ModelCatalogItemDTO(BaseModel):
+    provider: str
+    model: str
+    tier: str
+    input_cost_per_1m: float
+    output_cost_per_1m: float
+    context_limit: int
+    tags: List[str] = Field(default_factory=list)
+    enabled: bool
+
+
+class ProviderCatalogItemDTO(BaseModel):
+    provider: str
+    label: str
+    api_key_env: str
+    default_model_env: str
+    default_model: str
+    byok_supported: bool
+    capabilities: List[str] = Field(default_factory=list)
+    ui: Dict[str, Any] = Field(default_factory=dict)
+    model_count: int = 0
+    enabled_model_count: int = 0
+
+
+class ProvidersCatalogResponseDTO(BaseModel):
+    providers: List[ProviderCatalogItemDTO] = Field(default_factory=list)
+    total: int
+    timestamp: str
+
+
+class ModelsCatalogResponseDTO(BaseModel):
+    provider: Optional[str] = None
+    enabled_only: bool
+    models: List[ModelCatalogItemDTO] = Field(default_factory=list)
+    total: int
+    timestamp: str
+
+
 class FailedAttemptDTO(BaseModel):
     request_id: str
     request_group_id: str

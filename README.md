@@ -9,7 +9,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 
 ## Launch-Ready Capabilities
 
-- API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`
+- API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`, `/v1/providers`, `/v1/models`
 - Integration diagnostics endpoint: `/v1/whoami`
 - Request attribution: `users`, `api_keys`, `sessions`, `messages`, `llm_requests`, `llm_responses`
 - Routing telemetry: `routing_decisions`, `routing_attempts`
@@ -148,6 +148,8 @@ Response includes:
 ## API Endpoints
 
 - `GET /health`
+- `GET /v1/providers`
+- `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -510,6 +512,7 @@ OpenAIProject/
       __init__.py
       admin.py
       byok.py
+      catalog.py
       chat.py
       compare.py
       health.py

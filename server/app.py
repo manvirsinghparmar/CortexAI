@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
-from server.routes import admin, byok, chat, compare, health, history, optimize, reporting, whoami
+from server.routes import admin, byok, catalog, chat, compare, health, history, optimize, reporting, whoami
 from utils.logger import get_logger
 import os
 
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(reporting.router)
     app.include_router(byok.router)
     app.include_router(whoami.router)
+    app.include_router(catalog.router)
 
     # Serve the frontend SPA from the /frontend directory at root path
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")

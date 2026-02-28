@@ -106,6 +106,12 @@ class ProviderCatalog:
     def provider_ids(self) -> list[str]:
         return list(self._providers.keys())
 
+    def provider_specs(self) -> list[ProviderSpec]:
+        return list(self._providers.values())
+
+    def get_provider(self, provider_id: str) -> ProviderSpec | None:
+        return self._providers.get((provider_id or "").strip().lower())
+
     def default_models(self) -> dict[str, str]:
         return {provider_id: spec.default_model for provider_id, spec in self._providers.items()}
 
@@ -144,6 +150,10 @@ def get_provider_catalog() -> ProviderCatalog:
 
 def get_provider_ids() -> list[str]:
     return get_provider_catalog().provider_ids()
+
+
+def get_provider_specs() -> list[ProviderSpec]:
+    return get_provider_catalog().provider_specs()
 
 
 def get_provider_default_models() -> dict[str, str]:

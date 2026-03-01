@@ -3,25 +3,44 @@
  */
 
 /* â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-const API_BASE = "http://127.0.0.1:8000";
-const API_KEY = "dev-key-1";
+const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
+const API_BASE = String(
+    RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
+const API_KEY = String(
+    RUNTIME_CONFIG.apiKey || window.localStorage?.getItem("cortex_api_key") || "dev-key-1"
+);
 
 /* â”€â”€â”€ Provider Catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 // One entry per provider â€” icon shows in the dropdown, model is the default sent to API
-const PROVIDERS = [
-    { key: "gemini", label: "Gemini", icon: "\u2B50", model: "gemini-2.5-flash" },
-    { key: "openai", label: "ChatGPT", icon: "\uD83C\uDFAF", model: "gpt-4o" },
-    { key: "deepseek", label: "DeepSeek", icon: "\uD83E\uDDE0", model: "deepseek-chat" },
-    { key: "grok", label: "Grok", icon: "\uD83E\uDD16", model: "grok-4-latest" },
+const FALLBACK_PROVIDER_CATALOG = [
+    { provider: "gemini", label: "Gemini", icon: "\u2B50", color: "#4285F4", default_model: "gemini-2.5-flash", sort_order: 1 },
+    { provider: "openai", label: "ChatGPT", icon: "\uD83C\uDFAF", color: "#10A37F", default_model: "gpt-4o", sort_order: 2 },
+    { provider: "deepseek", label: "DeepSeek", icon: "\uD83E\uDDE0", color: "#5B5BD6", default_model: "deepseek-chat", sort_order: 3 },
+    { provider: "grok", label: "Grok", icon: "\uD83E\uDD16", color: "#1DA1F2", default_model: "grok-4-latest", sort_order: 4 },
 ];
 // Quick lookup for response card labels (provider key â†’ display label)
-const PROVIDER_LABELS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.label]));
-const PROVIDER_ICONS = Object.fromEntries(PROVIDERS.map(p => [p.key, p.icon]));
-// Default model per provider (for API calls)
-const PROVIDER_DEFAULT_MODEL = Object.fromEntries(PROVIDERS.map(p => [p.key, p.model]));
-const MANUAL_DEFAULT_PROVIDER = "openai";
-const MANUAL_FALLBACK_PROVIDER = PROVIDERS[0] || { key: "openai", model: "gpt-4o" };
-const MANUAL_DEFAULT_MODEL_KEY = `${PROVIDER_DEFAULT_MODEL[MANUAL_DEFAULT_PROVIDER] ? MANUAL_DEFAULT_PROVIDER : MANUAL_FALLBACK_PROVIDER.key}:${PROVIDER_DEFAULT_MODEL[MANUAL_DEFAULT_PROVIDER] || MANUAL_FALLBACK_PROVIDER.model}`;
+const FALLBACK_MODEL_CATALOG = FALLBACK_PROVIDER_CATALOG.map(spec => ({
+    provider: spec.provider,
+    model: spec.default_model,
+    enabled: true,
+}));
+
+const ICON_TOKEN_TO_EMOJI = {
+    target: "\uD83C\uDFAF",
+    star: "\u2B50",
+    brain: "\uD83E\uDDE0",
+    robot: "\uD83E\uDD16",
+};
+
+let providerCatalog = [];
+let modelCatalog = [];
+let providerLabelById = {};
+let providerIconById = {};
+let providerColorById = {};
+let providerDefaultModelById = {};
+let providerSortOrderById = {};
+let manualDefaultModelKey = "openai:gpt-4o";
 
 const ACTIVE_ROUTING_INDICATORS = {
     auto: "Auto",
@@ -37,6 +56,198 @@ const SESSION_STORAGE_KEY_BY_MODE = {
     compare: "cortex_active_session_id_compare",
 };
 const MAX_CONTEXT_MESSAGES_UI = 20;
+
+function toProviderId(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
+function toSortOrder(value, fallback = 999) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+}
+
+function toSafeColor(value, fallback = "#94A3B8") {
+    const raw = String(value || "").trim();
+    if (/^#[0-9a-fA-F]{3,8}$/.test(raw)) {
+        return raw;
+    }
+    return fallback;
+}
+
+function resolveProviderIcon(preferredIcon, iconToken) {
+    const rawIcon = String(preferredIcon || "").trim();
+    if (rawIcon) return rawIcon;
+    const token = String(iconToken || "").trim().toLowerCase();
+    return ICON_TOKEN_TO_EMOJI[token] || "";
+}
+
+function buildProviderLookups() {
+    providerLabelById = {};
+    providerIconById = {};
+    providerColorById = {};
+    providerDefaultModelById = {};
+    providerSortOrderById = {};
+
+    providerCatalog.forEach((spec, index) => {
+        const provider = toProviderId(spec.provider);
+        if (!provider) return;
+        providerLabelById[provider] = String(spec.label || provider).trim() || provider;
+        providerIconById[provider] = String(spec.icon || "").trim();
+        providerColorById[provider] = toSafeColor(spec.color, "#94A3B8");
+        providerSortOrderById[provider] = toSortOrder(spec.sort_order, index + 100);
+
+        const defaultModel = String(spec.default_model || "").trim();
+        if (defaultModel) {
+            providerDefaultModelById[provider] = defaultModel;
+        }
+    });
+
+    manualDefaultModelKey = computeManualDefaultModelKey();
+}
+
+function computeManualDefaultModelKey() {
+    const preferredProvider = "openai";
+    const preferredModel = providerDefaultModelById[preferredProvider];
+    if (preferredModel) {
+        return `${preferredProvider}:${preferredModel}`;
+    }
+
+    for (const spec of providerCatalog) {
+        const provider = toProviderId(spec.provider);
+        const model = providerDefaultModelById[provider];
+        if (provider && model) {
+            return `${provider}:${model}`;
+        }
+    }
+
+    const firstModel = modelCatalog[0];
+    if (firstModel && firstModel.provider && firstModel.model) {
+        return `${firstModel.provider}:${firstModel.model}`;
+    }
+    return "openai:gpt-4o";
+}
+
+function applyCatalogData(nextProviders, nextModels) {
+    const providerRows = Array.isArray(nextProviders) ? nextProviders : [];
+    const modelRows = Array.isArray(nextModels) ? nextModels : [];
+
+    const normalizedProviders = providerRows
+        .map((row, index) => {
+            const ui = row && typeof row.ui === "object" && row.ui ? row.ui : {};
+            const provider = toProviderId(row?.provider || row?.key || row?.id);
+            if (!provider) return null;
+            const label = String(ui.display_name || row?.label || provider).trim() || provider;
+            const defaultModel = String(row?.default_model || row?.model || "").trim();
+            const icon = resolveProviderIcon(row?.icon, row?.icon_token || ui.icon_token);
+            const color = toSafeColor(row?.color || ui.color, "#94A3B8");
+            const sortOrder = toSortOrder(row?.sort_order ?? ui.sort_order, index + 100);
+
+            return {
+                provider,
+                label,
+                icon,
+                color,
+                default_model: defaultModel,
+                sort_order: sortOrder,
+            };
+        })
+        .filter(Boolean);
+
+    providerCatalog = (normalizedProviders.length ? normalizedProviders : FALLBACK_PROVIDER_CATALOG.map(spec => ({ ...spec })))
+        .sort((a, b) => {
+            const left = toSortOrder(a.sort_order, 999);
+            const right = toSortOrder(b.sort_order, 999);
+            if (left !== right) return left - right;
+            return String(a.label || "").localeCompare(String(b.label || ""));
+        });
+
+    const allowedProviders = new Set(providerCatalog.map(spec => toProviderId(spec.provider)));
+    const providerOrder = Object.fromEntries(
+        providerCatalog.map((spec, index) => [toProviderId(spec.provider), toSortOrder(spec.sort_order, index + 100)])
+    );
+
+    const normalizedModels = modelRows
+        .map(row => {
+            const provider = toProviderId(row?.provider || row?.key || row?.id);
+            const model = String(row?.model || row?.name || "").trim();
+            if (!provider || !model || !allowedProviders.has(provider)) return null;
+            return {
+                provider,
+                model,
+                enabled: row?.enabled !== false,
+            };
+        })
+        .filter(Boolean);
+
+    const byKey = new Map();
+    normalizedModels.forEach(item => {
+        byKey.set(`${item.provider}:${item.model}`, item);
+    });
+    providerCatalog.forEach(spec => {
+        const provider = toProviderId(spec.provider);
+        const defaultModel = String(spec.default_model || "").trim();
+        if (!provider || !defaultModel) return;
+        const key = `${provider}:${defaultModel}`;
+        if (!byKey.has(key)) {
+            byKey.set(key, {
+                provider,
+                model: defaultModel,
+                enabled: true,
+            });
+        }
+    });
+
+    modelCatalog = [...byKey.values()];
+    if (modelCatalog.length === 0) {
+        modelCatalog = FALLBACK_MODEL_CATALOG.map(item => ({ ...item }));
+    }
+
+    modelCatalog.sort((a, b) => {
+        const leftOrder = toSortOrder(providerOrder[a.provider], 999);
+        const rightOrder = toSortOrder(providerOrder[b.provider], 999);
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return String(a.model || "").localeCompare(String(b.model || ""));
+    });
+
+    buildProviderLookups();
+}
+
+function getManualDefaultModelKey() {
+    return manualDefaultModelKey;
+}
+
+function getProviderColor(providerRaw) {
+    const provider = toProviderId(providerRaw);
+    return providerColorById[provider] || "#94A3B8";
+}
+
+function buildProviderDotHtml(providerRaw, size = 7) {
+    const px = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 7;
+    const color = getProviderColor(providerRaw);
+    return `<span class="provider-dot" style="width:${px}px;height:${px}px;border-radius:50%;flex-shrink:0;background:${color};"></span>`;
+}
+
+function getSelectableModels() {
+    return modelCatalog.filter(item => item && item.enabled !== false && item.provider && item.model);
+}
+
+function modelKeyOf(provider, model) {
+    const providerId = toProviderId(provider);
+    const modelName = String(model || "").trim();
+    if (!providerId || !modelName) return "";
+    return `${providerId}:${modelName}`;
+}
+
+function getModelOptionLabel(providerRaw, modelRaw) {
+    const provider = toProviderId(providerRaw);
+    const model = String(modelRaw || "").trim();
+    const label = providerLabelById[provider] || provider || "Model";
+    const icon = providerIconById[provider] || "";
+    const prefix = icon ? `${icon}  ` : "";
+    return `${prefix}${label} · ${model}`;
+}
+
+applyCatalogData(FALLBACK_PROVIDER_CATALOG, FALLBACK_MODEL_CATALOG);
 
 /* â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 let currentMode = "single";
@@ -208,18 +419,19 @@ function getCompactBadges() {
             return `<span class="compact-model-badge">Auto</span>`;
         }
         if (!provider) {
-            return `<span class="compact-model-badge">Using: ChatGPT</span>`;
+            const fallbackLabel = providerLabelById.openai || providerCatalog[0]?.label || "Assistant";
+            return `<span class="compact-model-badge">Using: ${escHtml(fallbackLabel)}</span>`;
         }
         return `<span class="compact-model-badge">
-              <span class="provider-dot dot-${provider}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
-              ${escHtml(PROVIDER_LABELS[provider] || model)}
+              ${buildProviderDotHtml(provider, 7)}
+              ${escHtml(providerLabelById[provider] || model)}
             </span>`;
     }
     return getActiveCompareSelects().map(sel => {
         const { provider, model } = parseKey(sel.value || "");
         if (!provider) return "";
         return `<span class="compact-model-badge">
-              <span class="provider-dot dot-${provider}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
+              ${buildProviderDotHtml(provider, 7)}
               ${escHtml(model)}
             </span>`;
     }).join("");
@@ -251,12 +463,12 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
         selectEl.appendChild(placeholder);
     }
 
-    PROVIDERS.forEach(p => {
-        const key = `${p.key}:${p.model}`;
+    getSelectableModels().forEach(item => {
+        const key = modelKeyOf(item.provider, item.model);
         if (excludeKeys.has(key)) return;
         const opt = document.createElement("option");
         opt.value = key;
-        opt.textContent = `${p.icon}  ${p.label}`;
+        opt.textContent = getModelOptionLabel(item.provider, item.model);
         if (key === current) opt.selected = true;
         selectEl.appendChild(opt);
     });
@@ -315,7 +527,7 @@ function buildCompareAssistantContext(responses) {
         const providerRaw = String(resp.provider || "").trim().toLowerCase();
         const modelRaw = String(resp.model || "").trim();
         const providerLabel =
-            PROVIDER_LABELS[providerRaw] ||
+            providerLabelById[providerRaw] ||
             String(resp.provider || "").trim() ||
             `Model ${index + 1}`;
         const modelLabel = modelRaw || `model-${index + 1}`;
@@ -444,17 +656,18 @@ function hasSelectedSingleModel() {
 
 function getSingleModelDisplayName() {
     const { provider } = parseKey(el.singleModel.value || "");
-    return PROVIDER_LABELS[provider] || "ChatGPT";
+    return providerLabelById[provider] || providerLabelById.openai || "Assistant";
 }
 
 function ensureSingleManualModelSelection(forceDefault = false) {
+    const fallbackModelKey = getManualDefaultModelKey();
     if (forceDefault) {
-        el.singleModel.value = MANUAL_DEFAULT_MODEL_KEY;
+        el.singleModel.value = fallbackModelKey;
         return;
     }
     el.singleModel.value = SmartRoutingState.resolveManualSelection(
         el.singleModel.value || "",
-        MANUAL_DEFAULT_MODEL_KEY
+        fallbackModelKey
     );
 }
 
@@ -857,6 +1070,11 @@ async function doCompare(prompt) {
     const targets = selects.map(sel => parseKey(sel.value));
     const sessionId = ensureActiveSessionId();
 
+    if (targets.some(t => !t.provider || !t.model)) {
+        showError("Please select a model for each compare slot.");
+        return;
+    }
+
     if (new Set(targets.map(t => `${t.provider}:${t.model}`)).size < targets.length) {
         showError("Please select different models for each slot.");
         return;
@@ -1181,10 +1399,10 @@ function buildResponseProviderMeta(summary, index = null) {
 }
 
 function getProviderPresentation(providerRaw, modelRaw) {
-    const provider = String(providerRaw || "").trim().toLowerCase();
+    const provider = toProviderId(providerRaw);
     const modelText = String(modelRaw || "").trim();
-    const label = PROVIDER_LABELS[provider] || String(providerRaw || "").trim() || "Assistant";
-    const icon = PROVIDER_ICONS[provider] || "";
+    const label = providerLabelById[provider] || String(providerRaw || "").trim() || "Assistant";
+    const icon = providerIconById[provider] || "";
     const summary = modelText ? `${label} \u00B7 ${modelText}` : label;
     return { provider, modelText, label, icon, summary };
 }
@@ -1614,16 +1832,90 @@ function setLoading(loading) {
     updateSendButtonState();
 }
 
+function resolveCompareSelections(previousValues, slotCount = 3) {
+    const rawPrev = Array.isArray(previousValues) ? previousValues : [];
+    const availableKeys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    const resolved = [];
+    const used = new Set();
+
+    for (let index = 0; index < slotCount; index += 1) {
+        const preferred = String(rawPrev[index] || "");
+        if (preferred && availableKeys.includes(preferred) && !used.has(preferred)) {
+            resolved.push(preferred);
+            used.add(preferred);
+            continue;
+        }
+        const fallback = availableKeys.find(key => !used.has(key)) || "";
+        resolved.push(fallback);
+        if (fallback) {
+            used.add(fallback);
+        }
+    }
+    return resolved;
+}
+
+function refreshModelSelectors({ preserveSingle = true, preserveCompare = true } = {}) {
+    const previousSingle = preserveSingle ? String(el.singleModel.value || "") : "";
+    const previousCompare = preserveCompare
+        ? [el.compareModel1.value, el.compareModel2.value, el.compareModel3.value]
+        : ["", "", ""];
+
+    const availableKeys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    const fallbackSingle = getManualDefaultModelKey();
+    const desiredSingle = (previousSingle && availableKeys.includes(previousSingle))
+        ? previousSingle
+        : SmartRoutingState.resolveManualSelection("", fallbackSingle);
+
+    el.singleModel.value = desiredSingle;
+    buildOptions(el.singleModel, new Set());
+    if (!el.singleModel.value && availableKeys.length > 0) {
+        el.singleModel.value = availableKeys[0];
+    }
+
+    const desiredCompare = resolveCompareSelections(previousCompare, 3);
+    el.compareModel1.value = desiredCompare[0] || "";
+    el.compareModel2.value = desiredCompare[1] || "";
+    el.compareModel3.value = desiredCompare[2] || "";
+    syncCompareDropdowns();
+}
+
+async function fetchCatalogJson(path) {
+    const resp = await fetch(`${API_BASE}${path}`, {
+        method: "GET",
+        headers: { "X-API-Key": API_KEY },
+    });
+    if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+    }
+    return resp.json();
+}
+
+async function loadDynamicProviderModelCatalog() {
+    try {
+        const [providersPayload, modelsPayload] = await Promise.all([
+            fetchCatalogJson("/v1/providers"),
+            fetchCatalogJson("/v1/models?enabled_only=true"),
+        ]);
+        const providers = Array.isArray(providersPayload?.providers) ? providersPayload.providers : [];
+        const models = Array.isArray(modelsPayload?.models) ? modelsPayload.models : [];
+        if (!providers.length) {
+            return;
+        }
+
+        applyCatalogData(providers, models);
+        refreshModelSelectors({ preserveSingle: true, preserveCompare: true });
+        updateSingleModelRoutingUI();
+    } catch (error) {
+        console.warn("Provider/model discovery unavailable, using fallback catalog.", error);
+    }
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    INIT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 (function init() {
-    buildOptions(el.singleModel, new Set());
-    el.singleModel.value = SmartRoutingState.resolveManualSelection("", MANUAL_DEFAULT_MODEL_KEY);
-    buildOptions(el.compareModel1, new Set());
-    buildOptions(el.compareModel2, new Set([el.compareModel1.value]));
-    buildOptions(el.compareModel3, new Set([el.compareModel1.value, el.compareModel2.value]));
+    refreshModelSelectors({ preserveSingle: false, preserveCompare: false });
 
     // Dedup on change
     [el.compareModel1, el.compareModel2, el.compareModel3].forEach(s =>
@@ -1644,6 +1936,7 @@ function setLoading(loading) {
     activeSessionId = normalizeSessionId(activeSessionIdByMode.single);
     setMode("single");
     updateSendButtonState();
+    void loadDynamicProviderModelCatalog();
 })();
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

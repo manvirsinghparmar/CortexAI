@@ -2,7 +2,28 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from config.provider_catalog import get_provider_ids
+
+
+def _supported_provider_ids() -> tuple[str, ...]:
+    return tuple(get_provider_ids())
+
+
+def _supported_provider_set() -> set[str]:
+    return set(_supported_provider_ids())
+
+
+def _validate_provider(provider: str, *, field_name: str) -> str:
+    value = str(provider or "")
+    allowed = _supported_provider_set()
+    if value not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"Unsupported {field_name} '{value}'. Supported providers: {allowed_text}"
+        )
+    return value
 
 
 class ConversationHistoryItem(BaseModel):
@@ -23,12 +44,19 @@ class ChatRoutingRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    provider: Optional[str] = Field(None, pattern="^(openai|gemini|deepseek|grok)$")
+    provider: Optional[str] = None
     model: Optional[str] = None
     context: Optional[UserContextRequest] = None
     routing: Optional[ChatRoutingRequest] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_provider(value, field_name="provider")
 
     @model_validator(mode="after")
     def validate_provider_model_pair(self):
@@ -38,8 +66,13 @@ class ChatRequest(BaseModel):
 
 
 class CompareTargetRequest(BaseModel):
-    provider: str = Field(..., pattern="^(openai|gemini|deepseek|grok)$")
+    provider: str
     model: Optional[str] = None
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value: str) -> str:
+        return _validate_provider(value, field_name="provider")
 
 
 class CompareRequest(BaseModel):
@@ -54,9 +87,16 @@ class CompareRequest(BaseModel):
 
 class ByokUpdateRequest(BaseModel):
     provider_keys: Dict[str, str] = Field(default_factory=dict)
-    baseline_provider: Optional[str] = Field(None, pattern="^(openai|gemini|deepseek|grok)$")
+    baseline_provider: Optional[str] = None
     baseline_model: Optional[str] = None
     requests_per_minute: Optional[int] = Field(None, ge=1, le=10000)
+
+    @field_validator("baseline_provider")
+    @classmethod
+    def validate_baseline_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_provider(value, field_name="baseline_provider")
 
     @model_validator(mode="after")
     def validate_payload(self):

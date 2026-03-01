@@ -22,6 +22,11 @@ This test suite provides comprehensive testing for the OpenAI Project, including
 | `test_unified_response_contract.py` | Contract enforcement | 15 tests | Provider compliance, error normalization |
 | `test_model_utils.py` | Model utilities | 21 tests | Unit + integration tests |
 | `test_fastapi_contract_and_guardrails.py` | API contract validation | 8 tests | Input validation, safety guarantees |
+| `test_baseline_safety_rails.py` | Provider safety rails | 20+ tests | Schema/provider/byok/orchestrator regression contracts |
+| `test_provider_catalog.py` | Provider catalog contract | 6 tests | SSoT mapping and module wiring checks |
+| `test_client_registry_and_schema_dynamic.py` | Registry + dynamic schema | 7 tests | Adapter registry factory behavior, catalog-driven schema acceptance |
+| `test_dynamic_provider_discovery_e2e.py` | Discovery endpoint regression | 1 test | New provider appears in `/v1/providers` + `/v1/models` automatically |
+| `test_component_boundaries.py` | Deploy boundary regression | 2 tests | API runs without static frontend mount and missing frontend dir |
 | `test_multi_compare_mode.py` | Multi-provider comparison | 15+ tests | Concurrent execution, error handling |
 | `test_prompt_optimizer.py` | Prompt optimization | 20+ tests | Input validation, self-correction |
 | `test_conversation.py` | Conversation management | 10+ tests | Multi-turn support, auto-trimming |
@@ -102,6 +107,25 @@ The `test_fastapi_contract_and_guardrails.py` test suite validates the *public A
 - **Error Handling Tests** - Exception normalization, retryable vs non-retryable
 - **DTO Mapping Tests** - Response contract stability
 - **Safety Tests** - No 500 errors guarantee
+
+---
+
+## Baseline Safety Rails Tests
+
+### Purpose
+
+The `test_baseline_safety_rails.py` suite freezes current provider-related behavior before larger architectural refactors.
+
+### Key Features
+
+1. **Schema Contract Freeze** - Locks current provider/model validation in request schemas
+2. **Chat Helper Contract Freeze** - Locks provider normalization and execution planning behavior
+3. **BYOK Contract Freeze** - Locks provider allowlist and runtime key resolution behavior
+4. **Orchestrator Guardrails** - Locks core non-smart routing and provider-type guardrails
+
+### Why This Exists
+
+These tests are a safety net for incremental architecture changes (provider registry, config-driven providers, deploy split) so behavior does not drift unintentionally.
 
 ---
 

@@ -76,6 +76,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi.testclient import TestClient
 
+from config.provider_catalog import get_provider_catalog, get_provider_ids
+from orchestrator.model_registry import ModelRegistry
 from server.app import create_app
 from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
 from server.schemas.responses import CompareResponseDTO
@@ -210,6 +212,7 @@ def app(monkeypatch):
     """
     Build FastAPI app and override get_orchestrator dependency.
     """
+    monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     app = create_app()
@@ -266,6 +269,137 @@ def test_compare_requires_api_key(client):
     }
     r = client.post("/v1/compare", json=payload)
     assert r.status_code in (401, 403)
+
+
+def test_providers_catalog_requires_api_key(client):
+    r = client.get("/v1/providers")
+    assert r.status_code in (401, 403)
+
+
+def test_models_catalog_requires_api_key(client):
+    r = client.get("/v1/models")
+    assert r.status_code in (401, 403)
+
+
+def test_providers_catalog_returns_catalog_and_model_counts(client):
+    r = client.get("/v1/providers", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["total"] == len(body["providers"])
+    assert isinstance(body.get("timestamp"), str) and body["timestamp"]
+
+    catalog = get_provider_catalog()
+    registry = ModelRegistry.from_yaml()
+    by_provider = {item["provider"]: item for item in body["providers"]}
+    assert set(by_provider.keys()) == set(catalog.provider_ids())
+
+    for spec in catalog.provider_specs():
+        item = by_provider[spec.provider_id]
+        assert item["label"] == spec.label
+        assert item["api_key_env"] == spec.api_key_env
+        assert item["default_model_env"] == spec.default_model_env
+        assert item["default_model"] == spec.default_model
+        assert item["byok_supported"] == spec.byok_supported
+        assert item["capabilities"] == list(spec.capabilities)
+        assert item["ui"] == dict(spec.ui)
+
+        expected_all = registry.list_models(spec.provider_id, include_disabled=True)
+        expected_enabled = registry.list_models(spec.provider_id, include_disabled=False)
+        assert item["model_count"] == len(expected_all)
+        assert item["enabled_model_count"] == len(expected_enabled)
+
+
+def test_models_catalog_lists_enabled_models_by_default(client):
+    r = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["provider"] is None
+    assert body["enabled_only"] is True
+    assert body["total"] == len(body["models"])
+    assert isinstance(body.get("timestamp"), str) and body["timestamp"]
+    assert all(item["enabled"] is True for item in body["models"])
+
+    required_keys = {
+        "provider",
+        "model",
+        "tier",
+        "input_cost_per_1m",
+        "output_cost_per_1m",
+        "context_limit",
+        "tags",
+        "enabled",
+    }
+    for item in body["models"]:
+        assert required_keys.issubset(item.keys())
+
+    registry = ModelRegistry.from_yaml()
+    expected_pairs = {
+        (candidate.provider, candidate.model_name)
+        for candidate in registry.list_models(include_disabled=False)
+    }
+    actual_pairs = {(item["provider"], item["model"]) for item in body["models"]}
+    assert actual_pairs == expected_pairs
+
+
+def test_models_catalog_filters_by_provider_case_insensitive(client):
+    provider = get_provider_ids()[0]
+    r = client.get(
+        f"/v1/models?provider={provider.upper()}",
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["provider"] == provider
+    assert body["enabled_only"] is True
+    assert all(item["provider"] == provider for item in body["models"])
+
+    registry = ModelRegistry.from_yaml()
+    expected_names = sorted(
+        candidate.model_name
+        for candidate in registry.list_models(provider=provider, include_disabled=False)
+    )
+    actual_names = sorted(item["model"] for item in body["models"])
+    assert actual_names == expected_names
+
+
+def test_models_catalog_can_include_disabled(client):
+    provider = get_provider_ids()[0]
+    r_enabled = client.get(
+        f"/v1/models?provider={provider}",
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    r_all = client.get(
+        f"/v1/models?provider={provider}&enabled_only=false",
+        headers={"X-API-Key": "dev-key-1"},
+    )
+
+    assert r_enabled.status_code == 200
+    assert r_all.status_code == 200
+
+    enabled_body = r_enabled.json()
+    all_body = r_all.json()
+    assert enabled_body["enabled_only"] is True
+    assert all_body["enabled_only"] is False
+
+    enabled_pairs = {(item["provider"], item["model"]) for item in enabled_body["models"]}
+    all_pairs = {(item["provider"], item["model"]) for item in all_body["models"]}
+    assert enabled_pairs.issubset(all_pairs)
+    assert len(all_pairs) >= len(enabled_pairs)
+
+
+def test_models_catalog_rejects_unsupported_provider(client):
+    r = client.get(
+        "/v1/models?provider=not-a-provider",
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 400
+    detail = r.json().get("detail", "")
+    assert "Unsupported provider 'not-a-provider'" in detail
+    for provider in get_provider_ids():
+        assert provider in detail
 
 
 def test_compare_rejects_too_many_targets(client):

@@ -11,6 +11,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
+from config.provider_catalog import (
+    get_provider_default_model_envs,
+    get_provider_default_models,
+    get_provider_ids,
+)
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server.dependencies import get_api_key, get_orchestrator
@@ -27,12 +32,8 @@ API_DB_ENABLED = persistence_service.API_DB_ENABLED
 
 logger = get_logger(__name__)
 
-DEFAULT_MODELS = {
-    "openai": "gpt-4o",
-    "gemini": "gemini-2.5-flash",
-    "deepseek": "deepseek-chat",
-    "grok": "grok-4-latest",
-}
+DEFAULT_MODELS = get_provider_default_models()
+DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
 SUPPORTED_PROVIDERS = tuple(DEFAULT_MODELS.keys())
 SMART_ROUTING_MODE = "smart"
 LEGACY_ROUTING_MODE = "legacy"
@@ -58,8 +59,29 @@ class ChatExecutionPlan:
 
 
 def _default_model_for_provider(provider: str) -> str:
-    env_key = f"DEFAULT_{provider.upper()}_MODEL"
-    return os.getenv(env_key, DEFAULT_MODELS[provider])
+    env_key = DEFAULT_MODEL_ENVS.get(provider)
+    default_model = DEFAULT_MODELS[provider]
+    if not env_key:
+        return default_model
+    return os.getenv(env_key, default_model)
+
+
+def _first_supported_provider(
+    candidates: list[str] | tuple[str, ...],
+    *,
+    fallback: str | None = None,
+) -> str:
+    for candidate in candidates:
+        provider = _normalize_provider(candidate)
+        if provider:
+            return provider
+
+    if fallback:
+        provider = _normalize_provider(fallback)
+        if provider:
+            return provider
+
+    return SUPPORTED_PROVIDERS[0]
 
 
 def _parse_float_env(name: str) -> float | None:
@@ -140,12 +162,13 @@ def _build_chat_routing_constraints() -> dict[str, Any] | None:
 
 def _pick_smart_provider(prompt: str, *, smart_mode: bool, research_mode: bool) -> str:
     text = (prompt or "").lower()
+    default_provider = _first_supported_provider(get_provider_ids(), fallback="openai")
 
     if not smart_mode:
-        return "gemini"
+        return _first_supported_provider(("gemini",), fallback=default_provider)
 
     if research_mode:
-        return "openai"
+        return _first_supported_provider(("openai",), fallback=default_provider)
 
     code_signals = (
         "code", "bug", "debug", "stack trace", "python", "javascript", "typescript",
@@ -158,12 +181,12 @@ def _pick_smart_provider(prompt: str, *, smart_mode: bool, research_mode: bool) 
     creative_signals = ("poem", "story", "creative", "brainstorm", "tagline", "tweet")
 
     if any(signal in text for signal in code_signals):
-        return "deepseek"
+        return _first_supported_provider(("deepseek", "openai"), fallback=default_provider)
     if any(signal in text for signal in deep_reasoning_signals) or len(text) > 900:
-        return "openai"
+        return _first_supported_provider(("openai",), fallback=default_provider)
     if any(signal in text for signal in creative_signals):
-        return "grok"
-    return "gemini"
+        return _first_supported_provider(("grok", "gemini"), fallback=default_provider)
+    return _first_supported_provider(("gemini",), fallback=default_provider)
 
 
 def _resolve_chat_execution_plan(

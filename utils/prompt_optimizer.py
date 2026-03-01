@@ -4,6 +4,11 @@ import json
 import os
 from typing import Any, Optional, Tuple
 
+from config.provider_catalog import (
+    get_provider_api_key_envs,
+    get_provider_default_model_envs,
+    get_provider_default_models,
+)
 from models.unified_response import UnifiedResponse
 from models.user_context import UserContext
 from utils.logger import get_logger
@@ -24,12 +29,9 @@ _JSON_SYSTEM_INSTRUCTION = (
     "Do not add markdown fences, commentary, or extra keys."
 )
 
-_DEFAULT_MODELS = {
-    "openai": "gpt-4o-mini",
-    "gemini": "gemini-2.5-flash-lite",
-    "deepseek": "deepseek-chat",
-    "grok": "grok-4-latest",
-}
+_DEFAULT_MODELS = get_provider_default_models()
+_DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
+_API_KEY_ENVS = get_provider_api_key_envs()
 
 
 class PromptOptimizer:
@@ -59,20 +61,17 @@ class PromptOptimizer:
         self._client = client
 
     def _default_model_for_provider(self, provider: str) -> str:
-        env_key = f"DEFAULT_{provider.upper()}_MODEL"
-        return os.getenv(env_key, _DEFAULT_MODELS.get(provider, "gpt-4o-mini"))
+        env_key = _DEFAULT_MODEL_ENVS.get(provider)
+        default_model = _DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        if not env_key:
+            return default_model
+        return os.getenv(env_key, default_model)
 
     def _resolve_api_key(self) -> str:
         if self._api_key:
             return self._api_key
 
-        env_map = {
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GOOGLE_GEMINI_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "grok": "GROK_API_KEY",
-        }
-        env_name = env_map.get(self.provider)
+        env_name = _API_KEY_ENVS.get(self.provider)
         if not env_name:
             raise ValueError(f"Unsupported provider for prompt optimizer: {self.provider}")
         api_key = os.getenv(env_name, "")

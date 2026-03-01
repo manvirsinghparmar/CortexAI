@@ -197,6 +197,13 @@ test("history sidebar items do not render provider/model labels", () => {
     assert.doesNotMatch(appJs, /history-provider-model/);
 });
 
+test("provider and model selectors are loaded from discovery APIs", () => {
+    assert.match(appJs, /async function loadDynamicProviderModelCatalog\(\)/);
+    assert.match(appJs, /fetchCatalogJson\("\/v1\/providers"\)/);
+    assert.match(appJs, /fetchCatalogJson\("\/v1\/models\?enabled_only=true"\)/);
+    assert.match(appJs, /applyCatalogData\(providers, models\);/);
+});
+
 test("history thread selection scrolls to the bottom of restored messages", () => {
     assert.match(appJs, /el\.resultsSection\.scrollIntoView\(\{ behavior: "smooth", block: "end" \}\);/);
     assert.match(appJs, /if \(!el\.resultsSection\.classList\.contains\("hidden"\)\) \{/);

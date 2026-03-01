@@ -1,0 +1,56 @@
+providers:
+  - id: openai
+    label: OpenAI
+    api_key_env: OPENAI_API_KEY
+    default_model_env: DEFAULT_OPENAI_MODEL
+    default_model: gpt-4o
+    compare_default_model: gpt-4.1-mini
+    byok_supported: true
+    capabilities: [chat, stream, compare, smart_routing, prompt_optimization]
+    ui:
+      display_name: ChatGPT
+      icon_token: target
+      color: "#10A37F"
+      sort_order: 2
+
+  - id: gemini
+    label: Gemini
+    api_key_env: GOOGLE_GEMINI_API_KEY
+    default_model_env: DEFAULT_GEMINI_MODEL
+    default_model: gemini-2.5-flash
+    compare_default_model: gemini-2.5-flash-lite
+    byok_supported: true
+    capabilities: [chat, stream, compare, smart_routing, prompt_optimization]
+    ui:
+      display_name: Gemini
+      icon_token: star
+      color: "#4285F4"
+      sort_order: 1
+
+  - id: deepseek
+    label: DeepSeek
+    api_key_env: DEEPSEEK_API_KEY
+    default_model_env: DEFAULT_DEEPSEEK_MODEL
+    default_model: deepseek-chat
+    compare_default_model: deepseek-chat
+    byok_supported: true
+    capabilities: [chat, stream, compare, smart_routing, prompt_optimization]
+    ui:
+      display_name: DeepSeek
+      icon_token: brain
+      color: "#5B5BD6"
+      sort_order: 3
+
+  - id: grok
+    label: Grok
+    api_key_env: GROK_API_KEY
+    default_model_env: DEFAULT_GROK_MODEL
+    default_model: grok-4-latest
+    compare_default_model: grok-4-1-fast-non-reasoning
+    byok_supported: true
+    capabilities: [chat, stream, compare, smart_routing, prompt_optimization]
+    ui:
+      display_name: Grok
+      icon_token: robot
+      color: "#1DA1F2"
+      sort_order: 4

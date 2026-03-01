@@ -1,0 +1,348 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
+
+class FakeClassList {
+    constructor() {
+        this._set = new Set();
+    }
+
+    add(...names) {
+        names.forEach(name => this._set.add(String(name)));
+    }
+
+    remove(...names) {
+        names.forEach(name => this._set.delete(String(name)));
+    }
+
+    contains(name) {
+        return this._set.has(String(name));
+    }
+
+    toggle(name, force) {
+        const key = String(name);
+        if (typeof force === "boolean") {
+            if (force) this._set.add(key);
+            else this._set.delete(key);
+            return force;
+        }
+        if (this._set.has(key)) {
+            this._set.delete(key);
+            return false;
+        }
+        this._set.add(key);
+        return true;
+    }
+}
+
+class FakeElement {
+    constructor(id = "", tagName = "div") {
+        this.id = id;
+        this.tagName = String(tagName || "div").toUpperCase();
+        this.dataset = {};
+        this.style = {};
+        this.value = "";
+        this.textContent = "";
+        this.disabled = false;
+        this._innerHTML = "";
+        this._children = [];
+        this._attrs = {};
+        this._listeners = {};
+        this.classList = new FakeClassList();
+        this.scrollTop = 0;
+        this.scrollHeight = 0;
+        this.offsetHeight = 120;
+        this._closest = null;
+    }
+
+    get innerHTML() {
+        return this._innerHTML;
+    }
+
+    set innerHTML(value) {
+        this._innerHTML = String(value ?? "");
+        if (this.tagName === "SELECT") {
+            this._children = [];
+            this.value = "";
+        }
+    }
+
+    get options() {
+        return this._children;
+    }
+
+    appendChild(child) {
+        const node = child || new FakeElement("", "div");
+        node._parent = this;
+        this._children.push(node);
+        if (this.tagName === "SELECT") {
+            const isSelected = Boolean(node.selected);
+            if (isSelected || !this.value) {
+                this.value = String(node.value || "");
+            }
+        }
+        return node;
+    }
+
+    addEventListener(type, fn) {
+        const key = String(type || "");
+        if (!this._listeners[key]) {
+            this._listeners[key] = [];
+        }
+        this._listeners[key].push(fn);
+    }
+
+    dispatchEvent(type, event = {}) {
+        const handlers = this._listeners[String(type || "")] || [];
+        handlers.forEach(fn => fn(event));
+    }
+
+    setAttribute(name, value) {
+        this._attrs[String(name)] = String(value);
+    }
+
+    getAttribute(name) {
+        return this._attrs[String(name)];
+    }
+
+    closest() {
+        return this._closest;
+    }
+
+    querySelectorAll() {
+        return [];
+    }
+
+    focus() {}
+    blur() {}
+    scrollIntoView() {}
+}
+
+function createRuntime({ providersPayload, modelsPayload }) {
+    const elementIds = [
+        "compactBar",
+        "compactModelInfo",
+        "cBtnSingle",
+        "cBtnCompare",
+        "compactSendBtn",
+        "mainHeader",
+        "btnSingleMode",
+        "btnCompareMode",
+        "workspaceTagline",
+        "singleRoutingControls",
+        "singleModelWrap",
+        "singleModelLabel",
+        "singleModel",
+        "compareModelWrap",
+        "compareModel3Wrap",
+        "compareAddModelBtn",
+        "compareModel1",
+        "compareModel2",
+        "compareModel3",
+        "promptCard",
+        "promptInput",
+        "submitBtn",
+        "routeOptimizeBtn",
+        "routeSmartBtn",
+        "routeResearchBtn",
+        "resultsSection",
+        "resultsGrid",
+        "clearBtn",
+        "errorBanner",
+        "errorMsg",
+        "errorClose",
+        "optViewBtn",
+        "optPanel",
+        "optPanelClose",
+        "optOriginalText",
+        "optOptimizedText",
+        "historySidebar",
+        "historyNewChatBtn",
+        "historyClearAllBtn",
+        "historyList",
+        "historyEmpty",
+        "historySearch",
+        "workspace",
+    ];
+
+    const elements = new Map();
+    elementIds.forEach(id => {
+        const tagName = id.toLowerCase().includes("model") && !id.includes("Wrap")
+            ? "select"
+            : id === "promptInput"
+                ? "textarea"
+                : "div";
+        elements.set(id, new FakeElement(id, tagName));
+    });
+
+    const smartChipWrap = new FakeElement("routeSmartChipWrap", "span");
+    elements.get("routeSmartBtn")._closest = smartChipWrap;
+
+    const document = {
+        getElementById(id) {
+            return elements.get(String(id)) || null;
+        },
+        createElement(tag) {
+            return new FakeElement("", tag);
+        },
+        querySelectorAll() {
+            return [];
+        },
+    };
+
+    const storage = new Map();
+    const localStorage = {
+        getItem(key) {
+            return storage.has(key) ? storage.get(key) : null;
+        },
+        setItem(key, value) {
+            storage.set(key, String(value));
+        },
+        removeItem(key) {
+            storage.delete(key);
+        },
+    };
+
+    const fetchCalls = [];
+    async function fetch(url) {
+        const text = String(url || "");
+        fetchCalls.push(text);
+        if (text.includes("/v1/providers")) {
+            return {
+                ok: true,
+                status: 200,
+                async json() {
+                    return providersPayload;
+                },
+            };
+        }
+        if (text.includes("/v1/models?enabled_only=true")) {
+            return {
+                ok: true,
+                status: 200,
+                async json() {
+                    return modelsPayload;
+                },
+            };
+        }
+        if (text.includes("/v1/history")) {
+            return {
+                ok: true,
+                status: 200,
+                async json() {
+                    return [];
+                },
+            };
+        }
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                return {};
+            },
+            async text() {
+                return "";
+            },
+        };
+    }
+
+    const window = {
+        scrollY: 0,
+        addEventListener() {},
+        removeEventListener() {},
+        localStorage,
+        crypto: {
+            randomUUID: () => "11111111-1111-4111-8111-111111111111",
+        },
+    };
+
+    const context = {
+        window,
+        document,
+        fetch,
+        confirm: () => true,
+        console,
+        setTimeout,
+        clearTimeout,
+        requestAnimationFrame: fn => {
+            if (typeof fn === "function") fn();
+            return 1;
+        },
+        cancelAnimationFrame: () => {},
+        URL,
+        URLSearchParams,
+        Promise,
+        Math,
+        Date,
+        JSON,
+    };
+    context.globalThis = context;
+
+    return { context, elements, fetchCalls };
+}
+
+function optionValues(selectEl) {
+    return (selectEl?.options || []).map(option => String(option.value || ""));
+}
+
+function optionTexts(selectEl) {
+    return (selectEl?.options || []).map(option => String(option.textContent || ""));
+}
+
+test("dynamic discovery updates frontend selectors with new provider/models", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            {
+                provider: "openai",
+                label: "OpenAI",
+                default_model: "gpt-4o",
+                ui: { display_name: "ChatGPT", icon_token: "target", color: "#10A37F", sort_order: 2 },
+            },
+            {
+                provider: "zai",
+                label: "Z.AI",
+                default_model: "zai-chat",
+                ui: { display_name: "Z.AI", icon_token: "star", color: "#2563EB", sort_order: 5 },
+            },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "zai", model: "zai-chat", enabled: true },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context, elements, fetchCalls } = createRuntime({
+        providersPayload,
+        modelsPayload,
+    });
+
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.ok(fetchCalls.some(url => url.includes("/v1/providers")));
+    assert.ok(fetchCalls.some(url => url.includes("/v1/models?enabled_only=true")));
+
+    const singleModel = elements.get("singleModel");
+    const values = optionValues(singleModel);
+    const texts = optionTexts(singleModel);
+
+    assert.ok(values.includes("zai:zai-chat"));
+    assert.ok(texts.some(text => text.includes("Z.AI") && text.includes("zai-chat")));
+});

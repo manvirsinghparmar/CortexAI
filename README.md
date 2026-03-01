@@ -436,6 +436,16 @@ Run full suite:
 python -m pytest -q
 ```
 
+Run full suite with an HTML report artifact:
+```bash
+python scripts/test_report_runner.py
+```
+
+This generates:
+- timestamped report folder under `reports/test-results/<YYYYMMDD-HHMMSS>/`
+- HTML dashboard report at `reports/test-results/latest-report.html`
+- JUnit XML at `reports/test-results/latest-junit.xml`
+
 Run B2B launch tests only:
 ```bash
 python -m pytest tests/test_b2b_launch_features.py -q

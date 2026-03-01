@@ -43,6 +43,7 @@ tools/logs/*.log.*
 .coverage
 htmlcov/
 .pytest_cache/
+reports/test-results/
 
 # Distribution / packaging
 dist/

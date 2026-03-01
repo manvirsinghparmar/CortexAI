@@ -19,6 +19,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_frontend_dir() -> str:
+    configured = (os.getenv("FRONTEND_DIR") or "").strip()
+    if configured:
+        return configured
+    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
@@ -79,11 +86,14 @@ def create_app() -> FastAPI:
     app.include_router(whoami.router)
     app.include_router(catalog.router)
 
-    # Serve the frontend SPA from the /frontend directory at root path
-    frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
-    if os.path.isdir(frontend_dir):
+    # Optional static frontend mount for monolith mode.
+    serve_frontend = _env_bool("SERVE_FRONTEND", default=True)
+    frontend_dir = _resolve_frontend_dir()
+    if serve_frontend and os.path.isdir(frontend_dir):
         app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
-    else:
+    elif serve_frontend:
         logger.warning(f"Frontend directory not found at {frontend_dir}; skipping static mount")
+    else:
+        logger.info("SERVE_FRONTEND=false; static frontend mount disabled")
 
     return app

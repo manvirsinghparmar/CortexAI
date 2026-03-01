@@ -96,6 +96,10 @@ MASTER_KEY=replace-with-strong-random-secret
 # Savings baseline
 BASELINE_MODEL_ID=openai:gpt-4o-mini
 # or BASELINE_PROVIDER=openai + BASELINE_MODEL=gpt-4o-mini
+
+# Component boundary controls
+SERVE_FRONTEND=true      # false => API-only runtime (no static frontend mount)
+FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true
 ```
 
 ## Pricing Configuration
@@ -120,6 +124,25 @@ Useful URLs:
 - Health: `http://127.0.0.1:8000/health`
 - Swagger: `http://127.0.0.1:8000/docs`
 - Frontend: `http://127.0.0.1:8000/`
+
+### Run Components Independently
+
+API only (disable static frontend mount):
+```bash
+# PowerShell
+$env:SERVE_FRONTEND="false"
+python run_server.py --reload
+```
+
+Frontend only (serve static UI separately):
+```bash
+python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
+```
+
+Optional frontend runtime config for separate API host:
+- Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
+- Include it before `app.js` in `frontend/index.html`
+- Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and `apiKey`
 
 ## Authentication
 
@@ -338,6 +361,24 @@ class CortexClient:
 - `STORAGE_POLICY=full`: content persistence enabled.
 - `REDACT_PII=true`: regex redaction for emails, phones, and card-like numbers before DB storage.
 
+## Build Artifacts
+
+Frontend artifact (static files + manifest + zip):
+```bash
+python scripts/build_frontend_artifact.py
+```
+
+API runtime image:
+```bash
+docker build -f Dockerfile.api -t cortexai-api:dev .
+```
+
+These artifacts are intentionally separate so frontend-only or API-only changes can be built independently.
+
+## DB Migration Runbook
+
+- See `docs/runbooks/db-migrations.md` for migration authoring, apply order, rollback strategy, and verification checks.
+
 ## Release Gate
 
 Use this before launch/deploy:
@@ -349,6 +390,13 @@ It runs:
 - `python -m py_compile ...`
 - `pytest -q`
 - DB mode smoke test (`/v1/chat` + DB row assertions for `llm_requests` and `usage_daily`)
+
+## CI Component Detection
+
+- `.github/workflows/ci.yml` uses path detection to run component jobs selectively:
+  - frontend checks/build artifact for `frontend/**` (and shared files)
+  - backend checks/API image build for `api/**`, `server/**`, `orchestrator/**`, `db/**` (and shared files)
+- Deploy jobs are intentionally not included yet; this keeps CI focused on readiness checks and build artifacts.
 
 ## Tenant Onboarding Script
 
@@ -405,6 +453,8 @@ Postman collection:
 
 ```text
 OpenAIProject/
+  .dockerignore
+  Dockerfile.api
   main.py
   run_server.py
   list-models.cmd
@@ -458,15 +508,23 @@ OpenAIProject/
     REFACTORING_SUMMARY.md
     TAVILY_INTEGRATION.md
     UNIFIED_RESPONSE_CONTRACT.md
+    adr/
+      0001-architecture-baseline-and-deploy-boundaries.md
+      0002-provider-validation-and-safety-rails.md
+      0003-component-deployment-readiness-boundaries.md
+    runbooks/
+      db-migrations.md
     postman/
       CortexAI_B2B.postman_collection.json
 
   frontend/
     index.html
     app.js
+    runtime-config.example.js
     style.css
     smart-routing-state.js
     layout-smoke.test.mjs
+    provider-discovery.e2e.test.mjs
     smart-routing-state.test.mjs
 
   models/
@@ -489,11 +547,13 @@ OpenAIProject/
     tier_decider.py
 
   scripts/
+    build_frontend_artifact.py
     db_mode_smoke.py
     e2e_b2b_checklist.py
     generate_proof_pack.py
     onboard_tenant.py
     release_gate.py
+    serve_frontend.py
 
   server/
     __init__.py
@@ -561,6 +621,7 @@ OpenAIProject/
     test_api_key_hashing.py
     test_api_persistence_guardrails.py
     test_b2b_launch_features.py
+    test_component_boundaries.py
     test_compare_session_totals.py
     test_conversation.py
     test_fallback_manager.py
@@ -577,6 +638,7 @@ OpenAIProject/
     test_smart_router_metadata.py
     test_tier_decider.py
     test_unified_response_contract.py
+    test_dynamic_provider_discovery_e2e.py
     ... (additional unit/integration suites)
 ```
 
@@ -594,4 +656,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-02-25
+Last updated: 2026-03-01

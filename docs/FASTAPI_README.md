@@ -17,12 +17,18 @@ API_KEYS=dev-key-1,dev-key-2
 DATABASE_URL=postgresql+psycopg://...
 ```
 
-4. Start server:
+4. Optional deployment boundary controls:
+```ini
+SERVE_FRONTEND=false
+FRONTEND_DIR=frontend
+```
+
+5. Start server:
 ```bash
 python run_server.py --reload
 ```
 
-5. Open docs:
+6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 

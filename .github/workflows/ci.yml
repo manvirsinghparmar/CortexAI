@@ -10,15 +10,57 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  detect-changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      db: ${{ steps.filter.outputs.db }}
+      shared: ${{ steps.filter.outputs.shared }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Detect changed component paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'api/**'
+              - 'config/**'
+              - 'context/**'
+              - 'db/**'
+              - 'models/**'
+              - 'orchestrator/**'
+              - 'server/**'
+              - 'tools/**'
+              - 'utils/**'
+              - 'run_server.py'
+              - 'main.py'
+              - 'requirements*.txt'
+              - 'pyproject.toml'
+            db:
+              - 'db/migrations/**'
+            shared:
+              - '.github/workflows/**'
+              - 'scripts/**'
+              - 'README.md'
+              - '.env.example'
+              - 'pytest.ini'
+
+  backend-quality:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.db == 'true' || needs.detect-changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,25 +74,104 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
-      # ---- Quality: lint/format ----
       - name: Ruff (lint)
         run: ruff check .
 
       - name: Black (format check)
         run: black --check .
 
-      # ---- Types ----
       - name: MyPy (type check)
         run: mypy . --explicit-package-bases
 
-      # ---- Release gate ----
-      - name: Release gate (compile + pytest + DB smoke)
-        run: python scripts/release_gate.py
+      - name: API contract and boundary regression suites
+        run: |
+          python -m pytest \
+            tests/test_baseline_safety_rails.py \
+            tests/test_provider_catalog.py \
+            tests/test_client_registry_and_schema_dynamic.py \
+            tests/test_fastapi_contract_and_guardrails.py \
+            tests/test_dynamic_provider_discovery_e2e.py \
+            tests/test_component_boundaries.py \
+            -q
 
-      # ---- Security ----
       - name: pip-audit (dependency vulnerabilities)
         run: pip-audit -r requirements.txt -r requirements-dev.txt
 
+  frontend-quality:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Frontend syntax + regression tests
+        run: |
+          node --check frontend/app.js
+          node frontend/smart-routing-state.test.mjs
+          node frontend/layout-smoke.test.mjs
+          node frontend/provider-discovery.e2e.test.mjs
+
+  build-frontend-artifact:
+    needs: [detect-changes, frontend-quality]
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build frontend artifact
+        run: python scripts/build_frontend_artifact.py
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-artifact
+          path: |
+            dist/frontend
+            dist/frontend-artifact.zip
+
+  build-api-image:
+    needs: [detect-changes, backend-quality]
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.db == 'true' || needs.detect-changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build API Docker image
+        run: docker build -f Dockerfile.api -t cortexai-api:ci .
+
+      - name: Export API image metadata artifact
+        run: |
+          mkdir -p dist
+          docker image inspect cortexai-api:ci --format='{{.Id}}' > dist/api-image-id.txt
+
+      - name: Upload API image metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-image-metadata
+          path: dist/api-image-id.txt
+
+  security-secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Gitleaks (secrets scanning)
         uses: gitleaks/gitleaks-action@v2
         with:

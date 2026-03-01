@@ -3,8 +3,13 @@
  */
 
 /* â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-const API_BASE = "http://127.0.0.1:8000";
-const API_KEY = "dev-key-1";
+const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
+const API_BASE = String(
+    RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
+const API_KEY = String(
+    RUNTIME_CONFIG.apiKey || window.localStorage?.getItem("cortex_api_key") || "dev-key-1"
+);
 
 /* â”€â”€â”€ Provider Catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 // One entry per provider â€” icon shows in the dropdown, model is the default sent to API

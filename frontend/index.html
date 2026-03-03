@@ -99,38 +99,6 @@
                             Compare
                         </button>
                     </div>
-                    <div class="composer-toolbar-left feature-strip" id="singleRoutingControls">
-                        <span class="feature-chip-wrap">
-                            <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
-                                aria-checked="true" aria-label="Auto (Recommended)"
-                                aria-describedby="smartRoutingTooltip">
-                                Auto (Recommended)
-                            </button>
-                            <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
-                                Automatically selects the best model based on quality, speed, and cost.
-                            </span>
-                        </span>
-                        <span class="feature-chip-wrap">
-                            <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
-                                <span class="chip-icon" aria-hidden="true">&#127760;</span>
-                                <span>Web</span>
-                            </button>
-                            <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
-                                Searches the internet and includes citations.
-                            </span>
-                        </span>
-                        <span class="feature-chip-wrap">
-                            <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
-                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
-                                <span>Rewrite</span>
-                            </button>
-                            <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
-                                Improves your prompt before sending.
-                            </span>
-                        </span>
-                    </div>
                 </div>
                 <div class="toolbar-model-group hidden" id="singleModelWrap">
                     <label class="sr-only" for="singleModel">Manual model selection</label>
@@ -166,27 +134,38 @@
             <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
             <div class="prompt-footer">
                 <div class="prompt-footer-left">
-                    <button class="btn-opt-view hidden" id="optViewBtn"
-                        title="See what prompt was actually sent to the LLM">
-                        View Optimized
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="opt-panel hidden" id="optPanel" role="region" aria-label="Optimized prompt view">
-            <div class="opt-panel-header">
-                <span class="opt-panel-title">Prompt Optimization - what went to the LLM</span>
-                <button class="opt-panel-close" id="optPanelClose" aria-label="Close">X</button>
-            </div>
-            <div class="opt-panel-body">
-                <div class="opt-col">
-                    <div class="opt-col-label">YOUR ORIGINAL</div>
-                    <div class="opt-col-text" id="optOriginalText"></div>
-                </div>
-                <div class="opt-col opt-col-right">
-                    <div class="opt-col-label">OPTIMIZED</div>
-                    <div class="opt-col-text" id="optOptimizedText"></div>
+                    <div class="composer-footer-features feature-strip" id="singleRoutingControls">
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
+                                aria-checked="true" aria-label="Auto (Recommended)"
+                                aria-describedby="smartRoutingTooltip">
+                                Auto (Recommended)
+                            </button>
+                            <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
+                                Automatically selects the best model based on quality, speed, and cost.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#127760;</span>
+                                <span>Web</span>
+                            </button>
+                            <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
+                                Searches the internet and includes citations.
+                            </span>
+                        </span>
+                        <span class="feature-chip-wrap">
+                            <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
+                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
+                                <span>Rewrite</span>
+                            </button>
+                            <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
+                                Improves your prompt before sending.
+                            </span>
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>

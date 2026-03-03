@@ -32,11 +32,11 @@ def test_tier_t0_for_simple_rewrite():
     assert decision.tier == Tier.T0
 
 
-def test_tier_t2_for_code():
+def test_tier_t3_for_code():
     decider = TierDecider()
     features = _base_features(has_code=True)
     decision = decider.decide(features)
-    assert decision.tier == Tier.T2
+    assert decision.tier == Tier.T3
 
 
 def test_tier_t3_for_ultra_strict():

@@ -181,12 +181,12 @@ def _pick_smart_provider(prompt: str, *, smart_mode: bool, research_mode: bool) 
     creative_signals = ("poem", "story", "creative", "brainstorm", "tagline", "tweet")
 
     if any(signal in text for signal in code_signals):
-        return _first_supported_provider(("deepseek", "openai"), fallback=default_provider)
+        return _first_supported_provider(("deepseek", "claude", "openai"), fallback=default_provider)
     if any(signal in text for signal in deep_reasoning_signals) or len(text) > 900:
-        return _first_supported_provider(("openai",), fallback=default_provider)
+        return _first_supported_provider(("openai", "claude"), fallback=default_provider)
     if any(signal in text for signal in creative_signals):
-        return _first_supported_provider(("grok", "gemini"), fallback=default_provider)
-    return _first_supported_provider(("gemini",), fallback=default_provider)
+        return _first_supported_provider(("grok", "gemini", "claude"), fallback=default_provider)
+    return _first_supported_provider(("gemini", "claude"), fallback=default_provider)
 
 
 def _resolve_chat_execution_plan(

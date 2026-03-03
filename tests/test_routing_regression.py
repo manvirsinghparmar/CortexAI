@@ -1,6 +1,9 @@
 from models.unified_response import TokenUsage, UnifiedResponse
+from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from orchestrator.routing_types import ModelCandidate, PromptFeatures, Tier
+from tools.web.intent import should_reuse_research
+from tools.web.research_state import ResearchSource, ResearchState
 
 
 class FakeClient:
@@ -21,6 +24,58 @@ class FakeClient:
             error=None,
             metadata={},
         )
+
+
+class SpyClient(FakeClient):
+    def __init__(self, provider: str, model: str):
+        super().__init__(provider, model)
+        self.calls: list[list[dict[str, str]]] = []
+
+    def get_completion(self, *args, **kwargs):
+        messages = kwargs.get("messages") or []
+        self.calls.append(messages)
+        return super().get_completion(*args, **kwargs)
+
+
+class FakeSourceDoc:
+    def __init__(self, source_id: int, title: str, url: str, fetched_at: str, excerpt: str):
+        self.id = source_id
+        self.title = title
+        self.url = url
+        self.fetched_at = fetched_at
+        self.excerpt = excerpt
+
+
+class FakeResearchContext:
+    def __init__(self, query: str):
+        now = "2026-03-02T00:00:00+00:00"
+        self.used = True
+        self.injected_text = (
+            "WEB RESEARCH SOURCES:\n"
+            "[1] Example Source\n"
+            "URL: https://example.com/source\n"
+            "Snippet: example snippet"
+        )
+        self.sources = [
+            FakeSourceDoc(
+                source_id=1,
+                title="Example Source",
+                url="https://example.com/source",
+                fetched_at=now,
+                excerpt=f"excerpt for {query}",
+            )
+        ]
+        self.cache_hit = False
+        self.error = None
+
+
+class FakeResearchService:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def build(self, query: str):
+        self.calls.append(query)
+        return FakeResearchContext(query)
 
 
 def test_direct_ask_still_works(monkeypatch):
@@ -221,3 +276,176 @@ def test_smart_retry_on_refusal_then_success(monkeypatch):
     assert "safe refactor with unchanged behavior" in resp.text
     assert resp.metadata["routing"]["attempt_count"] == 2
     assert resp.metadata["routing"]["fallback_used"] is True
+
+
+def test_research_mode_off_does_not_reuse_prior_web_context():
+    orchestrator = CortexOrchestrator()
+    session_id = "session-web-off-guard"
+    now = "2026-03-02T00:00:00+00:00"
+
+    prior_state = ResearchState(
+        topic="pakistan nuclear program",
+        query="pakistan nuclear program latest details",
+        injected_text="WEB RESEARCH SOURCES:\n1) example source",
+        sources=[
+            ResearchSource(
+                id=1,
+                title="Example Source",
+                url="https://example.com/source",
+                fetched_at=now,
+                excerpt="sample excerpt",
+            )
+        ],
+        created_at=now,
+        last_used_at=now,
+        used=True,
+        cache_hit=False,
+        error=None,
+        session_id=session_id,
+        mode="on",
+        ttl_seconds=900,
+    )
+    orchestrator._research_states[session_id] = prior_state
+
+    messages = [{"role": "user", "content": "What is photosynthesis?"}]
+    ctx = UserContext(session_id=session_id)
+
+    updated_messages, metadata = orchestrator._apply_research_if_needed(
+        prompt="What is photosynthesis?",
+        messages=messages,
+        research_mode="off",
+        context=ctx,
+    )
+
+    assert updated_messages == messages
+    assert metadata["research_used"] is False
+    assert metadata["research_reused"] is False
+    assert metadata["sources"] == []
+
+
+def test_research_mode_off_system_prompt_excludes_sources_only_phrase():
+    orchestrator = CortexOrchestrator()
+    messages = orchestrator._build_messages(
+        prompt="What happened yesterday?",
+        context=None,
+        research_mode="off",
+    )
+    system_content = str(messages[0].get("content", ""))
+    assert "Web research is disabled for this turn." in system_content
+    assert "The provided sources don't contain that specific information." not in system_content
+
+
+def test_ask_sequence_web_on_then_off_does_not_leak_prior_sources(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    spy = SpyClient("openai", "gpt-4o-mini")
+    monkeypatch.setattr(orchestrator, "_get_client", lambda *_args, **_kwargs: spy)
+
+    fake_research = FakeResearchService()
+    orchestrator.research_service = fake_research
+
+    context = UserContext(session_id="session-web-toggle-sequence")
+
+    first_response = orchestrator.ask(
+        prompt="What are the latest inflation numbers in Canada?",
+        model_type="openai",
+        model_name="gpt-4o-mini",
+        routing_mode="legacy",
+        research_mode="on",
+        context=context,
+    )
+    second_response = orchestrator.ask(
+        prompt="Explain photosynthesis in one sentence.",
+        model_type="openai",
+        model_name="gpt-4o-mini",
+        routing_mode="legacy",
+        research_mode="off",
+        context=context,
+    )
+
+    assert first_response.metadata.get("research_used") is True
+    assert second_response.metadata.get("research_used") is False
+    assert second_response.metadata.get("research_reused") is False
+    assert second_response.metadata.get("sources") == []
+
+    # First turn can search; second turn must never search after user toggles web off.
+    assert len(fake_research.calls) == 1
+
+    first_messages = spy.calls[0]
+    second_messages = spy.calls[1]
+    assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in first_messages)
+    assert all("WEB RESEARCH SOURCES:" not in str(msg.get("content", "")) for msg in second_messages)
+    assert "Web research is disabled for this turn." in str(second_messages[0].get("content", ""))
+
+
+def test_research_mode_off_skips_search_even_for_explicit_web_request():
+    orchestrator = CortexOrchestrator()
+    session_id = "session-explicit-web-off"
+    now = "2026-03-02T00:00:00+00:00"
+
+    prior_state = ResearchState(
+        topic="inflation canada",
+        query="latest inflation in canada",
+        injected_text="WEB RESEARCH SOURCES:\n1) old source",
+        sources=[
+            ResearchSource(
+                id=1,
+                title="Old Source",
+                url="https://example.com/old",
+                fetched_at=now,
+                excerpt="old excerpt",
+            )
+        ],
+        created_at=now,
+        last_used_at=now,
+        used=True,
+        cache_hit=False,
+        error=None,
+        session_id=session_id,
+        mode="on",
+        ttl_seconds=900,
+    )
+    orchestrator._research_states[session_id] = prior_state
+    fake_research = FakeResearchService()
+    orchestrator.research_service = fake_research
+
+    original_messages = [{"role": "user", "content": "Can you search internet for inflation now?"}]
+    updated_messages, metadata = orchestrator._apply_research_if_needed(
+        prompt="Can you search internet for inflation now?",
+        messages=original_messages,
+        research_mode="off",
+        context=UserContext(session_id=session_id),
+    )
+
+    assert updated_messages == original_messages
+    assert metadata["research_used"] is False
+    assert metadata["research_reused"] is False
+    assert metadata["sources"] == []
+    assert fake_research.calls == []
+
+
+def test_should_reuse_research_returns_false_when_state_mode_is_off():
+    now = "2026-03-02T00:00:00+00:00"
+    state = ResearchState(
+        topic="pakistan nuclear program",
+        query="pakistan nuclear program latest",
+        injected_text="WEB RESEARCH SOURCES:\n1) source",
+        sources=[
+            ResearchSource(
+                id=1,
+                title="Source",
+                url="https://example.com/source",
+                fetched_at=now,
+                excerpt="excerpt",
+            )
+        ],
+        created_at=now,
+        last_used_at=now,
+        used=True,
+        cache_hit=False,
+        error=None,
+        session_id="session-intent-guard",
+        mode="off",
+        ttl_seconds=900,
+    )
+
+    assert should_reuse_research("can you check again", state) is False

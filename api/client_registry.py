@@ -36,12 +36,19 @@ def _build_grok_client(api_key: str, model_name: str) -> BaseAIClient:
     return GrokClient(api_key=api_key, model_name=model_name)
 
 
+def _build_claude_client(api_key: str, model_name: str) -> BaseAIClient:
+    from api.claude_client import ClaudeClient
+
+    return ClaudeClient(api_key=api_key, model_name=model_name)
+
+
 def _default_factories() -> dict[str, ClientFactory]:
     return {
         "openai": _build_openai_client,
         "gemini": _build_gemini_client,
         "deepseek": _build_deepseek_client,
         "grok": _build_grok_client,
+        "claude": _build_claude_client,
     }
 
 

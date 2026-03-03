@@ -19,7 +19,7 @@ class CostCalculator:
         Initialize the cost calculator with model information.
 
         Args:
-            model_type: The type of model ('openai', 'gemini', 'deepseek', 'grok')
+            model_type: The type of model ('openai', 'gemini', 'deepseek', 'grok', 'claude')
             model_name: The specific model name
         """
         self.model_type = model_type.lower()

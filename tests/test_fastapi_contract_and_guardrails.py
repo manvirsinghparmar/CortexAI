@@ -599,7 +599,7 @@ def test_chat_accepts_auto_routing_without_provider(client, app):
     )
     assert r.status_code == 200
     body = r.json()
-    assert body.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert body.get("provider") in set(get_provider_ids())
     assert isinstance(body.get("model"), str)
     assert app.state.fake_orchestrator.last_ask_model_type is None
     assert app.state.fake_orchestrator.last_ask_kwargs.get("routing_mode") == "smart"
@@ -632,7 +632,7 @@ def test_chat_stream_auto_routing_includes_selected_target(client, app):
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
     start_event = next((e for e in events if e.get("type") == "start"), None)
     assert start_event is not None
-    assert start_event.get("provider") in {"openai", "gemini", "deepseek", "grok"}
+    assert start_event.get("provider") in set(get_provider_ids())
     assert isinstance(start_event.get("model"), str)
     assert app.state.fake_orchestrator.last_ask_model_type is None
     assert app.state.fake_orchestrator.last_ask_kwargs.get("routing_mode") == "smart"
@@ -656,6 +656,47 @@ def test_chat_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypa
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+
+
+def test_chat_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        if enabled:
+            return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 1}
+        return prompt, {"enabled": False, "used": False, "source_count": 0}
+
+    monkeypatch.setattr("server.routes.chat.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    first_payload = {
+        "prompt": "Latest AI policy updates",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "context": {"session_id": "session-toggle-chat", "new_session": False},
+        "routing": {"smart_mode": True, "research_mode": True},
+    }
+    first_response = client.post(
+        "/v1/chat",
+        json=first_payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert first_response.status_code == 200
+    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "on"
+
+    second_payload = {
+        "prompt": "Explain photosynthesis in one sentence.",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "context": {"session_id": "session-toggle-chat", "new_session": False},
+        "routing": {"smart_mode": True, "research_mode": False},
+    }
+    second_response = client.post(
+        "/v1/chat",
+        json=second_payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert second_response.status_code == 200
+    assert not app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
 
 
 def test_compare_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
@@ -750,3 +791,58 @@ def test_compare_stream_passes_research_mode_off_to_orchestrator(client, app):
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
     assert "routing_mode" not in app.state.fake_orchestrator.last_ask_kwargs
+
+
+def test_compare_stream_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, monkeypatch):
+    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
+        if enabled:
+            return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 2}
+        return prompt, {"enabled": False, "used": False, "source_count": 0}
+
+    monkeypatch.setattr("server.routes.compare.maybe_enrich_prompt_with_web", _fake_web_enrich)
+
+    first_payload = {
+        "prompt": "Recent market updates",
+        "context": {"session_id": "session-toggle-compare-stream", "new_session": False},
+        "routing": {"research_mode": True},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    first_response = client.post(
+        "/v1/compare/stream",
+        json=first_payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert first_response.status_code == 200
+    first_events = [json.loads(line) for line in first_response.text.splitlines() if line.strip()]
+    first_start = next((event for event in first_events if event.get("type") == "start"), None)
+    assert first_start is not None
+    assert first_start.get("research_mode") is True
+    assert first_start.get("web_sources") == 2
+    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "on"
+
+    second_payload = {
+        "prompt": "Explain photosynthesis in one sentence.",
+        "context": {"session_id": "session-toggle-compare-stream", "new_session": False},
+        "routing": {"research_mode": False},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    second_response = client.post(
+        "/v1/compare/stream",
+        json=second_payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert second_response.status_code == 200
+    second_events = [json.loads(line) for line in second_response.text.splitlines() if line.strip()]
+    second_start = next((event for event in second_events if event.get("type") == "start"), None)
+    assert second_start is not None
+    assert second_start.get("research_mode") is False
+    assert second_start.get("web_sources") == 0
+    assert not app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"

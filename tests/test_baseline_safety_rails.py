@@ -61,7 +61,7 @@ def test_chat_request_rejects_model_without_provider():
 
 def test_chat_request_rejects_unknown_provider():
     with pytest.raises(ValidationError):
-        ChatRequest(prompt="hello", provider="claude", model="claude-sonnet")
+        ChatRequest(prompt="hello", provider="unknown-provider", model="unknown-model")
 
 
 def test_compare_request_rejects_unknown_target_provider():
@@ -70,7 +70,7 @@ def test_compare_request_rejects_unknown_target_provider():
             prompt="hello",
             targets=[
                 {"provider": "openai", "model": "gpt-4o-mini"},
-                {"provider": "claude", "model": "claude-sonnet"},
+                {"provider": "unknown-provider", "model": "unknown-model"},
             ],
         )
 
@@ -101,7 +101,7 @@ def test_byok_update_requires_baseline_provider_when_model_is_present():
         ("OPENAI", "openai"),
         (" openai ", "openai"),
         ("gemini", "gemini"),
-        ("claude", None),
+        ("claude", "claude"),
         ("", None),
         (None, None),
     ],
@@ -145,7 +145,7 @@ def test_build_chat_routing_constraints_ignores_invalid_numeric_values(monkeypat
     monkeypatch.setenv("SMART_CHAT_MAX_COST_USD", "not-a-float")
     monkeypatch.setenv("SMART_CHAT_MAX_TOTAL_LATENCY_MS", "-10")
     monkeypatch.setenv("SMART_CHAT_MIN_CONTEXT_LIMIT", "0")
-    monkeypatch.setenv("SMART_CHAT_PREFERRED_PROVIDER", "claude")
+    monkeypatch.setenv("SMART_CHAT_PREFERRED_PROVIDER", "not-a-provider")
     monkeypatch.setenv("SMART_CHAT_ALLOWED_PROVIDERS", "invalid1,invalid2")
 
     assert chat_route._build_chat_routing_constraints() is None
@@ -198,7 +198,7 @@ def test_resolve_chat_execution_plan_smart_falls_back_on_invalid_preview(monkeyp
         prompt="Write a python function to reverse a list",
         routing=ChatRoutingRequest(smart_mode=True, research_mode=False),
     )
-    orchestrator = _PreviewOrchestrator(("claude", "claude-sonnet"))
+    orchestrator = _PreviewOrchestrator(("unknown-provider", "unknown-model"))
 
     plan = chat_route._resolve_chat_execution_plan(
         request,
@@ -269,7 +269,7 @@ def test_byok_validate_provider_normalizes_case_and_whitespace():
 
 def test_byok_validate_provider_rejects_unknown_provider():
     with pytest.raises(ValueError, match="Unsupported provider"):
-        byok_service.validate_provider("claude")
+        byok_service.validate_provider("not-a-provider")
 
 
 def test_byok_set_keys_normalizes_provider_and_baseline(monkeypatch):
@@ -320,7 +320,7 @@ def test_byok_runtime_key_resolution_rejects_unknown_requested_provider():
         byok_service.resolve_provider_api_keys(
             object(),
             api_key_id=uuid4(),
-            providers=["claude"],
+            providers=["not-a-provider"],
         )
 
 
@@ -369,7 +369,7 @@ def test_byok_runtime_key_resolution_filters_rows_and_wanted_providers(monkeypat
 def test_orchestrator_get_client_rejects_unknown_model_type():
     orchestrator = CortexOrchestrator()
     with pytest.raises(ValueError, match="Unsupported MODEL_TYPE"):
-        orchestrator._get_client("claude")
+        orchestrator._get_client("unknown-provider")
 
 
 def test_orchestrator_ask_legacy_mode_requires_provider():

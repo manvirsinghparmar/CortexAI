@@ -521,6 +521,10 @@ def should_reuse_research(prompt: str, research_state: object | None) -> bool:
     if not hasattr(research_state, "used") or not research_state.used:
         return False
 
+    # Respect explicit per-turn disable switch.
+    if hasattr(research_state, "mode") and str(getattr(research_state, "mode", "")).lower() == "off":
+        return False
+
     prompt_lower = prompt.lower().strip()
 
     # EXCEPTION 1: If user explicitly requests web search, NEVER reuse - always do fresh search

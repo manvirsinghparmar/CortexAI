@@ -65,13 +65,22 @@ class ModelPricing:
         "grok-2-mini": {"input": 0.50, "output": 2.50},
     }
 
+    # Anthropic Claude Models Pricing (per million tokens)
+    CLAUDE_PRICING = {
+        "claude-3-5-haiku-latest": {"input": 0.80, "output": 4.00},
+        "claude-3-5-sonnet-latest": {"input": 3.00, "output": 15.00},
+        "claude-sonnet-4": {"input": 3.00, "output": 15.00},
+        "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
+        "claude-opus-4-5": {"input": 5.00, "output": 25.00},
+    }
+
     @classmethod
     def get_model_pricing(cls, model_type: str, model_name: str) -> dict[str, float] | None:
         """
         Get pricing information for a specific model.
 
         Args:
-            model_type: The type of model ('openai', 'gemini', 'deepseek', 'grok')
+            model_type: The type of model ('openai', 'gemini', 'deepseek', 'grok', 'claude')
             model_name: The specific model name
 
         Returns:
@@ -85,6 +94,7 @@ class ModelPricing:
             "gemini": cls.GEMINI_PRICING,
             "deepseek": cls.DEEPSEEK_PRICING,
             "grok": cls.GROK_PRICING,
+            "claude": cls.CLAUDE_PRICING,
         }
 
         pricing_dict = pricing_map.get(model_type)
@@ -111,6 +121,7 @@ class ModelPricing:
             "gemini": cls.GEMINI_PRICING,
             "deepseek": cls.DEEPSEEK_PRICING,
             "grok": cls.GROK_PRICING,
+            "claude": cls.CLAUDE_PRICING,
         }
 
         if model_type:

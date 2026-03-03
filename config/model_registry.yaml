@@ -98,11 +98,48 @@ providers:
         context_limit: 128000
         tags: ["fast", "reasoning", "coding", "long_context"]
         enabled: true
+  claude:
+    models:
+      - name: "claude-3-5-haiku-latest"
+        tier: "T0"
+        input_cost_per_1m: 0.800
+        output_cost_per_1m: 4.000
+        context_limit: 200000
+        tags: ["fast", "balanced", "non_reasoning", "general", "long_context"]
+        enabled: true
+      - name: "claude-3-5-sonnet-latest"
+        tier: "T1"
+        input_cost_per_1m: 3.000
+        output_cost_per_1m: 15.000
+        context_limit: 200000
+        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
+      - name: "claude-sonnet-4"
+        tier: "T2"
+        input_cost_per_1m: 3.000
+        output_cost_per_1m: 15.000
+        context_limit: 200000
+        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
+      - name: "claude-sonnet-4-5"
+        tier: "T3"
+        input_cost_per_1m: 3.000
+        output_cost_per_1m: 15.000
+        context_limit: 200000
+        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
+      - name: "claude-opus-4-5"
+        tier: "T3"
+        input_cost_per_1m: 5.000
+        output_cost_per_1m: 25.000
+        context_limit: 200000
+        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
 routing_defaults:
   tier_order: ["T0", "T1", "T2", "T3"]
   max_attempts: 3
   max_total_latency_ms: 12000
-  allow_providers: ["openai", "gemini", "deepseek", "grok"]
+  allow_providers: ["openai", "gemini", "deepseek", "grok", "claude"]
   per_tier_timeout_ms:
     T0: 5000
     T1: 7000

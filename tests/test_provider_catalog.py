@@ -15,7 +15,7 @@ from utils import prompt_optimizer
 
 def test_provider_catalog_has_expected_baseline_providers():
     provider_ids = get_provider_ids()
-    assert provider_ids == ["openai", "gemini", "deepseek", "grok"]
+    assert provider_ids == ["openai", "gemini", "deepseek", "grok", "claude"]
 
 
 def test_provider_catalog_required_maps_are_present():

@@ -22,14 +22,9 @@ class TierDecider:
             reasons.append("ultra_strict_high_accuracy")
             return TierDecision(tier=Tier.T3, reasons=reasons)
 
-        if features.has_code and (
-            features.has_logs_stacktrace
-            or features.needs_accuracy
-            or features.has_strict_constraints
-            or features.token_estimate >= strong_prompt_tokens
-            or features.context_token_estimate >= strong_context_tokens
-        ):
-            reasons.append("complex_code_or_reasoning")
+        # Always route coding requests to T3 so codex/sonnet/opus-class models are eligible.
+        if features.has_code or features.has_logs_stacktrace or features.intent == "code":
+            reasons.append("coding_priority_models")
             return TierDecision(tier=Tier.T3, reasons=reasons)
 
         if (features.has_math or features.has_analysis) and (

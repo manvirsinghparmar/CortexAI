@@ -99,6 +99,10 @@ class PromptOptimizer:
             from api.grok_client import GrokClient
 
             return GrokClient(api_key=api_key, model_name=model_name)
+        if self.provider == "claude":
+            from api.claude_client import ClaudeClient
+
+            return ClaudeClient(api_key=api_key, model_name=model_name)
 
         raise ValueError(f"Unsupported provider for prompt optimizer: {self.provider}")
 

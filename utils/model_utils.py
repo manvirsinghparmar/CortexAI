@@ -10,7 +10,7 @@ class ModelUtils:
         Args:
             api_key: Provider API key
             current_model: Currently selected model name
-            provider: Provider name (gemini, openai, deepseek, grok)
+            provider: Provider name (gemini, openai, deepseek, grok, claude)
         """
         normalized_provider = provider.lower().strip()
 
@@ -81,6 +81,16 @@ class ModelUtils:
                 print(f"\nWarning: Failed to fetch Grok models - {e}")
             return
 
+        if normalized_provider == "claude":
+            from api.claude_client import ClaudeClient
+
+            print("\n=== Fetching Available Claude Models ===")
+            try:
+                ClaudeClient.list_available_models(api_key=api_key, current_model=current_model)
+            except Exception as e:
+                print(f"\nWarning: Failed to fetch Claude models - {e}")
+            return
+
         raise ValueError(f"Unsupported provider: {provider}")
 
     @staticmethod
@@ -97,19 +107,21 @@ class ModelUtils:
             current_models: Optional provider->current model mapping.
             providers: Optional list of providers to include.
         """
-        selected_providers = providers or ["openai", "gemini", "deepseek", "grok"]
+        selected_providers = providers or ["openai", "gemini", "deepseek", "grok", "claude"]
 
         env_api_keys = {
             "openai": os.getenv("OPENAI_API_KEY", ""),
             "gemini": os.getenv("GOOGLE_GEMINI_API_KEY", ""),
             "deepseek": os.getenv("DEEPSEEK_API_KEY", ""),
             "grok": os.getenv("GROK_API_KEY", ""),
+            "claude": os.getenv("ANTHROPIC_API_KEY", ""),
         }
         env_current_models = {
             "openai": os.getenv("DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
             "gemini": os.getenv("DEFAULT_GEMINI_MODEL", "gemini-2.5-flash-lite"),
             "deepseek": os.getenv("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat"),
             "grok": os.getenv("DEFAULT_GROK_MODEL", "grok-4-latest"),
+            "claude": os.getenv("DEFAULT_CLAUDE_MODEL", "claude-sonnet-4-5"),
         }
 
         merged_api_keys = {**env_api_keys, **(api_keys or {})}

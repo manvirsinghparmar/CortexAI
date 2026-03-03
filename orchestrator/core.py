@@ -189,74 +189,50 @@ class CortexOrchestrator:
         )
         return client
 
-    def _build_messages(self, prompt: str, context: UserContext | None) -> list[dict[str, str]]:
-        # Build base system instruction (ALWAYS injected first)
-        system_instruction = {
-            "role": "system",
-            "content": """SYSTEM CONTEXT AND RULES:
+    def _build_messages(
+        self, prompt: str, context: UserContext | None, research_mode: str = "auto"
+    ) -> list[dict[str, str]]:
+        research_mode_norm = (research_mode or "auto").lower().strip()
+
+        if research_mode_norm == "off":
+            system_content = """SYSTEM CONTEXT AND RULES:
+
+You are CortexAI.
+CURRENT DATE: January 17, 2026
+
+Web research is disabled for this turn.
+
+Rules:
+1) Do not reference "provided sources" unless source excerpts are explicitly present in this conversation.
+2) For current-data requests (prices, recent events, percentages), if no sources are present, say you do not have current data.
+3) For general knowledge, answer from training data.
+4) Never fabricate numbers, dates, percentages, or citations.
+5) Never claim you performed web browsing yourself.
+"""
+        else:
+            system_content = """SYSTEM CONTEXT AND RULES:
 
 You are CortexAI with REAL-TIME WEB RESEARCH capability.
 CURRENT DATE: January 17, 2026
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1: CHECK IF WEB SOURCES ARE PRESENT IN THIS CONVERSATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If a system message containing "WEB RESEARCH SOURCES:" is present:
+- Use those excerpts for factual claims.
+- Cite sources as [1], [2], etc.
+- If excerpts do not include the requested detail, say the excerpts do not include that detail.
 
-BEFORE reading the user's question, scroll up and check if there's a SYSTEM message that contains:
-   "WEB RESEARCH SOURCES:"
-   AND shows sources formatted like:
-   "[1] Title"
-   "[2] Title"
-   "[3] Title"
-   with URL and excerpt text
+If no web source excerpts are present:
+- For current-data requests, say you do not have current data.
+- For general knowledge, answer from training data.
 
-If you see this ⬆️ then web sources ARE present. Proceed to STEP 2A.
-If you DON'T see this ⬆️ then no web sources were provided. Proceed to STEP 2B.
+Never fabricate numbers, dates, percentages, or citations.
+Never claim you performed web browsing yourself; the system handles retrieval.
+"""
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2A: IF WEB SOURCES ARE PRESENT (you found the "WEB RESEARCH SOURCES:" message above)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✅ READ the source excerpts carefully
-✅ EXTRACT specific numbers, facts, dates from those excerpts
-✅ ANSWER the user's question using ONLY information from those excerpts
-✅ CITE sources: [1], [2], [3]
-✅ If the specific info isn't in excerpts: "The provided sources don't contain that specific information."
-
-❌ DO NOT say "I don't have current data" - you DO have it (the sources above)
-❌ DO NOT ignore the sources
-❌ DO NOT make up information not in the excerpts
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2B: IF NO WEB SOURCES (you didn't find "WEB RESEARCH SOURCES:" message above)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For factual queries requiring current data (prices, percentages, recent events):
-   ✅ Say: "I don't have current data for this query."
-
-For general knowledge questions:
-   ✅ Answer using your training data (but note knowledge cutoff if relevant)
-
-❌ NEVER invent numbers, percentages, statistics, or specific facts
-❌ NEVER say "strong performance", "record highs" without actual data
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OTHER IMPORTANT RULES:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• You CANNOT control web research - the system does it automatically
-• NEVER say "I will search/check/retrieve/access data" - you can't do this
-• If user asks "can you search": Say "The system handles web research automatically.
-  If sources aren't shown above, try rephrasing with time indicators like 'latest', 'recent', '2025', 'last year'."
-• You DO have internet access (via system-provided sources) - never claim otherwise
-
-These rules prevent misinformation. Follow them carefully.""",
-        }
+        system_instruction = {"role": "system", "content": system_content}
 
         if context and context.conversation_history:
             msgs = context.get_messages()
             msgs.append({"role": "user", "content": prompt})
-            # Inject system instruction at the beginning
             return [system_instruction, *msgs]
         return [system_instruction, {"role": "user", "content": prompt}]
 
@@ -388,6 +364,18 @@ These rules prevent misinformation. Follow them carefully.""",
 
         # 2) Get or create research state (thread-safe)
         state = self._get_or_create_research_state(session_id, research_mode)
+
+        # 2.5) Hard stop: when web research is toggled OFF for this turn,
+        # never inject or reuse prior web research context.
+        if research_mode == "off":
+            logger.info("Research disabled for this turn (mode=off)")
+            return messages, {
+                "research_used": False,
+                "research_reused": False,
+                "research_topic": None,
+                "research_error": None,
+                "sources": [],
+            }
 
         # 3) Check if we should reuse existing research
         should_reuse = should_reuse_research(prompt, state)
@@ -1169,7 +1157,7 @@ These rules prevent misinformation. Follow them carefully.""",
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for request")
 
-            messages = self._build_messages(optimized_prompt, context)
+            messages = self._build_messages(optimized_prompt, context, research_mode=research_mode)
 
             # Apply research if needed (and if service is configured)
             if self.research_service:
@@ -1354,7 +1342,7 @@ These rules prevent misinformation. Follow them carefully.""",
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for comparison")
 
-            messages = self._build_messages(optimized_prompt, context)
+            messages = self._build_messages(optimized_prompt, context, research_mode=research_mode)
 
             # Apply research ONCE for all models (compare fairness)
             if self.research_service:

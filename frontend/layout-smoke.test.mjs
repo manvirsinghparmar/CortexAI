@@ -35,6 +35,22 @@ test("compact composer toolbar contains smart, manual, and inline compare contro
     assert.match(html, /id="compareAddModelBtn"/);
 });
 
+test("composer send button is inside the input area, not in the feature-chip row", () => {
+    assert.match(
+        html,
+        /<div class="prompt-input-wrap">[\s\S]*id="promptInput"[\s\S]*btn-submit-inline[\s\S]*id="submitBtn"/,
+    );
+    assert.doesNotMatch(html, /class="prompt-footer-right"/);
+});
+
+test("composer chip row does not render optimization debug/status labels", () => {
+    assert.doesNotMatch(html, /id="optViewBtn"/);
+    assert.doesNotMatch(html, /id="optPanel"/);
+    assert.doesNotMatch(html, /Optimization Off \(server\)/);
+    assert.doesNotMatch(appJs, /Optimization Off \(server\)/);
+    assert.doesNotMatch(appJs, /optViewBtn\.textContent/);
+});
+
 test("top mode tabs use Ask and Compare labels", () => {
     assert.match(html, /id="btnSingleMode"[\s\S]*>\s*Ask\s*</);
     assert.match(html, /id="btnCompareMode"[\s\S]*>\s*Compare\s*</);
@@ -48,6 +64,17 @@ test("toolbar keeps compact auto, web, and rewrite feature chips", () => {
     assert.match(html, /id="routeResearchBtn"[\s\S]*chip-icon/);
     assert.match(html, /id="routeResearchBtn"[\s\S]*>\s*<span>Web<\/span>/);
     assert.match(html, /id="routeOptimizeBtn"[\s\S]*Rewrite/);
+});
+
+test("composer chips have premium motion and visual-state styling without status text", () => {
+    assert.match(appJs, /function triggerChipToggleFeedback\(button\) \{/);
+    assert.match(styleCss, /\.feature-chip:hover:not\(:disabled\) \{/);
+    assert.match(styleCss, /transform:\s*translateY\(-1px\);/);
+    assert.match(styleCss, /\.feature-chip\.active,/);
+    assert.match(styleCss, /\.feature-chip:disabled \{/);
+    assert.match(styleCss, /\.feature-chip\.is-toggling \{/);
+    assert.match(styleCss, /@keyframes chipTogglePulse \{/);
+    assert.match(styleCss, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.feature-chip\.is-toggling \{/);
 });
 
 test("feature chips expose concise tooltip copy and compact active hint container", () => {
@@ -163,7 +190,7 @@ test("chat action controls use persistent premium footer layout", () => {
     assert.match(appJs, /response-action-group-copy/);
     assert.match(appJs, /response-action-group-feedback/);
     assert.match(appJs, /class="message-footer"/);
-    assert.match(appJs, /buildTokenUsageText\(resp\.token_usage\)/);
+    assert.match(appJs, /buildResponseFooter\(index, summary, resp\.token_usage, webSources\)/);
     assert.doesNotMatch(appJs, /message-details/);
     assert.match(styleCss, /\.message-footer \{/);
     assert.match(styleCss, /\.message-footer-meta \{/);
@@ -205,9 +232,20 @@ test("provider and model selectors are loaded from discovery APIs", () => {
 });
 
 test("history thread selection scrolls to the bottom of restored messages", () => {
-    assert.match(appJs, /el\.resultsSection\.scrollIntoView\(\{ behavior: "smooth", block: "end" \}\);/);
-    assert.match(appJs, /if \(!el\.resultsSection\.classList\.contains\("hidden"\)\) \{/);
-    assert.match(appJs, /el\.resultsSection\.scrollTop = el\.resultsSection\.scrollHeight;/);
+    assert.match(appJs, /function scrollResultsToBottom\(behavior = "auto"\) \{/);
+    assert.match(appJs, /function scheduleScrollResultsToBottom\(options = \{\}\) \{/);
+    assert.match(
+        appJs,
+        /if \(!el\.resultsSection\.classList\.contains\("hidden"\)\) \{[\s\S]*scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/,
+    );
+});
+
+test("new streaming turns auto-scroll to Thinking and keep following streamed text", () => {
+    assert.match(appJs, /function maybeAutoScrollDuringStream\(\) \{/);
+    assert.match(appJs, /scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*maybeAutoScrollDuringStream\(\);/);
+    assert.match(appJs, /streamAutoScrollEnabled = true;/);
+    assert.match(appJs, /streamAutoScrollEnabled = false;/);
 });
 
 test("historical transcripts render persisted web source citations", () => {

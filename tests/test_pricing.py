@@ -13,6 +13,8 @@ from utils.cost_calculator import CostCalculator
         ("gemini", "gemini-2.5-pro", 1.25, 10.00),
         ("deepseek", "deepseek-chat", 0.28, 0.42),
         ("grok", "grok-4-1-fast-non-reasoning", 0.20, 0.50),
+        ("claude", "claude-sonnet-4-5", 3.00, 15.00),
+        ("claude", "claude-opus-4-5", 5.00, 25.00),
     ],
 )
 def test_key_model_pricing_values(provider, model, expected_input, expected_output):
@@ -31,7 +33,7 @@ def test_get_model_pricing_provider_case_insensitive():
 
 def test_all_pricing_entries_have_required_shape_and_non_negative_values():
     all_pricing = ModelPricing.list_all_pricing()
-    assert set(all_pricing.keys()) == {"openai", "gemini", "deepseek", "grok"}
+    assert set(all_pricing.keys()) == {"openai", "gemini", "deepseek", "grok", "claude"}
 
     for provider, models in all_pricing.items():
         assert models, f"{provider} pricing should not be empty"

@@ -14,10 +14,46 @@ const API_KEY = String(
 /* â”€â”€â”€ Provider Catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 // One entry per provider â€” icon shows in the dropdown, model is the default sent to API
 const FALLBACK_PROVIDER_CATALOG = [
-    { provider: "gemini", label: "Gemini", icon: "\u2B50", color: "#4285F4", default_model: "gemini-2.5-flash", sort_order: 1 },
-    { provider: "openai", label: "ChatGPT", icon: "\uD83C\uDFAF", color: "#10A37F", default_model: "gpt-4o", sort_order: 2 },
-    { provider: "deepseek", label: "DeepSeek", icon: "\uD83E\uDDE0", color: "#5B5BD6", default_model: "deepseek-chat", sort_order: 3 },
-    { provider: "grok", label: "Grok", icon: "\uD83E\uDD16", color: "#1DA1F2", default_model: "grok-4-latest", sort_order: 4 },
+    {
+        provider: "gemini",
+        label: "Gemini",
+        icon: "https://www.google.com/s2/favicons?domain_url=gemini.google.com&sz=64",
+        color: "#4285F4",
+        default_model: "gemini-2.5-flash",
+        sort_order: 1,
+    },
+    {
+        provider: "openai",
+        label: "ChatGPT",
+        icon: "https://www.google.com/s2/favicons?domain_url=openai.com&sz=64",
+        color: "#10A37F",
+        default_model: "gpt-4o",
+        sort_order: 2,
+    },
+    {
+        provider: "deepseek",
+        label: "DeepSeek",
+        icon: "https://www.google.com/s2/favicons?domain_url=deepseek.com&sz=64",
+        color: "#5B5BD6",
+        default_model: "deepseek-chat",
+        sort_order: 3,
+    },
+    {
+        provider: "grok",
+        label: "Grok",
+        icon: "https://www.google.com/s2/favicons?domain_url=x.ai&sz=64",
+        color: "#1DA1F2",
+        default_model: "grok-4-latest",
+        sort_order: 4,
+    },
+    {
+        provider: "claude",
+        label: "Claude",
+        icon: "https://www.google.com/s2/favicons?domain_url=claude.ai&sz=64",
+        color: "#D97706",
+        default_model: "claude-sonnet-4-5",
+        sort_order: 5,
+    },
 ];
 // Quick lookup for response card labels (provider key â†’ display label)
 const FALLBACK_MODEL_CATALOG = FALLBACK_PROVIDER_CATALOG.map(spec => ({
@@ -26,11 +62,12 @@ const FALLBACK_MODEL_CATALOG = FALLBACK_PROVIDER_CATALOG.map(spec => ({
     enabled: true,
 }));
 
-const ICON_TOKEN_TO_EMOJI = {
-    target: "\uD83C\uDFAF",
-    star: "\u2B50",
-    brain: "\uD83E\uDDE0",
-    robot: "\uD83E\uDD16",
+const PROVIDER_FAVICON_DOMAIN_BY_ID = {
+    openai: "openai.com",
+    gemini: "gemini.google.com",
+    deepseek: "deepseek.com",
+    grok: "x.ai",
+    claude: "claude.ai",
 };
 
 let providerCatalog = [];
@@ -74,11 +111,26 @@ function toSafeColor(value, fallback = "#94A3B8") {
     return fallback;
 }
 
-function resolveProviderIcon(preferredIcon, iconToken) {
-    const rawIcon = String(preferredIcon || "").trim();
-    if (rawIcon) return rawIcon;
-    const token = String(iconToken || "").trim().toLowerCase();
-    return ICON_TOKEN_TO_EMOJI[token] || "";
+function toSafeIconUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("/")) return raw;
+    if (raw.startsWith("./") || raw.startsWith("../")) return raw;
+    if (/^https?:\/\/\S+$/i.test(raw)) return raw;
+    return "";
+}
+
+function defaultProviderIcon(providerRaw) {
+    const provider = toProviderId(providerRaw);
+    const domain = PROVIDER_FAVICON_DOMAIN_BY_ID[provider];
+    if (!domain) return "";
+    return `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(domain)}&sz=64`;
+}
+
+function resolveProviderIcon(providerRaw, preferredIcon) {
+    const fromPreferred = toSafeIconUrl(preferredIcon);
+    if (fromPreferred) return fromPreferred;
+    return defaultProviderIcon(providerRaw);
 }
 
 function buildProviderLookups() {
@@ -92,7 +144,7 @@ function buildProviderLookups() {
         const provider = toProviderId(spec.provider);
         if (!provider) return;
         providerLabelById[provider] = String(spec.label || provider).trim() || provider;
-        providerIconById[provider] = String(spec.icon || "").trim();
+        providerIconById[provider] = resolveProviderIcon(provider, spec.icon);
         providerColorById[provider] = toSafeColor(spec.color, "#94A3B8");
         providerSortOrderById[provider] = toSortOrder(spec.sort_order, index + 100);
 
@@ -138,7 +190,10 @@ function applyCatalogData(nextProviders, nextModels) {
             if (!provider) return null;
             const label = String(ui.display_name || row?.label || provider).trim() || provider;
             const defaultModel = String(row?.default_model || row?.model || "").trim();
-            const icon = resolveProviderIcon(row?.icon, row?.icon_token || ui.icon_token);
+            const icon = resolveProviderIcon(
+                provider,
+                row?.icon || row?.logo_url || row?.icon_url || ui.icon || ui.logo_url || ui.icon_url
+            );
             const color = toSafeColor(row?.color || ui.color, "#94A3B8");
             const sortOrder = toSortOrder(row?.sort_order ?? ui.sort_order, index + 100);
 
@@ -221,8 +276,18 @@ function getProviderColor(providerRaw) {
     return providerColorById[provider] || "#94A3B8";
 }
 
+function buildProviderIconHtml(providerRaw, size = 14, className = "provider-logo provider-logo-inline") {
+    const provider = toProviderId(providerRaw);
+    const iconUrl = providerIconById[provider] || "";
+    if (!iconUrl) return "";
+    const px = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 14;
+    return `<img class="${escHtml(className)}" src="${escHtml(iconUrl)}" alt="" width="${px}" height="${px}" loading="lazy" decoding="async" aria-hidden="true" />`;
+}
+
 function buildProviderDotHtml(providerRaw, size = 7) {
     const px = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 7;
+    const iconHtml = buildProviderIconHtml(providerRaw, px, "provider-logo provider-logo-inline");
+    if (iconHtml) return iconHtml;
     const color = getProviderColor(providerRaw);
     return `<span class="provider-dot" style="width:${px}px;height:${px}px;border-radius:50%;flex-shrink:0;background:${color};"></span>`;
 }
@@ -242,8 +307,7 @@ function getModelOptionLabel(providerRaw, modelRaw) {
     const provider = toProviderId(providerRaw);
     const model = String(modelRaw || "").trim();
     const label = providerLabelById[provider] || provider || "Model";
-    const icon = providerIconById[provider] || "";
-    const prefix = icon ? `${icon}  ` : "";
+    const prefix = "";
     return `${prefix}${label} · ${model}`;
 }
 
@@ -268,7 +332,15 @@ let hasReceivedFirstStreamResponse = false;
 let historyUiReady = false;
 let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
 let _historyData = [];   // full fetched list
+let streamAutoScrollEnabled = false;
+let lastStreamAutoScrollTs = 0;
+let pendingBottomScrollRaf = null;
+let pendingBottomScrollTimer = null;
 const pendingWebSourcesByCard = new Map();
+const chipToggleTimers = new WeakMap();
+const modelPickerBySelectId = new Map();
+let modelPickerOutsideHandlersAttached = false;
+const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
         const raw = String(key || "");
@@ -328,11 +400,6 @@ const el = {
     errorBanner: $("errorBanner"),
     errorMsg: $("errorMsg"),
     errorClose: $("errorClose"),
-    optViewBtn: $("optViewBtn"),
-    optPanel: $("optPanel"),
-    optPanelClose: $("optPanelClose"),
-    optOriginalText: $("optOriginalText"),
-    optOptimizedText: $("optOptimizedText"),
 };
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -445,6 +512,247 @@ el.btnCompareMode.addEventListener("click", () => setMode("compare"));
 el.cBtnSingle.addEventListener("click", () => setMode("single"));
 el.cBtnCompare.addEventListener("click", () => setMode("compare"));
 el.compactSendBtn.addEventListener("click", handleSubmit);
+function getModelPicker(selectEl) {
+    if (!selectEl || !selectEl.id) return null;
+    return modelPickerBySelectId.get(selectEl.id) || null;
+}
+
+function buildModelPickerGlyph(providerRaw, size = 14) {
+    const iconHtml = buildProviderIconHtml(providerRaw, size, "model-picker-provider-icon");
+    if (iconHtml) return iconHtml;
+    const color = getProviderColor(providerRaw);
+    return `<span class="model-picker-provider-fallback" style="background:${escHtml(color)};"></span>`;
+}
+
+function closeAllModelPickers(exceptSelectId = "") {
+    modelPickerBySelectId.forEach((picker, selectId) => {
+        const keepOpen = exceptSelectId && selectId === exceptSelectId;
+        if (keepOpen) return;
+        picker.wrapperEl.classList.remove("is-open");
+        picker.wrapperEl.classList.remove("open-up");
+        picker.buttonEl.setAttribute("aria-expanded", "false");
+    });
+}
+
+function positionModelPickerMenu(selectEl) {
+    const picker = getModelPicker(selectEl);
+    if (!picker) return;
+
+    const buttonRect = picker.buttonEl?.getBoundingClientRect?.();
+    const viewportHeight = window?.innerHeight || document?.documentElement?.clientHeight || 0;
+    if (!buttonRect || !viewportHeight) return;
+
+    const edgePadding = 8;
+    const desiredMaxHeight = 260;
+    const spaceAbove = Math.max(0, buttonRect.top - edgePadding);
+    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - edgePadding);
+    const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+    const available = openUp ? spaceAbove : spaceBelow;
+    const nextMaxHeight = Math.max(0, Math.min(desiredMaxHeight, available - 6));
+
+    picker.wrapperEl.classList.toggle("open-up", openUp);
+    if (nextMaxHeight > 0) {
+        picker.menuEl.style.maxHeight = `${nextMaxHeight}px`;
+    } else {
+        picker.menuEl.style.removeProperty("max-height");
+    }
+}
+
+function refreshOpenModelPickerLayouts() {
+    modelPickerBySelectId.forEach(picker => {
+        if (picker.wrapperEl.classList.contains("is-open")) {
+            positionModelPickerMenu(picker.selectEl);
+        }
+    });
+}
+
+function setModelPickerOpen(selectEl, shouldOpen) {
+    const picker = getModelPicker(selectEl);
+    if (!picker) return;
+    if (shouldOpen && picker.buttonEl.disabled) return;
+
+    if (shouldOpen) {
+        closeAllModelPickers(selectEl.id);
+    }
+    picker.wrapperEl.classList.toggle("is-open", !!shouldOpen);
+    picker.buttonEl.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+
+    if (shouldOpen) {
+        positionModelPickerMenu(selectEl);
+        if (typeof window?.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => positionModelPickerMenu(selectEl));
+        }
+    } else {
+        picker.wrapperEl.classList.remove("open-up");
+    }
+}
+
+function renderModelPickerOptions(selectEl) {
+    const picker = getModelPicker(selectEl);
+    if (!picker) return;
+
+    const options = Array.from(selectEl?.options || []);
+    const selectedValue = String(selectEl.value || "");
+    if (options.length === 0) {
+        picker.menuEl.innerHTML = `<div class="model-picker-empty">No models available</div>`;
+        return;
+    }
+
+    const optionHtml = options.map(option => {
+        const value = String(option?.value || "");
+        const isActive = value === selectedValue;
+        const { provider, model } = parseKey(value);
+        const providerId = toProviderId(provider);
+        const providerLabel = providerLabelById[providerId] || providerId || "Model";
+        const label = value
+            ? `${providerLabel} - ${model}`
+            : String(option?.textContent || "Select a model");
+        const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
+
+        return `<button type="button"
+                class="model-picker-option${isActive ? " is-active" : ""}"
+                data-value="${escHtml(value)}"
+                role="option"
+                aria-selected="${isActive ? "true" : "false"}">
+                ${glyph}
+                <span class="model-picker-option-label">${escHtml(label)}</span>
+            </button>`;
+    }).join("");
+
+    picker.menuEl.innerHTML = optionHtml;
+}
+
+function syncModelPickerFromNativeSelect(selectEl) {
+    const picker = getModelPicker(selectEl);
+    if (!picker) return;
+
+    renderModelPickerOptions(selectEl);
+    const selectedValue = String(selectEl.value || "");
+    const { provider, model } = parseKey(selectedValue);
+    const providerId = toProviderId(provider);
+    const providerLabel = providerLabelById[providerId] || providerId || "Model";
+    const selectedLabel = selectedValue
+        ? `${providerLabel} - ${model}`
+        : "Select a model";
+    const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
+
+    picker.buttonEl.innerHTML = `
+        <span class="model-picker-selected">
+            ${glyph}
+            <span class="model-picker-selected-label">${escHtml(selectedLabel)}</span>
+        </span>
+        <span class="model-picker-caret" aria-hidden="true">v</span>
+    `;
+    picker.buttonEl.disabled = !!selectEl.disabled;
+    picker.wrapperEl.classList.toggle("is-disabled", !!selectEl.disabled);
+
+    if (selectEl.disabled) {
+        setModelPickerOpen(selectEl, false);
+    }
+}
+
+function attachModelPickerOutsideHandlers() {
+    if (modelPickerOutsideHandlersAttached) return;
+    if (typeof document?.addEventListener !== "function") return;
+
+    document.addEventListener("click", event => {
+        const target = event?.target;
+        const pickerHost = target && typeof target.closest === "function"
+            ? target.closest(".model-picker")
+            : null;
+        const keepOpenId = pickerHost ? String(pickerHost.getAttribute("data-select-id") || "") : "";
+        closeAllModelPickers(keepOpenId);
+    });
+
+    document.addEventListener("keydown", event => {
+        if (event?.key === "Escape") {
+            closeAllModelPickers();
+        }
+    });
+
+    if (typeof window?.addEventListener === "function") {
+        window.addEventListener("resize", refreshOpenModelPickerLayouts);
+        window.addEventListener("scroll", refreshOpenModelPickerLayouts, true);
+    }
+
+    modelPickerOutsideHandlersAttached = true;
+}
+
+function ensureModelPicker(selectEl) {
+    if (!selectEl || !selectEl.id) return;
+    if (getModelPicker(selectEl)) return;
+
+    const parent = selectEl.parentElement;
+    if (!parent || typeof document?.createElement !== "function" || typeof parent.insertBefore !== "function") {
+        return;
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "model-picker";
+    wrapper.setAttribute("data-select-id", selectEl.id);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "model-picker-btn";
+    button.setAttribute("aria-haspopup", "listbox");
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-label", "Choose model");
+
+    const menu = document.createElement("div");
+    menu.className = "model-picker-menu";
+    menu.setAttribute("role", "listbox");
+    menu.setAttribute("aria-label", "Model options");
+
+    wrapper.appendChild(button);
+    wrapper.appendChild(menu);
+    parent.insertBefore(wrapper, selectEl.nextSibling);
+    selectEl.classList.add("model-select-enhanced");
+
+    modelPickerBySelectId.set(selectEl.id, {
+        selectEl,
+        wrapperEl: wrapper,
+        buttonEl: button,
+        menuEl: menu,
+    });
+
+    button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOpen = wrapper.classList.contains("is-open");
+        setModelPickerOpen(selectEl, !isOpen);
+    });
+
+    menu.addEventListener("click", event => {
+        const optionButton = event?.target?.closest?.(".model-picker-option");
+        if (!optionButton) return;
+        const nextValue = String(optionButton.getAttribute("data-value") || "");
+        if (selectEl.value !== nextValue) {
+            selectEl.value = nextValue;
+            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+            syncModelPickerFromNativeSelect(selectEl);
+        }
+        setModelPickerOpen(selectEl, false);
+    });
+
+    selectEl.addEventListener("change", () => {
+        syncModelPickerFromNativeSelect(selectEl);
+    });
+
+    syncModelPickerFromNativeSelect(selectEl);
+    attachModelPickerOutsideHandlers();
+}
+
+function syncAllModelPickers() {
+    modelPickerBySelectId.forEach(picker => {
+        syncModelPickerFromNativeSelect(picker.selectEl);
+    });
+}
+
+function initModelPickers() {
+    [el.singleModel, el.compareModel1, el.compareModel2, el.compareModel3].forEach(ensureModelPicker);
+    syncAllModelPickers();
+}
 
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -476,6 +784,8 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
     if (!allowEmpty && !selectEl.value && selectEl.options.length > 0) {
         selectEl.options[0].selected = true;
     }
+
+    syncModelPickerFromNativeSelect(selectEl);
 }
 
 function getActiveCompareSelects() {
@@ -490,6 +800,7 @@ function syncCompareDropdowns() {
         const others = new Set(selects.filter((_, j) => j !== i).map(s => s.value).filter(Boolean));
         buildOptions(sel, others);
     });
+    closeAllModelPickers();
     updateCompactBar();
 }
 
@@ -502,6 +813,7 @@ function updateCompareAddButton() {
         el.compareAddModelBtn.textContent = showThird ? "- Remove Model" : "+ Add Model";
         el.compareAddModelBtn.setAttribute("aria-expanded", showThird ? "true" : "false");
     }
+    syncAllModelPickers();
 }
 
 function parseKey(key) {
@@ -683,6 +995,77 @@ function setComposerDocked(docked) {
     el.promptCard.classList.toggle("docked", docked);
 }
 
+function scrollResultsToBottom(behavior = "auto") {
+    if (!el.resultsSection || el.resultsSection.classList.contains("hidden")) return;
+
+    const lastCard = el.resultsGrid?.lastElementChild || null;
+    if (lastCard && typeof lastCard.scrollIntoView === "function") {
+        try {
+            lastCard.scrollIntoView({ behavior, block: "end", inline: "nearest" });
+        } catch (_) {
+            lastCard.scrollIntoView(false);
+        }
+    } else {
+        try {
+            el.resultsSection.scrollIntoView({ behavior, block: "end" });
+        } catch (_) {
+            el.resultsSection.scrollIntoView(false);
+        }
+    }
+
+    el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
+
+    const doc = document.scrollingElement || document.documentElement || document.body;
+    if (doc && typeof window.scrollTo === "function") {
+        const viewportH = Number(window.innerHeight) || 0;
+        const targetTop = Math.max(0, doc.scrollHeight - viewportH);
+        try {
+            window.scrollTo({ top: targetTop, behavior });
+        } catch (_) {
+            window.scrollTo(0, targetTop);
+        }
+    }
+}
+
+function scheduleScrollResultsToBottom(options = {}) {
+    const behavior = String(options.behavior || "auto");
+    const followUpDelayMs = Number.isFinite(options.followUpDelayMs) ? options.followUpDelayMs : 72;
+
+    if (pendingBottomScrollRaf !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(pendingBottomScrollRaf);
+        pendingBottomScrollRaf = null;
+    }
+    if (pendingBottomScrollTimer !== null) {
+        clearTimeout(pendingBottomScrollTimer);
+        pendingBottomScrollTimer = null;
+    }
+
+    const run = () => scrollResultsToBottom(behavior);
+    if (typeof requestAnimationFrame === "function") {
+        pendingBottomScrollRaf = requestAnimationFrame(() => {
+            pendingBottomScrollRaf = null;
+            run();
+        });
+    } else {
+        run();
+    }
+
+    pendingBottomScrollTimer = setTimeout(() => {
+        pendingBottomScrollTimer = null;
+        run();
+    }, followUpDelayMs);
+}
+
+function maybeAutoScrollDuringStream() {
+    if (!streamAutoScrollEnabled) return;
+    const now = Date.now();
+    if (now - lastStreamAutoScrollTs < STREAM_AUTO_SCROLL_THROTTLE_MS) {
+        return;
+    }
+    lastStreamAutoScrollTs = now;
+    scrollResultsToBottom("auto");
+}
+
 function markFirstStreamResponseSeen() {
     if (hasReceivedFirstStreamResponse) return;
     hasReceivedFirstStreamResponse = true;
@@ -726,6 +1109,7 @@ function updateSingleModelRoutingUI() {
     updateCompareAddButton();
 
     updateRoutingButtons();
+    syncAllModelPickers();
     updateCompactBar();
     updateSendButtonState();
 }
@@ -812,10 +1196,38 @@ el.routeResearchBtn.addEventListener("click", () => {
 });
 
 function setRoutingButtonState(button, label, enabled) {
+    if (!button) return;
+    const wasStateKnown = button.hasAttribute("aria-checked");
+    const previousChecked = button.getAttribute("aria-checked") === "true";
+
     button.classList.toggle("active", enabled);
     button.setAttribute("aria-checked", enabled ? "true" : "false");
     button.setAttribute("aria-pressed", enabled ? "true" : "false");
     button.setAttribute("title", label);
+
+    if (wasStateKnown && previousChecked !== enabled) {
+        triggerChipToggleFeedback(button);
+    }
+}
+
+function triggerChipToggleFeedback(button) {
+    if (!button || button.disabled) return;
+
+    const existingTimer = chipToggleTimers.get(button);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    button.classList.remove("is-toggling");
+    // Restart the animation reliably on repeated quick toggles.
+    void button.offsetWidth;
+    button.classList.add("is-toggling");
+
+    const timerId = window.setTimeout(() => {
+        button.classList.remove("is-toggling");
+        chipToggleTimers.delete(button);
+    }, 280);
+    chipToggleTimers.set(button, timerId);
 }
 
 function updateRoutingButtons() {
@@ -906,25 +1318,6 @@ el.promptInput.addEventListener("keydown", e => {
    OPT PANEL â€” View / close
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-// Toggle the panel when View Optimized is clicked
-el.optViewBtn.addEventListener("click", () => {
-    const isHidden = el.optPanel.classList.toggle("hidden");
-    el.optViewBtn.textContent = isHidden
-        ? (lastOptimizeResult?.wasOptimized ? "View Optimized" : "Optimization Off (server)")
-        : "Close";
-});
-
-// Close the panel via its close button
-el.optPanelClose.addEventListener("click", () => {
-    el.optPanel.classList.add("hidden");
-    if (lastOptimizeResult) {
-        el.optViewBtn.textContent = lastOptimizeResult.wasOptimized
-            ? "View Optimized"
-            : "Optimization Off (server)";
-    }
-});
-
-
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    OPTIMIZE PROMPT CALL
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -939,16 +1332,6 @@ async function callOptimize(prompt) {
         wasOptimized: data.was_optimized,
         serverEnabled: data.server_optimization_enabled,
     };
-
-    // Show / update the View Optimized button
-    el.optViewBtn.classList.remove("hidden");
-    el.optViewBtn.textContent = data.was_optimized
-        ? "View Optimized"
-        : "Optimization Off (server)";
-
-    // Pre-fill the panel texts
-    el.optOriginalText.textContent = data.original_prompt;
-    el.optOptimizedText.textContent = data.optimized_prompt;
 
     return data.optimized_prompt;
 }
@@ -974,9 +1357,6 @@ async function handleSubmit() {
         if (optimizeEnabled) {
             prompt = await callOptimize(rawPrompt);
         } else {
-            // Hide the panel when opt is off
-            el.optViewBtn.classList.add("hidden");
-            el.optPanel.classList.add("hidden");
             lastOptimizeResult = null;
         }
 
@@ -1029,24 +1409,30 @@ async function doSingleChat(prompt) {
     const cardIndex = streamState.indexMap[0];
 
     let finalResponse = null;
-    await callAPIStream("/v1/chat/stream", body, async event => {
-        if (event.type === "start") {
-            setPendingWebSources([cardIndex], event.web_source_items || []);
-            return;
-        }
-        if (event.type === "line") {
-            appendStreamLine(cardIndex, event.text || "");
-            return;
-        }
-        if (event.type === "response_done" && event.response) {
-            finalResponse = event.response;
-            finalizeStreamCard(cardIndex, finalResponse);
-            return;
-        }
-        if (event.type === "error") {
-            throw new Error(event.message || "Streaming failed");
-        }
-    });
+    streamAutoScrollEnabled = true;
+    lastStreamAutoScrollTs = 0;
+    try {
+        await callAPIStream("/v1/chat/stream", body, async event => {
+            if (event.type === "start") {
+                setPendingWebSources([cardIndex], event.web_source_items || []);
+                return;
+            }
+            if (event.type === "line") {
+                appendStreamLine(cardIndex, event.text || "");
+                return;
+            }
+            if (event.type === "response_done" && event.response) {
+                finalResponse = event.response;
+                finalizeStreamCard(cardIndex, finalResponse);
+                return;
+            }
+            if (event.type === "error") {
+                throw new Error(event.message || "Streaming failed");
+            }
+        });
+    } finally {
+        streamAutoScrollEnabled = false;
+    }
 
     if (!finalResponse) {
         throw new Error("Chat stream ended before completion.");
@@ -1085,43 +1471,49 @@ async function doCompare(prompt) {
     const responses = new Array(targets.length).fill(null);
     let comparePayload = null;
 
-    await callAPIStream("/v1/compare/stream", {
-        prompt,
-        targets,
-        routing: getRoutingPayload(),
-        context: {
-            session_id: sessionId,
-            conversation_history: conversationHistory,
-            new_session: pendingNewSession,
-        },
-    }, async event => {
-        if (event.type === "start") {
-            setPendingWebSources(streamState.indexMap, event.web_source_items || []);
-            return;
-        }
-        if (event.type === "line" && Number.isInteger(event.index)) {
-            const cardIndex = streamState.indexMap[event.index];
-            if (cardIndex !== undefined) {
-                appendStreamLine(cardIndex, event.text || "");
+    streamAutoScrollEnabled = true;
+    lastStreamAutoScrollTs = 0;
+    try {
+        await callAPIStream("/v1/compare/stream", {
+            prompt,
+            targets,
+            routing: getRoutingPayload(),
+            context: {
+                session_id: sessionId,
+                conversation_history: conversationHistory,
+                new_session: pendingNewSession,
+            },
+        }, async event => {
+            if (event.type === "start") {
+                setPendingWebSources(streamState.indexMap, event.web_source_items || []);
+                return;
             }
-            return;
-        }
-        if (event.type === "response_done" && Number.isInteger(event.index) && event.response) {
-            responses[event.index] = event.response;
-            const cardIndex = streamState.indexMap[event.index];
-            if (cardIndex !== undefined) {
-                finalizeStreamCard(cardIndex, event.response);
+            if (event.type === "line" && Number.isInteger(event.index)) {
+                const cardIndex = streamState.indexMap[event.index];
+                if (cardIndex !== undefined) {
+                    appendStreamLine(cardIndex, event.text || "");
+                }
+                return;
             }
-            return;
-        }
-        if (event.type === "done" && event.compare) {
-            comparePayload = event.compare;
-            return;
-        }
-        if (event.type === "error") {
-            throw new Error(event.message || "Streaming failed");
-        }
-    });
+            if (event.type === "response_done" && Number.isInteger(event.index) && event.response) {
+                responses[event.index] = event.response;
+                const cardIndex = streamState.indexMap[event.index];
+                if (cardIndex !== undefined) {
+                    finalizeStreamCard(cardIndex, event.response);
+                }
+                return;
+            }
+            if (event.type === "done" && event.compare) {
+                comparePayload = event.compare;
+                return;
+            }
+            if (event.type === "error") {
+                throw new Error(event.message || "Streaming failed");
+            }
+        });
+    } finally {
+        streamAutoScrollEnabled = false;
+    }
 
     if (!comparePayload) {
         const completed = responses.filter(Boolean);
@@ -1264,8 +1656,16 @@ function sourceDomainLabel(url) {
     }
 }
 
-function buildWebSourceIconsHtml(sources) {
-    const chips = sources.map((source, idx) => {
+function webSourceListId(index) {
+    const normalizedIndex = Number(index);
+    return Number.isFinite(normalizedIndex)
+        ? `response-sources-list-${normalizedIndex}`
+        : "response-sources-list-live";
+}
+
+function buildWebSourceChipsHtml(sources) {
+    if (!Array.isArray(sources) || sources.length === 0) return "";
+    return sources.map((source, idx) => {
         const faviconUrl = `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
         const domain = sourceDomainLabel(source.url);
         return `
@@ -1280,7 +1680,53 @@ function buildWebSourceIconsHtml(sources) {
           </a>
         `;
     }).join("");
-    return chips;
+}
+
+function buildWebSourceStripHtml(sources, index) {
+    if (!Array.isArray(sources) || sources.length === 0) return "";
+    const sourceCount = sources.length;
+    const pagesLabel = `${sourceCount} web page${sourceCount === 1 ? "" : "s"}`;
+    const listId = webSourceListId(index);
+
+    return `
+      <button type="button"
+              class="web-source-toggle"
+              data-role="source-toggle"
+              aria-label="Toggle web sources: ${escHtml(pagesLabel)}"
+              aria-expanded="false"
+              aria-controls="${listId}">
+        <span class="web-source-toggle-leading-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M2.5 8a5.5 5.5 0 1 1 11 0a5.5 5.5 0 0 1-11 0Zm2.1 0h6.8M8 2.5c1.25 1.3 2 3.37 2 5.5s-.75 4.2-2 5.5m0-11c-1.25 1.3-2 3.37-2 5.5s.75 4.2 2 5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+        <span class="web-source-toggle-text">
+          <span class="web-source-toggle-count">${sourceCount}</span>
+          <span class="web-source-toggle-label">web page${sourceCount === 1 ? "" : "s"}</span>
+        </span>
+        <span class="web-source-toggle-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M4.25 6.25L8 10l3.75-3.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+      </button>
+    `;
+}
+
+function setSourceStripExpanded(strip, expanded) {
+    if (!strip) return;
+    const toggle = strip.querySelector(".web-source-toggle");
+    const listId = String(toggle?.getAttribute("aria-controls") || "");
+    const list = listId ? document.getElementById(listId) : null;
+    const isExpanded = !!expanded;
+
+    strip.classList.toggle("is-expanded", isExpanded);
+    if (toggle) {
+        toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    }
+    if (list) {
+        list.setAttribute("aria-hidden", isExpanded ? "false" : "true");
+    }
 }
 
 function setPendingWebSources(indexes, rawSources) {
@@ -1292,16 +1738,29 @@ function setPendingWebSources(indexes, rawSources) {
 
 function applyPendingWebSources(index, shouldShow = true) {
     const wrap = document.getElementById(`response-sources-${index}`);
+    const list = document.getElementById(webSourceListId(index));
     if (!wrap) return;
     const sources = pendingWebSourcesByCard.get(Number(index)) || [];
     pendingWebSourcesByCard.delete(Number(index));
     if (!shouldShow || sources.length === 0) {
         wrap.classList.add("hidden");
+        wrap.classList.remove("is-expanded");
         wrap.innerHTML = "";
+        if (list) {
+            list.classList.add("hidden");
+            list.setAttribute("aria-hidden", "true");
+            list.innerHTML = "";
+        }
         return;
     }
     wrap.classList.remove("hidden");
-    wrap.innerHTML = buildWebSourceIconsHtml(sources);
+    wrap.classList.remove("is-expanded");
+    wrap.innerHTML = buildWebSourceStripHtml(sources, index);
+    if (list) {
+        list.classList.remove("hidden");
+        list.setAttribute("aria-hidden", "true");
+        list.innerHTML = buildWebSourceChipsHtml(sources);
+    }
 }
 
 function getNextStreamCardIndex() {
@@ -1398,11 +1857,30 @@ function buildResponseProviderMeta(summary, index = null) {
     return `<div class="response-provider-meta"${idAttr} title="${escHtml(safeSummary)}">${escHtml(safeSummary)}</div>`;
 }
 
+function buildResponseFooter(index, summary, tokenUsage, webSources = []) {
+    const safeSources = Array.isArray(webSources) ? webSources : [];
+    const sourceStripHtml = safeSources.length > 0 ? buildWebSourceStripHtml(safeSources, index) : "";
+    const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources) : "";
+
+    return `
+      <div class="message-footer">
+        <div class="message-footer-bar">
+          <div class="web-source-strip${webSources.length > 0 ? "" : " hidden"}" id="response-sources-${index}" aria-label="Web sources">${sourceStripHtml}</div>
+          <div class="message-footer-meta">
+            ${buildResponseProviderMeta(summary, index)}
+            ${buildTokenUsageText(tokenUsage, index)}
+            ${buildResponseActionButtons(index)}
+          </div>
+        </div>
+        <div class="web-source-list${webSources.length > 0 ? "" : " hidden"}" id="${webSourceListId(index)}" aria-hidden="true">${sourceListHtml}</div>
+      </div>`;
+}
+
 function getProviderPresentation(providerRaw, modelRaw) {
     const provider = toProviderId(providerRaw);
     const modelText = String(modelRaw || "").trim();
     const label = providerLabelById[provider] || String(providerRaw || "").trim() || "Assistant";
-    const icon = providerIconById[provider] || "";
+    const icon = buildProviderIconHtml(provider, 14, "compare-model-icon");
     const summary = modelText ? `${label} \u00B7 ${modelText}` : label;
     return { provider, modelText, label, icon, summary };
 }
@@ -1411,7 +1889,7 @@ function buildCompareModelHeader(providerRaw, modelRaw) {
     const { icon, summary } = getProviderPresentation(providerRaw, modelRaw);
     return `
       <div class="compare-model-header" title="${escHtml(summary)}">
-        ${icon ? `<span class="compare-model-icon" aria-hidden="true">${escHtml(icon)}</span>` : ""}
+        ${icon}
         <span class="compare-model-label">${escHtml(summary)}</span>
       </div>`;
 }
@@ -1439,7 +1917,7 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
     const { summary } = getProviderPresentation(target.provider, target.model);
     const providerSummary = escHtml(summary);
     const providerSummaryHtml = showProvider ? `<div class="message-provider">${providerSummary}</div>` : "";
-    const footerProviderSummaryHtml = buildResponseProviderMeta(summary, index);
+    const footerHtml = buildResponseFooter(index, summary, null, []);
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} is-streaming" id="chat-msg-${index}"
@@ -1456,16 +1934,7 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
           <span class="sr-only">Assistant is thinking</span>
         </div>
         <p class="response-text hidden" id="response-text-${index}" data-empty="true"></p>
-        <div class="message-footer">
-          <div class="web-source-strip hidden" id="response-sources-${index}" aria-label="Web sources"></div>
-          <div class="message-footer-controls">
-            ${footerProviderSummaryHtml}
-            <div class="message-footer-meta">
-              ${buildTokenUsageText(null, index)}
-              ${buildResponseActionButtons(index)}
-            </div>
-          </div>
-        </div>
+        ${footerHtml}
       </div>
     </div>`;
 }
@@ -1554,9 +2023,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
         el.resultsGrid.innerHTML = html;
     }
 
-    setTimeout(() => {
-        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-    }, 60);
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
 
     return { indexMap };
 }
@@ -1584,9 +2051,7 @@ function initCompareStreamingResults(targets, options = {}) {
         el.resultsGrid.innerHTML = turnHtml;
     }
 
-    setTimeout(() => {
-        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-    }, 60);
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
 
     return { indexMap };
 }
@@ -1603,6 +2068,7 @@ function appendStreamLine(index, text) {
         if (typingEl) typingEl.classList.add("hidden");
     }
     textEl.textContent += text;
+    maybeAutoScrollDuringStream();
 }
 
 function finalizeStreamCard(index, resp) {
@@ -1641,15 +2107,14 @@ function finalizeStreamCard(index, resp) {
     card.classList.remove("is-streaming");
     card.classList.toggle("is-error", hasError);
     applyPendingWebSources(index, !hasError);
+    maybeAutoScrollDuringStream();
 }
 
 function renderCompareSummary(data) {
     const existing = el.resultsGrid.querySelector(".compare-summary-card");
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
-    setTimeout(() => {
-        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-    }, 40);
+    scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 64 });
 }
 
 async function copyTextToClipboard(text) {
@@ -1717,6 +2182,22 @@ async function handleCopyAction(button) {
 }
 
 el.resultsGrid.addEventListener("click", event => {
+    const sourceToggle = event.target.closest(".web-source-toggle");
+    if (sourceToggle && el.resultsGrid.contains(sourceToggle)) {
+        const sourceStrip = sourceToggle.closest(".web-source-strip");
+        if (!sourceStrip) return;
+        const shouldExpand = sourceToggle.getAttribute("aria-expanded") !== "true";
+
+        el.resultsGrid.querySelectorAll(".web-source-strip.is-expanded").forEach(openStrip => {
+            if (openStrip !== sourceStrip) {
+                setSourceStripExpanded(openStrip, false);
+            }
+        });
+
+        setSourceStripExpanded(sourceStrip, shouldExpand);
+        return;
+    }
+
     const button = event.target.closest(".response-action-btn");
     if (!button || !el.resultsGrid.contains(button)) return;
     const action = button.dataset.action;
@@ -1746,9 +2227,7 @@ function showResults(responses, isMulti, compareData) {
     }
     if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
 
-    setTimeout(() => {
-        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-    }, 80);
+    scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 96 });
 }
 
 
@@ -1761,7 +2240,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const providerSummaryHtml = showProvider
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
-    const sourceStripHtml = webSources.length > 0 ? buildWebSourceIconsHtml(webSources) : "";
+    const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources);
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} ${hasError ? "is-error" : ""}"
@@ -1770,16 +2249,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
         <p class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${escHtml(text)}</p>
-        <div class="message-footer">
-          <div class="web-source-strip${webSources.length > 0 ? "" : " hidden"}" id="response-sources-${index}" aria-label="Web sources">${sourceStripHtml}</div>
-          <div class="message-footer-controls">
-            ${buildResponseProviderMeta(summary)}
-            <div class="message-footer-meta">
-              ${buildTokenUsageText(resp.token_usage)}
-              ${buildResponseActionButtons(index)}
-            </div>
-          </div>
-        </div>
+        ${footerHtml}
       </div>
     </div>`;
 }
@@ -1916,6 +2386,7 @@ async function loadDynamicProviderModelCatalog() {
 
 (function init() {
     refreshModelSelectors({ preserveSingle: false, preserveCompare: false });
+    initModelPickers();
 
     // Dedup on change
     [el.compareModel1, el.compareModel2, el.compareModel3].forEach(s =>
@@ -2141,9 +2612,7 @@ function renderConversationFromEntries(entries) {
     el.resultsGrid.innerHTML = htmlParts.join("");
     hasReceivedFirstStreamResponse = true;
     setComposerDocked(true);
-    setTimeout(() => {
-        el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-    }, 40);
+    scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 80 });
     return true;
 }
 
@@ -2440,11 +2909,7 @@ function renderHistory(data, filter = "") {
             el.promptInput.focus();
             updateSendButtonState();
             if (!el.resultsSection.classList.contains("hidden")) {
-                el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-                el.resultsSection.scrollIntoView({ behavior: "smooth", block: "end" });
-                setTimeout(() => {
-                    el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
-                }, 60);
+                scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
             } else {
                 document.getElementById("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
             }

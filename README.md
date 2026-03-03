@@ -1,6 +1,6 @@
 # CortexAI - B2B LLM Gateway (CLI + API + Frontend)
 
-CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek, and Grok with:
+CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek, Grok, and Claude with:
 - API-first chat/compare/streaming
 - smart routing + fallback
 - full DB audit trail in DB mode
@@ -54,6 +54,7 @@ OPENAI_API_KEY=...
 GOOGLE_GEMINI_API_KEY=...
 DEEPSEEK_API_KEY=...
 GROK_API_KEY=...
+ANTHROPIC_API_KEY=...
 ```
 
 Enable DB mode:
@@ -83,7 +84,7 @@ ENABLE_TRUE_SMART_CHAT_ROUTING=true
 SMART_CHAT_MAX_COST_USD=
 SMART_CHAT_MAX_TOTAL_LATENCY_MS=
 SMART_CHAT_MIN_CONTEXT_LIMIT=
-SMART_CHAT_PREFERRED_PROVIDER=      # openai|gemini|deepseek|grok
+SMART_CHAT_PREFERRED_PROVIDER=      # openai|gemini|deepseek|grok|claude
 SMART_CHAT_ALLOWED_PROVIDERS=       # comma-separated, e.g. openai,gemini
 
 # Storage/privacy
@@ -108,7 +109,7 @@ FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true
 - Smart-router model economics use `config/model_registry.yaml`.
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
-- Current pricing tables were refreshed on `2026-02-22`.
+- Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
 python -m pytest tests/test_registry_pricing_alignment.py -q
@@ -188,7 +189,7 @@ Response includes:
 - `GET /v1/savings/export?format=csv&from=...&to=...&group_by=...`
 - `POST /v1/byok`
 - `GET /v1/byok/status`
-- `DELETE /v1/byok?provider=openai` (or omit provider to delete all)
+- `DELETE /v1/byok?provider=<provider-id>` (or omit provider to delete all)
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 
 ## Routing Modes
@@ -436,6 +437,16 @@ Run full suite:
 python -m pytest -q
 ```
 
+Run full suite with an HTML report artifact:
+```bash
+python scripts/test_report_runner.py
+```
+
+This generates:
+- timestamped report folder under `reports/test-results/<YYYYMMDD-HHMMSS>/`
+- HTML dashboard report at `reports/test-results/latest-report.html`
+- JUnit XML at `reports/test-results/latest-junit.xml`
+
 Run B2B launch tests only:
 ```bash
 python -m pytest tests/test_b2b_launch_features.py -q
@@ -467,6 +478,7 @@ OpenAIProject/
 
   api/
     base_client.py
+    claude_client.py
     client_registry.py
     deepseek_client.py
     google_gemini_client.py

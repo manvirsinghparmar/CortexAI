@@ -80,19 +80,21 @@ class TestModelUtilsUnit:
             "gemini": "AIzaSyCQJbeUcPWFAKPp_mdkm-o5aUdmUO4mR2k",
             "deepseek": "sk-486b946ae8234a49b8bc43be9e38745d",
             "grok": "xai-ryo2QIzvpX3DSZbo1rJgzLp2l3wPxwxqNPmucL2D2zEqv999B19X1jpfxDvb1TD8CV3NMokLKFE2lkXg",
+            "claude": "sk-ant-tenant-claude-key",
         }
         current_models = {
             "openai": "gpt-4o",
             "gemini": "gemini-2.5-pro",
             "deepseek": "deepseek-chat",
             "grok": "grok-4-latest",
+            "claude": "claude-sonnet-4-5",
         }
 
         ModelUtils.list_all_available_models(api_keys=api_keys, current_models=current_models)
 
-        assert mock_list_available.call_count == 4
+        assert mock_list_available.call_count == 5
         called_providers = [call.kwargs["provider"] for call in mock_list_available.call_args_list]
-        assert called_providers == ["openai", "gemini", "deepseek", "grok"]
+        assert called_providers == ["openai", "gemini", "deepseek", "grok", "claude"]
 
     @patch("utils.model_utils.ModelUtils.list_available_models")
     @patch("sys.stdout", new_callable=StringIO)
@@ -130,6 +132,19 @@ class TestModelUtilsUnit:
         mock_list.assert_called_once_with(
             api_key="test-grok-key",
             current_model="grok-4-latest",
+        )
+
+    @patch("api.claude_client.ClaudeClient.list_available_models")
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_list_models_supports_claude(self, mock_stdout, mock_list):
+        ModelUtils.list_available_models(
+            api_key="test-claude-key",
+            current_model="claude-sonnet-4-5",
+            provider="claude",
+        )
+        mock_list.assert_called_once_with(
+            api_key="test-claude-key",
+            current_model="claude-sonnet-4-5",
         )
 
     @patch("utils.GeminiAvailableModels.GeminiClient")

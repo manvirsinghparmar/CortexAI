@@ -50,13 +50,21 @@ class ModelSelector:
         reliability = self._reliability_store.get(candidate.provider, candidate.model_name)
         blended_cost = (0.6 * candidate.input_cost_per_1m) + (0.4 * candidate.output_cost_per_1m)
         tag_penalty = self._tag_penalty(candidate, features)
+        coding_preference_rank = self._coding_preference_rank(candidate, features)
 
         provider_penalty = 1
         if constraints and constraints.preferred_provider:
             if candidate.provider.lower() == constraints.preferred_provider.lower():
                 provider_penalty = 0
 
-        return (-reliability, tag_penalty, blended_cost, provider_penalty, -candidate.context_limit)
+        return (
+            -reliability,
+            coding_preference_rank,
+            tag_penalty,
+            blended_cost,
+            provider_penalty,
+            -candidate.context_limit,
+        )
 
     def _estimated_request_cost(self, candidate: ModelCandidate, features: PromptFeatures) -> float:
         prompt_tokens = features.token_estimate + features.context_token_estimate
@@ -74,7 +82,7 @@ class ModelSelector:
         tags = {t.lower() for t in candidate.tags}
         penalty = 0
 
-        needs_coding = features.has_code or features.has_logs_stacktrace or features.intent == "code"
+        needs_coding = self._is_coding_task(features)
         needs_reasoning = (
             features.has_math
             or features.has_analysis
@@ -99,3 +107,30 @@ class ModelSelector:
             penalty += 1
 
         return penalty
+
+    def _is_coding_task(self, features: PromptFeatures) -> bool:
+        return features.has_code or features.has_logs_stacktrace or features.intent == "code"
+
+    def _coding_preference_rank(self, candidate: ModelCandidate, features: PromptFeatures) -> int:
+        """
+        Prefer codex + Claude Sonnet/Opus family for coding prompts.
+        Lower rank value is better.
+        """
+        if not self._is_coding_task(features):
+            return 999
+
+        preferred_order = {
+            ("openai", "gpt-5.2-codex"): 0,
+            ("claude", "claude-sonnet-4-5"): 1,
+            ("claude", "claude-opus-4-5"): 2,
+            ("claude", "claude-sonnet-4"): 3,
+            ("claude", "claude-3-5-sonnet-latest"): 4,
+        }
+        key = (candidate.provider.lower(), candidate.model_name)
+        if key in preferred_order:
+            return preferred_order[key]
+
+        tags = {t.lower() for t in candidate.tags}
+        if {"coding", "reasoning"} & tags:
+            return 50
+        return 100

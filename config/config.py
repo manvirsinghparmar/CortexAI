@@ -64,11 +64,13 @@ class Config:
         self.GOOGLE_GEMINI_API_KEY = self.PROVIDER_API_KEYS.get("gemini")
         self.DEEPSEEK_API_KEY = self.PROVIDER_API_KEYS.get("deepseek")
         self.GROK_API_KEY = self.PROVIDER_API_KEYS.get("grok")
+        self.ANTHROPIC_API_KEY = self.PROVIDER_API_KEYS.get("claude")
 
         self.DEFAULT_OPENAI_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("openai")
         self.DEFAULT_GEMINI_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("gemini")
         self.DEFAULT_DEEPSEEK_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("deepseek")
         self.DEFAULT_GROK_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("grok")
+        self.DEFAULT_CLAUDE_MODEL = self.DEFAULT_MODELS_BY_PROVIDER.get("claude")
 
         default_provider = self.PROVIDER_IDS[0]
         self.MODEL_TYPE = (os.getenv("MODEL_TYPE", default_provider) or default_provider).strip().lower()

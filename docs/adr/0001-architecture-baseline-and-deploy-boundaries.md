@@ -25,6 +25,7 @@ We define and freeze the current baseline as:
 - `gemini`
 - `deepseek`
 - `grok`
+- `claude`
 
 4. Contract behavior for chat/compare/byok/provider validation is locked by regression tests before refactor work.
 

@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from contextlib import suppress
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import tempfile
 from uuid import UUID, uuid4
@@ -43,6 +44,33 @@ class FakeOrchestrator:
         self.ask_calls = 0
         self.compare_calls = 0
 
+    @staticmethod
+    def _metadata_for_research_mode(research_mode: str | None) -> dict:
+        if str(research_mode or "").strip().lower() != "on":
+            return {
+                "routing": {
+                    "mode": "smart",
+                    "initial_tier": "T1",
+                    "final_tier": "T1",
+                    "attempt_count": 1,
+                    "fallback_used": False,
+                    "attempts": [],
+                }
+            }
+        return {
+            "routing": {
+                "mode": "smart",
+                "initial_tier": "T1",
+                "final_tier": "T1",
+                "attempt_count": 1,
+                "fallback_used": False,
+                "attempts": [],
+            },
+            "research_used": True,
+            "research_reused": False,
+            "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
+        }
+
     def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
         self.ask_calls += 1
         return UnifiedResponse(
@@ -56,6 +84,7 @@ class FakeOrchestrator:
             finish_reason="stop",
             error=None,
             metadata={
+                **self._metadata_for_research_mode(kwargs.get("research_mode")),
                 "routing": {
                     "mode": "smart",
                     "initial_tier": "T1",
@@ -72,7 +101,7 @@ class FakeOrchestrator:
                             "latency_ms": 10,
                         }
                     ],
-                }
+                },
             },
         )
 
@@ -383,6 +412,13 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
 
 class DBModeCompareOrchestrator:
     def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+        metadata = {}
+        if str(kwargs.get("research_mode") or "").strip().lower() == "on":
+            metadata = {
+                "research_used": True,
+                "research_reused": False,
+                "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
+            }
         return UnifiedResponse(
             request_id=f"ask_{uuid4()}",
             text="ok",
@@ -393,7 +429,7 @@ class DBModeCompareOrchestrator:
             estimated_cost=0.00001,
             finish_reason="stop",
             error=None,
-            metadata={},
+            metadata=metadata,
         )
 
     def compare(self, prompt: str, models_list, context=None, **kwargs):
@@ -565,7 +601,73 @@ def test_create_api_key_returns_existing_owner_when_user_differs(monkeypatch):
 
     assert api_key_id == existing_api_key_id
     assert resolved_owner_user_id == owner_user_id
-    db_session.close()
+
+
+@pytest.mark.unit
+def test_get_or_create_api_session_reuses_user_owned_session_across_modes(monkeypatch):
+    user_id = uuid4()
+    session_id = uuid4()
+
+    monkeypatch.setattr(
+        persistence_service,
+        "get_session_by_id",
+        lambda *_args, **_kwargs: {"id": session_id, "mode": "ask"},
+    )
+    monkeypatch.setattr(
+        persistence_service,
+        "verify_session_belongs_to_user",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        persistence_service,
+        "get_active_session",
+        lambda *_args, **_kwargs: pytest.fail("should not query fallback active session"),
+    )
+    monkeypatch.setattr(
+        persistence_service,
+        "create_session",
+        lambda *_args, **_kwargs: pytest.fail("should not create a new session"),
+    )
+
+    resolved = persistence_service.get_or_create_api_session(
+        object(),
+        user_id,
+        str(session_id),
+        mode="compare",
+        title="API Compare",
+    )
+
+    assert resolved == session_id
+
+
+@pytest.mark.unit
+def test_get_or_create_api_session_reuses_latest_session_without_mode_partition(monkeypatch):
+    user_id = uuid4()
+    session_id = uuid4()
+    observed_modes = []
+
+    monkeypatch.setattr(persistence_service, "get_session_by_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service,
+        "get_active_session",
+        lambda _db, _user_id, mode=None: observed_modes.append(mode) or session_id,
+    )
+    monkeypatch.setattr(
+        persistence_service,
+        "create_session",
+        lambda *_args, **_kwargs: pytest.fail("should reuse the existing active session"),
+    )
+
+    resolved = persistence_service.get_or_create_api_session(
+        object(),
+        user_id,
+        None,
+        mode="compare",
+        title="API Compare",
+    )
+
+    assert resolved == session_id
+    assert observed_modes == [None]
 
 
 @pytest.mark.unit
@@ -958,6 +1060,86 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
+def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fastapi_client):
+    client, _fake_orch = db_mode_fastapi_client
+
+    chat_response = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "Start a shared thread",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+    )
+    assert chat_response.status_code == 200
+    chat_body = chat_response.json()
+    session_id = chat_body.get("session_id")
+    assert session_id
+
+    compare_response = client.post(
+        "/v1/compare",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "Compare in the same thread",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+            ],
+        },
+    )
+    assert compare_response.status_code == 200
+    compare_body = compare_response.json()
+    assert compare_body["session_id"] == session_id
+
+    history_response = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_id, "limit": 200},
+    )
+    assert history_response.status_code == 200
+    history_payload = history_response.json()
+    assert len(history_payload) == 3
+    assert {item["mode"] for item in history_payload} == {"chat", "compare"}
+
+
+@pytest.mark.integration
+def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fastapi_client):
+    client, _fake_orch = db_mode_fastapi_client
+
+    chat_response = client.post(
+        "/v1/chat/stream",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "Stream a shared thread",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+    )
+    assert chat_response.status_code == 200
+    chat_events = [json.loads(line) for line in chat_response.text.splitlines() if line.strip()]
+    chat_done = next(event for event in chat_events if event.get("type") == "done")
+    session_id = chat_done.get("session_id")
+    assert session_id
+
+    compare_response = client.post(
+        "/v1/compare/stream",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "Stream compare in the same thread",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+            ],
+        },
+    )
+    assert compare_response.status_code == 200
+    compare_events = [json.loads(line) for line in compare_response.text.splitlines() if line.strip()]
+    compare_done = next(event for event in compare_events if event.get("type") == "done")
+    assert compare_done["compare"]["session_id"] == session_id
+
+
+@pytest.mark.integration
 def test_history_can_filter_by_session_id_and_new_session_flag(db_mode_fastapi_client):
     client, _fake_orch = db_mode_fastapi_client
 
@@ -1036,28 +1218,8 @@ def test_history_can_filter_by_session_id_and_new_session_flag(db_mode_fastapi_c
 @pytest.mark.integration
 def test_history_includes_web_source_items_when_research_is_used(
     db_mode_fastapi_client,
-    monkeypatch,
 ):
     client, _fake_orch = db_mode_fastapi_client
-
-    async def _fake_maybe_enrich_prompt_with_web(
-        prompt: str,
-        *,
-        enabled: bool,
-        max_results: int = 5,
-        timeout_s: float = 8.0,
-    ):
-        del max_results, timeout_s
-        if not enabled:
-            return prompt, {"enabled": False, "used": False, "source_count": 0, "sources": []}
-        return prompt, {
-            "enabled": True,
-            "used": True,
-            "source_count": 1,
-            "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
-        }
-
-    monkeypatch.setattr(chat_route, "maybe_enrich_prompt_with_web", _fake_maybe_enrich_prompt_with_web)
 
     response = client.post(
         "/v1/chat",

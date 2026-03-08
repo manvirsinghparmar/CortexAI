@@ -20,6 +20,7 @@ class ErrorDTO(BaseModel):
 
 class ChatResponseDTO(BaseModel):
     request_id: str
+    session_id: Optional[str] = None
     text: str
     provider: str
     model: str
@@ -29,13 +30,38 @@ class ChatResponseDTO(BaseModel):
     cost_currency: str = "USD"
     finish_reason: Optional[str] = None
     error: Optional[ErrorDTO] = None
+    web_source_items: List[Dict[str, str]] = Field(default_factory=list)
     timestamp: str
 
     @classmethod
-    def from_unified_response(cls, ur):
+    def from_unified_response(cls, ur, *, session_id: Optional[str] = None):
         """Convert UnifiedResponse to DTO."""
+        metadata = ur.metadata if isinstance(getattr(ur, "metadata", None), dict) else {}
+        source_candidates = metadata.get("web_source_items")
+        if not isinstance(source_candidates, list):
+            source_candidates = metadata.get("sources")
+
+        normalized_sources: List[Dict[str, str]] = []
+        seen_urls: set[str] = set()
+        if isinstance(source_candidates, list):
+            for item in source_candidates:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                normalized_url = url.lower()
+                if normalized_url in seen_urls:
+                    continue
+                seen_urls.add(normalized_url)
+                title = str(item.get("title") or "").strip() or url
+                normalized_sources.append({"title": title, "url": url})
+                if len(normalized_sources) >= 8:
+                    break
+
         return cls(
             request_id=ur.request_id,
+            session_id=session_id,
             text=ur.text,
             provider=ur.provider,
             model=ur.model,
@@ -55,12 +81,14 @@ class ChatResponseDTO(BaseModel):
                 retryable=ur.error.retryable,
                 details=ur.error.details
             ) if ur.error else None,
+            web_source_items=normalized_sources,
             timestamp=ur.timestamp
         )
 
 
 class CompareResponseDTO(BaseModel):
     request_group_id: str
+    session_id: Optional[str] = None
     responses: List[ChatResponseDTO]
     success_count: int
     error_count: int
@@ -69,11 +97,12 @@ class CompareResponseDTO(BaseModel):
     timestamp: str
 
     @classmethod
-    def from_multi_unified_response(cls, mur):
+    def from_multi_unified_response(cls, mur, *, session_id: Optional[str] = None):
         """Convert MultiUnifiedResponse to DTO."""
         return cls(
             request_group_id=mur.request_group_id,
-            responses=[ChatResponseDTO.from_unified_response(r) for r in mur.responses],
+            session_id=session_id,
+            responses=[ChatResponseDTO.from_unified_response(r, session_id=session_id) for r in mur.responses],
             success_count=mur.success_count,
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,

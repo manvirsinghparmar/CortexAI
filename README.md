@@ -198,12 +198,24 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - Explicit `provider` + `model`: deterministic target.
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
-- `routing.research_mode=true`: optional web-enriched prompt flow.
+- `routing.research_mode=true`: optional orchestrator-managed web research flow with fresh sources for the current turn.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
-- `routing.research_mode=true` is still honored.
+- `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+
+## Session Continuity
+
+- Ask and Compare now share the same conversation session when the same `session_id` is reused.
+- Switching between Ask and Compare does not require creating a separate thread.
+- Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
+
+## Chat Context Guardrails
+
+- Conversation history sent to the API is trimmed to the last `10` messages.
+- Total conversation-history payload is capped at `20000` characters per request.
+- If the last `10` messages exceed that limit, the request is rejected until the sent context is smaller or a new session is started.
 
 ## Compare and `request_group_id`
 
@@ -221,6 +233,11 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `done`
 - `error`
 
+Notes:
+- Chat responses now include `session_id`.
+- Chat `response_done` payloads include `web_source_items` for rendered source chips.
+- Chat `start` and `done` stream events include the active `session_id`.
+
 `/v1/compare/stream` events:
 - `start`
 - `response_start`
@@ -228,6 +245,12 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `response_done`
 - `done` (contains aggregate compare payload with `request_group_id`)
 - `error`
+
+Notes:
+- Compare responses now include `session_id`.
+- Per-model compare `response_done` payloads include `web_source_items`.
+- Compare `start` and `done` stream events include the active `session_id`.
+- The final compare `done` payload includes both `request_group_id` and `session_id`.
 
 ## BYOK (Bring Your Own Keys)
 
@@ -606,7 +629,6 @@ OpenAIProject/
       contracts.py
       factory.py
       intent.py
-      research_decider.py
       research_pack.py
       research_state.py
       research_state_store.py
@@ -623,7 +645,6 @@ OpenAIProject/
     model_utils.py
     prompt_optimizer.py
     token_tracker.py
-    web_research.py
 
   tests/
     __init__.py
@@ -668,4 +689,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-01
+Last updated: 2026-03-08

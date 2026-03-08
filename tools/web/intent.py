@@ -1,92 +1,6 @@
 """Intent detection for determining when to use web research."""
 
 
-def is_followup_meta(prompt: str) -> bool:
-    """
-    Detect if prompt is a meta follow-up that should reuse previous research.
-
-    Meta follow-ups are phrases like "can you check", "are you sure", etc.
-    that don't contain new information but ask to verify/recheck.
-
-    Args:
-        prompt: User prompt to check
-
-    Returns:
-        True if this is a meta follow-up
-    """
-    prompt_lower = prompt.lower().strip()
-
-    # Meta follow-up phrases (exact or partial matches)
-    meta_phrases = [
-        "check on your own",
-        "can you check",
-        "can u check",
-        "verify",
-        "are you sure",
-        "check again",
-        "double check",
-        "confirm",
-        "recheck",
-        "look it up",
-        "search for it",
-        "find out",
-        "check that",
-        "why did you check",
-        "why did you search",
-        "why did u check",
-        "why did u search",
-        "dont you have internet",
-        "don't you have internet",
-        "do you have internet",
-        "internet access",
-        "how did you check",
-        "how did u check",
-        "why are you not able",
-        "why u r not able",
-        "why can't you fetch",
-        "why cant you fetch",
-    ]
-
-    for phrase in meta_phrases:
-        if phrase in prompt_lower:
-            return True
-
-    return False
-
-
-def is_same_topic_followup(prompt: str) -> bool:
-    """
-    Detect if prompt is a same-topic follow-up that should reuse research.
-
-    Args:
-        prompt: User prompt to check
-
-    Returns:
-        True if this is a same-topic follow-up
-    """
-    prompt_lower = prompt.lower().strip()
-
-    # Follow-up starters indicating continuation of current topic
-    followup_starters = [
-        "why ",
-        "how ",
-        "but ",
-        "what about",
-        "then ",
-        "so ",
-        "also ",
-        "and ",
-        "i meant",
-        "i mean",
-    ]
-
-    for starter in followup_starters:
-        if prompt_lower.startswith(starter):
-            return True
-
-    return False
-
-
 def is_explicit_web_request(prompt: str) -> bool:
     """
     Detect if user explicitly requests web/internet search.
@@ -333,137 +247,6 @@ def rewrite_query(prompt: str) -> str:
     return prompt
 
 
-def should_use_web(prompt: str, research_mode: str) -> tuple[bool, str]:
-    """
-    Determine if web research should be used based on mode and prompt content.
-
-    Args:
-        prompt: User prompt to analyze
-        research_mode: One of "off" or "on"
-
-    Returns:
-        Tuple of (should_use: bool, reason: str)
-    """
-    if research_mode == "off":
-        return False, "mode_off"
-
-    # Check if this is a meta follow-up (should reuse previous research)
-    if is_followup_meta(prompt):
-        return True, "followup_reuse_last"
-
-    # Check if this is a same-topic follow-up (should reuse previous research)
-    if is_same_topic_followup(prompt) and research_mode != "off":
-        return True, "followup_same_topic_reuse_last"
-
-    if research_mode == "on":
-        return True, "mode_on"
-
-    # Default: no search
-    return False, "mode_off"
-
-
-def is_meta_followup(prompt: str) -> bool:
-    """
-    Detect if prompt is a meta follow-up that should NEVER trigger a new web search.
-
-    Meta follow-ups are verification/confirmation requests that should reuse existing research.
-
-    Args:
-        prompt: User prompt to check
-
-    Returns:
-        True if this is a meta follow-up
-    """
-    prompt_lower = prompt.lower().strip()
-
-    meta_phrases = [
-        "check once more",
-        "check again",
-        "are you sure",
-        "verify",
-        "which source",
-        "what source",
-        "why did you search",
-        "why did you check",
-        "do you have internet",
-        "internet access",
-        "did you invent",
-        "did you make that up",
-        "confirm again",
-    ]
-
-    for phrase in meta_phrases:
-        if phrase in prompt_lower:
-            return True
-
-    return False
-
-
-def is_short_year_followup(prompt: str) -> str | None:
-    """
-    Detect if prompt is a short year follow-up like "and in 2025" or "in 2025".
-
-    These should be anchored to the previous topic, not searched literally.
-
-    Args:
-        prompt: User prompt to check
-
-    Returns:
-        Year string if detected (e.g., "2025"), None otherwise
-    """
-    import re
-
-    prompt_lower = prompt.lower().strip()
-
-    # Patterns for short year follow-ups
-    patterns = [
-        r"^and in (\d{4})$",
-        r"^in (\d{4})$",
-        r"^what about (\d{4})$",
-        r"^and (\d{4})$",
-        r"^for (\d{4})$",
-    ]
-
-    for pattern in patterns:
-        match = re.match(pattern, prompt_lower)
-        if match:
-            return match.group(1)
-
-    return None
-
-
-def build_anchored_query(state, prompt: str) -> str:
-    """
-    Build an anchored query for follow-ups to avoid searching literal meta text.
-
-    Args:
-        state: ResearchState object
-        prompt: User prompt
-
-    Returns:
-        Anchored query string (never returns meta text as query)
-    """
-    # Import here to avoid circular dependency
-    from typing import TYPE_CHECKING
-
-    if TYPE_CHECKING:
-        pass
-
-    # Check if this is a short year follow-up
-    year = is_short_year_followup(prompt)
-    if year and hasattr(state, "query") and state.query:
-        return f"{state.query} {year}"
-
-    # Check if this is a meta follow-up
-    if is_meta_followup(prompt):
-        # Never search using meta text - reuse last search query
-        if hasattr(state, "query") and state.query:
-            return state.query
-
-    # Default: return prompt as-is
-    return prompt
-
-
 def normalize_topic(text: str) -> str:
     """
     Normalize text to extract canonical topic.
@@ -504,13 +287,16 @@ def normalize_topic(text: str) -> str:
     return normalized
 
 
-def should_reuse_research(prompt: str, research_state: object | None) -> bool:
+def should_reuse_research(
+    prompt: str, research_state: object | None, *, current_mode: str | None = None
+) -> bool:
     """
     Determine if existing research should be reused.
 
     Args:
         prompt: User prompt
         research_state: Optional ResearchState object
+        current_mode: Current turn research mode ("off" | "auto" | "on")
 
     Returns:
         True if research should be reused, False if new search needed
@@ -519,6 +305,10 @@ def should_reuse_research(prompt: str, research_state: object | None) -> bool:
         return False
 
     if not hasattr(research_state, "used") or not research_state.used:
+        return False
+
+    # Forced web mode should always fetch fresh sources for the current turn.
+    if str(current_mode or "").lower().strip() == "on":
         return False
 
     # Respect explicit per-turn disable switch.
@@ -595,7 +385,7 @@ def should_search(prompt: str, research_mode: str, research_state: object | None
     1. If research_mode == off → NO search
     2. If research_state exists AND should_reuse == True → NO search
     3. If explicit web request ("check internet", "search web") → search
-    4. If research_mode == on → search
+    4. If research_mode == on → search every turn
     5. Else → NO search
 
     Args:
@@ -611,7 +401,7 @@ def should_search(prompt: str, research_mode: str, research_state: object | None
         return False
 
     # Rule 2: Reuse existing research if available
-    if should_reuse_research(prompt, research_state):
+    if should_reuse_research(prompt, research_state, current_mode=research_mode):
         return False
 
     # Rule 3: Check for explicit web request (in any mode except off)

@@ -38,7 +38,7 @@ test("compact composer toolbar contains smart, manual, and inline compare contro
 test("composer send button is inside the input area, not in the feature-chip row", () => {
     assert.match(
         html,
-        /<div class="prompt-input-wrap">[\s\S]*id="promptInput"[\s\S]*btn-submit-inline[\s\S]*id="submitBtn"/,
+        /<div class="prompt-input-wrap"[^>]*>[\s\S]*id="promptInput"[\s\S]*btn-submit-inline[\s\S]*id="submitBtn"/,
     );
     assert.doesNotMatch(html, /class="prompt-footer-right"/);
 });
@@ -60,7 +60,7 @@ test("toolbar keeps compact auto, web, and rewrite feature chips", () => {
     assert.doesNotMatch(html, /route-pill-group/);
     assert.match(html, /id="routeOptimizeBtn"/);
     assert.match(html, /id="routeResearchBtn"/);
-    assert.match(html, /id="routeSmartBtn"[\s\S]*Auto \(Recommended\)/);
+    assert.match(html, /id="routeSmartBtn"[\s\S]*>\s*Auto\s*</);
     assert.match(html, /id="routeResearchBtn"[\s\S]*chip-icon/);
     assert.match(html, /id="routeResearchBtn"[\s\S]*>\s*<span>Web<\/span>/);
     assert.match(html, /id="routeOptimizeBtn"[\s\S]*Rewrite/);
@@ -119,18 +119,19 @@ test("compare history hydration keeps prior user prompts without duplicating per
     assert.match(appJs, /if \(assistantContext\) \{[\s\S]*rebuilt\.push\(\{ role: "assistant", content: assistantContext \}\);/);
 });
 
-test("mode-scoped session ids are persisted separately for Ask and Compare", () => {
-    assert.match(appJs, /const SESSION_STORAGE_KEY_BY_MODE = \{/);
-    assert.match(appJs, /single:\s*"cortex_active_session_id_single"/);
-    assert.match(appJs, /compare:\s*"cortex_active_session_id_compare"/);
-    assert.match(appJs, /const activeSessionIdByMode = \{/);
-    assert.match(appJs, /function historyModeForUiMode\(mode = currentMode\)/);
+test("a single shared session id is reused across Ask and Compare", () => {
+    assert.match(appJs, /const ACTIVE_SESSION_STORAGE_KEY = "cortex_active_session_id";/);
+    assert.match(appJs, /const LEGACY_MODE_SESSION_STORAGE_KEYS = \[/);
+    assert.match(appJs, /function setActiveSessionId\(sessionId, \{ persist = true \} = \{\}\)/);
+    assert.match(appJs, /function ensureActiveSessionId\(\) \{[\s\S]*const existing = normalizeSessionId\(activeSessionId \|\| loadActiveSessionId\(\)\);/);
+    assert.doesNotMatch(appJs, /const activeSessionIdByMode = \{/);
 });
 
-test("history threads are grouped by mode and session to avoid cross-mode merging", () => {
-    assert.match(appJs, /function buildHistoryThreads\(data\) \{[\s\S]*const modeLabel = normalizeHistoryModeLabel\(entry\.mode\);/);
-    assert.match(appJs, /const key = sessionId \? `session:\$\{modeLabel\}:\$\{sessionId\}` : `entry:\$\{modeLabel\}:\$\{entry\.id\}`;/);
-    assert.match(appJs, /const isActive = thread\.modeLabel === historyModeForUiMode\(currentMode\)/);
+test("history threads are grouped by shared session id and can surface mixed-mode turns", () => {
+    assert.match(appJs, /function buildHistoryThreads\(data\) \{[\s\S]*const key = sessionId \? `session:\$\{sessionId\}` : `entry:\$\{entry\.id\}`;/);
+    assert.match(appJs, /const normalizedModes = new Set\(entries\.map\(entry => normalizeHistoryModeLabel\(entry\.mode\)\)\);/);
+    assert.match(appJs, /const modeLabel = normalizedModes\.size > 1[\s\S]*\? "mixed"/);
+    assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
 test("header keeps only slim nav links without subtitle block", () => {
@@ -170,6 +171,15 @@ test("response cards provide copy, like, and dislike actions", () => {
     assert.match(appJs, /function handleCopyAction\(button\)/);
     assert.match(appJs, /function handleReactionAction\(button, action\)/);
     assert.match(appJs, /el\.resultsGrid\.addEventListener\("click", event =>/);
+});
+
+test("composer shows explicit stop control during streaming", () => {
+    assert.match(appJs, /function handlePrimaryComposerAction\(\) \{/);
+    assert.match(appJs, /stopActiveGeneration\(\);/);
+    assert.match(appJs, /setComposerRequestState\("connecting"\)/);
+    assert.match(appJs, /Stop generating/);
+    assert.match(styleCss, /\.btn-submit\.is-stop \{/);
+    assert.match(styleCss, /\.stop-icon \{/);
 });
 
 test("streaming placeholder shows Thinking label with animated dots and reduced-motion fallback", () => {

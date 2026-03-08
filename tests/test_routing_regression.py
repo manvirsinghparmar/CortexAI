@@ -449,3 +449,83 @@ def test_should_reuse_research_returns_false_when_state_mode_is_off():
     )
 
     assert should_reuse_research("can you check again", state) is False
+
+
+def test_should_reuse_research_returns_false_when_current_mode_is_on():
+    now = "2026-03-02T00:00:00+00:00"
+    state = ResearchState(
+        topic="inflation canada",
+        query="latest inflation in canada",
+        injected_text="WEB RESEARCH SOURCES:\n1) source",
+        sources=[
+            ResearchSource(
+                id=1,
+                title="Source",
+                url="https://example.com/source",
+                fetched_at=now,
+                excerpt="excerpt",
+            )
+        ],
+        created_at=now,
+        last_used_at=now,
+        used=True,
+        cache_hit=False,
+        error=None,
+        session_id="session-intent-on",
+        mode="auto",
+        ttl_seconds=900,
+    )
+
+    assert should_reuse_research("can you check again", state, current_mode="on") is False
+
+
+def test_research_mode_on_forces_fresh_search_instead_of_reuse():
+    orchestrator = CortexOrchestrator()
+    session_id = "session-web-on-fresh"
+    now = "2026-03-02T00:00:00+00:00"
+
+    prior_state = ResearchState(
+        topic="inflation canada",
+        query="latest inflation in canada",
+        injected_text="WEB RESEARCH SOURCES:\n1) old source",
+        sources=[
+            ResearchSource(
+                id=1,
+                title="Old Source",
+                url="https://example.com/old",
+                fetched_at=now,
+                excerpt="old excerpt",
+            )
+        ],
+        created_at=now,
+        last_used_at=now,
+        used=True,
+        cache_hit=False,
+        error=None,
+        session_id=session_id,
+        mode="auto",
+        ttl_seconds=900,
+    )
+    orchestrator._research_states[session_id] = prior_state
+    fake_research = FakeResearchService()
+    orchestrator.research_service = fake_research
+
+    updated_messages, metadata = orchestrator._apply_research_if_needed(
+        prompt="Can you verify the latest inflation numbers in Canada?",
+        messages=[{"role": "user", "content": "Can you verify the latest inflation numbers in Canada?"}],
+        research_mode="on",
+        context=UserContext(session_id=session_id),
+    )
+
+    assert len(fake_research.calls) == 1
+    assert metadata["research_used"] is True
+    assert metadata["research_reused"] is False
+    assert metadata["sources"] == [
+        {
+            "id": 1,
+            "title": "Example Source",
+            "url": "https://example.com/source",
+            "fetched_at": "2026-03-02T00:00:00+00:00",
+        }
+    ]
+    assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in updated_messages)

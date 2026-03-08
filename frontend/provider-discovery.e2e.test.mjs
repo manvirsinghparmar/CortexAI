@@ -107,6 +107,10 @@ class FakeElement {
         return this._attrs[String(name)];
     }
 
+    hasAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(this._attrs, String(name));
+    }
+
     closest() {
         return this._closest;
     }
@@ -252,6 +256,8 @@ function createRuntime({ providersPayload, modelsPayload }) {
         scrollY: 0,
         addEventListener() {},
         removeEventListener() {},
+        setTimeout,
+        clearTimeout,
         localStorage,
         crypto: {
             randomUUID: () => "11111111-1111-4111-8111-111111111111",
@@ -289,6 +295,18 @@ function optionValues(selectEl) {
 
 function optionTexts(selectEl) {
     return (selectEl?.options || []).map(option => String(option.textContent || ""));
+}
+
+function optionByValue(selectEl, value) {
+    return (selectEl?.options || []).find(
+        option => String(option.value || "") === String(value || ""),
+    ) || null;
+}
+
+function isOptionDisabled(selectEl, value) {
+    return (selectEl?.options || []).some(
+        option => String(option.value || "") === String(value || "") && Boolean(option.disabled),
+    );
 }
 
 test("dynamic discovery updates frontend selectors with new provider/models", async () => {
@@ -342,7 +360,69 @@ test("dynamic discovery updates frontend selectors with new provider/models", as
     const singleModel = elements.get("singleModel");
     const values = optionValues(singleModel);
     const texts = optionTexts(singleModel);
+    const zaiOption = optionByValue(singleModel, "zai:zai-chat");
 
     assert.ok(values.includes("zai:zai-chat"));
-    assert.ok(texts.some(text => text.includes("Z.AI") && text.includes("zai-chat")));
+    assert.ok(texts.some(text => text.includes("Z.AI Chat")));
+    assert.equal(zaiOption?.textContent, "Z.AI Chat");
+    assert.equal(zaiOption?.getAttribute("aria-label"), "Z.AI Chat (zai-chat)");
+    assert.equal(zaiOption?.getAttribute("title"), "Z.AI Chat\nzai-chat");
+});
+
+test("compare selectors enforce unique model choices with disabled taken options", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+            { provider: "zai", label: "Z.AI", default_model: "zai-chat", ui: { display_name: "Z.AI" } },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+            { provider: "zai", model: "zai-chat", enabled: true },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context, elements } = createRuntime({ providersPayload, modelsPayload });
+
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const btnCompareMode = elements.get("btnCompareMode");
+    const compareModel1 = elements.get("compareModel1");
+    const compareModel2 = elements.get("compareModel2");
+    const compareModel3 = elements.get("compareModel3");
+    const compareAddModelBtn = elements.get("compareAddModelBtn");
+
+    btnCompareMode.dispatchEvent("click");
+
+    const slot1Value = String(compareModel1.value || "");
+    assert.ok(slot1Value.length > 0);
+    assert.equal(isOptionDisabled(compareModel2, slot1Value), true);
+
+    compareModel1.value = "zai:zai-chat";
+    compareModel1.dispatchEvent("change");
+    assert.equal(isOptionDisabled(compareModel2, "zai:zai-chat"), true);
+    assert.equal(isOptionDisabled(compareModel2, slot1Value), false);
+
+    compareAddModelBtn.dispatchEvent("click");
+    assert.ok(String(compareModel3.value || "").length > 0);
+
+    const selected = [compareModel1.value, compareModel2.value, compareModel3.value].map(value => String(value || ""));
+    assert.equal(new Set(selected).size, selected.length);
 });

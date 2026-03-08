@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from fastapi import HTTPException, status
 
 MAX_CONTEXT_MESSAGES = 10
-MAX_CONTEXT_CHARS = 8000
+MAX_CONTEXT_CHARS = 20000
 MAX_OUTPUT_TOKENS = 1024
 SENSITIVE_HEADERS = {"x-api-key", "authorization"}
 

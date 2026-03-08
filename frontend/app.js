@@ -87,12 +87,13 @@ const ACTIVE_ROUTING_INDICATORS = {
 const COMPARE_CONTEXT_MODEL_TEXT_LIMIT = 260;
 const COMPARE_CONTEXT_TOTAL_LIMIT = 2200;
 
-const LEGACY_SESSION_STORAGE_KEY = "cortex_active_session_id";
-const SESSION_STORAGE_KEY_BY_MODE = {
-    single: "cortex_active_session_id_single",
-    compare: "cortex_active_session_id_compare",
-};
+const ACTIVE_SESSION_STORAGE_KEY = "cortex_active_session_id";
+const LEGACY_MODE_SESSION_STORAGE_KEYS = [
+    "cortex_active_session_id_single",
+    "cortex_active_session_id_compare",
+];
 const MAX_CONTEXT_MESSAGES_UI = 20;
+const REQUEST_TIMEOUT_MS = 20000;
 
 function toProviderId(value) {
     return String(value || "").trim().toLowerCase();
@@ -303,12 +304,67 @@ function modelKeyOf(provider, model) {
     return `${providerId}:${modelName}`;
 }
 
-function getModelOptionLabel(providerRaw, modelRaw) {
+function getProviderDisplayPrefix(providerRaw) {
+    const provider = toProviderId(providerRaw);
+    if (provider === "openai") return "GPT";
+    if (provider === "gemini") return "Gemini";
+    if (provider === "claude") return "Claude";
+    if (provider === "grok") return "Grok";
+    if (provider === "deepseek") return "DeepSeek";
+    const fallback = String(providerLabelById[provider] || provider || "Model").trim();
+    return fallback || "Model";
+}
+
+function modelCapabilityWord(modelRaw) {
+    const model = String(modelRaw || "").toLowerCase();
+    if (!model) return "";
+    if (model.includes("flash")) return "Flash";
+    if (model.includes("pro")) return "Pro";
+    if (model.includes("mini")) return "Mini";
+    if (model.includes("sonnet")) return "Sonnet";
+    if (model.includes("haiku")) return "Haiku";
+    if (model.includes("opus")) return "Opus";
+    if (model.includes("fast")) return "Fast";
+    if (model.includes("reasoning")) return "Reasoning";
+    if (model.includes("chat")) return "Chat";
+    if (model.includes("instruct")) return "Instruct";
+    return "";
+}
+
+function getModelDisplayLabel(providerRaw, modelRaw) {
     const provider = toProviderId(providerRaw);
     const model = String(modelRaw || "").trim();
-    const label = providerLabelById[provider] || provider || "Model";
-    const prefix = "";
-    return `${prefix}${label} · ${model}`;
+    if (!model) return getProviderDisplayPrefix(provider);
+
+    const capability = modelCapabilityWord(model);
+
+    if (provider === "openai") {
+        const lower = model.toLowerCase();
+        const gptMatch = lower.match(/gpt-([0-9]+(?:\.[0-9]+)?[a-z]?)/i);
+        const base = gptMatch ? `GPT-${gptMatch[1]}` : getProviderDisplayPrefix(provider);
+        if (capability && !base.toLowerCase().includes(capability.toLowerCase())) {
+            return `${base} ${capability}`.trim();
+        }
+        return base;
+    }
+
+    const prefix = getProviderDisplayPrefix(provider);
+    if (capability) {
+        return `${prefix} ${capability}`.trim();
+    }
+    return prefix;
+}
+
+function getModelDisplayMetadata(providerRaw, modelRaw) {
+    const shortLabel = getModelDisplayLabel(providerRaw, modelRaw);
+    const fullModel = String(modelRaw || "").trim();
+    const ariaLabel = fullModel ? `${shortLabel} (${fullModel})` : shortLabel;
+    const title = fullModel ? `${shortLabel}\n${fullModel}` : shortLabel;
+    return { shortLabel, fullModel, ariaLabel, title };
+}
+
+function getModelOptionLabel(providerRaw, modelRaw) {
+    return getModelDisplayLabel(providerRaw, modelRaw);
 }
 
 applyCatalogData(FALLBACK_PROVIDER_CATALOG, FALLBACK_MODEL_CATALOG);
@@ -318,22 +374,23 @@ let currentMode = "single";
 let compareSlotCount = 2;
 let conversationHistory = [];
 let activeSessionId = null;
-const activeSessionIdByMode = {
-    single: null,
-    compare: null,
-};
 let pendingNewSession = false;
 let optimizeEnabled = false;
 let smartModeEnabled = true;
 let askResearchModeEnabled = true;
 let compareResearchModeEnabled = false;
 let isSubmitting = false;
+let isRetryingLastPrompt = false;
 let hasReceivedFirstStreamResponse = false;
 let historyUiReady = false;
 let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
+let lastPromptForRetry = "";
 let _historyData = [];   // full fetched list
 let streamAutoScrollEnabled = false;
 let lastStreamAutoScrollTs = 0;
+let composerRequestState = "idle";
+let activeStreamRequest = null;
+let activeStreamRequestId = 0;
 let pendingBottomScrollRaf = null;
 let pendingBottomScrollTimer = null;
 const pendingWebSourcesByCard = new Map();
@@ -389,6 +446,8 @@ const el = {
     compareModel2: $("compareModel2"),
     compareModel3: $("compareModel3"),
     promptCard: $("promptCard"),
+    promptInputWrap: $("promptInputWrap"),
+    promptAddBtn: $("promptAddBtn"),
     promptInput: $("promptInput"),
     submitBtn: $("submitBtn"),
     routeOptimizeBtn: $("routeOptimizeBtn"),
@@ -398,7 +457,10 @@ const el = {
     resultsGrid: $("resultsGrid"),
     clearBtn: $("clearBtn"),
     errorBanner: $("errorBanner"),
+    errorTitle: $("errorTitle"),
     errorMsg: $("errorMsg"),
+    errorHint: $("errorHint"),
+    errorRetry: $("errorRetry"),
     errorClose: $("errorClose"),
 };
 
@@ -475,8 +537,8 @@ function updateCompactBar() {
     const badgesHTML = getCompactBadges();
     el.compactModelInfo.innerHTML = badgesHTML;
 
-    // Send label
-    el.compactSendBtn.innerHTML = `<span class="btn-icon">&uarr;</span> ${currentMode === "single" ? "Send" : "Compare"}`;
+    // Primary action state (Send/Compare/Stop)
+    renderComposerActionButtons();
 }
 
 function getCompactBadges() {
@@ -497,11 +559,101 @@ function getCompactBadges() {
     return getActiveCompareSelects().map(sel => {
         const { provider, model } = parseKey(sel.value || "");
         if (!provider) return "";
+        const { shortLabel, title } = getModelDisplayMetadata(provider, model);
         return `<span class="compact-model-badge">
               ${buildProviderDotHtml(provider, 7)}
-              ${escHtml(model)}
+              <span title="${escHtml(title)}">${escHtml(shortLabel)}</span>
             </span>`;
     }).join("");
+}
+
+function isComposerStopModeActive() {
+    return composerRequestState === "connecting" || composerRequestState === "streaming";
+}
+
+function renderComposerActionButtons() {
+    const stopMode = isComposerStopModeActive();
+    if (stopMode) {
+        el.submitBtn.classList.add("is-stop");
+        el.submitBtn.innerHTML = `<span class="stop-icon" aria-hidden="true"></span>`;
+        el.submitBtn.setAttribute("aria-label", "Stop generating");
+        el.submitBtn.setAttribute("title", "Stop generating");
+
+        el.compactSendBtn.classList.add("is-stop");
+        el.compactSendBtn.innerHTML = `<span class="stop-icon stop-icon-compact" aria-hidden="true"></span> Stop`;
+        el.compactSendBtn.setAttribute("aria-label", "Stop generating");
+        el.compactSendBtn.setAttribute("title", "Stop generating");
+        return;
+    }
+
+    el.submitBtn.classList.remove("is-stop");
+    el.compactSendBtn.classList.remove("is-stop");
+
+    if (isSubmitting) {
+        el.submitBtn.innerHTML = `<span class="spinner"></span>`;
+        el.submitBtn.setAttribute("aria-label", "Generating response");
+        el.submitBtn.setAttribute("title", "Generating response");
+
+        el.compactSendBtn.innerHTML = `<span class="spinner"></span>`;
+        el.compactSendBtn.setAttribute("aria-label", "Generating response");
+        el.compactSendBtn.setAttribute("title", "Generating response");
+        return;
+    }
+
+    el.submitBtn.innerHTML = `<span class="btn-icon">&uarr;</span>`;
+    el.submitBtn.setAttribute("aria-label", "Send message");
+    el.submitBtn.setAttribute("title", "Send message");
+
+    const compactLabel = currentMode === "single" ? "Send" : "Compare";
+    const compactAria = currentMode === "single" ? "Send message" : "Compare models";
+    el.compactSendBtn.innerHTML = `<span class="btn-icon">&uarr;</span> ${compactLabel}`;
+    el.compactSendBtn.setAttribute("aria-label", compactAria);
+    el.compactSendBtn.setAttribute("title", compactAria);
+}
+
+function setComposerRequestState(nextState) {
+    composerRequestState = String(nextState || "idle");
+    renderComposerActionButtons();
+}
+
+function beginActiveStreamRequest() {
+    const request = {
+        id: ++activeStreamRequestId,
+        controller: typeof AbortController === "function" ? new AbortController() : null,
+        userStopped: false,
+    };
+    activeStreamRequest = request;
+    setComposerRequestState("connecting");
+    return request;
+}
+
+function markActiveStreamStreaming(request = null) {
+    if (!activeStreamRequest) return;
+    if (request && activeStreamRequest.id !== request.id) return;
+    if (composerRequestState !== "streaming") {
+        setComposerRequestState("streaming");
+    }
+}
+
+function endActiveStreamRequest(request = null) {
+    if (!activeStreamRequest) {
+        setComposerRequestState("idle");
+        return;
+    }
+    if (request && activeStreamRequest.id !== request.id) {
+        return;
+    }
+    activeStreamRequest = null;
+    setComposerRequestState("idle");
+}
+
+function stopActiveGeneration() {
+    if (!activeStreamRequest) return false;
+    activeStreamRequest.userStopped = true;
+    if (activeStreamRequest.controller && typeof activeStreamRequest.controller.abort === "function") {
+        activeStreamRequest.controller.abort();
+    }
+    return true;
 }
 
 // Main workspace mode toggle buttons
@@ -511,7 +663,7 @@ el.btnCompareMode.addEventListener("click", () => setMode("compare"));
 // Compact bar mirrors
 el.cBtnSingle.addEventListener("click", () => setMode("single"));
 el.cBtnCompare.addEventListener("click", () => setMode("compare"));
-el.compactSendBtn.addEventListener("click", handleSubmit);
+el.compactSendBtn.addEventListener("click", handlePrimaryComposerAction);
 function getModelPicker(selectEl) {
     if (!selectEl || !selectEl.id) return null;
     return modelPickerBySelectId.get(selectEl.id) || null;
@@ -601,19 +753,28 @@ function renderModelPickerOptions(selectEl) {
     const optionHtml = options.map(option => {
         const value = String(option?.value || "");
         const isActive = value === selectedValue;
+        const isDisabled = !!option?.disabled;
         const { provider, model } = parseKey(value);
         const providerId = toProviderId(provider);
-        const providerLabel = providerLabelById[providerId] || providerId || "Model";
-        const label = value
-            ? `${providerLabel} - ${model}`
-            : String(option?.textContent || "Select a model");
+        const meta = value
+            ? getModelDisplayMetadata(providerId, model)
+            : {
+                shortLabel: String(option?.textContent || "Select a model"),
+                title: String(option?.textContent || "Select a model"),
+                ariaLabel: String(option?.textContent || "Select a model"),
+            };
+        const label = meta.shortLabel;
         const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
 
         return `<button type="button"
-                class="model-picker-option${isActive ? " is-active" : ""}"
+                class="model-picker-option${isActive ? " is-active" : ""}${isDisabled ? " is-disabled" : ""}"
                 data-value="${escHtml(value)}"
                 role="option"
-                aria-selected="${isActive ? "true" : "false"}">
+                aria-selected="${isActive ? "true" : "false"}"
+                aria-disabled="${isDisabled ? "true" : "false"}"
+                aria-label="${escHtml(meta.ariaLabel)}"
+                title="${escHtml(meta.title)}"
+                ${isDisabled ? "disabled" : ""}>
                 ${glyph}
                 <span class="model-picker-option-label">${escHtml(label)}</span>
             </button>`;
@@ -630,19 +791,25 @@ function syncModelPickerFromNativeSelect(selectEl) {
     const selectedValue = String(selectEl.value || "");
     const { provider, model } = parseKey(selectedValue);
     const providerId = toProviderId(provider);
-    const providerLabel = providerLabelById[providerId] || providerId || "Model";
-    const selectedLabel = selectedValue
-        ? `${providerLabel} - ${model}`
-        : "Select a model";
+    const selectedMeta = selectedValue
+        ? getModelDisplayMetadata(providerId, model)
+        : {
+            shortLabel: "Select a model",
+            title: "Select a model",
+            ariaLabel: "Select a model",
+        };
+    const selectedLabel = selectedMeta.shortLabel;
     const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
 
     picker.buttonEl.innerHTML = `
         <span class="model-picker-selected">
             ${glyph}
-            <span class="model-picker-selected-label">${escHtml(selectedLabel)}</span>
+            <span class="model-picker-selected-label" title="${escHtml(selectedMeta.title)}">${escHtml(selectedLabel)}</span>
         </span>
         <span class="model-picker-caret" aria-hidden="true">v</span>
     `;
+    picker.buttonEl.title = selectedMeta.title;
+    picker.buttonEl.setAttribute("aria-label", selectedMeta.ariaLabel);
     picker.buttonEl.disabled = !!selectEl.disabled;
     picker.wrapperEl.classList.toggle("is-disabled", !!selectEl.disabled);
 
@@ -725,6 +892,9 @@ function ensureModelPicker(selectEl) {
     menu.addEventListener("click", event => {
         const optionButton = event?.target?.closest?.(".model-picker-option");
         if (!optionButton) return;
+        if (optionButton.disabled || optionButton.getAttribute("aria-disabled") === "true") {
+            return;
+        }
         const nextValue = String(optionButton.getAttribute("data-value") || "");
         if (selectEl.value !== nextValue) {
             selectEl.value = nextValue;
@@ -768,6 +938,9 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
         const placeholder = document.createElement("option");
         placeholder.value = "";
         placeholder.textContent = emptyLabel;
+        placeholder.title = emptyLabel;
+        placeholder.setAttribute("title", emptyLabel);
+        placeholder.setAttribute("aria-label", emptyLabel);
         selectEl.appendChild(placeholder);
     }
 
@@ -776,7 +949,11 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
         if (excludeKeys.has(key)) return;
         const opt = document.createElement("option");
         opt.value = key;
-        opt.textContent = getModelOptionLabel(item.provider, item.model);
+        const meta = getModelDisplayMetadata(item.provider, item.model);
+        opt.textContent = meta.shortLabel;
+        opt.title = meta.title;
+        opt.setAttribute("title", meta.title);
+        opt.setAttribute("aria-label", meta.ariaLabel);
         if (key === current) opt.selected = true;
         selectEl.appendChild(opt);
     });
@@ -788,19 +965,93 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
     syncModelPickerFromNativeSelect(selectEl);
 }
 
+function getCompareOptionStates(allModels, selectedModels, slotIndex) {
+    const currentKey = String(selectedModels[slotIndex] || "");
+    const takenByOtherSlots = new Set(
+        selectedModels
+            .map((value, index) => (index === slotIndex ? "" : String(value || "")))
+            .filter(Boolean)
+    );
+
+    return allModels.map(item => {
+        const key = modelKeyOf(item.provider, item.model);
+        const meta = getModelDisplayMetadata(item.provider, item.model);
+        return {
+            key,
+            label: meta.shortLabel,
+            title: meta.title,
+            ariaLabel: meta.ariaLabel,
+            // Keep the slot's own selected model visible while blocking duplicates elsewhere.
+            disabled: takenByOtherSlots.has(key) && key !== currentKey,
+            selected: key === currentKey,
+        };
+    });
+}
+
+function buildCompareOptions(selectEl, selectedModels, slotIndex) {
+    const states = getCompareOptionStates(getSelectableModels(), selectedModels, slotIndex);
+    selectEl.innerHTML = "";
+
+    states.forEach(state => {
+        const opt = document.createElement("option");
+        opt.value = state.key;
+        opt.textContent = state.label;
+        opt.title = state.title;
+        opt.setAttribute("title", state.title);
+        opt.setAttribute("aria-label", state.ariaLabel);
+        opt.disabled = !!state.disabled;
+        if (state.selected) {
+            opt.selected = true;
+        }
+        selectEl.appendChild(opt);
+    });
+
+    if (!selectEl.value) {
+        const firstAvailable = states.find(state => !state.disabled);
+        selectEl.value = firstAvailable ? firstAvailable.key : "";
+    }
+
+    syncModelPickerFromNativeSelect(selectEl);
+}
+
 function getActiveCompareSelects() {
     const s = [el.compareModel1, el.compareModel2];
     if (compareSlotCount === 3) s.push(el.compareModel3);
     return s;
 }
 
+function reconcileCompareSelections(selects) {
+    if (!Array.isArray(selects) || selects.length === 0) return [];
+    // Safety pass: if programmatic updates introduced duplicates, normalize to unique values.
+    const resolved = resolveCompareSelections(selects.map(sel => sel.value), selects.length);
+    selects.forEach((selectEl, index) => {
+        const nextValue = String(resolved[index] || "");
+        if (String(selectEl.value || "") !== nextValue) {
+            selectEl.value = nextValue;
+        }
+    });
+    return selects.map(sel => String(sel.value || ""));
+}
+
+function canAddAnotherCompareSlot() {
+    if (compareSlotCount >= 3) return false;
+    const selected = new Set(getActiveCompareSelects().map(sel => String(sel.value || "")).filter(Boolean));
+    const keys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    return keys.some(key => !selected.has(key));
+}
+
 function syncCompareDropdowns() {
     const selects = getActiveCompareSelects();
-    selects.forEach((sel, i) => {
-        const others = new Set(selects.filter((_, j) => j !== i).map(s => s.value).filter(Boolean));
-        buildOptions(sel, others);
+    let selectedModels = reconcileCompareSelections(selects);
+    selects.forEach((sel, index) => {
+        buildCompareOptions(sel, selectedModels, index);
+    });
+    selectedModels = reconcileCompareSelections(selects);
+    selects.forEach((sel, index) => {
+        buildCompareOptions(sel, selectedModels, index);
     });
     closeAllModelPickers();
+    updateCompareAddButton();
     updateCompactBar();
 }
 
@@ -812,6 +1063,11 @@ function updateCompareAddButton() {
     if (el.compareAddModelBtn) {
         el.compareAddModelBtn.textContent = showThird ? "- Remove Model" : "+ Add Model";
         el.compareAddModelBtn.setAttribute("aria-expanded", showThird ? "true" : "false");
+        const canAdd = canAddAnotherCompareSlot();
+        const compareModeActive = currentMode === "compare";
+        el.compareAddModelBtn.disabled = showThird
+            ? !compareModeActive
+            : (!compareModeActive || !canAdd);
     }
     syncAllModelPickers();
 }
@@ -873,56 +1129,41 @@ function normalizeSessionId(value) {
     return raw ? raw.toLowerCase() : null;
 }
 
-function loadActiveSessionId(mode = currentMode) {
-    const safeMode = normalizeUiMode(mode);
-    const storageKey = SESSION_STORAGE_KEY_BY_MODE[safeMode];
+function loadActiveSessionId() {
     try {
-        const scopedValue = normalizeSessionId(window.localStorage.getItem(storageKey));
-        if (scopedValue) {
-            return scopedValue;
+        const current = normalizeSessionId(window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY));
+        if (current) {
+            return current;
         }
-        if (safeMode === "single") {
-            return normalizeSessionId(window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY));
-        }
-        return null;
+        const legacyValues = LEGACY_MODE_SESSION_STORAGE_KEYS
+            .map(key => normalizeSessionId(window.localStorage.getItem(key)))
+            .filter(Boolean);
+        const uniqueLegacyValues = [...new Set(legacyValues)];
+        return uniqueLegacyValues.length === 1 ? uniqueLegacyValues[0] : null;
     } catch (_) {
         return null;
     }
 }
 
-function persistActiveSessionId(mode = currentMode) {
-    const safeMode = normalizeUiMode(mode);
-    const storageKey = SESSION_STORAGE_KEY_BY_MODE[safeMode];
-    const value = normalizeSessionId(
-        safeMode === currentMode ? activeSessionId : activeSessionIdByMode[safeMode]
-    );
-
+function persistActiveSessionId() {
+    const value = normalizeSessionId(activeSessionId);
     try {
         if (!value) {
-            window.localStorage.removeItem(storageKey);
-            if (safeMode === "single") {
-                window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-            }
+            window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+            LEGACY_MODE_SESSION_STORAGE_KEYS.forEach(key => window.localStorage.removeItem(key));
             return;
         }
-        window.localStorage.setItem(storageKey, value);
-        if (safeMode === "single") {
-            window.localStorage.setItem(LEGACY_SESSION_STORAGE_KEY, value);
-        }
+        window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, value);
+        LEGACY_MODE_SESSION_STORAGE_KEYS.forEach(key => window.localStorage.removeItem(key));
     } catch (_) { /* ignore storage failures */ }
 }
 
-function setActiveSessionIdForMode(mode, sessionId, { persist = true } = {}) {
-    const safeMode = normalizeUiMode(mode);
-    const normalized = normalizeSessionId(sessionId);
-    activeSessionIdByMode[safeMode] = normalized;
-    if (safeMode === currentMode) {
-        activeSessionId = normalized;
-    }
+function setActiveSessionId(sessionId, { persist = true } = {}) {
+    activeSessionId = normalizeSessionId(sessionId);
     if (persist) {
-        persistActiveSessionId(safeMode);
+        persistActiveSessionId();
     }
-    return normalized;
+    return activeSessionId;
 }
 
 function createSessionId() {
@@ -938,28 +1179,21 @@ function createSessionId() {
 }
 
 function ensureActiveSessionId() {
-    const safeMode = normalizeUiMode(currentMode);
-    const existing = normalizeSessionId(activeSessionIdByMode[safeMode] || activeSessionId);
+    const existing = normalizeSessionId(activeSessionId || loadActiveSessionId());
     if (existing) {
         activeSessionId = existing;
-        activeSessionIdByMode[safeMode] = existing;
         return existing;
     }
     const created = normalizeSessionId(createSessionId());
-    setActiveSessionIdForMode(safeMode, created);
-    activeSessionId = created;
-    return created;
+    return setActiveSessionId(created);
 }
 
 function startNewChatSession() {
-    const safeMode = normalizeUiMode(currentMode);
-    activeSessionId = normalizeSessionId(createSessionId());
-    activeSessionIdByMode[safeMode] = activeSessionId;
+    activeSessionId = setActiveSessionId(createSessionId());
     pendingNewSession = true;
     conversationHistory = [];
     clearResults();
     clearError();
-    persistActiveSessionId(safeMode);
 }
 
 function hasSelectedSingleModel() {
@@ -1130,16 +1364,12 @@ function setMode(mode) {
     if (!isSingle) syncCompareDropdowns();
     updateSingleModelRoutingUI();
 
-    const safeMode = normalizeUiMode(currentMode);
-    if (!activeSessionIdByMode[safeMode]) {
-        activeSessionIdByMode[safeMode] = loadActiveSessionId(safeMode);
+    if (!activeSessionId) {
+        activeSessionId = loadActiveSessionId();
     }
-    activeSessionId = normalizeSessionId(activeSessionIdByMode[safeMode]);
-
-    const modeLabel = historyModeForUiMode(safeMode);
     if (activeSessionId) {
-        hydrateConversationHistoryFromSession(activeSessionId, _historyData, modeLabel);
-        renderSessionTranscript(activeSessionId, _historyData, modeLabel);
+        hydrateConversationHistoryFromSession(activeSessionId, _historyData);
+        renderSessionTranscript(activeSessionId, _historyData);
         pendingNewSession = false;
     } else {
         conversationHistory = [];
@@ -1166,7 +1396,19 @@ function isSingleManualModePendingSelection() {
 
 if (el.compareAddModelBtn) {
     el.compareAddModelBtn.addEventListener("click", () => {
-        compareSlotCount = compareSlotCount === 3 ? 2 : 3;
+        if (compareSlotCount === 3) {
+            compareSlotCount = 2;
+            updateCompareAddButton();
+            syncCompareDropdowns();
+            return;
+        }
+        if (!canAddAnotherCompareSlot()) {
+            updateCompareAddButton();
+            return;
+        }
+        compareSlotCount = 3;
+        // Let the sync/reconcile pass choose the next available unique model.
+        el.compareModel3.value = "";
         updateCompareAddButton();
         syncCompareDropdowns();
     });
@@ -1204,6 +1446,7 @@ function setRoutingButtonState(button, label, enabled) {
     button.setAttribute("aria-checked", enabled ? "true" : "false");
     button.setAttribute("aria-pressed", enabled ? "true" : "false");
     button.setAttribute("title", label);
+    button.setAttribute("aria-label", label);
 
     if (wasStateKnown && previousChecked !== enabled) {
         triggerChipToggleFeedback(button);
@@ -1239,7 +1482,7 @@ function updateRoutingButtons() {
         smartChipWrap.setAttribute("aria-hidden", smartAllowed ? "false" : "true");
     }
     el.routeSmartBtn.disabled = !smartAllowed;
-    setRoutingButtonState(el.routeSmartBtn, "Auto (Recommended)", smartAllowed && smartModeEnabled);
+    setRoutingButtonState(el.routeSmartBtn, "Auto", smartAllowed && smartModeEnabled);
     setRoutingButtonState(el.routeResearchBtn, "Web", isResearchEnabledForCurrentMode());
     updateRoutingHint();
 }
@@ -1247,7 +1490,8 @@ function updateRoutingButtons() {
 function updateSendButtonState() {
     const hasPrompt = el.promptInput.value.trim().length > 0;
     const missingManualModel = isSingleManualModePendingSelection();
-    const disabled = isSubmitting || !hasPrompt || missingManualModel;
+    const stopMode = isComposerStopModeActive();
+    const disabled = stopMode ? false : (isSubmitting || !hasPrompt || missingManualModel);
     el.submitBtn.disabled = disabled;
     el.compactSendBtn.disabled = disabled;
     const isExpanded = autoSizePromptInput(hasPrompt);
@@ -1255,23 +1499,31 @@ function updateSendButtonState() {
 }
 
 function autoSizePromptInput(hasPrompt) {
-    const collapsedHeight = 56;
-    const expandedMaxHeight = 240;
-    const multilineThreshold = 4;
+    const fallbackLineHeight = 20;
+    const maxLines = 4;
+    const computed = (typeof window?.getComputedStyle === "function")
+        ? window.getComputedStyle(el.promptInput)
+        : null;
+    const lineHeight = computed ? (parseFloat(computed.lineHeight) || fallbackLineHeight) : fallbackLineHeight;
+    const padTop = computed ? (parseFloat(computed.paddingTop) || 0) : 0;
+    const padBottom = computed ? (parseFloat(computed.paddingBottom) || 0) : 0;
+    const verticalPadding = padTop + padBottom;
+    const minHeight = Math.max(40, Math.round(lineHeight + verticalPadding));
+    const maxHeight = Math.max(minHeight, Math.round((lineHeight * maxLines) + verticalPadding));
 
     el.promptInput.style.height = "auto";
     if (!hasPrompt) {
-        el.promptInput.style.height = `${collapsedHeight}px`;
+        el.promptInput.style.overflowY = "hidden";
+        el.promptInput.style.height = `${minHeight}px`;
         return false;
     }
 
-    const contentHeight = el.promptInput.scrollHeight;
-    const shouldExpand = contentHeight > (collapsedHeight + multilineThreshold);
-    const nextHeight = shouldExpand
-        ? Math.min(contentHeight, expandedMaxHeight)
-        : collapsedHeight;
+    const contentHeight = Math.max(el.promptInput.scrollHeight, minHeight);
+    const nextHeight = Math.min(contentHeight, maxHeight);
+    const capped = contentHeight > (maxHeight + 1);
     el.promptInput.style.height = `${nextHeight}px`;
-    return shouldExpand;
+    el.promptInput.style.overflowY = capped ? "auto" : "hidden";
+    return nextHeight > (minHeight + 2);
 }
 
 function getRoutingPayload() {
@@ -1288,6 +1540,20 @@ function getRoutingPayload() {
 el.promptInput.addEventListener("focus", () => el.promptCard.classList.add("focused"));
 el.promptInput.addEventListener("blur", () => el.promptCard.classList.remove("focused"));
 el.promptInput.addEventListener("input", updateSendButtonState);
+if (el.promptInputWrap) {
+    el.promptInputWrap.addEventListener("click", event => {
+        const target = event?.target;
+        if (target && typeof target.closest === "function" && target.closest("button")) {
+            return;
+        }
+        el.promptInput.focus();
+    });
+}
+if (el.promptAddBtn) {
+    el.promptAddBtn.addEventListener("click", () => {
+        el.promptInput.focus();
+    });
+}
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    EXAMPLE CHIPS
@@ -1310,7 +1576,7 @@ document.querySelectorAll(".chip").forEach(chip => {
 el.promptInput.addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        handleSubmit();
+        handlePrimaryComposerAction();
     }
 });
 
@@ -1323,7 +1589,12 @@ el.promptInput.addEventListener("keydown", e => {
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function callOptimize(prompt) {
-    const data = await callAPI("/v1/optimize", { prompt });
+    let data = null;
+    try {
+        data = await callAPI("/v1/optimize", { prompt });
+    } catch (_) {
+        return prompt;
+    }
     if (!data) return prompt;               // on error fall through
 
     lastOptimizeResult = {
@@ -1340,17 +1611,33 @@ async function callOptimize(prompt) {
    SUBMIT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-el.submitBtn.addEventListener("click", handleSubmit);
+function handlePrimaryComposerAction() {
+    if (isComposerStopModeActive()) {
+        stopActiveGeneration();
+        return;
+    }
+    handleSubmit();
+}
+
+el.submitBtn.addEventListener("click", handlePrimaryComposerAction);
 
 async function handleSubmit() {
     const rawPrompt = el.promptInput.value.trim();
     if (!rawPrompt) { el.promptInput.focus(); return; }
     el.promptInput.value = "";
     updateSendButtonState();
+    await submitPrompt(rawPrompt);
+}
 
-    clearError();
+async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
+    if (!fromRetry) {
+        clearError();
+    }
+    if (fromRetry) {
+        setErrorRetryBusy(true);
+    }
     setLoading(true);
-
+    lastPromptForRetry = String(rawPrompt || "");
     try {
         // Step 1: optionally optimize the prompt
         let prompt = rawPrompt;
@@ -1361,17 +1648,36 @@ async function handleSubmit() {
         }
 
         // Step 2: send to chat / compare
+        let sent = false;
         if (currentMode === "single") {
-            await doSingleChat(prompt);
+            sent = await doSingleChat(prompt);
         } else {
-            await doCompare(prompt);
+            sent = await doCompare(prompt);
+        }
+        if (sent) {
+            clearError();
         }
     } catch (err) {
-        showError(err.message || "An unexpected error occurred.");
+        if (!isRequestAbortedFailure(err)) {
+            showRequestFailure(err, { retryable: !!lastPromptForRetry });
+        }
     } finally {
+        if (fromRetry) {
+            setErrorRetryBusy(false);
+        }
         setLoading(false);
         // Refresh history panel (silently, whether open or not, so next open is fresh)
         loadHistory();
+    }
+}
+
+async function retryLastPrompt() {
+    if (!lastPromptForRetry || isSubmitting || isRetryingLastPrompt) return;
+    isRetryingLastPrompt = true;
+    try {
+        await submitPrompt(lastPromptForRetry, { fromRetry: true });
+    } finally {
+        isRetryingLastPrompt = false;
     }
 }
 
@@ -1385,7 +1691,7 @@ async function doSingleChat(prompt) {
     const useManualModel = manualMode && !!provider;
     if (manualMode && !useManualModel) {
         showError("Please select a model or turn Auto-Select back on.");
-        return;
+        return false;
     }
 
     const sessionId = ensureActiveSessionId();
@@ -1401,14 +1707,20 @@ async function doSingleChat(prompt) {
         },
     };
 
+    const streamTarget = useManualModel
+        ? { provider, model }
+        : { provider: "Auto", model: "Auto-selected model" };
     const streamState = initStreamingResults(
-        [useManualModel ? { provider, model } : { provider: "Auto", model: "Auto-selected model" }],
+        [streamTarget],
         false,
         { append: true, promptText: prompt }
     );
     const cardIndex = streamState.indexMap[0];
 
     let finalResponse = null;
+    let partialText = "";
+    let stoppedByUser = false;
+    const streamRequest = beginActiveStreamRequest();
     streamAutoScrollEnabled = true;
     lastStreamAutoScrollTs = 0;
     try {
@@ -1418,24 +1730,54 @@ async function doSingleChat(prompt) {
                 return;
             }
             if (event.type === "line") {
-                appendStreamLine(cardIndex, event.text || "");
+                const chunk = String(event.text || "");
+                if (chunk) {
+                    markActiveStreamStreaming(streamRequest);
+                    partialText += chunk;
+                }
+                appendStreamLine(cardIndex, chunk);
                 return;
             }
             if (event.type === "response_done" && event.response) {
+                if (event.response.session_id) {
+                    setActiveSessionId(event.response.session_id);
+                }
+                setPendingWebSources([cardIndex], event.response.web_source_items || []);
                 finalResponse = event.response;
                 finalizeStreamCard(cardIndex, finalResponse);
                 return;
             }
-            if (event.type === "error") {
-                throw new Error(event.message || "Streaming failed");
+            if (event.type === "done" && event.session_id) {
+                setActiveSessionId(event.session_id);
+                return;
             }
+            if (event.type === "error") {
+                throw createRequestFailure(event.message || "streaming_failed", {
+                    kind: inferErrorKindFromMessage(event.message) || "service",
+                });
+            }
+        }, {
+            signal: streamRequest?.controller?.signal,
         });
+    } catch (error) {
+        if (streamRequest?.userStopped && isRequestAbortedFailure(error)) {
+            stoppedByUser = true;
+        } else {
+            throw error;
+        }
     } finally {
         streamAutoScrollEnabled = false;
+        endActiveStreamRequest(streamRequest);
+    }
+
+    if (stoppedByUser && !finalResponse) {
+        const streamedSoFar = partialText || readStreamedResponseText(cardIndex);
+        finalResponse = buildStoppedStreamResponse(streamTarget, streamedSoFar);
+        finalizeStreamCard(cardIndex, finalResponse);
     }
 
     if (!finalResponse) {
-        throw new Error("Chat stream ended before completion.");
+        throw createRequestFailure("chat_stream_incomplete", { kind: "service" });
     }
 
     conversationHistory.push({ role: "user", content: prompt });
@@ -1445,6 +1787,7 @@ async function doSingleChat(prompt) {
     }
     pendingNewSession = false;
     persistActiveSessionId();
+    return true;
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1458,18 +1801,21 @@ async function doCompare(prompt) {
 
     if (targets.some(t => !t.provider || !t.model)) {
         showError("Please select a model for each compare slot.");
-        return;
+        return false;
     }
 
     if (new Set(targets.map(t => `${t.provider}:${t.model}`)).size < targets.length) {
         showError("Please select different models for each slot.");
-        return;
+        return false;
     }
 
     const streamState = initStreamingResults(targets, true, { append: true, promptText: prompt });
 
     const responses = new Array(targets.length).fill(null);
+    const partialTexts = new Array(targets.length).fill("");
     let comparePayload = null;
+    let stoppedByUser = false;
+    const streamRequest = beginActiveStreamRequest();
 
     streamAutoScrollEnabled = true;
     lastStreamAutoScrollTs = 0;
@@ -1491,7 +1837,12 @@ async function doCompare(prompt) {
             if (event.type === "line" && Number.isInteger(event.index)) {
                 const cardIndex = streamState.indexMap[event.index];
                 if (cardIndex !== undefined) {
-                    appendStreamLine(cardIndex, event.text || "");
+                    const chunk = String(event.text || "");
+                    if (chunk) {
+                        markActiveStreamStreaming(streamRequest);
+                        partialTexts[event.index] += chunk;
+                    }
+                    appendStreamLine(cardIndex, chunk);
                 }
                 return;
             }
@@ -1499,20 +1850,47 @@ async function doCompare(prompt) {
                 responses[event.index] = event.response;
                 const cardIndex = streamState.indexMap[event.index];
                 if (cardIndex !== undefined) {
+                    setPendingWebSources([cardIndex], event.response.web_source_items || []);
                     finalizeStreamCard(cardIndex, event.response);
                 }
                 return;
             }
             if (event.type === "done" && event.compare) {
+                if (event.compare.session_id) {
+                    setActiveSessionId(event.compare.session_id);
+                }
                 comparePayload = event.compare;
                 return;
             }
             if (event.type === "error") {
-                throw new Error(event.message || "Streaming failed");
+                throw createRequestFailure(event.message || "streaming_failed", {
+                    kind: inferErrorKindFromMessage(event.message) || "service",
+                });
             }
+        }, {
+            signal: streamRequest?.controller?.signal,
         });
+    } catch (error) {
+        if (streamRequest?.userStopped && isRequestAbortedFailure(error)) {
+            stoppedByUser = true;
+        } else {
+            throw error;
+        }
     } finally {
         streamAutoScrollEnabled = false;
+        endActiveStreamRequest(streamRequest);
+    }
+
+    if (stoppedByUser) {
+        targets.forEach((target, idx) => {
+            if (responses[idx]) return;
+            const cardIndex = streamState.indexMap[idx];
+            if (cardIndex === undefined) return;
+            const streamedSoFar = partialTexts[idx] || readStreamedResponseText(cardIndex);
+            const stoppedResponse = buildStoppedStreamResponse(target, streamedSoFar);
+            responses[idx] = stoppedResponse;
+            finalizeStreamCard(cardIndex, stoppedResponse);
+        });
     }
 
     if (!comparePayload) {
@@ -1539,6 +1917,7 @@ async function doCompare(prompt) {
     }
     pendingNewSession = false;
     persistActiveSessionId();
+    return true;
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1546,23 +1925,21 @@ async function doCompare(prompt) {
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 async function callAPI(path, body) {
-    const resp = await fetch(`${API_BASE}${path}`, {
+    const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
         body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try { const j = await resp.json(); detail = j.detail || detail; } catch { }
-        showError(`API error: ${detail}`);
-        return null;
+        throw await toRequestFailureFromResponse(resp);
     }
     return resp.json();
 }
 
-async function callAPIStream(path, body, onEvent) {
-    const resp = await fetch(`${API_BASE}${path}`, {
+async function callAPIStream(path, body, onEvent, options = {}) {
+    const signal = options?.signal;
+    const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -1570,51 +1947,219 @@ async function callAPIStream(path, body, onEvent) {
             "X-API-Key": API_KEY,
         },
         body: JSON.stringify(body),
+        signal,
     });
 
     if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try {
-            const j = await resp.json();
-            detail = j.detail || detail;
-        } catch {
-            try { detail = await resp.text(); } catch { }
-        }
-        throw new Error(`API error: ${detail}`);
+        throw await toRequestFailureFromResponse(resp);
     }
 
     if (!resp.body) {
-        throw new Error("Streaming is not supported in this browser.");
+        throw createRequestFailure("Streaming unsupported", { kind: "service" });
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        let newlineIdx = buffer.indexOf("\n");
-        while (newlineIdx >= 0) {
-            const raw = buffer.slice(0, newlineIdx).trim();
-            buffer = buffer.slice(newlineIdx + 1);
-            if (raw) {
-                let event = null;
-                try { event = JSON.parse(raw); } catch { }
-                if (event && onEvent) await onEvent(event);
+            buffer += decoder.decode(value, { stream: true });
+            let newlineIdx = buffer.indexOf("\n");
+            while (newlineIdx >= 0) {
+                const raw = buffer.slice(0, newlineIdx).trim();
+                buffer = buffer.slice(newlineIdx + 1);
+                if (raw) {
+                    let event = null;
+                    try { event = JSON.parse(raw); } catch { }
+                    if (event && onEvent) await onEvent(event);
+                }
+                newlineIdx = buffer.indexOf("\n");
             }
-            newlineIdx = buffer.indexOf("\n");
+        }
+        const tail = (buffer + decoder.decode()).trim();
+        if (tail) {
+            try {
+                const event = JSON.parse(tail);
+                if (onEvent) await onEvent(event);
+            } catch { }
+        }
+    } catch (error) {
+        if (isAbortErrorLike(error) || signal?.aborted) {
+            throw createRequestFailure("aborted", { kind: "aborted" });
+        }
+        const message = String(error?.detail || error?.message || "stream_read_failed");
+        const inferred = inferErrorKindFromMessage(message) || "connection";
+        throw createRequestFailure(message, { kind: inferred });
+    } finally {
+        try { reader.releaseLock(); } catch (_) { }
+    }
+}
+
+function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
+    const error = new Error("request_failed");
+    if (kind) {
+        error.uiErrorKind = kind;
+    }
+    if (Number.isFinite(Number(status))) {
+        error.status = Number(status);
+    }
+    if (detail) {
+        error.detail = String(detail);
+    }
+    return error;
+}
+
+function mapStatusToErrorKind(statusRaw) {
+    const status = Number(statusRaw);
+    if (!Number.isFinite(status)) return "";
+    if (status === 408 || status === 504) return "timeout";
+    if (status >= 500) return "service";
+    return "";
+}
+
+function inferErrorKindFromMessage(rawMessage) {
+    const message = String(rawMessage || "").toLowerCase();
+    if (!message) return "";
+    if (
+        message.includes("timeout")
+        || message.includes("timed out")
+        || message.includes("took too long")
+        || message.includes("abort")
+    ) {
+        return "timeout";
+    }
+    if (
+        message.includes("failed to fetch")
+        || message.includes("networkerror")
+        || message.includes("network request failed")
+        || message.includes("load failed")
+        || message.includes("connection")
+        || message.includes("offline")
+    ) {
+        return "connection";
+    }
+    if (
+        message.includes("http 500")
+        || message.includes("http 502")
+        || message.includes("http 503")
+        || message.includes("http 504")
+        || message.includes("service unavailable")
+        || message.includes("server error")
+    ) {
+        return "service";
+    }
+    return "";
+}
+
+async function readResponseErrorDetail(resp) {
+    if (!resp || typeof resp.clone !== "function") return "";
+    const copy = resp.clone();
+    try {
+        const jsonBody = await copy.json();
+        if (jsonBody && typeof jsonBody === "object") {
+            return String(jsonBody.detail || jsonBody.message || "").trim();
+        }
+    } catch (_) { }
+    try {
+        return String(await copy.text()).trim();
+    } catch (_) {
+        return "";
+    }
+}
+
+async function toRequestFailureFromResponse(resp) {
+    const detail = await readResponseErrorDetail(resp);
+    const statusKind = mapStatusToErrorKind(resp?.status);
+    const detailKind = inferErrorKindFromMessage(detail);
+    const kind = statusKind || detailKind || "service";
+    return createRequestFailure(detail, { kind, status: resp?.status });
+}
+
+function isAbortErrorLike(error) {
+    if (!error) return false;
+    if (error.name === "AbortError") return true;
+    if (error.uiErrorKind === "aborted") return true;
+    const message = String(error?.detail || error?.message || "").toLowerCase();
+    return message.includes("aborted") || message.includes("aborterror");
+}
+
+function isRequestAbortedFailure(error) {
+    return isAbortErrorLike(error) || String(error?.uiErrorKind || "") === "aborted";
+}
+
+function readStreamedResponseText(index) {
+    const textEl = document.getElementById(`response-text-${index}`);
+    return textEl ? String(textEl.textContent || "") : "";
+}
+
+function buildStoppedStreamResponse(target, partialText, webSourceItems = []) {
+    const provider = String(target?.provider || "").trim();
+    const model = String(target?.model || "").trim();
+    return {
+        provider,
+        model,
+        text: String(partialText || ""),
+        finish_reason: "stopped",
+        token_usage: null,
+        web_source_items: normalizeWebSources(webSourceItems),
+    };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+    if (typeof AbortController !== "function") {
+        return fetch(url, options);
+    }
+
+    const externalSignal = options && options.signal;
+    const controller = new AbortController();
+    let timedOut = false;
+    let abortedByExternalSignal = false;
+    const safeTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+        ? Number(timeoutMs)
+        : REQUEST_TIMEOUT_MS;
+    const onExternalAbort = () => {
+        abortedByExternalSignal = true;
+        controller.abort();
+    };
+
+    if (externalSignal && typeof externalSignal.addEventListener === "function") {
+        if (externalSignal.aborted) {
+            abortedByExternalSignal = true;
+            controller.abort();
+        } else {
+            externalSignal.addEventListener("abort", onExternalAbort, { once: true });
         }
     }
 
-    const tail = (buffer + decoder.decode()).trim();
-    if (tail) {
-        try {
-            const event = JSON.parse(tail);
-            if (onEvent) await onEvent(event);
-        } catch { }
+    const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, safeTimeoutMs);
+    const requestOptions = { ...options, signal: controller.signal };
+    try {
+        return await fetch(url, requestOptions);
+    } catch (error) {
+        if (isAbortErrorLike(error) || controller.signal.aborted) {
+            if (abortedByExternalSignal || externalSignal?.aborted) {
+                throw createRequestFailure("aborted", { kind: "aborted" });
+            }
+            if (timedOut) {
+                throw createRequestFailure("timeout", { kind: "timeout" });
+            }
+            throw createRequestFailure("timeout", { kind: "timeout" });
+        }
+        const message = String(error?.message || "");
+        const inferred = inferErrorKindFromMessage(message) || "connection";
+        throw createRequestFailure(message, { kind: inferred });
+    } finally {
+        clearTimeout(timer);
+        if (externalSignal && typeof externalSignal.removeEventListener === "function") {
+            externalSignal.removeEventListener("abort", onExternalAbort);
+        }
     }
 }
 
@@ -1684,15 +2229,13 @@ function buildWebSourceChipsHtml(sources) {
 
 function buildWebSourceStripHtml(sources, index) {
     if (!Array.isArray(sources) || sources.length === 0) return "";
-    const sourceCount = sources.length;
-    const pagesLabel = `${sourceCount} web page${sourceCount === 1 ? "" : "s"}`;
     const listId = webSourceListId(index);
 
     return `
       <button type="button"
               class="web-source-toggle"
               data-role="source-toggle"
-              aria-label="Toggle web sources: ${escHtml(pagesLabel)}"
+              aria-label="Toggle Sources"
               aria-expanded="false"
               aria-controls="${listId}">
         <span class="web-source-toggle-leading-icon" aria-hidden="true">
@@ -1701,8 +2244,7 @@ function buildWebSourceStripHtml(sources, index) {
           </svg>
         </span>
         <span class="web-source-toggle-text">
-          <span class="web-source-toggle-count">${sourceCount}</span>
-          <span class="web-source-toggle-label">web page${sourceCount === 1 ? "" : "s"}</span>
+          <span class="web-source-toggle-label">Sources</span>
         </span>
         <span class="web-source-toggle-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
@@ -2077,7 +2619,10 @@ function finalizeStreamCard(index, resp) {
     markFirstStreamResponseSeen();
 
     const hasError = !!resp.error;
-    const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
+    const text = hasExplicitText
+        ? String(resp?.text ?? "")
+        : (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -2282,23 +2827,123 @@ function clearResults() {
     setComposerDocked(true);
 }
 
-function showError(msg) {
-    el.errorMsg.textContent = msg;
+const FRIENDLY_ERROR_COPY = {
+    connection: {
+        title: "Connection issue",
+        message: "We're having trouble reaching the CortexAI service right now. Your request wasn't processed.",
+        hint: "Please check your connection or try again in a moment.",
+    },
+    service: {
+        title: "Service temporarily unavailable",
+        message: "CortexAI is temporarily unavailable right now. Your request wasn't processed.",
+        hint: "Please try again in a moment.",
+    },
+    timeout: {
+        title: "The request took too long to respond",
+        message: "We didn't receive a response from CortexAI in time.",
+        hint: "Please try again in a moment.",
+    },
+};
+
+function classifyRequestError(error) {
+    const statusKind = mapStatusToErrorKind(error?.status || error?.httpStatus);
+    if (statusKind) return statusKind;
+
+    const explicitKind = String(error?.uiErrorKind || "").trim();
+    if (explicitKind) return explicitKind;
+
+    if (error && error.name === "AbortError") return "timeout";
+    const inferred = inferErrorKindFromMessage(error?.detail || error?.message || "");
+    return inferred || "connection";
+}
+
+function showRequestFailure(error, { retryable = true } = {}) {
+    const kind = classifyRequestError(error);
+    const copy = FRIENDLY_ERROR_COPY[kind] || FRIENDLY_ERROR_COPY.connection;
+    renderErrorBanner({
+        title: copy.title,
+        message: copy.message,
+        hint: copy.hint,
+        retryable: !!retryable,
+    });
+}
+
+function setErrorRetryBusy(busy) {
+    if (!el.errorRetry) return;
+    el.errorRetry.disabled = !!busy;
+    el.errorRetry.textContent = busy ? "Retrying..." : "Retry";
+}
+
+function renderErrorBanner({
+    title = "Connection issue",
+    message = "We're having trouble reaching the CortexAI service right now.",
+    hint = "Please try again in a moment.",
+    retryable = false,
+} = {}) {
+    if (!el.errorBanner) return;
+    if (el.errorTitle) {
+        el.errorTitle.textContent = title;
+    }
+    if (el.errorMsg) {
+        el.errorMsg.textContent = message;
+    }
+    if (el.errorHint) {
+        const hasHint = String(hint || "").trim().length > 0;
+        el.errorHint.textContent = hasHint ? String(hint) : "";
+        el.errorHint.classList.toggle("hidden", !hasHint);
+    }
+
+    if (el.errorRetry) {
+        const canRetry = Boolean(retryable && lastPromptForRetry);
+        el.errorRetry.classList.toggle("hidden", !canRetry);
+        if (!canRetry) {
+            setErrorRetryBusy(false);
+        } else if (!isRetryingLastPrompt) {
+            setErrorRetryBusy(false);
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(() => {
+                    if (el.errorRetry && typeof el.errorRetry.focus === "function") {
+                        el.errorRetry.focus();
+                    }
+                });
+            } else if (typeof el.errorRetry.focus === "function") {
+                el.errorRetry.focus();
+            }
+        }
+    }
     el.errorBanner.classList.remove("hidden");
 }
-function clearError() { el.errorBanner.classList.add("hidden"); }
-el.errorClose.addEventListener("click", clearError);
+
+function showError(msg) {
+    renderErrorBanner({
+        title: "Something needs attention",
+        message: String(msg || "Please review your request and try again."),
+        hint: "",
+        retryable: false,
+    });
+}
+
+function clearError() {
+    if (el.errorBanner) {
+        el.errorBanner.classList.add("hidden");
+    }
+    setErrorRetryBusy(false);
+}
+if (el.errorClose) {
+    el.errorClose.addEventListener("click", clearError);
+}
+if (el.errorRetry) {
+    el.errorRetry.addEventListener("click", () => {
+        retryLastPrompt();
+    });
+}
 
 function setLoading(loading) {
     isSubmitting = loading;
-
-    if (loading) {
-        el.submitBtn.innerHTML = `<span class="spinner"></span>`;
-        el.compactSendBtn.innerHTML = `<span class="spinner"></span>`;
-    } else {
-        el.submitBtn.innerHTML = `<span class="btn-icon">&uarr;</span>`;
-        el.compactSendBtn.innerHTML = `<span class="btn-icon">&uarr;</span> ${currentMode === "single" ? "Send" : "Compare"}`;
+    if (!loading) {
+        setComposerRequestState("idle");
     }
+    renderComposerActionButtons();
     updateSendButtonState();
 }
 
@@ -2402,9 +3047,7 @@ async function loadDynamicProviderModelCatalog() {
     updateRoutingButtons();
     updateSingleModelRoutingUI();
     setComposerDocked(true);
-    activeSessionIdByMode.single = loadActiveSessionId("single");
-    activeSessionIdByMode.compare = loadActiveSessionId("compare");
-    activeSessionId = normalizeSessionId(activeSessionIdByMode.single);
+    activeSessionId = loadActiveSessionId();
     setMode("single");
     updateSendButtonState();
     void loadDynamicProviderModelCatalog();
@@ -2440,14 +3083,11 @@ function normalizeHistoryModeLabel(value) {
     return String(value || "").trim().toLowerCase() === "compare" ? "compare" : "chat";
 }
 
-function getSessionEntries(data, sessionId, modeLabel = null) {
+function getSessionEntries(data, sessionId) {
     const normalized = normalizeSessionId(sessionId);
     if (!normalized) return [];
-    const requiredMode = modeLabel ? normalizeHistoryModeLabel(modeLabel) : null;
     return data.filter(entry => {
-        if (normalizeSessionId(entry.session_id) !== normalized) return false;
-        if (!requiredMode) return true;
-        return normalizeHistoryModeLabel(entry.mode) === requiredMode;
+        return normalizeSessionId(entry.session_id) === normalized;
     });
 }
 
@@ -2518,10 +3158,9 @@ function hydrateConversationHistoryFromEntries(entries) {
 
 function hydrateConversationHistoryFromSession(
     sessionId,
-    data = _historyData,
-    modeLabel = historyModeForUiMode()
+    data = _historyData
 ) {
-    const entries = getSessionEntries(data, sessionId, modeLabel);
+    const entries = getSessionEntries(data, sessionId);
     hydrateConversationHistoryFromEntries(entries);
 }
 
@@ -2616,21 +3255,16 @@ function renderConversationFromEntries(entries) {
     return true;
 }
 
-function renderSessionTranscript(sessionId, data = _historyData, modeLabel = historyModeForUiMode()) {
-    const entries = getSessionEntries(data, sessionId, modeLabel);
+function renderSessionTranscript(sessionId, data = _historyData) {
+    const entries = getSessionEntries(data, sessionId);
     return renderConversationFromEntries(entries);
 }
 
-function setActiveSession(sessionId, { markNew = false, mode = currentMode } = {}) {
-    const safeMode = normalizeUiMode(mode);
+function setActiveSession(sessionId, { markNew = false } = {}) {
     activeSessionId = normalizeSessionId(sessionId) || normalizeSessionId(createSessionId());
-    setActiveSessionIdForMode(safeMode, activeSessionId);
+    setActiveSessionId(activeSessionId);
     pendingNewSession = Boolean(markNew);
-    const sessionEntries = getSessionEntries(
-        _historyData,
-        activeSessionId,
-        historyModeForUiMode(safeMode)
-    );
+    const sessionEntries = getSessionEntries(_historyData, activeSessionId);
     hydrateConversationHistoryFromEntries(sessionEntries);
     renderConversationFromEntries(sessionEntries);
     renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
@@ -2651,10 +3285,7 @@ historyEl.clearAllBtn.addEventListener("click", async () => {
     conversationHistory = [];
     pendingNewSession = true;
     activeSessionId = null;
-    activeSessionIdByMode.single = null;
-    activeSessionIdByMode.compare = null;
-    persistActiveSessionId("single");
-    persistActiveSessionId("compare");
+    persistActiveSessionId();
     loadHistory({ restoreActiveTranscript: true });
 });
 
@@ -2672,28 +3303,22 @@ async function loadHistory({ restoreActiveTranscript = false } = {}) {
         if (!resp.ok) return;
         _historyData = await resp.json();
 
-        const safeMode = normalizeUiMode(currentMode);
-        const modeLabel = historyModeForUiMode(safeMode);
-        if (!activeSessionIdByMode[safeMode]) {
-            activeSessionIdByMode[safeMode] = loadActiveSessionId(safeMode);
-        }
-        activeSessionId = normalizeSessionId(activeSessionIdByMode[safeMode]);
+        activeSessionId = normalizeSessionId(activeSessionId || loadActiveSessionId());
 
         if (!activeSessionId) {
             const mostRecentWithSession = _historyData.find(entry =>
-                normalizeSessionId(entry.session_id) &&
-                normalizeHistoryModeLabel(entry.mode) === modeLabel
+                normalizeSessionId(entry.session_id)
             );
             if (mostRecentWithSession) {
                 activeSessionId = normalizeSessionId(mostRecentWithSession.session_id);
-                setActiveSessionIdForMode(safeMode, activeSessionId);
+                setActiveSessionId(activeSessionId);
             }
         }
 
         if (activeSessionId) {
-            hydrateConversationHistoryFromSession(activeSessionId, _historyData, modeLabel);
+            hydrateConversationHistoryFromSession(activeSessionId, _historyData);
             if (restoreActiveTranscript) {
-                renderSessionTranscript(activeSessionId, _historyData, modeLabel);
+                renderSessionTranscript(activeSessionId, _historyData);
             }
         } else if (restoreActiveTranscript) {
             conversationHistory = [];
@@ -2750,14 +3375,19 @@ function formatHistoryUsd(value) {
     })}`;
 }
 
+function getHistoryThreadBadgeLabel(modeLabel) {
+    if (modeLabel === "compare") return "Compare";
+    if (modeLabel === "mixed") return "Mixed";
+    return "Chat";
+}
+
 function buildHistoryThreads(data) {
     const grouped = new Map();
     data.forEach(entry => {
         const sessionId = normalizeSessionId(entry.session_id);
-        const modeLabel = normalizeHistoryModeLabel(entry.mode);
-        const key = sessionId ? `session:${modeLabel}:${sessionId}` : `entry:${modeLabel}:${entry.id}`;
+        const key = sessionId ? `session:${sessionId}` : `entry:${entry.id}`;
         if (!grouped.has(key)) {
-            grouped.set(key, { key, sessionId, modeLabel, entries: [] });
+            grouped.set(key, { key, sessionId, entries: [] });
         }
         grouped.get(key).entries.push(entry);
     });
@@ -2771,7 +3401,11 @@ function buildHistoryThreads(data) {
         const latestTimestampMs = parseHistoryTimestamp(latestEntry.timestamp);
         const firstPrompt = pickFirstPrompt(entries);
         const latestResponse = pickLatestResponse(entries);
-        const modeLabel = thread.modeLabel || normalizeHistoryModeLabel(latestEntry.mode);
+        const normalizedModes = new Set(entries.map(entry => normalizeHistoryModeLabel(entry.mode)));
+        const latestModeLabel = normalizeHistoryModeLabel(latestEntry.mode);
+        const modeLabel = normalizedModes.size > 1
+            ? "mixed"
+            : (normalizedModes.values().next().value || latestModeLabel);
         const providerSet = new Set(entries.map(entry => String(entry.provider || "").trim().toLowerCase()).filter(Boolean));
         const provider = providerSet.size > 1 ? "mixed" : String(latestEntry.provider || "");
         const modelSet = new Set(entries.map(entry => String(entry.model || "").trim()).filter(Boolean));
@@ -2798,6 +3432,7 @@ function buildHistoryThreads(data) {
             firstPrompt,
             latestResponse,
             modeLabel,
+            preferredMode: latestModeLabel,
             provider,
             model,
             totalTokens,
@@ -2831,14 +3466,13 @@ function renderHistory(data, filter = "") {
             : rawPrompt);
         const tokStr = thread.totalTokens ? thread.totalTokens.toLocaleString() : "-";
         const totalCostLabel = thread.hasCost ? formatHistoryUsd(thread.totalCost) : null;
-        const isActive = thread.modeLabel === historyModeForUiMode(currentMode)
-            && thread.sessionId
+        const isActive = thread.sessionId
             && thread.sessionId === activeSessionId;
         const activeClass = isActive ? " is-active-session" : "";
 
         return `<li class="history-entry${activeClass}" data-thread-key="${escHtml(thread.key)}" data-session-id="${escHtml(thread.sessionId || "")}">
           <div class="history-entry-top">
-            <span class="history-mode-badge history-mode-${thread.modeLabel}">${thread.modeLabel === "compare" ? "Compare" : "Chat"}</span>
+            <span class="history-mode-badge history-mode-${thread.modeLabel}">${getHistoryThreadBadgeLabel(thread.modeLabel)}</span>
           </div>
           <div class="history-prompt">${promptSnippet}</div>
           <div class="history-meta">
@@ -2888,17 +3522,17 @@ function renderHistory(data, filter = "") {
             const thread = threadByKey.get(item.dataset.threadKey || "");
             if (!thread) return;
 
-            const targetMode = thread.modeLabel === "compare" ? "compare" : "single";
+            const targetMode = thread.preferredMode === "compare" ? "compare" : "single";
             if (currentMode !== targetMode) {
                 setMode(targetMode);
             }
 
             const clickedSessionId = normalizeSessionId(thread.sessionId);
             if (clickedSessionId) {
-                setActiveSession(clickedSessionId, { markNew: false, mode: targetMode });
+                setActiveSession(clickedSessionId, { markNew: false });
             } else {
                 activeSessionId = normalizeSessionId(createSessionId());
-                setActiveSessionIdForMode(targetMode, activeSessionId);
+                setActiveSessionId(activeSessionId);
                 pendingNewSession = true;
                 hydrateConversationHistoryFromEntries(thread.entries);
                 renderConversationFromEntries(thread.entries);
@@ -2916,4 +3550,5 @@ function renderHistory(data, filter = "") {
         });
     });
 }
+
 

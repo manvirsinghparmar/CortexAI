@@ -12,7 +12,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=20260225a" />
+    <link rel="stylesheet" href="style.css?v=20260305b" />
 </head>
 
 <body>
@@ -86,6 +86,19 @@
             <div class="results-grid" id="resultsGrid"></div>
         </section>
 
+        <div class="error-banner hidden" id="errorBanner" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="error-icon-wrap" aria-hidden="true">
+                <span class="error-icon">&#9888;</span>
+            </div>
+            <div class="error-content">
+                <p class="error-title" id="errorTitle">Connection issue</p>
+                <p class="error-message" id="errorMsg">We&rsquo;re having trouble reaching the CortexAI service right now.</p>
+                <p class="error-hint" id="errorHint">Please check your connection or try again in a moment.</p>
+                <button class="error-retry" id="errorRetry" type="button">Retry</button>
+            </div>
+            <button class="error-close" id="errorClose" type="button" aria-label="Dismiss error">&times;</button>
+        </div>
+
         <div class="card prompt-card" id="promptCard">
             <div class="composer-toolbar" id="composerToolbar" role="group" aria-label="Prompt routing controls">
                 <div class="composer-toolbar-row">
@@ -124,22 +137,25 @@
                     </button>
                 </div>
             </div>
-            <div class="prompt-input-wrap">
-                <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything... your models are ready."
-                    rows="1" aria-label="Prompt input"></textarea>
+            <div class="prompt-input-wrap" id="promptInputWrap">
+                <button class="prompt-input-action prompt-input-add" id="promptAddBtn" type="button"
+                    aria-label="More actions">
+                    <span aria-hidden="true">+</span>
+                </button>
+                <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything..." rows="1"
+                    aria-label="Prompt input"></textarea>
                 <button class="btn-submit btn-submit-inline" id="submitBtn" aria-label="Send message">
                     <span class="btn-icon">&uarr;</span>
                 </button>
             </div>
-            <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
             <div class="prompt-footer">
                 <div class="prompt-footer-left">
                     <div class="composer-footer-features feature-strip" id="singleRoutingControls">
                         <span class="feature-chip-wrap">
                             <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
-                                aria-checked="true" aria-label="Auto (Recommended)"
+                                aria-checked="true" aria-label="Auto"
                                 aria-describedby="smartRoutingTooltip">
-                                Auto (Recommended)
+                                Auto
                             </button>
                             <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
                                 Automatically selects the best model based on quality, speed, and cost.
@@ -168,6 +184,7 @@
                     </div>
                 </div>
             </div>
+            <div class="routing-hint" id="workspaceTagline" aria-live="polite"></div>
         </div>
 
         <div class="examples-section">
@@ -186,20 +203,14 @@
             </div>
         </div>
 
-        <div class="error-banner hidden" id="errorBanner" role="alert">
-            <span class="error-icon">!</span>
-            <span id="errorMsg">Something went wrong.</span>
-            <button class="error-close" id="errorClose" aria-label="Dismiss error">X</button>
-        </div>
-
     </main>
 
     <footer class="footer">
         <p>CortexAI - Unified AI Comparison Engine</p>
     </footer>
 
-    <script src="smart-routing-state.js?v=20260225a"></script>
-    <script src="app.js?v=20260225a"></script>
+    <script src="smart-routing-state.js?v=20260305b"></script>
+    <script src="app.js?v=20260305b"></script>
 </body>
 
 </html>

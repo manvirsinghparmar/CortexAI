@@ -381,14 +381,14 @@ def create_session(
     return session_id
 
 
-def get_active_session(db: Session, user_id: UUID, mode: str = "ask") -> UUID | None:
+def get_active_session(db: Session, user_id: UUID, mode: str | None = "ask") -> UUID | None:
     """
-    Get user's most recent active session for given mode.
+    Get user's most recent active session.
 
     Args:
         db: Database session
         user_id: User ID
-        mode: Session mode (default: 'ask')
+        mode: Optional session mode filter. Pass None to search across all modes.
 
     Returns:
         UUID: session_id if found, None otherwise
@@ -397,9 +397,13 @@ def get_active_session(db: Session, user_id: UUID, mode: str = "ask") -> UUID | 
 
     sessions = get_table("sessions")
 
+    conditions = [sessions.c.user_id == user_id]
+    if mode is not None:
+        conditions.append(sessions.c.mode == mode)
+
     stmt = (
         select(sessions.c.id)
-        .where(and_(sessions.c.user_id == user_id, sessions.c.mode == mode))
+        .where(and_(*conditions))
         .order_by(desc(sessions.c.updated_at))
         .limit(1)
     )

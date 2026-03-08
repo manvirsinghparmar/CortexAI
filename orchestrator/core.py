@@ -377,8 +377,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 "sources": [],
             }
 
-        # 3) Check if we should reuse existing research
-        should_reuse = should_reuse_research(prompt, state)
+        # 3) Check if we should reuse existing research.
+        # Forced web mode ("on") should always refresh sources for this turn.
+        should_reuse = should_reuse_research(prompt, state, current_mode=research_mode)
         logger.info(f"Research decision - reuse: {should_reuse}, prompt: {prompt[:50]}...")
 
         if should_reuse:

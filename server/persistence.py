@@ -503,19 +503,14 @@ def get_or_create_api_session(
 ) -> UUID:
     """Resolve API session ownership safely; create one when needed."""
     provided = coerce_uuid(requested_session_id)
-    requested_mode = str(mode or "").strip().lower()
     provided_for_create: UUID | None = None
 
     if provided:
         existing_session = get_session_by_id(db_session, provided)
         if existing_session:
-            session_mode = str(existing_session.get("mode") or "").strip().lower()
-            if (
-                verify_session_belongs_to_user(db_session, provided, user_id)
-                and session_mode == requested_mode
-            ):
+            if verify_session_belongs_to_user(db_session, provided, user_id):
                 return provided
-            # Existing session belongs to another mode or user; never reuse its id.
+            # Existing session belongs to another user; never reuse its id.
             provided_for_create = None
         else:
             # Caller may provide a fresh UUID for a brand new session.
@@ -530,7 +525,8 @@ def get_or_create_api_session(
             session_id=provided_for_create,
         )
 
-    active = get_active_session(db_session, user_id, mode=mode)
+    # Session continuity is now shared across Ask and Compare turns.
+    active = get_active_session(db_session, user_id, mode=None)
     if active:
         return active
 
@@ -683,7 +679,7 @@ def persist_chat_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-) -> None:
+) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
         session_id = get_or_create_api_session(
@@ -747,6 +743,8 @@ def persist_chat_interaction(
         if resolution.api_key_id is not None:
             update_api_key_last_used(db_session, api_key)
 
+        return str(session_id)
+
 
 def _selected_compare_index(responses: Iterable[UnifiedResponse]) -> int:
     for index, response in enumerate(responses):
@@ -765,7 +763,7 @@ def persist_compare_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-) -> None:
+) -> str:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:
         session_id = get_or_create_api_session(
@@ -839,3 +837,5 @@ def persist_compare_interaction(
 
         if resolution.api_key_id is not None:
             update_api_key_last_used(db_session, api_key)
+
+        return str(session_id)

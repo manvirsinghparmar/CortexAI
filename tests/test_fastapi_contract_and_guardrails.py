@@ -119,6 +119,16 @@ class FakeOrchestrator:
         self.last_ask_kwargs = {}
         self.last_compare_kwargs = {}
 
+    @staticmethod
+    def _metadata_for_research_mode(research_mode: str | None) -> dict[str, Any]:
+        if str(research_mode or "").strip().lower() != "on":
+            return {}
+        return {
+            "research_used": True,
+            "research_reused": False,
+            "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
+        }
+
     def ask(self, prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs) -> UnifiedResponse:
         self.last_ask_prompt = prompt
         self.last_ask_model_type = model_type
@@ -133,7 +143,7 @@ class FakeOrchestrator:
             estimated_cost=0.00001,
             finish_reason="stop",
             error=None,
-            metadata={},
+            metadata=self._metadata_for_research_mode(kwargs.get("research_mode")),
         )
 
     def compare(
@@ -145,6 +155,7 @@ class FakeOrchestrator:
     ) -> FakeMultiUnifiedResponse:
         self.last_compare_prompt = prompt
         self.last_compare_kwargs = dict(kwargs)
+        shared_metadata = self._metadata_for_research_mode(kwargs.get("research_mode"))
         r1 = UnifiedResponse(
             request_id="req_cmp_1",
             text="A",
@@ -155,7 +166,7 @@ class FakeOrchestrator:
             estimated_cost=0.00001,
             finish_reason="stop",
             error=None,
-            metadata={},
+            metadata=shared_metadata,
         )
 
         r2 = UnifiedResponse(
@@ -168,7 +179,7 @@ class FakeOrchestrator:
             estimated_cost=0.00002,
             finish_reason="stop",
             error=None,
-            metadata={},
+            metadata=shared_metadata,
         )
 
         total_tokens = r1.token_usage.total_tokens + r2.token_usage.total_tokens
@@ -638,13 +649,7 @@ def test_chat_stream_auto_routing_includes_selected_target(client, app):
     assert app.state.fake_orchestrator.last_ask_kwargs.get("routing_mode") == "smart"
 
 
-def test_chat_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
-    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
-        assert enabled is True
-        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 1}
-
-    monkeypatch.setattr("server.routes.chat.maybe_enrich_prompt_with_web", _fake_web_enrich)
-
+def test_chat_web_mode_keeps_prompt_clean_and_returns_sources_from_orchestrator(client, app):
     payload = {
         "prompt": "Latest AI policy updates",
         "routing": {"smart_mode": True, "research_mode": True},
@@ -655,17 +660,15 @@ def test_chat_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypa
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code == 200
-    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    payload_json = r.json()
+    assert app.state.fake_orchestrator.last_ask_prompt == "Latest AI policy updates"
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "on"
+    assert payload_json["web_source_items"] == [
+        {"title": "Example Source", "url": "https://example.com/report"}
+    ]
 
 
-def test_chat_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, monkeypatch):
-    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
-        if enabled:
-            return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 1}
-        return prompt, {"enabled": False, "used": False, "source_count": 0}
-
-    monkeypatch.setattr("server.routes.chat.maybe_enrich_prompt_with_web", _fake_web_enrich)
-
+def test_chat_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, app):
     first_payload = {
         "prompt": "Latest AI policy updates",
         "provider": "openai",
@@ -679,8 +682,11 @@ def test_chat_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, m
         headers={"X-API-Key": "dev-key-1"},
     )
     assert first_response.status_code == 200
-    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_prompt == "Latest AI policy updates"
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "on"
+    assert first_response.json()["web_source_items"] == [
+        {"title": "Example Source", "url": "https://example.com/report"}
+    ]
 
     second_payload = {
         "prompt": "Explain photosynthesis in one sentence.",
@@ -695,17 +701,12 @@ def test_chat_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, m
         headers={"X-API-Key": "dev-key-1"},
     )
     assert second_response.status_code == 200
-    assert not app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert app.state.fake_orchestrator.last_ask_prompt == "Explain photosynthesis in one sentence."
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
+    assert second_response.json()["web_source_items"] == []
 
 
-def test_compare_web_mode_enriches_prompt_before_orchestrator(client, app, monkeypatch):
-    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
-        assert enabled is True
-        return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 2}
-
-    monkeypatch.setattr("server.routes.compare.maybe_enrich_prompt_with_web", _fake_web_enrich)
-
+def test_compare_web_mode_keeps_prompt_clean_and_returns_sources_from_orchestrator(client, app):
     payload = {
         "prompt": "Recent market updates",
         "routing": {"research_mode": True},
@@ -720,7 +721,11 @@ def test_compare_web_mode_enriches_prompt_before_orchestrator(client, app, monke
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code == 200
-    assert app.state.fake_orchestrator.last_compare_prompt.endswith("[WEB_CTX]")
+    payload_json = r.json()
+    assert app.state.fake_orchestrator.last_compare_prompt == "Recent market updates"
+    assert payload_json["responses"][0]["web_source_items"] == [
+        {"title": "Example Source", "url": "https://example.com/report"}
+    ]
 
 
 def test_chat_passes_research_mode_off_to_orchestrator_when_web_toggle_off(client, app):
@@ -793,14 +798,7 @@ def test_compare_stream_passes_research_mode_off_to_orchestrator(client, app):
     assert "routing_mode" not in app.state.fake_orchestrator.last_ask_kwargs
 
 
-def test_compare_stream_web_toggle_off_after_on_does_not_enrich_second_turn(client, app, monkeypatch):
-    async def _fake_web_enrich(prompt: str, *, enabled: bool, **kwargs):
-        if enabled:
-            return f"{prompt}\n[WEB_CTX]", {"enabled": True, "used": True, "source_count": 2}
-        return prompt, {"enabled": False, "used": False, "source_count": 0}
-
-    monkeypatch.setattr("server.routes.compare.maybe_enrich_prompt_with_web", _fake_web_enrich)
-
+def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, app):
     first_payload = {
         "prompt": "Recent market updates",
         "context": {"session_id": "session-toggle-compare-stream", "new_session": False},
@@ -818,10 +816,15 @@ def test_compare_stream_web_toggle_off_after_on_does_not_enrich_second_turn(clie
     assert first_response.status_code == 200
     first_events = [json.loads(line) for line in first_response.text.splitlines() if line.strip()]
     first_start = next((event for event in first_events if event.get("type") == "start"), None)
+    first_done = next((event for event in first_events if event.get("type") == "response_done"), None)
     assert first_start is not None
+    assert first_done is not None
     assert first_start.get("research_mode") is True
-    assert first_start.get("web_sources") == 2
-    assert app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert first_start.get("web_sources") == 0
+    assert first_done.get("response", {}).get("web_source_items") == [
+        {"title": "Example Source", "url": "https://example.com/report"}
+    ]
+    assert app.state.fake_orchestrator.last_ask_prompt == "Recent market updates"
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "on"
 
     second_payload = {
@@ -841,8 +844,11 @@ def test_compare_stream_web_toggle_off_after_on_does_not_enrich_second_turn(clie
     assert second_response.status_code == 200
     second_events = [json.loads(line) for line in second_response.text.splitlines() if line.strip()]
     second_start = next((event for event in second_events if event.get("type") == "start"), None)
+    second_done = next((event for event in second_events if event.get("type") == "response_done"), None)
     assert second_start is not None
+    assert second_done is not None
     assert second_start.get("research_mode") is False
     assert second_start.get("web_sources") == 0
-    assert not app.state.fake_orchestrator.last_ask_prompt.endswith("[WEB_CTX]")
+    assert second_done.get("response", {}).get("web_source_items") == []
+    assert app.state.fake_orchestrator.last_ask_prompt == "Explain photosynthesis in one sentence."
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"

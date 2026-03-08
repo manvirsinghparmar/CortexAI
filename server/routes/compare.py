@@ -3,7 +3,6 @@
 import asyncio
 import json
 import uuid
-from dataclasses import replace
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -19,7 +18,6 @@ from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.utils import clamp_max_tokens, validate_and_trim_context
 from utils.logger import get_logger
-from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Compare"])
 
@@ -87,49 +85,6 @@ def _iter_stream_lines(text: str):
 def _to_ndjson(event: dict) -> str:
     """Serialize one stream event as NDJSON."""
     return json.dumps(event, ensure_ascii=False) + "\n"
-
-
-def _normalize_web_source_items(raw_items: object) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    if not isinstance(raw_items, list):
-        return items
-
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        url = str(item.get("url") or "").strip()
-        if not url:
-            continue
-        normalized_url = url.lower()
-        if normalized_url in seen_urls:
-            continue
-        seen_urls.add(normalized_url)
-        title = str(item.get("title") or "").strip() or url
-        items.append({"title": title, "url": url})
-        if len(items) >= 8:
-            break
-
-    return items
-
-
-def _with_web_sources_metadata(response: UnifiedResponse, research_meta: dict | None) -> UnifiedResponse:
-    metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    existing_sources = metadata.get("web_source_items")
-    if not isinstance(existing_sources, list):
-        existing_sources = metadata.get("sources")
-
-    normalized_sources = _normalize_web_source_items(existing_sources)
-    if not normalized_sources and isinstance(research_meta, dict):
-        normalized_sources = _normalize_web_source_items(research_meta.get("sources"))
-    if not normalized_sources:
-        return response
-
-    updated_metadata = dict(metadata)
-    updated_metadata["web_source_items"] = normalized_sources
-    updated_metadata.setdefault("sources", normalized_sources)
-    updated_metadata["web_sources"] = len(normalized_sources)
-    return replace(response, metadata=updated_metadata)
 
 
 def _make_error_response(
@@ -215,13 +170,10 @@ async def compare(
 
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
-    effective_prompt, _research_meta = await maybe_enrich_prompt_with_web(
-        request.prompt,
-        enabled=research_mode,
-    )
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -246,7 +198,7 @@ async def compare(
 
     response = await asyncio.to_thread(
         orchestrator.compare,
-        prompt=effective_prompt,
+        prompt=request.prompt,
         models_list=models_list,
         context=context,
         timeout_s=request.timeout_s,
@@ -255,28 +207,24 @@ async def compare(
         **kwargs,
     )
 
-    dto = CompareResponseDTO.from_multi_unified_response(response)
-
+    resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
         try:
-            persistable = [
-                _with_web_sources_metadata(r, _research_meta)
-                for r in response.responses
-                if r is not None
-            ]
-            _persist_compare_interaction(
+            persistable = [r for r in response.responses if r is not None]
+            resolved_session_id = _persist_compare_interaction(
                 api_key=api_key,
                 resolution=persistence_resolution,
                 prompt=request.prompt,
                 responses=persistable,
-                request_group_id=dto.request_group_id,
-                requested_session_id=request.context.session_id if request.context else None,
+                request_group_id=response.request_group_id,
+                requested_session_id=requested_session_id,
                 research_mode=research_mode,
                 force_new_session=force_new_session,
             )
         except Exception:
             logger.exception("Compare persistence failed in DB mode")
 
+    dto = CompareResponseDTO.from_multi_unified_response(response, session_id=resolved_session_id)
     return dto
 
 
@@ -296,13 +244,10 @@ async def compare_stream(
 
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
-    effective_prompt, research_meta = await maybe_enrich_prompt_with_web(
-        request.prompt,
-        enabled=research_mode,
-    )
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -330,10 +275,11 @@ async def compare_stream(
             {
                 "type": "start",
                 "mode": "compare",
+                "session_id": requested_session_id,
                 "target_count": len(request.targets),
                 "research_mode": research_mode,
-                "web_sources": research_meta.get("source_count", 0),
-                "web_source_items": research_meta.get("sources", []),
+                "web_sources": 0,
+                "web_source_items": [],
             }
         )
 
@@ -354,7 +300,7 @@ async def compare_stream(
                         retryable=False,
                     )
                     ordered_responses[i] = bad
-                    bad_dto = ChatResponseDTO.from_unified_response(bad)
+                    bad_dto = ChatResponseDTO.from_unified_response(bad, session_id=requested_session_id)
 
                     yield _to_ndjson(
                         {
@@ -381,7 +327,7 @@ async def compare_stream(
                     asyncio.create_task(
                         _run_compare_target(
                             index=i,
-                            prompt=effective_prompt,
+                            prompt=request.prompt,
                             provider=provider,
                             model=model,
                             context=context,
@@ -395,9 +341,8 @@ async def compare_stream(
 
             for task in asyncio.as_completed(tasks):
                 idx, response = await task
-                response = _with_web_sources_metadata(response, research_meta)
                 ordered_responses[idx] = response
-                dto = ChatResponseDTO.from_unified_response(response)
+                dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
 
                 yield _to_ndjson(
                     {
@@ -424,10 +369,29 @@ async def compare_stream(
                 )
 
             raw_responses = [r for r in ordered_responses if r is not None]
-            dtos = [ChatResponseDTO.from_unified_response(r) for r in raw_responses]
+            resolved_session_id = requested_session_id
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    resolved_session_id = _persist_compare_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
+                        prompt=request.prompt,
+                        responses=raw_responses,
+                        request_group_id=request_group_id,
+                        requested_session_id=requested_session_id,
+                        research_mode=research_mode,
+                        force_new_session=force_new_session,
+                    )
+                except Exception:
+                    logger.exception("Compare stream persistence failed in DB mode")
 
+            dtos = [
+                ChatResponseDTO.from_unified_response(r, session_id=resolved_session_id)
+                for r in raw_responses
+            ]
             compare_payload = {
                 "request_group_id": request_group_id,
+                "session_id": resolved_session_id,
                 "responses": [jsonable_encoder(r) for r in dtos],
                 "success_count": sum(1 for r in dtos if r.error is None),
                 "error_count": sum(1 for r in dtos if r.error is not None),
@@ -436,22 +400,14 @@ async def compare_stream(
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
 
-            yield _to_ndjson({"type": "done", "mode": "compare", "compare": compare_payload})
-
-            if API_DB_ENABLED and persistence_resolution is not None:
-                try:
-                    _persist_compare_interaction(
-                        api_key=api_key,
-                        resolution=persistence_resolution,
-                        prompt=request.prompt,
-                        responses=raw_responses,
-                        request_group_id=request_group_id,
-                        requested_session_id=request.context.session_id if request.context else None,
-                        research_mode=research_mode,
-                        force_new_session=force_new_session,
-                    )
-                except Exception:
-                    logger.exception("Compare stream persistence failed in DB mode")
+            yield _to_ndjson(
+                {
+                    "type": "done",
+                    "mode": "compare",
+                    "session_id": resolved_session_id,
+                    "compare": compare_payload,
+                }
+            )
 
         except Exception as exc:
             if API_DB_ENABLED and persistence_resolution is not None:
@@ -465,14 +421,14 @@ async def compare_stream(
                                 code="provider_error",
                                 retryable=True,
                             )
-                        partial_responses = [_with_web_sources_metadata(fallback_error, research_meta)]
+                        partial_responses = [fallback_error]
                     _persist_compare_interaction(
                         api_key=api_key,
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         responses=partial_responses,
                         request_group_id=request_group_id,
-                        requested_session_id=request.context.session_id if request.context else None,
+                        requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
                     )

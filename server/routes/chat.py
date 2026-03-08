@@ -3,7 +3,7 @@
 import asyncio
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -24,7 +24,6 @@ from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.utils import clamp_max_tokens, validate_and_trim_context
 from utils.logger import get_logger
-from utils.web_research import maybe_enrich_prompt_with_web
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
 STREAM_LINE_DELAY_S = 0.1
@@ -321,49 +320,6 @@ def _to_ndjson(event: dict) -> str:
     return json.dumps(event, ensure_ascii=False) + "\n"
 
 
-def _normalize_web_source_items(raw_items: object) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    if not isinstance(raw_items, list):
-        return items
-
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        url = str(item.get("url") or "").strip()
-        if not url:
-            continue
-        normalized_url = url.lower()
-        if normalized_url in seen_urls:
-            continue
-        seen_urls.add(normalized_url)
-        title = str(item.get("title") or "").strip() or url
-        items.append({"title": title, "url": url})
-        if len(items) >= 8:
-            break
-
-    return items
-
-
-def _with_web_sources_metadata(response, research_meta: dict | None):
-    metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    existing_sources = metadata.get("web_source_items")
-    if not isinstance(existing_sources, list):
-        existing_sources = metadata.get("sources")
-
-    normalized_sources = _normalize_web_source_items(existing_sources)
-    if not normalized_sources and isinstance(research_meta, dict):
-        normalized_sources = _normalize_web_source_items(research_meta.get("sources"))
-    if not normalized_sources:
-        return response
-
-    updated_metadata = dict(metadata)
-    updated_metadata["web_source_items"] = normalized_sources
-    updated_metadata.setdefault("sources", normalized_sources)
-    updated_metadata["web_sources"] = len(normalized_sources)
-    return replace(response, metadata=updated_metadata)
-
-
 @router.post("/chat", response_model=ChatResponseDTO)
 async def chat(
     request: ChatRequest,
@@ -374,17 +330,14 @@ async def chat(
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    effective_prompt, _research_meta = await maybe_enrich_prompt_with_web(
-        request.prompt,
-        enabled=research_mode,
-    )
     execution_plan = _resolve_chat_execution_plan(
         request,
-        effective_prompt=effective_prompt,
+        effective_prompt=request.prompt,
         context=context,
         orchestrator=orchestrator,
     )
@@ -410,7 +363,7 @@ async def chat(
 
     response = await asyncio.to_thread(
         orchestrator.ask,
-        prompt=effective_prompt,
+        prompt=request.prompt,
         model_type=execution_plan.model_type,
         context=context,
         model_name=execution_plan.model_name,
@@ -420,24 +373,23 @@ async def chat(
         routing_constraints=execution_plan.routing_constraints,
         **kwargs,
     )
-    response = _with_web_sources_metadata(response, _research_meta)
 
-    dto = ChatResponseDTO.from_unified_response(response)
-
+    resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
         try:
-            _persist_chat_interaction(
+            resolved_session_id = _persist_chat_interaction(
                 api_key=api_key,
                 resolution=persistence_resolution,
                 prompt=request.prompt,
                 response=response,
-                requested_session_id=request.context.session_id if request.context else None,
+                requested_session_id=requested_session_id,
                 research_mode=research_mode,
                 force_new_session=force_new_session,
             )
         except Exception:
             logger.exception("Chat persistence failed in DB mode")
 
+    dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
     return dto
 
 
@@ -451,17 +403,14 @@ async def chat_stream(
     """Stream a single-model chat response as NDJSON events."""
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
+    requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    effective_prompt, research_meta = await maybe_enrich_prompt_with_web(
-        request.prompt,
-        enabled=research_mode,
-    )
     execution_plan = _resolve_chat_execution_plan(
         request,
-        effective_prompt=effective_prompt,
+        effective_prompt=request.prompt,
         context=context,
         orchestrator=orchestrator,
     )
@@ -494,16 +443,17 @@ async def chat_stream(
                 "mode": "chat",
                 "provider": target_provider,
                 "model": target_model,
+                "session_id": requested_session_id,
                 "research_mode": research_mode,
-                "web_sources": research_meta.get("source_count", 0),
-                "web_source_items": research_meta.get("sources", []),
+                "web_sources": 0,
+                "web_source_items": [],
             }
         )
 
         try:
             response = await asyncio.to_thread(
                 orchestrator.ask,
-                prompt=effective_prompt,
+                prompt=request.prompt,
                 model_type=execution_plan.model_type,
                 context=context,
                 model_name=execution_plan.model_name,
@@ -513,17 +463,31 @@ async def chat_stream(
                 routing_constraints=execution_plan.routing_constraints,
                 **kwargs,
             )
-            response = _with_web_sources_metadata(response, research_meta)
 
-            dto = ChatResponseDTO.from_unified_response(response)
-            stream_text = dto.text or ""
-            if not stream_text and dto.error:
-                stream_text = f"Error: {dto.error.message}"
+            stream_text = response.text or ""
+            if not stream_text and response.error:
+                stream_text = f"Error: {response.error.message}"
 
             for line in _iter_stream_lines(stream_text):
                 yield _to_ndjson({"type": "line", "index": 0, "text": line})
                 await asyncio.sleep(STREAM_LINE_DELAY_S)
 
+            resolved_session_id = requested_session_id
+            if API_DB_ENABLED and persistence_resolution is not None:
+                try:
+                    resolved_session_id = _persist_chat_interaction(
+                        api_key=api_key,
+                        resolution=persistence_resolution,
+                        prompt=request.prompt,
+                        response=response,
+                        requested_session_id=requested_session_id,
+                        research_mode=research_mode,
+                        force_new_session=force_new_session,
+                    )
+                except Exception:
+                    logger.exception("Chat stream persistence failed in DB mode")
+
+            dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
             yield _to_ndjson(
                 {
                     "type": "response_done",
@@ -531,21 +495,7 @@ async def chat_stream(
                     "response": jsonable_encoder(dto),
                 }
             )
-            yield _to_ndjson({"type": "done", "mode": "chat"})
-
-            if API_DB_ENABLED and persistence_resolution is not None:
-                try:
-                    _persist_chat_interaction(
-                        api_key=api_key,
-                        resolution=persistence_resolution,
-                        prompt=request.prompt,
-                        response=response,
-                        requested_session_id=request.context.session_id if request.context else None,
-                        research_mode=research_mode,
-                        force_new_session=force_new_session,
-                    )
-                except Exception:
-                    logger.exception("Chat stream persistence failed in DB mode")
+            yield _to_ndjson({"type": "done", "mode": "chat", "session_id": resolved_session_id})
 
         except Exception as exc:
             if API_DB_ENABLED and persistence_resolution is not None:
@@ -557,13 +507,12 @@ async def chat_stream(
                         code="provider_error",
                         retryable=True,
                     )
-                    error_response = _with_web_sources_metadata(error_response, research_meta)
                     _persist_chat_interaction(
                         api_key=api_key,
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         response=error_response,
-                        requested_session_id=request.context.session_id if request.context else None,
+                        requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
                     )

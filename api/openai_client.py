@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 import openai
 
@@ -62,61 +63,80 @@ class OpenAIClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
-        temperature = kwargs.get("temperature", 0.7)
+        temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 500)
         max_completion_tokens = kwargs.get("max_completion_tokens")
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
-
-            request_payload = {
-                "model": model,
-                "messages": normalized_messages,
-                "temperature": temperature,
-            }
-            if max_completion_tokens is not None:
-                request_payload["max_completion_tokens"] = max_completion_tokens
-            else:
-                request_payload["max_tokens"] = max_tokens
-
-            try:
-                response = self.client.chat.completions.create(**request_payload)
-            except Exception as request_exc:
-                # OpenAI newer model families reject max_tokens and require max_completion_tokens.
-                if (
-                    "max_tokens" in request_payload
-                    and self._should_retry_with_max_completion_tokens(request_exc)
-                ):
-                    retry_payload = dict(request_payload)
-                    retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
-                    logger.warning(
-                        "Retrying OpenAI request with max_completion_tokens",
-                        extra={
-                            "extra_fields": {
-                                "request_id": request_id,
-                                "model": model,
-                                "retry_reason": "unsupported_max_tokens_parameter",
-                            }
-                        },
-                    )
-                    response = self.client.chat.completions.create(**retry_payload)
-                else:
-                    raise
+            response, endpoint_used, adaptive_retry = self._create_openai_completion(
+                request_id=request_id,
+                model=model,
+                normalized_messages=normalized_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+            )
 
             latency_ms = self._measure_latency(start_time)
 
-            # Extract text
-            text = response.choices[0].message.content or ""
+            if endpoint_used == "responses":
+                text = self._extract_responses_text(response)
+                token_usage = self._extract_responses_usage(response)
+                finish_reason = self._normalize_finish_reason(
+                    self._extract_responses_finish_reason(response),
+                    provider="openai",
+                )
+                raw = self._serialize_raw_response(response) if save_full else None
+            else:
+                # Extract text
+                text = response.choices[0].message.content or ""
 
-            # Extract token usage
-            token_usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
-                completion_tokens=(
-                    response.usage.completion_tokens if hasattr(response, "usage") else 0
-                ),
-                total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
-            )
+                # Extract token usage
+                token_usage = TokenUsage(
+                    prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
+                    completion_tokens=(
+                        response.usage.completion_tokens if hasattr(response, "usage") else 0
+                    ),
+                    total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
+                )
+
+                # Normalize finish reason
+                finish_reason = self._normalize_finish_reason(
+                    response.choices[0].finish_reason if response.choices else None,
+                    provider="openai",
+                )
+
+                # Build raw response if requested
+                raw = None
+                if save_full:
+                    raw = {
+                        "id": response.id,
+                        "object": response.object,
+                        "created": response.created,
+                        "model": response.model,
+                        "choices": [
+                            {
+                                "index": choice.index,
+                                "message": {
+                                    "role": choice.message.role,
+                                    "content": choice.message.content,
+                                },
+                                "finish_reason": choice.finish_reason,
+                            }
+                            for choice in response.choices
+                        ],
+                        "usage": (
+                            {
+                                "prompt_tokens": response.usage.prompt_tokens,
+                                "completion_tokens": response.usage.completion_tokens,
+                                "total_tokens": response.usage.total_tokens,
+                            }
+                            if hasattr(response, "usage")
+                            else None
+                        ),
+                    }
 
             # Calculate cost
             cost = self.cost_calculator.calculate_cost(
@@ -124,40 +144,9 @@ class OpenAIClient(BaseAIClient):
             )
             estimated_cost = cost["total_cost"]
 
-            # Normalize finish reason
-            finish_reason = self._normalize_finish_reason(
-                response.choices[0].finish_reason if response.choices else None, provider="openai"
-            )
-
-            # Build raw response if requested
-            raw = None
-            if save_full:
-                raw = {
-                    "id": response.id,
-                    "object": response.object,
-                    "created": response.created,
-                    "model": response.model,
-                    "choices": [
-                        {
-                            "index": choice.index,
-                            "message": {
-                                "role": choice.message.role,
-                                "content": choice.message.content,
-                            },
-                            "finish_reason": choice.finish_reason,
-                        }
-                        for choice in response.choices
-                    ],
-                    "usage": (
-                        {
-                            "prompt_tokens": response.usage.prompt_tokens,
-                            "completion_tokens": response.usage.completion_tokens,
-                            "total_tokens": response.usage.total_tokens,
-                        }
-                        if hasattr(response, "usage")
-                        else None
-                    ),
-                }
+            metadata = {"endpoint": endpoint_used}
+            if adaptive_retry:
+                metadata["adaptive_retry"] = adaptive_retry
 
             logger.info(
                 "OpenAI completion successful",
@@ -165,6 +154,7 @@ class OpenAIClient(BaseAIClient):
                     "extra_fields": {
                         "request_id": request_id,
                         "model": model,
+                        "endpoint": endpoint_used,
                         "latency_ms": latency_ms,
                         "tokens": token_usage.total_tokens,
                         "cost": estimated_cost,
@@ -182,7 +172,7 @@ class OpenAIClient(BaseAIClient):
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
-                metadata={},
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -206,6 +196,278 @@ class OpenAIClient(BaseAIClient):
             return self._create_error_response(
                 request_id=request_id, error=error, latency_ms=latency_ms, model=model
             )
+
+    def _create_openai_completion(
+        self,
+        *,
+        request_id: str,
+        model: str,
+        normalized_messages: list[dict[str, str]],
+        temperature: float | None,
+        max_tokens: int,
+        max_completion_tokens: int | None,
+    ) -> tuple[Any, str, dict[str, Any] | None]:
+        if self._should_use_responses_api_for_model(model):
+            payload = self._build_responses_payload(
+                model=model,
+                normalized_messages=normalized_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+            )
+            return self._create_openai_response_with_compat_retries(
+                request_id=request_id,
+                model=model,
+                payload=payload,
+            )
+
+        request_payload = {
+            "model": model,
+            "messages": normalized_messages,
+        }
+        if temperature is not None:
+            request_payload["temperature"] = temperature
+        if max_completion_tokens is not None:
+            request_payload["max_completion_tokens"] = max_completion_tokens
+        else:
+            request_payload["max_tokens"] = max_tokens
+
+        try:
+            return self.client.chat.completions.create(**request_payload), "chat.completions", None
+        except Exception as request_exc:
+            # OpenAI newer model families reject max_tokens and require max_completion_tokens.
+            if (
+                "max_tokens" in request_payload
+                and self._should_retry_with_max_completion_tokens(request_exc)
+            ):
+                retry_payload = dict(request_payload)
+                retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+                logger.warning(
+                    "Retrying OpenAI request with max_completion_tokens",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "retry_reason": "unsupported_max_tokens_parameter",
+                        }
+                    },
+                )
+                return self.client.chat.completions.create(**retry_payload), "chat.completions", {
+                    "dropped_param": "max_tokens",
+                    "replacement_param": "max_completion_tokens",
+                    "retry_reason": "unsupported_max_tokens_parameter",
+                    "endpoint": "chat.completions",
+                }
+
+            if self._should_retry_with_responses_api(request_exc):
+                payload = self._build_responses_payload(
+                    model=model,
+                    normalized_messages=normalized_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    max_completion_tokens=max_completion_tokens,
+                )
+                logger.warning(
+                    "Retrying OpenAI request with responses API",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "retry_reason": "chat_endpoint_incompatible_with_model",
+                        }
+                    },
+                )
+                return self._create_openai_response_with_compat_retries(
+                    request_id=request_id,
+                    model=model,
+                    payload=payload,
+                )
+
+            dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
+                request_payload,
+                request_exc,
+                safe_parameters={
+                    "temperature",
+                    "top_p",
+                    "presence_penalty",
+                    "frequency_penalty",
+                    "max_tokens",
+                    "max_completion_tokens",
+                },
+            )
+            if retry_payload is not None and dropped_param is not None:
+                logger.warning(
+                    "Retrying OpenAI chat completion without unsupported parameter",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "retry_reason": "unsupported_parameter",
+                            "dropped_param": dropped_param,
+                        }
+                    },
+                )
+                return self.client.chat.completions.create(**retry_payload), "chat.completions", {
+                    "dropped_param": dropped_param,
+                    "retry_reason": "unsupported_parameter",
+                    "endpoint": "chat.completions",
+                }
+
+            raise
+
+    @staticmethod
+    def _should_use_responses_api_for_model(model: str) -> bool:
+        model_norm = (model or "").strip().lower()
+        return "codex" in model_norm
+
+    @staticmethod
+    def _should_retry_with_responses_api(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "not a chat model" in message
+            or "not supported in the v1/chat/completions endpoint" in message
+            or (
+                "chat/completions" in message
+                and "responses" in message
+                and "endpoint" in message
+            )
+        )
+
+    @staticmethod
+    def _build_responses_payload(
+        *,
+        model: str,
+        normalized_messages: list[dict[str, str]],
+        temperature: float | None,
+        max_tokens: int,
+        max_completion_tokens: int | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": normalized_messages,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_completion_tokens is not None:
+            payload["max_output_tokens"] = max_completion_tokens
+        else:
+            payload["max_output_tokens"] = max_tokens
+        return payload
+
+    def _create_openai_response_with_compat_retries(
+        self,
+        *,
+        request_id: str,
+        model: str,
+        payload: dict[str, Any],
+    ) -> tuple[Any, str, dict[str, Any] | None]:
+        try:
+            return self.client.responses.create(**payload), "responses", None
+        except Exception as exc:
+            dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
+                payload,
+                exc,
+                safe_parameters={
+                    "temperature",
+                    "top_p",
+                    "presence_penalty",
+                    "frequency_penalty",
+                    "max_output_tokens",
+                    "max_completion_tokens",
+                    "reasoning_effort",
+                },
+            )
+            if retry_payload is not None and dropped_param is not None:
+                logger.warning(
+                    "Retrying OpenAI responses request without unsupported parameter",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "retry_reason": "unsupported_parameter",
+                            "dropped_param": dropped_param,
+                        }
+                    },
+                )
+                return self.client.responses.create(**retry_payload), "responses", {
+                    "dropped_param": dropped_param,
+                    "retry_reason": "unsupported_parameter",
+                    "endpoint": "responses",
+                }
+            raise
+
+    @staticmethod
+    def _field(obj: Any, name: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    @classmethod
+    def _extract_responses_text(cls, response: Any) -> str:
+        output_text = cls._field(response, "output_text")
+        if output_text:
+            return str(output_text)
+
+        output_items = cls._field(response, "output", [])
+        collected: list[str] = []
+        for item in output_items or []:
+            content_items = cls._field(item, "content", [])
+            for part in content_items or []:
+                part_type = str(cls._field(part, "type", "") or "").lower()
+                if part_type not in {"output_text", "text"}:
+                    continue
+                text = cls._field(part, "text")
+                if text:
+                    collected.append(str(text))
+
+        return "".join(collected).strip()
+
+    @classmethod
+    def _extract_responses_usage(cls, response: Any) -> TokenUsage:
+        usage = cls._field(response, "usage")
+        prompt_tokens = int(
+            cls._field(usage, "input_tokens", cls._field(usage, "prompt_tokens", 0)) or 0
+        )
+        completion_tokens = int(
+            cls._field(usage, "output_tokens", cls._field(usage, "completion_tokens", 0)) or 0
+        )
+        total_tokens = int(cls._field(usage, "total_tokens", 0) or 0)
+        if total_tokens <= 0:
+            total_tokens = prompt_tokens + completion_tokens
+        return TokenUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+
+    @classmethod
+    def _extract_responses_finish_reason(cls, response: Any) -> str | None:
+        finish_reason = cls._field(response, "finish_reason")
+        if finish_reason:
+            return str(finish_reason)
+
+        incomplete = cls._field(response, "incomplete_details")
+        incomplete_reason = str(cls._field(incomplete, "reason", "") or "").lower()
+        if "max_output_tokens" in incomplete_reason or "max_tokens" in incomplete_reason:
+            return "length"
+
+        status = str(cls._field(response, "status", "") or "").lower()
+        if status == "completed":
+            return "stop"
+        if status in {"failed", "incomplete", "cancelled"}:
+            return "error"
+        return None
+
+    @staticmethod
+    def _serialize_raw_response(response: Any) -> dict[str, Any] | None:
+        if hasattr(response, "model_dump"):
+            try:
+                return response.model_dump()
+            except Exception:
+                return None
+        if isinstance(response, dict):
+            return response
+        return None
 
     @staticmethod
     def _should_retry_with_max_completion_tokens(exc: Exception) -> bool:

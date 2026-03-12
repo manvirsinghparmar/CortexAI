@@ -49,6 +49,14 @@ class _PreviewOrchestrator:
         return self.preview_target
 
 
+class _PreviewAndAvailabilityOrchestrator(_PreviewOrchestrator):
+    def __init__(self, preview_target, available):
+        super().__init__(preview_target)
+        self.available = available
+
+    def available_providers(self, **_kwargs):
+        return list(self.available)
+
 # ---------------------------------------------------------------------------
 # Request schema contract
 # ---------------------------------------------------------------------------
@@ -232,6 +240,26 @@ def test_resolve_chat_execution_plan_uses_legacy_auto_when_true_smart_disabled(m
     assert plan.preview_model == "grok-4-latest"
 
 
+def test_resolve_chat_execution_plan_smart_fallback_prefers_available_providers(monkeypatch):
+    monkeypatch.setattr(chat_route, "TRUE_SMART_ROUTING_ENABLED", True)
+    monkeypatch.setenv("DEFAULT_OPENAI_MODEL", "gpt-5.2-codex")
+    request = ChatRequest(
+        prompt="Write a python function to reverse a list",
+        routing=ChatRoutingRequest(smart_mode=True, research_mode=False),
+    )
+    orchestrator = _PreviewAndAvailabilityOrchestrator(None, ["openai"])
+
+    plan = chat_route._resolve_chat_execution_plan(
+        request,
+        effective_prompt=request.prompt,
+        context=None,
+        orchestrator=orchestrator,
+    )
+
+    assert plan.strategy == "smart_orchestrator"
+    assert plan.preview_provider == "openai"
+    assert plan.preview_model == "gpt-5.2-codex"
+
 def test_providers_for_runtime_keys_returns_preview_provider_when_not_smart():
     plan = chat_route.ChatExecutionPlan(
         strategy="legacy_auto",
@@ -378,4 +406,7 @@ def test_orchestrator_ask_legacy_mode_requires_provider():
     assert response.is_error is True
     assert response.error is not None
     assert response.error.code == "bad_request"
+
+
+
 

@@ -17,6 +17,19 @@ def test_follow_up_detection():
     assert features.is_follow_up is True
 
 
+def test_detail_follow_up_detection_with_context():
+    analyzer = PromptAnalyzer()
+    context = UserContext(
+        conversation_history=[
+            {"role": "user", "content": "Who is war between Iran and Israel going on?"},
+            {"role": "assistant", "content": "Detailed answer with sources."},
+        ]
+    )
+    features = analyzer.analyze("can you be a bit more detailed on it?", context=context)
+    assert features.has_analysis is True
+    assert features.is_follow_up is True
+
+
 def test_strict_constraints_detection():
     analyzer = PromptAnalyzer()
     features = analyzer.analyze("Give exactly 3 bullets and no extra text.", context=None)

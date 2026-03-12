@@ -60,3 +60,15 @@ def test_tier_t3_for_complex_code_request():
     )
     decision = decider.decide(features)
     assert decision.tier == Tier.T3
+
+
+def test_tier_t2_for_follow_up_needing_depth():
+    decider = TierDecider()
+    features = _base_features(
+        context_messages=2,
+        is_follow_up=True,
+        needs_latest_info=True,
+    )
+    decision = decider.decide(features)
+    assert decision.tier == Tier.T2
+    assert "follow_up_needs_depth" in decision.reasons

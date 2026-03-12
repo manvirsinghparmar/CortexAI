@@ -43,6 +43,19 @@ class TierDecider:
             return TierDecision(tier=Tier.T3, reasons=reasons)
 
         if (
+            features.context_messages > 0
+            and features.is_follow_up
+            and (
+                features.has_analysis
+                or features.needs_accuracy
+                or features.needs_latest_info
+                or features.has_factual
+            )
+        ):
+            reasons.append("follow_up_needs_depth")
+            return TierDecision(tier=Tier.T2, reasons=reasons)
+
+        if (
             features.has_code
             or features.has_math
             or features.has_analysis

@@ -53,3 +53,9 @@ build/
 /orchestrator/logs/app.log
 /api/logs/error.log
 /orchestrator/logs/error.log
+e2e/.env
+e2e/.env.local
+e2e/.runtime/
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

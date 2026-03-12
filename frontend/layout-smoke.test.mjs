@@ -107,7 +107,7 @@ test("compare transcript renders turn-based side-by-side columns with model head
 });
 
 test("compare mode sends session context and preserves prompt history between turns", () => {
-    assert.match(appJs, /async function doCompare\(prompt\) \{[\s\S]*const sessionId = ensureActiveSessionId\(\);/);
+    assert.match(appJs, /async function doCompare\(prompt, \{ streamRequest = null \} = \{\}\) \{[\s\S]*const sessionId = ensureActiveSessionId\(\);/);
     assert.match(appJs, /await callAPIStream\("\/v1\/compare\/stream", \{[\s\S]*context: \{[\s\S]*session_id: sessionId,[\s\S]*conversation_history: conversationHistory,[\s\S]*new_session: pendingNewSession,/);
     assert.match(appJs, /const compareAssistantContext = buildCompareAssistantContext\(compareResponsesForContext\);/);
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
@@ -177,6 +177,11 @@ test("composer shows explicit stop control during streaming", () => {
     assert.match(appJs, /function handlePrimaryComposerAction\(\) \{/);
     assert.match(appJs, /stopActiveGeneration\(\);/);
     assert.match(appJs, /setComposerRequestState\("connecting"\)/);
+    assert.match(appJs, /const streamRequest = beginActiveStreamRequest\(\);/);
+    assert.match(
+        appJs,
+        /function setComposerRequestState\(nextState\) \{[\s\S]*renderComposerActionButtons\(\);[\s\S]*updateSendButtonState\(\);[\s\S]*\}/,
+    );
     assert.match(appJs, /Stop generating/);
     assert.match(styleCss, /\.btn-submit\.is-stop \{/);
     assert.match(styleCss, /\.stop-icon \{/);

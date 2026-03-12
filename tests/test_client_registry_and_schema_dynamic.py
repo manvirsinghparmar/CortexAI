@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from api.base_client import BaseAIClient
+from api import client_registry as client_registry_module
 from api.client_registry import ClientRegistry
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from server.schemas import requests as request_models
@@ -91,6 +92,33 @@ def test_client_registry_rejects_unknown_provider():
         registry.create_client("unknown-provider", api_key_override="x")
 
 
+
+def test_client_registry_available_providers_requires_sdk_and_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setattr(
+        client_registry_module,
+        "is_provider_sdk_available",
+        lambda provider: provider != "claude",
+    )
+
+    registry = ClientRegistry.from_catalog(factories=_dummy_factories())
+    available = registry.available_providers(["openai", "claude"])
+
+    assert available == ["openai"]
+
+
+def test_client_registry_available_providers_honors_override_keys(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(client_registry_module, "is_provider_sdk_available", lambda provider: True)
+
+    registry = ClientRegistry.from_catalog(factories=_dummy_factories())
+    available = registry.available_providers(
+        ["claude"],
+        provider_api_keys={"claude": "tenant-claude-key"},
+    )
+
+    assert available == ["claude"]
 def test_client_registry_fails_when_catalog_provider_has_no_registered_adapter():
     providers = get_provider_ids()
     assert providers

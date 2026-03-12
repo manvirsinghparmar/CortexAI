@@ -36,3 +36,22 @@ def test_api_runs_when_frontend_directory_is_missing(monkeypatch):
 
     root = client.get("/")
     assert root.status_code == 404
+
+
+def test_runtime_health_reports_interpreter_and_claude_readiness(monkeypatch):
+    _set_min_api_env(monkeypatch)
+    monkeypatch.setenv("SERVE_FRONTEND", "false")
+
+    app = create_app()
+    client = TestClient(app)
+
+    runtime = client.get("/health/runtime")
+    assert runtime.status_code == 200
+
+    payload = runtime.json()
+    assert payload["status"] in {"healthy", "degraded"}
+    assert isinstance(payload.get("python_executable"), str)
+    assert payload.get("python_executable")
+    assert isinstance(payload.get("claude"), dict)
+    assert "sdk_available" in payload["claude"]
+    assert "api_key_present" in payload["claude"]

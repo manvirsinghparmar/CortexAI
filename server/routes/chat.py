@@ -160,14 +160,35 @@ def _build_chat_routing_constraints() -> dict[str, Any] | None:
 
 
 def _pick_smart_provider(prompt: str, *, smart_mode: bool, research_mode: bool) -> str:
+    return _pick_smart_provider_from_candidates(
+        prompt,
+        smart_mode=smart_mode,
+        research_mode=research_mode,
+        candidates=None,
+    )
+
+
+def _pick_smart_provider_from_candidates(
+    prompt: str,
+    *,
+    smart_mode: bool,
+    research_mode: bool,
+    candidates: list[str] | tuple[str, ...] | None,
+) -> str:
     text = (prompt or "").lower()
-    default_provider = _first_supported_provider(get_provider_ids(), fallback="openai")
+    candidate_pool = get_provider_ids() if candidates is None else list(candidates)
+    candidate_set = {provider for provider in candidate_pool if _normalize_provider(provider)}
+    default_provider = _first_supported_provider(candidate_pool, fallback="openai")
+
+    def _pick_ranked(preferred: tuple[str, ...]) -> str:
+        ranked = [provider for provider in preferred if provider in candidate_set]
+        return _first_supported_provider(ranked, fallback=default_provider)
 
     if not smart_mode:
-        return _first_supported_provider(("gemini",), fallback=default_provider)
+        return _pick_ranked(("gemini",))
 
     if research_mode:
-        return _first_supported_provider(("openai",), fallback=default_provider)
+        return _pick_ranked(("openai",))
 
     code_signals = (
         "code", "bug", "debug", "stack trace", "python", "javascript", "typescript",
@@ -180,12 +201,12 @@ def _pick_smart_provider(prompt: str, *, smart_mode: bool, research_mode: bool) 
     creative_signals = ("poem", "story", "creative", "brainstorm", "tagline", "tweet")
 
     if any(signal in text for signal in code_signals):
-        return _first_supported_provider(("deepseek", "claude", "openai"), fallback=default_provider)
+        return _pick_ranked(("deepseek", "claude", "openai"))
     if any(signal in text for signal in deep_reasoning_signals) or len(text) > 900:
-        return _first_supported_provider(("openai", "claude"), fallback=default_provider)
+        return _pick_ranked(("openai", "claude"))
     if any(signal in text for signal in creative_signals):
-        return _first_supported_provider(("grok", "gemini", "claude"), fallback=default_provider)
-    return _first_supported_provider(("gemini", "claude"), fallback=default_provider)
+        return _pick_ranked(("grok", "gemini", "claude"))
+    return _pick_ranked(("gemini", "claude"))
 
 
 def _resolve_chat_execution_plan(
@@ -194,6 +215,7 @@ def _resolve_chat_execution_plan(
     effective_prompt: str,
     context: UserContext | None,
     orchestrator: CortexOrchestrator,
+    provider_api_keys: dict[str, str] | None = None,
 ) -> ChatExecutionPlan:
     manual_provider = (request.provider or "").strip().lower()
     manual_model = (request.model or "").strip()
@@ -225,6 +247,7 @@ def _resolve_chat_execution_plan(
                 context=context,
                 routing_mode=SMART_ROUTING_MODE,
                 routing_constraints=constraints,
+                provider_api_keys=provider_api_keys,
             )
 
         preview_provider: str | None = None
@@ -236,10 +259,16 @@ def _resolve_chat_execution_plan(
                 preview_provider, preview_model = pp, pm
 
         if not preview_provider or not preview_model:
-            fallback_provider = _pick_smart_provider(
+            available_providers: list[str] | None = None
+            available_fn = getattr(orchestrator, "available_providers", None)
+            if callable(available_fn):
+                available_providers = available_fn(provider_api_keys=provider_api_keys)
+
+            fallback_provider = _pick_smart_provider_from_candidates(
                 request.prompt,
                 smart_mode=True,
                 research_mode=research_mode,
+                candidates=available_providers,
             )
             preview_provider = fallback_provider
             preview_model = _default_model_for_provider(fallback_provider)
@@ -335,23 +364,24 @@ async def chat(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    execution_plan = _resolve_chat_execution_plan(
-        request,
-        effective_prompt=request.prompt,
-        context=context,
-        orchestrator=orchestrator,
-    )
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
         persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
-        runtime_providers = _providers_for_runtime_keys(execution_plan)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
-            providers=runtime_providers,
+            providers=SUPPORTED_PROVIDERS,
         )
+
+    execution_plan = _resolve_chat_execution_plan(
+        request,
+        effective_prompt=request.prompt,
+        context=context,
+        orchestrator=orchestrator,
+        provider_api_keys=provider_api_keys,
+    )
 
     kwargs = {}
     if request.temperature is not None:
@@ -408,25 +438,26 @@ async def chat_stream(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    execution_plan = _resolve_chat_execution_plan(
-        request,
-        effective_prompt=request.prompt,
-        context=context,
-        orchestrator=orchestrator,
-    )
-    target_provider = execution_plan.preview_provider
-    target_model = execution_plan.preview_model
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
         persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
-        runtime_providers = _providers_for_runtime_keys(execution_plan)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
-            providers=runtime_providers,
+            providers=SUPPORTED_PROVIDERS,
         )
+
+    execution_plan = _resolve_chat_execution_plan(
+        request,
+        effective_prompt=request.prompt,
+        context=context,
+        orchestrator=orchestrator,
+        provider_api_keys=provider_api_keys,
+    )
+    target_provider = execution_plan.preview_provider
+    target_model = execution_plan.preview_model
 
     kwargs = {}
     if request.temperature is not None:

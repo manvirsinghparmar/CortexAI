@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
+from server.runtime_checks import check_claude_runtime
 from server.routes import admin, byok, catalog, chat, compare, health, history, optimize, reporting, whoami
 from utils.logger import get_logger
 import os
@@ -29,7 +30,15 @@ def _resolve_frontend_dir() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
-    logger.info("FastAPI server starting up")
+    runtime_check = check_claude_runtime()
+    logger.info(
+        "FastAPI server starting up",
+        extra={
+            "extra_fields": {
+                "python_executable": runtime_check.python_executable,
+            }
+        },
+    )
 
     database_url = (os.getenv("DATABASE_URL") or "").strip()
     if not database_url:
@@ -49,6 +58,44 @@ async def lifespan(app: FastAPI):
     missing = [k for k in required_keys if not os.getenv(k)]
     if missing:
         logger.warning(f"Missing environment variables: {missing}")
+
+    if not runtime_check.sdk_available:
+        logger.warning(
+            "Claude SDK is unavailable in current interpreter",
+            extra={
+                "extra_fields": {
+                    "provider": "claude",
+                    "sdk_module": runtime_check.sdk_module,
+                    "python_executable": runtime_check.python_executable,
+                    "install_command": (
+                        f"{runtime_check.python_executable} -m pip install -r requirements.txt"
+                    ),
+                }
+            },
+        )
+    elif not runtime_check.api_key_present:
+        logger.warning(
+            "Claude environment API key is not configured",
+            extra={
+                "extra_fields": {
+                    "provider": "claude",
+                    "api_key_env": runtime_check.api_key_env,
+                    "python_executable": runtime_check.python_executable,
+                    "note": "BYOK runtime keys can still satisfy Claude requests per API key.",
+                }
+            },
+        )
+    else:
+        logger.info(
+            "Claude runtime readiness check passed",
+            extra={
+                "extra_fields": {
+                    "provider": "claude",
+                    "sdk_module": runtime_check.sdk_module,
+                    "api_key_env": runtime_check.api_key_env,
+                }
+            },
+        )
 
     yield
 
@@ -74,7 +121,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # API routes – registered first so /v1/* takes precedence over static files
+    # API routes - registered first so /v1/* takes precedence over static files
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(compare.router)
@@ -97,3 +144,4 @@ def create_app() -> FastAPI:
         logger.info("SERVE_FRONTEND=false; static frontend mount disabled")
 
     return app
+

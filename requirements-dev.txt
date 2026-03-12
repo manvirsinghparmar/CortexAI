@@ -1,3 +1,6 @@
+# Include runtime dependencies so dev installs are complete.
+-r requirements.txt
+
 # Linting & formatting
 ruff
 black

@@ -193,6 +193,94 @@ class TestProviderContractCompliance:
         assert "max_tokens" not in calls[1].kwargs
 
     @patch("openai.OpenAI")
+    def test_openai_codex_models_use_responses_api(self, mock_openai):
+        """Codex-family models should use responses API directly."""
+        mock_response = Mock()
+        mock_response.output_text = "Codex response"
+        mock_response.usage = Mock(input_tokens=7, output_tokens=11, total_tokens=18)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.2-codex")
+        response = client.get_completion("Test prompt", max_tokens=333)
+
+        assert response.is_success
+        assert response.text == "Codex response"
+        assert response.finish_reason == "stop"
+        assert response.token_usage.prompt_tokens == 7
+        assert response.token_usage.completion_tokens == 11
+        assert response.token_usage.total_tokens == 18
+        assert response.metadata["endpoint"] == "responses"
+
+        mock_openai.return_value.chat.completions.create.assert_not_called()
+        mock_openai.return_value.responses.create.assert_called_once()
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assert payload["model"] == "gpt-5.2-codex"
+        assert payload["max_output_tokens"] == 333
+        assert payload["input"] == [{"role": "user", "content": "Test prompt"}]
+
+    @patch("openai.OpenAI")
+    def test_openai_retries_with_responses_when_chat_endpoint_incompatible(self, mock_openai):
+        """If chat endpoint rejects a model family, retry with responses API."""
+        incompatible_error = Exception(
+            "Error code: 404 - {'error': {'message': "
+            "'This is not a chat model and thus not supported in the v1/chat/completions "
+            "endpoint. Did you mean to use v1/completions?'}}"
+        )
+        mock_openai.return_value.chat.completions.create.side_effect = incompatible_error
+
+        mock_response = Mock()
+        mock_response.output_text = "Recovered through responses API"
+        mock_response.usage = Mock(input_tokens=4, output_tokens=6, total_tokens=10)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
+        response = client.get_completion("Test prompt", model="future-non-chat-model", max_tokens=123)
+
+        assert response.is_success
+        assert response.text == "Recovered through responses API"
+        assert response.finish_reason == "stop"
+        assert response.metadata["endpoint"] == "responses"
+        assert mock_openai.return_value.chat.completions.create.call_count == 1
+        mock_openai.return_value.responses.create.assert_called_once()
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assert payload["model"] == "future-non-chat-model"
+        assert payload["max_output_tokens"] == 123
+
+    @patch("openai.OpenAI")
+    def test_openai_retries_responses_without_temperature_when_unsupported(self, mock_openai):
+        """Responses path should retry without temperature for incompatible models."""
+        unsupported_temp = Exception(
+            "Error code: 400 - {'error': {'message': "
+            "\"Unsupported parameter: 'temperature' is not supported with this model.\"}}"
+        )
+        success = Mock()
+        success.output_text = "Recovered without temperature"
+        success.usage = Mock(input_tokens=3, output_tokens=5, total_tokens=8)
+        success.status = "completed"
+        success.finish_reason = None
+        mock_openai.return_value.responses.create.side_effect = [unsupported_temp, success]
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.2-codex")
+        response = client.get_completion("Test prompt", temperature=0.2, max_tokens=77)
+
+        assert response.is_success
+        assert response.text == "Recovered without temperature"
+        assert response.finish_reason == "stop"
+        assert response.metadata["endpoint"] == "responses"
+        assert response.metadata["adaptive_retry"]["dropped_param"] == "temperature"
+        assert response.metadata["adaptive_retry"]["retry_reason"] == "unsupported_parameter"
+        assert mock_openai.return_value.responses.create.call_count == 2
+        first_payload = mock_openai.return_value.responses.create.call_args_list[0].kwargs
+        second_payload = mock_openai.return_value.responses.create.call_args_list[1].kwargs
+        assert first_payload["temperature"] == 0.2
+        assert "temperature" not in second_payload
+        assert second_payload["max_output_tokens"] == 77
+
+    @patch("openai.OpenAI")
     def test_deepseek_returns_unified_response(self, mock_openai):
         """Test that DeepSeek client returns UnifiedResponse."""
         # Mock successful response
@@ -209,6 +297,31 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("openai.OpenAI")
+    def test_deepseek_retries_without_unsupported_parameter(self, mock_openai):
+        """DeepSeek should retry once when provider rejects an optional parameter."""
+        unsupported_temp = Exception(
+            "Error code: 400 - {'error': {'message': "
+            "\"Unsupported parameter: 'temperature' is not supported with this model.\"}}"
+        )
+        mock_success = Mock()
+        mock_success.choices = [Mock(message=Mock(content="Recovered"), finish_reason="stop")]
+        mock_success.usage = Mock(prompt_tokens=8, completion_tokens=13, total_tokens=21)
+        mock_openai.return_value.chat.completions.create.side_effect = [unsupported_temp, mock_success]
+
+        client = DeepSeekClient(api_key="test-key", model_name="deepseek-chat")
+        response = client.get_completion("Test prompt", temperature=0.5, max_tokens=200)
+
+        assert response.is_success
+        assert response.text == "Recovered"
+        assert response.metadata["endpoint"] == "chat.completions"
+        assert response.metadata["adaptive_retry"]["dropped_param"] == "temperature"
+        assert mock_openai.return_value.chat.completions.create.call_count == 2
+        first_payload = mock_openai.return_value.chat.completions.create.call_args_list[0].kwargs
+        second_payload = mock_openai.return_value.chat.completions.create.call_args_list[1].kwargs
+        assert first_payload["temperature"] == 0.5
+        assert "temperature" not in second_payload
+
+    @patch("openai.OpenAI")
     def test_grok_returns_unified_response(self, mock_openai):
         """Test that Grok client returns UnifiedResponse."""
         # Mock successful response
@@ -223,6 +336,31 @@ class TestProviderContractCompliance:
         assert isinstance(response, UnifiedResponse)
         assert response.provider == "grok"
         assert response.is_success
+
+    @patch("openai.OpenAI")
+    def test_grok_retries_without_unsupported_parameter(self, mock_openai):
+        """Grok should retry once when provider rejects an optional parameter."""
+        unsupported_temp = Exception(
+            "Error code: 400 - {'error': {'message': "
+            "\"Unsupported parameter: 'temperature' is not supported with this model.\"}}"
+        )
+        mock_success = Mock()
+        mock_success.choices = [Mock(message=Mock(content="Recovered"), finish_reason="stop")]
+        mock_success.usage = Mock(prompt_tokens=6, completion_tokens=9, total_tokens=15)
+        mock_openai.return_value.chat.completions.create.side_effect = [unsupported_temp, mock_success]
+
+        client = GrokClient(api_key="test-key", model_name="grok-4-latest")
+        response = client.get_completion("Test prompt", temperature=0.3, max_tokens=120)
+
+        assert response.is_success
+        assert response.text == "Recovered"
+        assert response.metadata["endpoint"] == "chat.completions"
+        assert response.metadata["adaptive_retry"]["dropped_param"] == "temperature"
+        assert mock_openai.return_value.chat.completions.create.call_count == 2
+        first_payload = mock_openai.return_value.chat.completions.create.call_args_list[0].kwargs
+        second_payload = mock_openai.return_value.chat.completions.create.call_args_list[1].kwargs
+        assert first_payload["temperature"] == 0.3
+        assert "temperature" not in second_payload
 
     @patch("google.genai.Client")
     def test_gemini_returns_unified_response(self, mock_genai):
@@ -243,6 +381,33 @@ class TestProviderContractCompliance:
         assert response.provider == "gemini"
         assert response.text == "Test response"
         assert response.is_success
+
+    @patch("google.genai.Client")
+    def test_gemini_retries_without_unsupported_parameter(self, mock_genai):
+        """Gemini should retry once when config includes unsupported optional parameter."""
+        unsupported_temp = Exception(
+            "400 Invalid argument: Unsupported parameter: 'temperature' is not supported with this model."
+        )
+        mock_response = Mock()
+        mock_response.text = "Recovered"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.side_effect = [unsupported_temp, mock_response]
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-1.5-flash")
+        response = client.get_completion("Test prompt", temperature=0.4, max_output_tokens=222)
+
+        assert response.is_success
+        assert response.text == "Recovered"
+        assert response.metadata["endpoint"] == "models.generate_content"
+        assert response.metadata["adaptive_retry"]["dropped_param"] == "temperature"
+        assert mock_genai.return_value.models.generate_content.call_count == 2
+        first_config = mock_genai.return_value.models.generate_content.call_args_list[0].kwargs["config"]
+        second_config = mock_genai.return_value.models.generate_content.call_args_list[1].kwargs["config"]
+        assert first_config["temperature"] == 0.4
+        assert "temperature" not in second_config
 
 
 class TestErrorHandlingContract:

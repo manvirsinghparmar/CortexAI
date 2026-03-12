@@ -8,6 +8,8 @@ This enforces the "locked" contract across all providers.
 import time
 import uuid
 from abc import ABC, abstractmethod
+from typing import Any
+import re
 
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.logger import get_logger
@@ -322,3 +324,58 @@ class BaseAIClient(ABC):
             error=error,
             metadata={},
         )
+
+    @staticmethod
+    def _extract_unsupported_parameter(exception: Exception) -> str | None:
+        """
+        Try to parse unsupported parameter name from provider error messages.
+        """
+        message = str(exception)
+        patterns = (
+            r"Unsupported parameter:\s*['\"]?([A-Za-z0-9_.-]+)['\"]?",
+            r"Unknown parameter:\s*['\"]?([A-Za-z0-9_.-]+)['\"]?",
+            r"Unrecognized request argument supplied:\s*['\"]?([A-Za-z0-9_.-]+)['\"]?",
+            r"Parameter\s+['\"]?([A-Za-z0-9_.-]+)['\"]?\s+is not supported",
+            r"Unsupported argument:\s*['\"]?([A-Za-z0-9_.-]+)['\"]?",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, message, flags=re.IGNORECASE)
+            if match:
+                return str(match.group(1) or "").strip().lower() or None
+        return None
+
+    def _build_retry_payload_without_unsupported_parameter(
+        self,
+        payload: dict[str, Any],
+        exception: Exception,
+        *,
+        safe_parameters: set[str] | None = None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """
+        Return (dropped_param, retry_payload) when adaptive retry is safe, else (None, None).
+        """
+        unsupported = self._extract_unsupported_parameter(exception)
+        if not unsupported:
+            return None, None
+
+        allowed = safe_parameters or {
+            "temperature",
+            "max_tokens",
+            "max_completion_tokens",
+            "max_output_tokens",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "reasoning_effort",
+        }
+        if unsupported not in allowed:
+            return None, None
+
+        key_lookup = {str(key).strip().lower(): key for key in payload.keys()}
+        matching_key = key_lookup.get(unsupported)
+        if matching_key is None:
+            return None, None
+
+        retry_payload = dict(payload)
+        retry_payload.pop(matching_key, None)
+        return str(matching_key), retry_payload

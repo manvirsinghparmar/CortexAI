@@ -130,9 +130,39 @@ class GeminiClient(BaseAIClient):
             if system_instruction:
                 config["system_instruction"] = system_instruction
 
-            response = self.client.models.generate_content(
-                model=model_name, contents=gemini_contents, config=config
-            )
+            adaptive_retry = None
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name, contents=gemini_contents, config=config
+                )
+            except Exception as request_exc:
+                dropped_param, retry_config = self._build_retry_payload_without_unsupported_parameter(
+                    config,
+                    request_exc,
+                    safe_parameters={"temperature", "max_output_tokens", "top_p", "top_k"},
+                )
+                if retry_config is not None and dropped_param is not None:
+                    logger.warning(
+                        "Retrying Gemini request without unsupported parameter",
+                        extra={
+                            "extra_fields": {
+                                "request_id": request_id,
+                                "model": model_name,
+                                "retry_reason": "unsupported_parameter",
+                                "dropped_param": dropped_param,
+                            }
+                        },
+                    )
+                    response = self.client.models.generate_content(
+                        model=model_name, contents=gemini_contents, config=retry_config
+                    )
+                    adaptive_retry = {
+                        "dropped_param": dropped_param,
+                        "retry_reason": "unsupported_parameter",
+                        "endpoint": "models.generate_content",
+                    }
+                else:
+                    raise
 
             latency_ms = self._measure_latency(start_time)
 
@@ -209,7 +239,11 @@ class GeminiClient(BaseAIClient):
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
-                metadata={},
+                metadata=(
+                    {"endpoint": "models.generate_content", "adaptive_retry": adaptive_retry}
+                    if adaptive_retry
+                    else {"endpoint": "models.generate_content"}
+                ),
                 raw=raw,
             )
 

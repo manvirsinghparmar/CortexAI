@@ -1,5 +1,6 @@
 """Intent detection for determining when to use web research."""
 
+import re
 
 def is_explicit_web_request(prompt: str) -> bool:
     """
@@ -286,6 +287,101 @@ def normalize_topic(text: str) -> str:
 
     return normalized
 
+def _is_context_dependent_detail_followup(prompt: str) -> bool:
+    """
+    Detect short follow-ups like "be more detailed on it".
+
+    These prompts rely on prior context and should not be treated as a
+    standalone web-search topic.
+    """
+    prompt_lower = prompt.lower().strip()
+    if not prompt_lower:
+        return False
+
+    tokens = re.findall(r"\b[\w']+\b", prompt_lower)
+    if len(tokens) > 18:
+        return False
+
+    detail_markers = [
+        "more detail",
+        "more details",
+        "more detailed",
+        "in detail",
+        "in depth",
+        "go deeper",
+        "dig deeper",
+        "deep dive",
+        "elaborate",
+        "expand on",
+        "explain more",
+        "break it down",
+    ]
+    has_detail_intent = any(marker in prompt_lower for marker in detail_markers)
+    if not has_detail_intent:
+        return False
+
+    # Prefer high precision: "it/this/that" style references are almost always follow-ups.
+    deictic_markers = [
+        " on it",
+        " about it",
+        " on this",
+        " about this",
+        " on that",
+        " about that",
+        " this topic",
+        " that topic",
+    ]
+    if any(marker in prompt_lower for marker in deictic_markers):
+        return True
+
+    # Also treat very short detail prompts as follow-ups when they have no clear topic words.
+    filler_words = {
+        "can",
+        "could",
+        "would",
+        "you",
+        "u",
+        "please",
+        "pls",
+        "plz",
+        "be",
+        "a",
+        "bit",
+        "more",
+        "detail",
+        "details",
+        "detailed",
+        "in",
+        "depth",
+        "elaborate",
+        "expand",
+        "explain",
+    }
+    topic_words = [tok for tok in tokens if tok not in filler_words]
+    return len(topic_words) <= 2
+
+
+def _derive_detail_followup_query(
+    research_state: object | None, last_user_message: str | None
+) -> str:
+    """
+    Build a context-aware search query for detail follow-ups.
+
+    Preference order:
+    1) previous research query
+    2) previous research topic
+    3) previous user message
+    """
+    if research_state and hasattr(research_state, "query") and research_state.query:
+        return f"{research_state.query} in-depth details"
+
+    if research_state and hasattr(research_state, "topic") and research_state.topic:
+        return f"{research_state.topic} in-depth details"
+
+    if last_user_message and len(last_user_message.strip()) > 5:
+        return f"{last_user_message.strip()} in-depth details"
+
+    return ""
 
 def should_reuse_research(
     prompt: str, research_state: object | None, *, current_mode: str | None = None
@@ -327,6 +423,10 @@ def should_reuse_research(
 
     # Meta clarification questions should reuse (don't search literally)
     if is_meta_clarification(prompt):
+        return True
+
+    # Detail-oriented follow-ups that refer to previous context should reuse.
+    if _is_context_dependent_detail_followup(prompt):
         return True
 
     # Meta follow-ups always reuse (but only if NOT explicit web request)
@@ -382,12 +482,11 @@ def should_search(prompt: str, research_mode: str, research_state: object | None
     Simple decision logic for whether to perform new search.
 
     Decision order:
-    1. If research_mode == off → NO search
-    2. If research_state exists AND should_reuse == True → NO search
-    3. If explicit web request ("check internet", "search web") → search
-    4. If research_mode == on → search every turn
-    5. Else → NO search
-
+    1. If research_mode == off -> NO search
+    2. If research_state exists AND should_reuse == True -> NO search
+    3. If explicit web request ("check internet", "search web") -> search
+    4. If research_mode == on -> search every turn
+    5. Else -> NO search
     Args:
         prompt: User prompt
         research_mode: Research mode ("off" or "on")
@@ -532,6 +631,12 @@ def sanitize_query(
         # Return empty - these should NOT be searched
         return ""
 
+    # SPECIAL CASE: short detail follow-ups should anchor to prior context.
+    if _is_context_dependent_detail_followup(prompt):
+        anchored_query = _derive_detail_followup_query(research_state, last_user_message)
+        if anchored_query:
+            return anchored_query
+
     # Check if prompt is a stop-word query (exact or partial match)
     for stop_phrase in STOP_WORD_QUERIES:
         if stop_phrase in prompt_lower:
@@ -549,9 +654,6 @@ def sanitize_query(
             r"^(?:can|could|would|will|do|please)?\s*(?:you|u|ye)?\s*(?:please|pls)?\s*(?:check|search|look|find|get|fetch|retrieve)\s+(?:again|over|on|using|with|via|the|a|an)?\s*(?:internet|web|online|again)\s*$",
             r"^(?:check|search|look)\s+(?:again|over|on|the)?\s*(?:internet|web|online)?\s*$",
         ]
-
-        import re
-
         is_pure_meta = any(
             re.match(pattern, prompt_lower, re.IGNORECASE) for pattern in pure_meta_patterns
         )

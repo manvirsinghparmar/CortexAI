@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from dataclasses import dataclass
 from typing import Callable
@@ -11,6 +12,24 @@ from api.provider_adapter import ProviderAdapter, RegistryProviderAdapter
 
 ClientFactory = Callable[[str, str], BaseAIClient]
 
+_PROVIDER_SDK_MODULES: dict[str, str] = {
+    "openai": "openai",
+    "deepseek": "openai",
+    "grok": "openai",
+    "gemini": "google.genai",
+    "claude": "anthropic",
+}
+
+
+def is_provider_sdk_available(provider: str) -> bool:
+    provider_norm = (provider or "").strip().lower()
+    module_name = _PROVIDER_SDK_MODULES.get(provider_norm)
+    if not module_name:
+        return True
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 def _build_openai_client(api_key: str, model_name: str) -> BaseAIClient:
     from api.openai_client import OpenAIClient
@@ -96,6 +115,60 @@ class ClientRegistry:
             raise ValueError(f"Unsupported MODEL_TYPE: {provider_norm or provider}")
         return adapter
 
+    def has_configured_api_key(
+        self,
+        provider: str,
+        *,
+        api_key_override: str | None = None,
+    ) -> bool:
+        adapter = self.get_adapter(provider)
+        if api_key_override:
+            return True
+        return bool(os.getenv(adapter.api_key_env))
+
+    def is_provider_routable(
+        self,
+        provider: str,
+        *,
+        api_key_override: str | None = None,
+    ) -> bool:
+        provider_norm = (provider or "").strip().lower()
+        if not provider_norm:
+            return False
+        return is_provider_sdk_available(provider_norm) and self.has_configured_api_key(
+            provider_norm,
+            api_key_override=api_key_override,
+        )
+
+    def available_providers(
+        self,
+        providers: list[str] | tuple[str, ...] | None = None,
+        *,
+        provider_api_keys: dict[str, str] | None = None,
+    ) -> list[str]:
+        overrides = {
+            str(provider or "").strip().lower(): str(api_key or "").strip()
+            for provider, api_key in (provider_api_keys or {}).items()
+            if str(provider or "").strip() and str(api_key or "").strip()
+        }
+        candidates = providers or self.supported_providers()
+        available: list[str] = []
+
+        for provider in candidates:
+            provider_norm = (provider or "").strip().lower()
+            if not provider_norm or provider_norm in available:
+                continue
+            try:
+                if self.is_provider_routable(
+                    provider_norm,
+                    api_key_override=overrides.get(provider_norm),
+                ):
+                    available.append(provider_norm)
+            except ValueError:
+                continue
+
+        return available
+
     def create_client(
         self,
         provider: str,
@@ -110,3 +183,6 @@ class ClientRegistry:
 
         resolved_model = model_name or os.getenv(adapter.default_model_env, adapter.default_model)
         return adapter.create_client(api_key=api_key, model_name=resolved_model)
+
+
+

@@ -1,6 +1,4 @@
 import re
-from typing import Any
-
 from models.user_context import UserContext
 from orchestrator.routing_types import PromptFeatures
 
@@ -47,6 +45,18 @@ class PromptAnalyzer:
                 "derive",
                 "plan",
                 "architecture",
+                "more detail",
+                "more details",
+                "more detailed",
+                "in detail",
+                "in-depth",
+                "in depth",
+                "elaborate",
+                "expand on",
+                "go deeper",
+                "deep dive",
+                "break it down",
+                "explain more",
             ],
         )
 
@@ -104,10 +114,33 @@ class PromptAnalyzer:
 
         is_follow_up = False
         if context_messages > 0:
-            is_follow_up = self._contains_phrase(
+            short_follow_up_markers = self._contains_phrase(
                 text,
-                ["continue", "refine this", "try again", "go on", "keep going"],
-            ) and word_count <= 6
+                [
+                    "continue",
+                    "refine this",
+                    "try again",
+                    "go on",
+                    "keep going",
+                    "more detail",
+                    "more details",
+                    "more detailed",
+                    "in detail",
+                    "in depth",
+                    "go deeper",
+                    "deep dive",
+                    "elaborate",
+                    "expand on",
+                    "explain more",
+                    "break it down",
+                ],
+            )
+            has_deictic_reference = bool(
+                re.search(r"\b(it|this|that|these|those)\b", text, re.I)
+            )
+            is_follow_up = (short_follow_up_markers and word_count <= 18) or (
+                has_deictic_reference and has_analysis and word_count <= 18
+            )
 
         needs_latest_info = self._contains_phrase(
             text,

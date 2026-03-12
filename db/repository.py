@@ -30,6 +30,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # For UPSERT
+from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.orm import Session
 
 # Import logger
@@ -1363,13 +1364,19 @@ def get_api_key_settings(db: Session, api_key_id: UUID) -> dict[str, Any] | None
     """Fetch per-api-key settings row."""
     from db.tables import get_table
 
-    api_key_settings = get_table("api_key_settings")
+    try:
+        api_key_settings = get_table("api_key_settings")
+    except NoSuchTableError:
+        logger.warning(
+            "api_key_settings table is missing; treating per-api-key settings as unavailable"
+        )
+        return None
+
     stmt = select(api_key_settings).where(api_key_settings.c.api_key_id == api_key_id)
     row = db.execute(stmt).first()
     if row:
         return dict(row._mapping)
     return None
-
 
 def upsert_api_key_settings(
     db: Session,
@@ -2196,3 +2203,5 @@ def save_compare_summary(
 
     # Save as single assistant message
     return save_message(db, session_id, role="assistant", content=summary)
+
+

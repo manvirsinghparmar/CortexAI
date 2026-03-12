@@ -614,6 +614,7 @@ function renderComposerActionButtons() {
 function setComposerRequestState(nextState) {
     composerRequestState = String(nextState || "idle");
     renderComposerActionButtons();
+    updateSendButtonState();
 }
 
 function beginActiveStreamRequest() {
@@ -1588,11 +1589,14 @@ el.promptInput.addEventListener("keydown", e => {
    OPTIMIZE PROMPT CALL
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function callOptimize(prompt) {
+async function callOptimize(prompt, options = {}) {
     let data = null;
     try {
-        data = await callAPI("/v1/optimize", { prompt });
-    } catch (_) {
+        data = await callAPI("/v1/optimize", { prompt }, { signal: options?.signal });
+    } catch (error) {
+        if (isRequestAbortedFailure(error)) {
+            throw error;
+        }
         return prompt;
     }
     if (!data) return prompt;               // on error fall through
@@ -1637,12 +1641,15 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
         setErrorRetryBusy(true);
     }
     setLoading(true);
+    const streamRequest = beginActiveStreamRequest();
     lastPromptForRetry = String(rawPrompt || "");
     try {
         // Step 1: optionally optimize the prompt
         let prompt = rawPrompt;
         if (optimizeEnabled) {
-            prompt = await callOptimize(rawPrompt);
+            prompt = await callOptimize(rawPrompt, {
+                signal: streamRequest?.controller?.signal,
+            });
         } else {
             lastOptimizeResult = null;
         }
@@ -1650,9 +1657,9 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
         // Step 2: send to chat / compare
         let sent = false;
         if (currentMode === "single") {
-            sent = await doSingleChat(prompt);
+            sent = await doSingleChat(prompt, { streamRequest });
         } else {
-            sent = await doCompare(prompt);
+            sent = await doCompare(prompt, { streamRequest });
         }
         if (sent) {
             clearError();
@@ -1662,6 +1669,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
             showRequestFailure(err, { retryable: !!lastPromptForRetry });
         }
     } finally {
+        endActiveStreamRequest(streamRequest);
         if (fromRetry) {
             setErrorRetryBusy(false);
         }
@@ -1685,7 +1693,9 @@ async function retryLastPrompt() {
    SINGLE CHAT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function doSingleChat(prompt) {
+async function doSingleChat(prompt, { streamRequest = null } = {}) {
+    const ownedStreamRequest = !streamRequest;
+    const activeRequest = streamRequest || beginActiveStreamRequest();
     const { provider, model } = parseKey(el.singleModel.value);
     const manualMode = currentMode === "single" && !smartModeEnabled;
     const useManualModel = manualMode && !!provider;
@@ -1720,7 +1730,6 @@ async function doSingleChat(prompt) {
     let finalResponse = null;
     let partialText = "";
     let stoppedByUser = false;
-    const streamRequest = beginActiveStreamRequest();
     streamAutoScrollEnabled = true;
     lastStreamAutoScrollTs = 0;
     try {
@@ -1732,7 +1741,7 @@ async function doSingleChat(prompt) {
             if (event.type === "line") {
                 const chunk = String(event.text || "");
                 if (chunk) {
-                    markActiveStreamStreaming(streamRequest);
+                    markActiveStreamStreaming(activeRequest);
                     partialText += chunk;
                 }
                 appendStreamLine(cardIndex, chunk);
@@ -1747,8 +1756,10 @@ async function doSingleChat(prompt) {
                 finalizeStreamCard(cardIndex, finalResponse);
                 return;
             }
-            if (event.type === "done" && event.session_id) {
-                setActiveSessionId(event.session_id);
+            if (event.type === "done") {
+                if (event.session_id) {
+                    setActiveSessionId(event.session_id);
+                }
                 return;
             }
             if (event.type === "error") {
@@ -1757,17 +1768,19 @@ async function doSingleChat(prompt) {
                 });
             }
         }, {
-            signal: streamRequest?.controller?.signal,
+            signal: activeRequest?.controller?.signal,
         });
     } catch (error) {
-        if (streamRequest?.userStopped && isRequestAbortedFailure(error)) {
+        if (activeRequest?.userStopped && isRequestAbortedFailure(error)) {
             stoppedByUser = true;
         } else {
             throw error;
         }
     } finally {
         streamAutoScrollEnabled = false;
-        endActiveStreamRequest(streamRequest);
+        if (ownedStreamRequest) {
+            endActiveStreamRequest(activeRequest);
+        }
     }
 
     if (stoppedByUser && !finalResponse) {
@@ -1794,7 +1807,9 @@ async function doSingleChat(prompt) {
    COMPARE
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function doCompare(prompt) {
+async function doCompare(prompt, { streamRequest = null } = {}) {
+    const ownedStreamRequest = !streamRequest;
+    const activeRequest = streamRequest || beginActiveStreamRequest();
     const selects = getActiveCompareSelects();
     const targets = selects.map(sel => parseKey(sel.value));
     const sessionId = ensureActiveSessionId();
@@ -1815,7 +1830,6 @@ async function doCompare(prompt) {
     const partialTexts = new Array(targets.length).fill("");
     let comparePayload = null;
     let stoppedByUser = false;
-    const streamRequest = beginActiveStreamRequest();
 
     streamAutoScrollEnabled = true;
     lastStreamAutoScrollTs = 0;
@@ -1839,7 +1853,7 @@ async function doCompare(prompt) {
                 if (cardIndex !== undefined) {
                     const chunk = String(event.text || "");
                     if (chunk) {
-                        markActiveStreamStreaming(streamRequest);
+                        markActiveStreamStreaming(activeRequest);
                         partialTexts[event.index] += chunk;
                     }
                     appendStreamLine(cardIndex, chunk);
@@ -1855,11 +1869,13 @@ async function doCompare(prompt) {
                 }
                 return;
             }
-            if (event.type === "done" && event.compare) {
-                if (event.compare.session_id) {
+            if (event.type === "done") {
+                if (event.compare?.session_id) {
                     setActiveSessionId(event.compare.session_id);
                 }
-                comparePayload = event.compare;
+                if (event.compare) {
+                    comparePayload = event.compare;
+                }
                 return;
             }
             if (event.type === "error") {
@@ -1868,17 +1884,19 @@ async function doCompare(prompt) {
                 });
             }
         }, {
-            signal: streamRequest?.controller?.signal,
+            signal: activeRequest?.controller?.signal,
         });
     } catch (error) {
-        if (streamRequest?.userStopped && isRequestAbortedFailure(error)) {
+        if (activeRequest?.userStopped && isRequestAbortedFailure(error)) {
             stoppedByUser = true;
         } else {
             throw error;
         }
     } finally {
         streamAutoScrollEnabled = false;
-        endActiveStreamRequest(streamRequest);
+        if (ownedStreamRequest) {
+            endActiveStreamRequest(activeRequest);
+        }
     }
 
     if (stoppedByUser) {
@@ -1924,11 +1942,12 @@ async function doCompare(prompt) {
    API
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function callAPI(path, body) {
+async function callAPI(path, body, options = {}) {
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
         body: JSON.stringify(body),
+        signal: options?.signal,
     });
 
     if (!resp.ok) {
@@ -3550,5 +3569,8 @@ function renderHistory(data, filter = "") {
         });
     });
 }
+
+
+
 
 

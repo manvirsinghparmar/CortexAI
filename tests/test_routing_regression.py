@@ -278,6 +278,66 @@ def test_smart_retry_on_refusal_then_success(monkeypatch):
     assert resp.metadata["routing"]["fallback_used"] is True
 
 
+def test_smart_routing_filters_unroutable_providers_before_selection(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    attempted: list[str] = []
+
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda providers=None, provider_api_keys=None: ["openai"],
+    )
+
+    def _fake_invoke(candidate, messages, **kwargs):
+        attempted.append(candidate.provider)
+        return UnifiedResponse(
+            request_id="req_openai",
+            text="openai selected",
+            provider=candidate.provider,
+            model=candidate.model_name,
+            latency_ms=1,
+            token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            estimated_cost=0.0,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+    monkeypatch.setattr(orchestrator, "_invoke_candidate", _fake_invoke)
+
+    resp = orchestrator._run_smart_attempt_loop(
+        prompt="Write Python code to parse JSON safely",
+        context=None,
+        messages=[{"role": "user", "content": "Write Python code to parse JSON safely"}],
+        routing_mode="smart",
+        routing_constraints=None,
+    )
+
+    assert resp.provider == "openai"
+    assert attempted == ["openai"]
+
+
+def test_smart_routing_returns_provider_error_when_no_provider_is_routable(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda providers=None, provider_api_keys=None: [],
+    )
+
+    resp = orchestrator._run_smart_attempt_loop(
+        prompt="Write Python code to parse JSON safely",
+        context=None,
+        messages=[{"role": "user", "content": "Write Python code to parse JSON safely"}],
+        routing_mode="smart",
+        routing_constraints=None,
+    )
+
+    assert resp.is_error is True
+    assert resp.error is not None
+    assert resp.error.code == "provider_error"
+    assert "No routable providers are available" in resp.error.message
+
 def test_research_mode_off_does_not_reuse_prior_web_context():
     orchestrator = CortexOrchestrator()
     session_id = "session-web-off-guard"
@@ -529,3 +589,6 @@ def test_research_mode_on_forces_fresh_search_instead_of_reuse():
         }
     ]
     assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in updated_messages)
+
+
+

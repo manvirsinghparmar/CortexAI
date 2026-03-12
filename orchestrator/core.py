@@ -565,7 +565,10 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             "i don't have access",  # Catches "I don't have access to real-time information"
             "i am not able to browse",
             "i cannot browse",
-            "no internet access",
+            "i do not have access to real-time",
+            "do not have access to real-time web browsing",
+            "do not have access to real-time web browsing capabilities",
+            "real-time web browsing capabilities",
             "can't access the internet",
             "unable to access real-time",
             "don't have real-time",
@@ -775,6 +778,49 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             strict_format=bool(raw.get("strict_format", False)),
         )
 
+
+    def available_providers(
+        self,
+        *,
+        providers: list[str] | tuple[str, ...] | None = None,
+        provider_api_keys: dict[str, str] | None = None,
+    ) -> list[str]:
+        return self._client_registry.available_providers(
+            providers=providers,
+            provider_api_keys=provider_api_keys,
+        )
+
+    def _constrain_to_routable_providers(
+        self,
+        constraints: RoutingConstraints | None,
+        *,
+        provider_api_keys: dict[str, str] | None = None,
+    ) -> RoutingConstraints:
+        requested = None
+        preferred_provider = None
+        if constraints:
+            requested = constraints.allowed_providers
+            preferred_provider = constraints.preferred_provider
+
+        available = self.available_providers(
+            providers=requested,
+            provider_api_keys=provider_api_keys,
+        )
+        normalized_preferred = (preferred_provider or "").strip().lower()
+        if normalized_preferred and normalized_preferred not in available:
+            preferred_provider = None
+
+        if constraints is None:
+            return RoutingConstraints(
+                allowed_providers=available,
+                preferred_provider=preferred_provider,
+            )
+
+        return replace(
+            constraints,
+            allowed_providers=available,
+            preferred_provider=preferred_provider,
+        )
     def _resolve_forced_tier(self, routing_mode: str) -> Tier | None:
         if routing_mode == "cheap":
             return Tier.T0
@@ -789,6 +835,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         context: UserContext | None = None,
         routing_mode: str = "smart",
         routing_constraints: dict[str, Any] | None = None,
+        provider_api_keys: dict[str, str] | None = None,
     ) -> tuple[str, str] | None:
         """
         Return the first planned smart-routing candidate without invoking providers.
@@ -801,6 +848,12 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 return None
 
             constraints = self._build_routing_constraints(routing_constraints)
+            constraints = self._constrain_to_routable_providers(
+                constraints,
+                provider_api_keys=provider_api_keys,
+            )
+            if constraints.allowed_providers == []:
+                return None
             _features, _tier, ordered_candidates, _metadata = self._smart_router.route_once_plan(
                 prompt=prompt,
                 context=context,
@@ -985,6 +1038,21 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 model="smart_router",
                 message="Smart routing not initialized",
                 code="unknown",
+            )
+
+        routing_constraints = self._constrain_to_routable_providers(
+            routing_constraints,
+            provider_api_keys=provider_api_keys,
+        )
+        if routing_constraints.allowed_providers == []:
+            return self._error_response(
+                provider="orchestrator",
+                model="smart_router",
+                message=(
+                    "No routable providers are available for smart routing. "
+                    "Check provider API keys and installed SDK dependencies."
+                ),
+                code="provider_error",
             )
 
         start_time = time.monotonic()

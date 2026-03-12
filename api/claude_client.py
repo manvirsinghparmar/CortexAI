@@ -1,10 +1,14 @@
+import importlib
+import sys
 import time
 from typing import Any
 
 try:
     import anthropic
-except Exception:
+    _anthropic_import_error: Exception | None = None
+except Exception as exc:
     anthropic = None
+    _anthropic_import_error = exc
 
 from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
@@ -15,6 +19,27 @@ from .base_client import BaseAIClient
 logger = get_logger(__name__)
 
 
+def _resolve_anthropic_module():
+    """Load anthropic lazily so runtime installs can recover without code changes."""
+    global anthropic, _anthropic_import_error
+
+    if anthropic is not None:
+        return anthropic
+
+    try:
+        anthropic = importlib.import_module("anthropic")
+        _anthropic_import_error = None
+        return anthropic
+    except Exception as exc:
+        _anthropic_import_error = exc
+        raise ValueError(
+            "anthropic package is not available in the active interpreter "
+            f"({sys.executable}). Install dependencies into this interpreter with "
+            f"\"{sys.executable}\" -m pip install -r requirements.txt. "
+            f"Import error: {exc}"
+        ) from exc
+
+
 class ClaudeClient(BaseAIClient):
     """
     Anthropic Claude client returning UnifiedResponse.
@@ -23,12 +48,9 @@ class ClaudeClient(BaseAIClient):
     """
 
     def __init__(self, api_key: str, model_name: str = "claude-sonnet-4-5", **kwargs):
-        if anthropic is None:
-            raise ValueError(
-                "anthropic package is not installed. Install dependencies from requirements.txt."
-            )
+        anthropic_module = _resolve_anthropic_module()
         super().__init__(api_key, model_name=model_name, **kwargs)
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic_module.Anthropic(api_key=api_key)
         self.model_name = model_name
         self.cost_calculator = CostCalculator(model_type="claude", model_name=model_name)
 
@@ -104,7 +126,35 @@ class ClaudeClient(BaseAIClient):
             if system_instruction:
                 request_payload["system"] = system_instruction
 
-            response = self.client.messages.create(**request_payload)
+            adaptive_retry = None
+            try:
+                response = self.client.messages.create(**request_payload)
+            except Exception as request_exc:
+                dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
+                    request_payload,
+                    request_exc,
+                    safe_parameters={"temperature", "top_p", "max_tokens"},
+                )
+                if retry_payload is not None and dropped_param is not None:
+                    logger.warning(
+                        "Retrying Claude request without unsupported parameter",
+                        extra={
+                            "extra_fields": {
+                                "request_id": request_id,
+                                "model": model,
+                                "retry_reason": "unsupported_parameter",
+                                "dropped_param": dropped_param,
+                            }
+                        },
+                    )
+                    response = self.client.messages.create(**retry_payload)
+                    adaptive_retry = {
+                        "dropped_param": dropped_param,
+                        "retry_reason": "unsupported_parameter",
+                        "endpoint": "messages.create",
+                    }
+                else:
+                    raise
             latency_ms = self._measure_latency(start_time)
 
             text = self._extract_text(response)
@@ -163,7 +213,11 @@ class ClaudeClient(BaseAIClient):
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
-                metadata={},
+                metadata=(
+                    {"endpoint": "messages.create", "adaptive_retry": adaptive_retry}
+                    if adaptive_retry
+                    else {"endpoint": "messages.create"}
+                ),
                 raw=raw,
             )
 
@@ -191,16 +245,14 @@ class ClaudeClient(BaseAIClient):
     @classmethod
     def list_available_models(cls, api_key: str = None, **kwargs) -> None:
         try:
-            if anthropic is None:
-                print("anthropic package is not installed. Cannot list Claude models.")
-                return
+            anthropic_module = _resolve_anthropic_module()
             if not api_key:
                 logger.warning("API key not provided for listing Claude models")
                 print("API key not provided. Cannot list available models.")
                 return
 
             current_model = kwargs.get("current_model", "claude-sonnet-4-5")
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic_module.Anthropic(api_key=api_key)
 
             fallback_models = [
                 "claude-3-5-haiku-latest",

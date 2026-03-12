@@ -69,12 +69,48 @@ class GrokClient(BaseAIClient):
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
 
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=normalized_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            request_payload = {
+                "model": model,
+                "messages": normalized_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            adaptive_retry = None
+
+            try:
+                response = self.client.chat.completions.create(**request_payload)
+            except Exception as request_exc:
+                dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
+                    request_payload,
+                    request_exc,
+                    safe_parameters={
+                        "temperature",
+                        "top_p",
+                        "presence_penalty",
+                        "frequency_penalty",
+                        "max_tokens",
+                    },
+                )
+                if retry_payload is not None and dropped_param is not None:
+                    logger.warning(
+                        "Retrying Grok request without unsupported parameter",
+                        extra={
+                            "extra_fields": {
+                                "request_id": request_id,
+                                "model": model,
+                                "retry_reason": "unsupported_parameter",
+                                "dropped_param": dropped_param,
+                            }
+                        },
+                    )
+                    response = self.client.chat.completions.create(**retry_payload)
+                    adaptive_retry = {
+                        "dropped_param": dropped_param,
+                        "retry_reason": "unsupported_parameter",
+                        "endpoint": "chat.completions",
+                    }
+                else:
+                    raise
 
             latency_ms = self._measure_latency(start_time)
 
@@ -154,7 +190,11 @@ class GrokClient(BaseAIClient):
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
-                metadata={},
+                metadata=(
+                    {"endpoint": "chat.completions", "adaptive_retry": adaptive_retry}
+                    if adaptive_retry
+                    else {"endpoint": "chat.completions"}
+                ),
                 raw=raw,
             )
 

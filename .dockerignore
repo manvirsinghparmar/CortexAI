@@ -25,3 +25,4 @@ frontend/
 *.sqlite
 .env
 .env.*
+e2e/

@@ -38,6 +38,8 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 python -m venv venv
 venv\Scripts\activate
 ```
+MacOS
+source .venv/bin/activate
 
 2. Install dependencies.
 ```bash
@@ -147,9 +149,16 @@ Optional frontend runtime config for separate API host:
 
 ## Authentication
 
-All `/v1/*` routes require:
+All `/v1/*` routes accept either **API key** or **Cognito (e.g. Gmail/Google) ID token**:
+
+1. **API key** (unchanged):
 ```http
 X-API-Key: <tenant-api-key>
+```
+
+2. **Cognito / Gmail (Google) sign-in** (optional): when [Cognito is configured](#cognito-gmail-sign-in), the frontend can use "Sign in with Google". The API then accepts:
+```http
+Authorization: Bearer <Cognito-ID-token>
 ```
 
 Optional request correlation:
@@ -191,6 +200,20 @@ Response includes:
 - `GET /v1/byok/status`
 - `DELETE /v1/byok?provider=<provider-id>` (or omit provider to delete all)
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
+- `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
+
+### Cognito (Gmail) sign-in
+
+To enable "Sign in with Google" via Amazon Cognito:
+
+1. **AWS Cognito**: Create a User Pool, add an App client, configure the Cognito domain, and add Google as an identity provider (see [AWS docs](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-social-idp.html)).
+2. **Environment** (see `.env.example`):
+   - `COGNITO_USER_POOL_ID` – User pool ID (e.g. `us-east-1_xxxxxxxxx`)
+   - `COGNITO_CLIENT_ID` – App client ID
+   - `COGNITO_REGION` – AWS region
+   - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
+   - `COGNITO_REDIRECT_URI` – (optional) Callback URL; defaults to current origin + pathname
+3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the ID token is stored and sent as `Authorization: Bearer <token>` on all API requests. Sessions/history are tied to the Cognito user (user created or looked up by `sub` in the database).
 
 ## Routing Modes
 

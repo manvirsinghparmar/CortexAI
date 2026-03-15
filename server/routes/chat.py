@@ -18,7 +18,7 @@ from config.provider_catalog import (
 )
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
-from server.dependencies import get_api_key, get_orchestrator
+from server.dependencies import get_auth, get_orchestrator
 from server import persistence as persistence_service
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
@@ -354,7 +354,7 @@ async def chat(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
@@ -369,7 +369,7 @@ async def chat(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
@@ -408,7 +408,7 @@ async def chat(
     if API_DB_ENABLED and persistence_resolution is not None:
         try:
             resolved_session_id = _persist_chat_interaction(
-                api_key=api_key,
+                api_key=auth.api_key_or_none(),
                 resolution=persistence_resolution,
                 prompt=request.prompt,
                 response=response,
@@ -428,7 +428,7 @@ async def chat_stream(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Stream a single-model chat response as NDJSON events."""
     request.context = validate_and_trim_context(request.context)
@@ -443,7 +443,7 @@ async def chat_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
@@ -507,7 +507,7 @@ async def chat_stream(
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     resolved_session_id = _persist_chat_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         response=response,
@@ -539,7 +539,7 @@ async def chat_stream(
                         retryable=True,
                     )
                     _persist_chat_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         response=error_response,

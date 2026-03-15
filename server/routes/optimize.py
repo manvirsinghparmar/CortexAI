@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from server.dependencies import get_orchestrator, get_api_key
+from server.dependencies import get_auth, get_orchestrator
 from orchestrator.core import CortexOrchestrator
 from utils.prompt_optimizer import PromptOptimizer
 
@@ -43,7 +43,7 @@ class OptimizeResponse(BaseModel):
 async def optimize_prompt(
     request: OptimizeRequest,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """
     Optimize a prompt using the configured AI provider.

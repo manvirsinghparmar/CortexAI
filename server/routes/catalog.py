@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
-from server.dependencies import get_api_key
+from server.dependencies import get_auth
 from server.schemas.responses import (
     ModelCatalogItemDTO,
     ModelsCatalogResponseDTO,
@@ -59,10 +59,10 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
 
 @router.get("/providers", response_model=ProvidersCatalogResponseDTO)
 async def list_providers(
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """List discoverable providers and metadata for API/front-end clients."""
-    _ = api_key
+    _ = auth
     catalog = get_provider_catalog()
     registry = ModelRegistry.from_yaml()
 
@@ -96,10 +96,10 @@ async def list_providers(
 async def list_models(
     provider: str | None = Query(default=None),
     enabled_only: bool = Query(default=True),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """List discoverable models, optionally filtered by provider."""
-    _ = api_key
+    _ = auth
     provider_norm = _validate_provider_or_400(provider)
     registry = ModelRegistry.from_yaml()
 

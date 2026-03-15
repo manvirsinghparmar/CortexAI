@@ -13,7 +13,7 @@ from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import persistence as persistence_service
-from server.dependencies import get_api_key, get_orchestrator
+from server.dependencies import get_auth, get_orchestrator
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.utils import clamp_max_tokens, validate_and_trim_context
@@ -159,7 +159,7 @@ async def compare(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Send a prompt to multiple AI models and compare responses."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -179,7 +179,7 @@ async def compare(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -212,7 +212,7 @@ async def compare(
         try:
             persistable = [r for r in response.responses if r is not None]
             resolved_session_id = _persist_compare_interaction(
-                api_key=api_key,
+                api_key=auth.api_key_or_none(),
                 resolution=persistence_resolution,
                 prompt=request.prompt,
                 responses=persistable,
@@ -233,7 +233,7 @@ async def compare_stream(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Stream compare responses as NDJSON events, then emit aggregate summary."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -253,7 +253,7 @@ async def compare_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -373,7 +373,7 @@ async def compare_stream(
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     resolved_session_id = _persist_compare_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         responses=raw_responses,
@@ -423,7 +423,7 @@ async def compare_stream(
                             )
                         partial_responses = [fallback_error]
                     _persist_compare_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
                         prompt=request.prompt,
                         responses=partial_responses,

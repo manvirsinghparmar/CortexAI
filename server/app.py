@@ -1,12 +1,12 @@
 """FastAPI application factory."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import admin, byok, catalog, chat, compare, health, history, optimize, reporting, whoami
+from server.routes import admin, auth as auth_routes, byok, catalog, chat, compare, health, history, optimize, reporting, whoami
 from utils.logger import get_logger
 import os
 
@@ -123,6 +123,11 @@ def create_app() -> FastAPI:
 
     # API routes - registered first so /v1/* takes precedence over static files
     app.include_router(health.router)
+    # Cognito callback at /auth (when app client callback URL is e.g. .../auth)
+    @app.get("/auth")
+    async def auth_callback(request: Request, response: Response, code: str | None = None):
+        return await auth_routes.handle_oauth_callback(request, response, code)
+    app.include_router(auth_routes.router)
     app.include_router(chat.router)
     app.include_router(compare.router)
     app.include_router(optimize.router)

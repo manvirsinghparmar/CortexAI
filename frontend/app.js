@@ -5,11 +5,59 @@
 /* â”€â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
-    RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://127.0.0.1:8000"
+    RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
 const API_KEY = String(
     RUNTIME_CONFIG.apiKey || window.localStorage?.getItem("cortex_api_key") || "dev-key-1"
 );
+
+let cognitoConfig = { enabled: false };
+const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
+function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
+function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
+function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return { "X-API-Key": API_KEY }; }
+async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
+function handleCognitoCallback() { const hash = window.location.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, window.location.pathname + (window.location.search || "")); } }
+async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
+function buildCognitoLoginUrl() {
+        if (!cognitoConfig.enabled || !cognitoConfig.domain || !cognitoConfig.clientId) return "";
+        var base = String(cognitoConfig.domain).trim().replace(/\/+$/, "");
+        if (!base) return "";
+        if (base.indexOf("http://") !== 0 && base.indexOf("https://") !== 0) base = "https://" + base;
+        var redirect = (window.location.origin || "") + (window.location.pathname || "/");
+        redirect = redirect.replace(/\/+$/, "") || redirect;
+        return base + "/oauth2/authorize?client_id=" + encodeURIComponent(cognitoConfig.clientId) + "&response_type=token&scope=openid+email&redirect_uri=" + encodeURIComponent(redirect);
+    }
+async function cognitoSignOut() {
+    try { await fetch(API_BASE + "/v1/auth/logout", { method: "POST", credentials: "include" }); } catch (_) {}
+    if (cognitoConfig.logoutUrl) {
+        var logoutUri =  cognitoConfig.logoutUrl + "&response_type=code&scope=email+openid&redirect_uri=" + encodeURIComponent(window.location.origin || "") + "/auth";
+        window.location.href = logoutUri;
+    } else {
+        window.location.reload();
+    }
+    //https://us-east-1duh9ar9jk.auth.us-east-1.amazoncognito.com/login?client_id=5i9cjes5hpui0okrfi656jk3ss&&response_type=code&scope=email+openidredirect_uri=http://localhost:8000/auth
+    //https://us-east-1duh9ar9jk.auth.us-east-1.amazoncognito.com/login?client_id=5i9cjes5hpui0okrfi656jk3ss&response_type=code&scope=email+openid&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fauth
+}
+async function renderAuthUI() {
+    const wrap = document.getElementById("authNavWrap");
+    if (!wrap) return;
+    if (!cognitoConfig.enabled) { wrap.innerHTML = ""; return; }
+    var hasSession = false;
+    try {
+        var meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
+        hasSession = meResp.ok;
+    } catch (_) {}
+    if (hasSession) {
+        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signout\" id=\"cognitoSignOutBtn\">Log off</button>";
+        wrap.querySelector("#cognitoSignOutBtn").addEventListener("click", function () { void cognitoSignOut(); });
+    } else {
+        const url = buildCognitoLoginUrl();
+        if (!url) { wrap.innerHTML = ""; return; }
+        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in with Google</button>";
+        wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
+    }
+}
 
 /* â”€â”€â”€ Provider Catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 // One entry per provider â€” icon shows in the dropdown, model is the default sent to API
@@ -1945,7 +1993,7 @@ async function doCompare(prompt, { streamRequest = null } = {}) {
 async function callAPI(path, body, options = {}) {
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
         signal: options?.signal,
     });
@@ -1963,7 +2011,7 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         headers: {
             "Content-Type": "application/json",
             "Accept": "application/x-ndjson",
-            "X-API-Key": API_KEY,
+            ...getAuthHeaders(),
         },
         body: JSON.stringify(body),
         signal,
@@ -3016,7 +3064,7 @@ function refreshModelSelectors({ preserveSingle = true, preserveCompare = true }
 async function fetchCatalogJson(path) {
     const resp = await fetch(`${API_BASE}${path}`, {
         method: "GET",
-        headers: { "X-API-Key": API_KEY },
+        headers: getAuthHeaders(),
     });
     if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
@@ -3069,6 +3117,7 @@ async function loadDynamicProviderModelCatalog() {
     activeSessionId = loadActiveSessionId();
     setMode("single");
     updateSendButtonState();
+    void initCognitoAuth().then(function () { return renderAuthUI(); });
     void loadDynamicProviderModelCatalog();
 })();
 
@@ -3299,7 +3348,7 @@ historyEl.clearAllBtn.addEventListener("click", async () => {
     if (!confirm("Delete all history?")) return;
     await fetch(`${API_BASE}/v1/history`, {
         method: "DELETE",
-        headers: { "X-API-Key": API_KEY },
+        headers: getAuthHeaders(),
     });
     conversationHistory = [];
     pendingNewSession = true;
@@ -3317,7 +3366,7 @@ loadHistory({ restoreActiveTranscript: true });
 async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
         const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
-            headers: { "X-API-Key": API_KEY },
+            headers: getAuthHeaders(),
         });
         if (!resp.ok) return;
         _historyData = await resp.json();
@@ -3524,7 +3573,7 @@ function renderHistory(data, filter = "") {
             for (const entry of thread.entries) {
                 await fetch(`${API_BASE}/v1/history/${entry.id}`, {
                     method: "DELETE",
-                    headers: { "X-API-Key": API_KEY },
+                    headers: getAuthHeaders(),
                 });
             }
 

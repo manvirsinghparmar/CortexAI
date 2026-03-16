@@ -158,6 +158,64 @@ class CortexOrchestrator:
             ),
         )
 
+    def _normalize_empty_success_response(self, response: UnifiedResponse) -> UnifiedResponse:
+        """
+        Convert blank non-error responses into explicit provider errors.
+
+        Some providers can return successful envelopes with no assistant text
+        (e.g., content filtering, tool-only payloads, or schema edge cases).
+        Treating these as success causes blank UI cards and poor UX.
+        """
+        if response.is_error:
+            return response
+
+        text_value = str(response.text or "")
+        if text_value.strip():
+            return response
+
+        finish_reason = str(response.finish_reason or "").strip().lower()
+        blocked_by_filter = finish_reason == "content_filter"
+        message = (
+            "Provider returned no text because content was filtered."
+            if blocked_by_filter
+            else "Provider returned an empty response."
+        )
+        retryable = not blocked_by_filter
+
+        metadata = response.metadata if isinstance(response.metadata, dict) else {}
+        details: dict[str, Any] = {}
+        if response.finish_reason:
+            details["finish_reason"] = str(response.finish_reason)
+        if metadata.get("provider_finish_reason"):
+            details["provider_finish_reason"] = str(metadata.get("provider_finish_reason"))
+        if metadata.get("endpoint"):
+            details["endpoint"] = str(metadata.get("endpoint"))
+
+        logger.warning(
+            "Normalized empty model output to provider_error",
+            extra={
+                "extra_fields": {
+                    "provider": response.provider,
+                    "model": response.model,
+                    "finish_reason": response.finish_reason,
+                    "endpoint": metadata.get("endpoint"),
+                }
+            },
+        )
+
+        return replace(
+            response,
+            text="",
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message=message,
+                provider=response.provider,
+                retryable=retryable,
+                details=details,
+            ),
+        )
+
     def _get_client(
         self,
         model_type: str,
@@ -193,12 +251,14 @@ class CortexOrchestrator:
         self, prompt: str, context: UserContext | None, research_mode: str = "auto"
     ) -> list[dict[str, str]]:
         research_mode_norm = (research_mode or "auto").lower().strip()
+        current_date = datetime.now(timezone.utc)
+        current_date_text = f"{current_date.strftime('%B')} {current_date.day}, {current_date.year}"
 
         if research_mode_norm == "off":
-            system_content = """SYSTEM CONTEXT AND RULES:
+            system_content = f"""SYSTEM CONTEXT AND RULES:
 
 You are CortexAI.
-CURRENT DATE: January 17, 2026
+CURRENT DATE: {current_date_text}
 
 Web research is disabled for this turn.
 
@@ -210,15 +270,16 @@ Rules:
 5) Never claim you performed web browsing yourself.
 """
         else:
-            system_content = """SYSTEM CONTEXT AND RULES:
+            system_content = f"""SYSTEM CONTEXT AND RULES:
 
 You are CortexAI with REAL-TIME WEB RESEARCH capability.
-CURRENT DATE: January 17, 2026
+CURRENT DATE: {current_date_text}
 
 If a system message containing "WEB RESEARCH SOURCES:" is present:
 - Use those excerpts for factual claims.
 - Cite sources as [1], [2], etc.
-- If excerpts do not include the requested detail, say the excerpts do not include that detail.
+- If sources are partial, give the best sourced summary first.
+- If an exact detail is missing, state what is missing and suggest one focused follow-up search query.
 
 If no web source excerpts are present:
 - For current-data requests, say you do not have current data.
@@ -444,6 +505,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         logger.debug(f"Applying sanitization to: '{prompt[:50]}...'")
         query = sanitize_query(prompt, state, last_user_msg)
 
+        if not query and research_mode == "on":
+            fallback_query = prompt.strip()
+            if fallback_query:
+                logger.info(
+                    "Research mode on: sanitization produced empty query; "
+                    "falling back to raw prompt."
+                )
+                query = fallback_query
+
         if not query:
             # No query and no previous state - can't proceed
             logger.warning(f"Blocked garbage query with no fallback: {prompt[:50]}...")
@@ -465,7 +535,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         # Execute search
         logger.info(f"Executing new search: {query[:50]}...")
-        research_ctx = self.research_service.build(query)
+        use_cache = research_mode != "on"
+        research_ctx = self.research_service.build(query, use_cache=use_cache)
 
         if research_ctx.used:
             # Convert SourceDoc to ResearchSource
@@ -859,6 +930,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 context=context,
                 routing_mode=(routing_mode or "smart").lower().strip() or "smart",
                 constraints=constraints,
+                runtime_messages=None,
             )
             if not ordered_candidates:
                 return None
@@ -917,6 +989,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 api_key_override=override_key,
             )
             response = client.get_completion(messages=messages, **kwargs)
+            response = self._normalize_empty_success_response(response)
             circuit_breaker.record_response(response)
             return response
         except Exception as e:
@@ -1063,6 +1136,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     context=context,
                     routing_mode=routing_mode,
                     constraints=routing_constraints,
+                    runtime_messages=messages,
                 )
             )
         except Exception as e:
@@ -1280,6 +1354,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     api_key_override=provider_api_keys.get(provider_norm),
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
+                resp = self._normalize_empty_success_response(resp)
                 record_direct_circuit = True
                 md = resp.metadata or {}
                 md["routing"] = {
@@ -1354,6 +1429,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     api_key_override=provider_api_keys.get(provider_norm),
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
+                resp = self._normalize_empty_success_response(resp)
                 record_direct_circuit = True
 
             # Merge research and optimization metadata into response
@@ -1501,9 +1577,10 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             research_used = research_metadata.get("research_used", False)
             updated_responses = []
             for resp in responses:
-                md = resp.metadata or {}
+                normalized_resp = self._normalize_empty_success_response(resp)
+                md = normalized_resp.metadata or {}
                 merged_md = {**md, **research_metadata, "research_mode": research_mode}
-                resp_with_metadata = replace(resp, metadata=merged_md)
+                resp_with_metadata = replace(normalized_resp, metadata=merged_md)
                 # Check for browse disclaimer if research was used or explicitly requested
                 resp_checked = resp_with_metadata
                 if self._enable_browse_disclaimer_check:

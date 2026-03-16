@@ -269,6 +269,33 @@ test("historical transcripts render persisted web source citations", () => {
     assert.match(appJs, /class="web-source-strip\$\{webSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Web sources"/);
 });
 
+test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {
+    assert.match(appJs, /const GFM_TABLE_DELIMITER_RE =/);
+    assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
+    assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
+    assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
+    assert.match(appJs, /const responseHtml = hasError \? escHtml\(text\) : renderMarkdownToHtml\(text\);/);
+    assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
+    assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
+    assert.match(appJs, /<div class="response-text \$\{hasError \? "error-text" : ""\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
+});
+
+test("streaming still appends raw chunks before final markdown rendering", () => {
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
+    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
+    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? `Error: \$\{resp\.error\.message\}` : "\(empty response\)"\);/);
+});
+
+test("markdown table css adds overflow wrapper, cell wrapping, and stacked layout", () => {
+    assert.match(styleCss, /\.response-table-wrap \{/);
+    assert.match(styleCss, /overflow-x: auto;/);
+    assert.match(styleCss, /\.response-text table \{/);
+    assert.match(styleCss, /\.response-text thead \{/);
+    assert.match(styleCss, /\.response-text th,[\s\S]*\.response-text td \{/);
+    assert.match(styleCss, /word-break: break-word;/);
+    assert.match(styleCss, /\.response-text table\.is-stacked td::before \{/);
+});
+
 test("compare layout styles support equal-width columns and responsive stacking", () => {
     assert.match(styleCss, /\.results-grid\.compare-transcript \{/);
     assert.match(styleCss, /\.compare-grid \{/);

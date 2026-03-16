@@ -172,6 +172,7 @@ Response includes:
 ## API Endpoints
 
 - `GET /health`
+- `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/chat`
@@ -198,12 +199,22 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - Explicit `provider` + `model`: deterministic target.
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
-- `routing.research_mode=true`: optional orchestrator-managed web research flow with fresh sources for the current turn.
+- `routing.research_mode=true`: orchestrator-managed web research flow with fresh sources for the current turn.
+- Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+
+## Web Research Behavior (Current)
+
+- `research_mode=off`: hard stop for this turn (no research injection, no reuse).
+- `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
+- `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
+- If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
+- Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
+- When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
 
 ## Session Continuity
 
@@ -333,6 +344,14 @@ Common `detail.code` values:
 - `invalid_model`
 - `unauthorized`
 
+## Output Guardrails (Current)
+
+- Route-level `max_tokens` is clamped to `2048` (`server/utils.py`).
+- OpenAI client defaults to `max_tokens=2048` when caller omits output cap.
+- If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
+- Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
+- This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
+
 ## Minimal Python SDK Snippet
 
 ```python
@@ -415,12 +434,30 @@ It runs:
 - `pytest -q`
 - DB mode smoke test (`/v1/chat` + DB row assertions for `llm_requests` and `usage_daily`)
 
-## CI Component Detection
+## CI and Workflows
 
-- `.github/workflows/ci.yml` uses path detection to run component jobs selectively:
-  - frontend checks/build artifact for `frontend/**` (and shared files)
-  - backend checks/API image build for `api/**`, `server/**`, `orchestrator/**`, `db/**` (and shared files)
-- Deploy jobs are intentionally not included yet; this keeps CI focused on readiness checks and build artifacts.
+- `.github/workflows/ci.yml`:
+  - path-aware frontend/backend quality checks
+  - frontend artifact build
+  - API image build metadata export
+  - secrets scanning (gitleaks)
+- `.github/workflows/incident-regression-38.yml`:
+  - targeted backend regression pack for routing/guardrail mismatches (38 tests)
+  - no live provider keys required
+- `.github/workflows/live-e2e.yml`:
+  - live Playwright browser suite with real providers
+  - uses GitHub Environment `live-e2e`
+  - provisions Postgres service container in-workflow (no local DB dependency)
+  - initializes schema from `db/schema_public_snapshot.sql` + `db/migrations/*.sql`
+
+Required secrets for `live-e2e` environment:
+- `E2E_API_KEY` (gateway auth key used by E2E suite; not a provider billing key)
+- `OPENAI_API_KEY`
+- `GOOGLE_GEMINI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GROK_API_KEY`
+- `DEEPSEEK_API_KEY`
+- optional web/search keys used by test prompts: `BRAVE_API_KEY`, `SERPAPI_API_KEY`
 
 ## Tenant Onboarding Script
 
@@ -480,6 +517,28 @@ Run full B2B API checklist against a live server:
 python scripts/e2e_b2b_checklist.py --base-url http://127.0.0.1:8000 --api-key dev-key-1
 ```
 
+Run browser E2E suite (Playwright):
+```bash
+npm run --prefix e2e test
+```
+
+Run high-impact UI business scenarios only:
+```bash
+npm run --prefix e2e test -- specs/50.high-impact-business-ui.spec.mjs
+```
+
+Run incident regression pack locally (same target set as workflow):
+```bash
+python -m pytest -q \
+  tests/test_routing_regression.py \
+  tests/test_fallback_manager.py \
+  tests/test_smart_router_metadata.py \
+  tests/test_server_utils.py \
+  tests/test_unified_response_contract.py \
+  tests/test_fastapi_contract_and_guardrails.py \
+  tests/test_api_persistence_guardrails.py
+```
+
 Postman collection:
 - `docs/postman/CortexAI_B2B.postman_collection.json`
 
@@ -498,6 +557,12 @@ OpenAIProject/
   requirements-dev.txt
   pyproject.toml
   pytest.ini
+
+  .github/
+    workflows/
+      ci.yml
+      incident-regression-38.yml
+      live-e2e.yml
 
   api/
     base_client.py
@@ -524,6 +589,7 @@ OpenAIProject/
   db/
     __init__.py
     engine.py
+    schema_public_snapshot.sql
     migrations/
       20260218_add_request_group_id_to_llm_requests.sql
       20260218_llm_requests_api_key_owner_guard.sql
@@ -541,8 +607,10 @@ OpenAIProject/
     LOGGING.md
     PROJECT_MAP.md
     REFACTORING_SUMMARY.md
+    SMART_ROUTING_DIAGRAM.md
     TAVILY_INTEGRATION.md
     UNIFIED_RESPONSE_CONTRACT.md
+    USER_FLOW_DIAGRAM_SOURCE.md
     adr/
       0001-architecture-baseline-and-deploy-boundaries.md
       0002-provider-validation-and-safety-rails.md
@@ -588,7 +656,9 @@ OpenAIProject/
     generate_proof_pack.py
     onboard_tenant.py
     release_gate.py
+    run_playwright_mcp.py
     serve_frontend.py
+    test_report_runner.py
 
   server/
     __init__.py
@@ -600,6 +670,7 @@ OpenAIProject/
     persistence.py
     privacy.py
     rate_limit.py
+    runtime_checks.py
     savings.py
     usage_reporting.py
     utils.py
@@ -667,12 +738,48 @@ OpenAIProject/
     test_prompt_optimizer.py
     test_registry_pricing_alignment.py
     test_response_validator.py
+    test_research_pack.py
     test_routing_regression.py
+    test_server_utils.py
     test_smart_router_metadata.py
+    test_tavily_client.py
     test_tier_decider.py
     test_unified_response_contract.py
     test_dynamic_provider_discovery_e2e.py
     ... (additional unit/integration suites)
+
+  e2e/
+    README.md
+    package.json
+    playwright.config.mjs
+    global-setup.mjs
+    global-teardown.mjs
+    fixtures/
+      live-e2e.mjs
+    helpers/
+      api.mjs
+      cleanup.mjs
+      config.mjs
+      db.mjs
+      ids.mjs
+      network.mjs
+      prompts.mjs
+      runtime-state.mjs
+      ui.mjs
+    server/
+      run_e2e_server.py
+      fault_injection.py
+      stream_tuning.py
+    specs/
+      00.app-readiness.spec.mjs
+      10.ask-and-routing.spec.mjs
+      20.session-and-history.spec.mjs
+      30.persistence-and-fallback.spec.mjs
+      40.compare-three-models.spec.mjs
+      50.high-impact-business-ui.spec.mjs
+      _helpers.mjs
+    test-data/
+      routing-outcomes.mjs
 ```
 
 ## What to Edit for Common Changes
@@ -681,12 +788,14 @@ OpenAIProject/
 - Add business logic/service code: `server/*.py` (keep route handlers thin; move logic into services).
 - Add or change provider behavior: `api/*.py`, `api/client_registry.py`, orchestration flow in `orchestrator/core.py`, and provider metadata in `config/providers.yaml`.
 - Change smart routing rules: `orchestrator/prompt_analyzer.py`, `orchestrator/tier_decider.py`, `orchestrator/model_selector.py`, `orchestrator/smart_router.py`.
+- Change web research behavior: `orchestrator/core.py` + `tools/web/intent.py` + `tools/web/tavily_service.py` + `tools/web/research_pack.py`.
 - Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).
 - Change usage/savings/BYOK behavior: `server/usage_reporting.py`, `server/savings.py`, `server/byok_service.py`, and related routes under `server/routes/`.
 - Add/adjust guardrails: `server/rate_limit.py`, `server/circuit_breaker.py`, privacy policy in `server/privacy.py`.
+- Update CI/workflow behavior: `.github/workflows/ci.yml`, `.github/workflows/live-e2e.yml`, `.github/workflows/incident-regression-38.yml`.
 - Add tenant/dev tooling scripts: `scripts/` (runtime checks/reporting) and `tools/` (operator/dev helpers).
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-08
+Last updated: 2026-03-15

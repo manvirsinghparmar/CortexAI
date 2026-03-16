@@ -64,7 +64,7 @@ class OpenAIClient(BaseAIClient):
 
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature")
-        max_tokens = kwargs.get("max_tokens", 500)
+        max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
 
         try:
@@ -91,7 +91,7 @@ class OpenAIClient(BaseAIClient):
                 raw = self._serialize_raw_response(response) if save_full else None
             else:
                 # Extract text
-                text = response.choices[0].message.content or ""
+                text = self._extract_chat_completions_text(response)
 
                 # Extract token usage
                 token_usage = TokenUsage(
@@ -401,6 +401,36 @@ class OpenAIClient(BaseAIClient):
         if isinstance(obj, dict):
             return obj.get(name, default)
         return getattr(obj, name, default)
+
+    @classmethod
+    def _extract_chat_completions_text(cls, response: Any) -> str:
+        if not getattr(response, "choices", None):
+            return ""
+
+        first_choice = response.choices[0]
+        message = cls._field(first_choice, "message")
+        content = cls._field(message, "content")
+
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                part_type = str(cls._field(item, "type", "") or "").lower()
+                if part_type in {"text", "output_text"}:
+                    part_text = cls._field(item, "text") or cls._field(item, "content")
+                    if part_text:
+                        parts.append(str(part_text))
+            combined = "".join(parts).strip()
+            if combined:
+                return combined
+
+        refusal_text = cls._field(message, "refusal")
+        if refusal_text:
+            return str(refusal_text)
+
+        return ""
 
     @classmethod
     def _extract_responses_text(cls, response: Any) -> str:

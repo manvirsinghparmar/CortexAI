@@ -543,6 +543,153 @@ def test_chat_stream_returns_ndjson_events(client):
     assert "done" in event_types
 
 
+def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
+    def _empty_success(*_args, **_kwargs):
+        return UnifiedResponse(
+            request_id="req_empty_success_chat",
+            text="",
+            provider="openai",
+            model="gpt-5.1",
+            latency_ms=8,
+            token_usage=TokenUsage(prompt_tokens=200, completion_tokens=500, total_tokens=700),
+            estimated_cost=0.0,
+            finish_reason="length",
+            error=None,
+            metadata={"endpoint": "chat.completions"},
+        )
+
+    app.state.fake_orchestrator.ask = _empty_success
+
+    payload = {
+        "prompt": "Long answer please",
+        "provider": "openai",
+        "model": "gpt-5.1",
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["text"] == ""
+    assert body["finish_reason"] == "error"
+    assert body["error"] is not None
+    assert body["error"]["code"] == "provider_error"
+    assert body["error"]["details"]["finish_reason"] == "length"
+    assert body["error"]["details"]["endpoint"] == "chat.completions"
+
+
+def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, app):
+    def _empty_success(*_args, **_kwargs):
+        return UnifiedResponse(
+            request_id="req_empty_success_chat_stream",
+            text="",
+            provider="openai",
+            model="gpt-5.1",
+            latency_ms=8,
+            token_usage=TokenUsage(prompt_tokens=200, completion_tokens=500, total_tokens=700),
+            estimated_cost=0.0,
+            finish_reason="length",
+            error=None,
+            metadata={"endpoint": "chat.completions"},
+        )
+
+    app.state.fake_orchestrator.ask = _empty_success
+
+    payload = {
+        "prompt": "Long answer please",
+        "provider": "openai",
+        "model": "gpt-5.1",
+    }
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+
+    line_events = [event for event in events if event.get("type") == "line"]
+    assert any(
+        "Error: Provider returned an empty response." in str(event.get("text", ""))
+        for event in line_events
+    )
+
+    done = next((event for event in events if event.get("type") == "response_done"), None)
+    assert done is not None
+    payload_json = done["response"]
+    assert payload_json["text"] == ""
+    assert payload_json["finish_reason"] == "error"
+    assert payload_json["error"]["code"] == "provider_error"
+    assert payload_json["error"]["details"]["finish_reason"] == "length"
+
+
+def test_compare_normalizes_empty_success_payload_to_provider_error(client, app):
+    def _compare_with_blank_success(prompt: str, models_list: List[Dict[str, Any]], context: Any = None, **kwargs):
+        empty = UnifiedResponse(
+            request_id="req_cmp_empty",
+            text="",
+            provider=models_list[0]["provider"],
+            model=models_list[0].get("model", "gpt-5.1"),
+            latency_ms=7,
+            token_usage=TokenUsage(prompt_tokens=120, completion_tokens=500, total_tokens=620),
+            estimated_cost=0.0,
+            finish_reason="length",
+            error=None,
+            metadata={"endpoint": "chat.completions"},
+        )
+        ok = UnifiedResponse(
+            request_id="req_cmp_ok",
+            text="second model answer",
+            provider=models_list[1]["provider"],
+            model=models_list[1].get("model", "gemini-2.5-flash"),
+            latency_ms=9,
+            token_usage=TokenUsage(prompt_tokens=12, completion_tokens=18, total_tokens=30),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        return FakeMultiUnifiedResponse(
+            request_id="req_compare_empty_shape",
+            request_group_id="grp_compare_empty_shape",
+            prompt=prompt,
+            responses=[empty, ok],
+            success_count=2,
+            failure_count=0,
+            error_count=0,
+            total_tokens=650,
+            total_cost=0.0001,
+        )
+
+    app.state.fake_orchestrator.compare = _compare_with_blank_success
+
+    payload = {
+        "prompt": "compare this",
+        "targets": [
+            {"provider": "openai", "model": "gpt-5.1"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["success_count"] == 1
+    assert body["error_count"] == 1
+    first = body["responses"][0]
+    assert first["text"] == ""
+    assert first["finish_reason"] == "error"
+    assert first["error"]["code"] == "provider_error"
+    assert first["error"]["details"]["finish_reason"] == "length"
+
+
 def test_compare_stream_returns_ndjson_events(client):
     payload = {
         "prompt": "hello",
@@ -565,6 +712,129 @@ def test_compare_stream_returns_ndjson_events(client):
     assert "start" in event_types
     assert event_types.count("response_done") >= 2
     assert "done" in event_types
+
+
+def test_compare_stream_normalizes_empty_success_payload_to_provider_error(client, app):
+    def _ask_with_one_blank(prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs):
+        provider = model_type or "openai"
+        model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
+        if provider == "openai":
+            return UnifiedResponse(
+                request_id="req_cmp_stream_empty",
+                text="",
+                provider=provider,
+                model=model,
+                latency_ms=6,
+                token_usage=TokenUsage(prompt_tokens=100, completion_tokens=500, total_tokens=600),
+                estimated_cost=0.0,
+                finish_reason="length",
+                error=None,
+                metadata={"endpoint": "chat.completions"},
+            )
+
+        return UnifiedResponse(
+            request_id="req_cmp_stream_ok",
+            text="healthy fallback answer",
+            provider=provider,
+            model=model,
+            latency_ms=6,
+            token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+    app.state.fake_orchestrator.ask = _ask_with_one_blank
+
+    payload = {
+        "prompt": "compare stream",
+        "targets": [
+            {"provider": "openai", "model": "gpt-5.1"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+
+    response_done_events = [event for event in events if event.get("type") == "response_done"]
+    assert len(response_done_events) >= 2
+    openai_done = next(
+        (event for event in response_done_events if event.get("response", {}).get("provider") == "openai"),
+        None,
+    )
+    assert openai_done is not None
+    openai_resp = openai_done["response"]
+    assert openai_resp["text"] == ""
+    assert openai_resp["finish_reason"] == "error"
+    assert openai_resp["error"]["code"] == "provider_error"
+    assert openai_resp["error"]["details"]["finish_reason"] == "length"
+
+
+def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(client, app):
+    observed_kwargs: dict[str, Any] = {}
+
+    def _ask_with_one_blank(prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs):
+        observed_kwargs.clear()
+        observed_kwargs.update(kwargs)
+        provider = model_type or "openai"
+        model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
+        if provider == "openai":
+            return UnifiedResponse(
+                request_id="req_cmp_stream_empty_count",
+                text="",
+                provider=provider,
+                model=model,
+                latency_ms=6,
+                token_usage=TokenUsage(prompt_tokens=100, completion_tokens=500, total_tokens=600),
+                estimated_cost=0.0,
+                finish_reason="length",
+                error=None,
+                metadata={"endpoint": "chat.completions"},
+            )
+
+        return UnifiedResponse(
+            request_id="req_cmp_stream_ok_count",
+            text="healthy fallback answer",
+            provider=provider,
+            model=model,
+            latency_ms=6,
+            token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+    app.state.fake_orchestrator.ask = _ask_with_one_blank
+
+    payload = {
+        "prompt": "compare stream aggregate",
+        "max_tokens": 99999,
+        "targets": [
+            {"provider": "openai", "model": "gpt-5.1"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert observed_kwargs.get("max_tokens") == 2048
+
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    done = next((event for event in events if event.get("type") == "done"), None)
+    assert done is not None
+    compare_payload = done.get("compare", {})
+    assert compare_payload.get("success_count") == 1
+    assert compare_payload.get("error_count") == 1
 
 
 def test_compare_stream_allows_context_with_three_targets(client):
@@ -627,6 +897,40 @@ def test_chat_rejects_model_without_provider(client):
         headers={"X-API-Key": "dev-key-1"},
     )
     assert r.status_code == 422
+
+
+def test_chat_clamps_max_tokens_to_server_cap(client, app):
+    payload = {
+        "prompt": "Give me a summary",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "max_tokens": 99999,
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_ask_kwargs.get("max_tokens") == 2048
+
+
+def test_compare_clamps_max_tokens_to_server_cap(client, app):
+    payload = {
+        "prompt": "compare",
+        "max_tokens": 77777,
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 200
+    assert app.state.fake_orchestrator.last_compare_kwargs.get("max_tokens") == 2048
 
 
 def test_chat_stream_auto_routing_includes_selected_target(client, app):

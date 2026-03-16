@@ -111,7 +111,8 @@ class GeminiClient(BaseAIClient):
 
         model_name = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
-        max_output_tokens = kwargs.get("max_output_tokens", 2048)
+        # Keep route-level max_tokens clamp compatible with Gemini's max_output_tokens naming.
+        max_output_tokens = kwargs.get("max_output_tokens", kwargs.get("max_tokens", 2048))
 
         try:
             # Normalize input to messages format

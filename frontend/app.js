@@ -2494,7 +2494,7 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
           </span>
           <span class="sr-only">Assistant is thinking</span>
         </div>
-        <p class="response-text hidden" id="response-text-${index}" data-empty="true"></p>
+        <div class="response-text hidden" id="response-text-${index}" data-empty="true"></div>
         ${footerHtml}
       </div>
     </div>`;
@@ -2639,9 +2639,8 @@ function finalizeStreamCard(index, resp) {
 
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
-    const text = hasExplicitText
-        ? String(resp?.text ?? "")
-        : (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
+    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -2651,7 +2650,7 @@ function finalizeStreamCard(index, resp) {
     const summaryEl = document.getElementById(`response-provider-summary-${index}`);
 
     if (textEl) {
-        textEl.textContent = text;
+        renderResponseMarkdown(textEl, text, { hasError });
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
         textEl.classList.toggle("error-text", hasError);
@@ -2790,6 +2789,7 @@ function showResults(responses, isMulti, compareData) {
         el.resultsGrid.innerHTML = responses.map((r, i) => buildResponseCard(r, i, isMulti)).join("");
     }
     if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
+    refreshResponseTableLayouts(el.resultsGrid);
 
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 96 });
 }
@@ -2805,6 +2805,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
     const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources);
+    const responseHtml = hasError ? escHtml(text) : renderMarkdownToHtml(text);
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} ${hasError ? "is-error" : ""}"
@@ -2812,7 +2813,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
          style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
-        <p class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${escHtml(text)}</p>
+        <div class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${responseHtml}</div>
         ${footerHtml}
       </div>
     </div>`;
@@ -3084,6 +3085,285 @@ function escHtml(str) {
         .replace(/"/g, "&quot;");
 }
 
+const GFM_TABLE_DELIMITER_RE = /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const CODE_BLOCK_TOKEN_RE = /^@@CODEBLOCK(\d+)@@$/;
+const WIDE_TABLE_COLUMN_THRESHOLD = 6;
+const WIDE_TABLE_HEADER_CHAR_THRESHOLD = 72;
+const WIDE_TABLE_ROW_CHAR_THRESHOLD = 140;
+
+function splitMarkdownTableRow(rawLine) {
+    let row = String(rawLine || "").trim();
+    if (row.startsWith("|")) row = row.slice(1);
+    if (row.endsWith("|")) row = row.slice(0, -1);
+    return row.split("|").map(cell => cell.trim());
+}
+
+function parseMarkdownTableAlignments(delimiterRow, expectedCells) {
+    const rawCells = splitMarkdownTableRow(delimiterRow);
+    const aligns = [];
+    for (let i = 0; i < expectedCells; i += 1) {
+        const cell = String(rawCells[i] || "").trim();
+        if (/^:-+:$/.test(cell)) {
+            aligns.push("center");
+            continue;
+        }
+        if (/^-+:$/.test(cell)) {
+            aligns.push("right");
+            continue;
+        }
+        if (/^:-+$/.test(cell)) {
+            aligns.push("left");
+            continue;
+        }
+        aligns.push("");
+    }
+    return aligns;
+}
+
+function renderInlineMarkdown(rawText) {
+    let source = String(rawText || "");
+    const codeTokens = [];
+    source = source.replace(/`([^`\n]+)`/g, (_, code) => {
+        const token = `@@INLCODE${codeTokens.length}@@`;
+        codeTokens.push(`<code>${escHtml(code)}</code>`);
+        return token;
+    });
+
+    const linkTokens = [];
+    source = source.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
+        const safeUrl = toSafeHttpUrl(url);
+        if (!safeUrl) return match;
+        const token = `@@INLLINK${linkTokens.length}@@`;
+        linkTokens.push(
+            `<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(label)}</a>`
+        );
+        return token;
+    });
+
+    let html = escHtml(source)
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+        .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+
+    linkTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLLINK${idx}@@`, tokenHtml);
+    });
+    codeTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLCODE${idx}@@`, tokenHtml);
+    });
+    return html;
+}
+
+function isMarkdownTableStart(lines, startIndex) {
+    if (startIndex + 1 >= lines.length) return false;
+    const headerLine = String(lines[startIndex] || "");
+    const delimiterLine = String(lines[startIndex + 1] || "");
+    if (!headerLine.includes("|")) return false;
+    return GFM_TABLE_DELIMITER_RE.test(delimiterLine.trim());
+}
+
+function renderMarkdownTable(lines, startIndex) {
+    const headerCells = splitMarkdownTableRow(lines[startIndex]);
+    if (headerCells.length === 0) {
+        return {
+            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""))}</p>`,
+            nextIndex: startIndex + 1,
+        };
+    }
+
+    const alignments = parseMarkdownTableAlignments(lines[startIndex + 1], headerCells.length);
+    const thHtml = headerCells.map((cell, idx) => {
+        const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
+        return `<th${align}>${renderInlineMarkdown(cell)}</th>`;
+    }).join("");
+
+    let cursor = startIndex + 2;
+    const rowHtml = [];
+    while (cursor < lines.length) {
+        const rawLine = String(lines[cursor] || "");
+        const trimmed = rawLine.trim();
+        if (!trimmed || !rawLine.includes("|") || CODE_BLOCK_TOKEN_RE.test(trimmed)) {
+            break;
+        }
+        if (/^(#{1,6})\s+/.test(trimmed) || /^[-*+]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+            break;
+        }
+        const cells = splitMarkdownTableRow(rawLine);
+        if (cells.length === 0) break;
+        const tds = headerCells.map((_, idx) => {
+            const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
+            return `<td${align}>${renderInlineMarkdown(cells[idx] || "")}</td>`;
+        }).join("");
+        rowHtml.push(`<tr>${tds}</tr>`);
+        cursor += 1;
+    }
+
+    return {
+        html: `<div class="response-table-wrap"><table><thead><tr>${thHtml}</tr></thead><tbody>${rowHtml.join("")}</tbody></table></div>`,
+        nextIndex: cursor,
+    };
+}
+
+function renderMarkdownToHtml(markdownText) {
+    let source = String(markdownText || "");
+    if (!source.trim()) return "";
+    source = source.replace(/\r\n?/g, "\n");
+
+    const codeBlocks = [];
+    source = source.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, lang, codeText) => {
+        const token = `@@CODEBLOCK${codeBlocks.length}@@`;
+        const language = String(lang || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+        const languageClass = language ? ` class="language-${language}"` : "";
+        const normalizedCode = String(codeText || "").replace(/\n$/, "");
+        codeBlocks.push(`<pre><code${languageClass}>${escHtml(normalizedCode)}</code></pre>`);
+        return `\n${token}\n`;
+    });
+
+    const lines = source.split("\n");
+    const htmlParts = [];
+    let paragraphLines = [];
+
+    const flushParagraph = () => {
+        if (paragraphLines.length === 0) return;
+        const paragraphText = paragraphLines.join("\n").trim();
+        paragraphLines = [];
+        if (!paragraphText) return;
+        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
+    };
+
+    let index = 0;
+    while (index < lines.length) {
+        const rawLine = String(lines[index] || "");
+        const trimmed = rawLine.trim();
+
+        if (!trimmed) {
+            flushParagraph();
+            index += 1;
+            continue;
+        }
+
+        const codeMatch = CODE_BLOCK_TOKEN_RE.exec(trimmed);
+        if (codeMatch) {
+            flushParagraph();
+            const tokenIndex = Number(codeMatch[1]);
+            if (Number.isInteger(tokenIndex) && codeBlocks[tokenIndex]) {
+                htmlParts.push(codeBlocks[tokenIndex]);
+            }
+            index += 1;
+            continue;
+        }
+
+        if (isMarkdownTableStart(lines, index)) {
+            flushParagraph();
+            const renderedTable = renderMarkdownTable(lines, index);
+            htmlParts.push(renderedTable.html);
+            index = renderedTable.nextIndex;
+            continue;
+        }
+
+        const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+        if (headingMatch) {
+            flushParagraph();
+            const level = headingMatch[1].length;
+            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+            index += 1;
+            continue;
+        }
+
+        if (/^[-*+]\s+/.test(trimmed)) {
+            flushParagraph();
+            const items = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "").trim();
+                if (!/^[-*+]\s+/.test(current)) break;
+                items.push(current.replace(/^[-*+]\s+/, ""));
+                index += 1;
+            }
+            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+            continue;
+        }
+
+        if (/^\d+\.\s+/.test(trimmed)) {
+            flushParagraph();
+            const items = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "").trim();
+                if (!/^\d+\.\s+/.test(current)) break;
+                items.push(current.replace(/^\d+\.\s+/, ""));
+                index += 1;
+            }
+            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            continue;
+        }
+
+        paragraphLines.push(rawLine);
+        index += 1;
+    }
+
+    flushParagraph();
+    return htmlParts.join("");
+}
+
+function shouldStackTableForChat(tableEl) {
+    const headerCells = Array.from(tableEl.querySelectorAll("thead th"));
+    if (headerCells.length >= WIDE_TABLE_COLUMN_THRESHOLD) return true;
+
+    const headerChars = headerCells.reduce((sum, th) => {
+        return sum + String(th.textContent || "").trim().length;
+    }, 0);
+    if (headerChars >= WIDE_TABLE_HEADER_CHAR_THRESHOLD) return true;
+
+    const bodyRows = Array.from(tableEl.querySelectorAll("tbody tr"));
+    return bodyRows.some(row => {
+        const rowChars = Array.from(row.querySelectorAll("td")).reduce((sum, td) => {
+            return sum + String(td.textContent || "").trim().length;
+        }, 0);
+        return rowChars >= WIDE_TABLE_ROW_CHAR_THRESHOLD;
+    });
+}
+
+function applyWideTableLayout(containerEl) {
+    if (!containerEl) return;
+    containerEl.querySelectorAll(".response-table-wrap").forEach(wrapper => {
+        const tableEl = wrapper.querySelector("table");
+        if (!tableEl) return;
+
+        tableEl.classList.remove("is-stacked");
+        wrapper.classList.remove("is-stacked");
+
+        const labels = Array.from(tableEl.querySelectorAll("thead th")).map(cell => String(cell.textContent || "").trim());
+        tableEl.querySelectorAll("tbody tr").forEach(row => {
+            row.querySelectorAll("td").forEach((cell, idx) => {
+                const label = labels[idx] || `Column ${idx + 1}`;
+                cell.setAttribute("data-label", label);
+            });
+        });
+
+        if (shouldStackTableForChat(tableEl)) {
+            tableEl.classList.add("is-stacked");
+            wrapper.classList.add("is-stacked");
+        }
+    });
+}
+
+function renderResponseMarkdown(targetEl, text, { hasError = false } = {}) {
+    if (!targetEl) return;
+    const value = String(text ?? "");
+    if (hasError) {
+        targetEl.textContent = value;
+        return;
+    }
+    targetEl.innerHTML = renderMarkdownToHtml(value);
+    applyWideTableLayout(targetEl);
+}
+
+function refreshResponseTableLayouts(root = el.resultsGrid) {
+    if (!root) return;
+    root.querySelectorAll(".response-text").forEach(responseEl => {
+        applyWideTableLayout(responseEl);
+    });
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    HISTORY SIDEBAR
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -3187,13 +3467,14 @@ function buildHistoricalAssistantCardPayload(entry) {
     const response = String(entry.response || "").trim();
     const hasError = isResponsePlaceholder(response);
     const errorMessage = hasError ? response.replace(/^\[error\]\s*/i, "").trim() : "";
+    const safeResponse = response || "(empty response)";
     const tokens = Number(entry.tokens);
     const provider = String(entry.provider || "").trim().toLowerCase();
     const model = String(entry.model || "").trim();
     const webSourceItems = normalizeWebSources(entry.web_source_items || []);
 
     return {
-        text: hasError ? `Error: ${errorMessage || "Request failed"}` : response,
+        text: hasError ? `Error: ${errorMessage || "Request failed"}` : safeResponse,
         provider,
         model,
         web_source_items: webSourceItems,
@@ -3268,6 +3549,7 @@ function renderConversationFromEntries(entries) {
     el.resultsGrid.className = hasCompareTurns ? "results-grid compare-transcript" : "results-grid";
     el.resultsGrid.style.gridTemplateColumns = "";
     el.resultsGrid.innerHTML = htmlParts.join("");
+    refreshResponseTableLayouts(el.resultsGrid);
     hasReceivedFirstStreamResponse = true;
     setComposerDocked(true);
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 80 });

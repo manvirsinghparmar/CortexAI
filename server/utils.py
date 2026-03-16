@@ -1,12 +1,15 @@
 """Shared utilities for FastAPI routes."""
 
+from dataclasses import replace
 from collections.abc import Mapping
 
 from fastapi import HTTPException, status
 
+from models.unified_response import NormalizedError, UnifiedResponse
+
 MAX_CONTEXT_MESSAGES = 10
 MAX_CONTEXT_CHARS = 20000
-MAX_OUTPUT_TOKENS = 1024
+MAX_OUTPUT_TOKENS = 2048
 SENSITIVE_HEADERS = {"x-api-key", "authorization"}
 
 
@@ -51,3 +54,51 @@ def redact_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
         else:
             redacted[key] = value
     return redacted
+
+
+def normalize_empty_success_response(response: UnifiedResponse) -> UnifiedResponse:
+    """
+    Transport-level safeguard against blank successful payloads.
+
+    Orchestrator normally normalizes empty-success responses already, but
+    API routes should still protect the DTO/stream contract as a last resort.
+    """
+    if response.is_error:
+        return response
+
+    text_value = str(response.text or "")
+    if text_value.strip():
+        return response
+
+    finish_reason = str(response.finish_reason or "").strip().lower()
+    blocked_by_filter = finish_reason == "content_filter"
+    message = (
+        "Provider returned no text because content was filtered."
+        if blocked_by_filter
+        else "Provider returned an empty response."
+    )
+    retryable = not blocked_by_filter
+
+    metadata = response.metadata if isinstance(response.metadata, dict) else {}
+    details: dict[str, str] = {}
+    if response.finish_reason:
+        details["finish_reason"] = str(response.finish_reason)
+    provider_finish_reason = metadata.get("provider_finish_reason")
+    if provider_finish_reason:
+        details["provider_finish_reason"] = str(provider_finish_reason)
+    endpoint = metadata.get("endpoint")
+    if endpoint:
+        details["endpoint"] = str(endpoint)
+
+    return replace(
+        response,
+        text="",
+        finish_reason="error",
+        error=NormalizedError(
+            code="provider_error",
+            message=message,
+            provider=response.provider,
+            retryable=retryable,
+            details=details,
+        ),
+    )

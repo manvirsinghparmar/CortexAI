@@ -84,7 +84,13 @@ jobs:
             }
           }
 
-          $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Sort-Object Name | Select-Object -First 1
+          $service = Get-Service -Name "postgresql-x64-16" -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            $service = Get-Service -Name "postgresql-x64-*" -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -First 1
+          }
+          if ($null -eq $service) {
+            $service = Get-Service -Name "postgresql*" -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -First 1
+          }
           if ($null -eq $service) {
             throw "PostgreSQL Windows service not found after installation."
           }

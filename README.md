@@ -447,7 +447,7 @@ It runs:
 - `.github/workflows/live-e2e.yml`:
   - live Playwright browser suite with real providers
   - uses GitHub Environment `live-e2e`
-  - provisions Postgres service container in-workflow (no local DB dependency)
+  - runs on `windows-latest` and provisions local PostgreSQL in-workflow
   - initializes schema from `db/schema_public_snapshot.sql` + `db/migrations/*.sql`
 
 Required secrets for `live-e2e` environment:

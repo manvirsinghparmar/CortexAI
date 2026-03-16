@@ -1,4 +1,4 @@
-name: Incident Regression 38
+name: Critical Routing and Guardrails Regression Suite
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  run-incident-regression-38:
+  run-critical-routing-guardrails-regressions:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -26,7 +26,7 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
-      - name: Run incident regression 38 tests
+      - name: Run critical routing and guardrails regression tests
         run: |
           TESTS=(
             "tests/test_routing_regression.py::test_direct_ask_normalizes_empty_length_output_to_provider_error"

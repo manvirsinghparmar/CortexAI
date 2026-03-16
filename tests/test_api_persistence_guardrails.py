@@ -796,6 +796,86 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
+def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
+    fastapi_client, monkeypatch
+):
+    client, fake_orch = fastapi_client
+
+    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+        return UnifiedResponse(
+            request_id="req_blank_success",
+            text="",
+            provider=model_type or "openai",
+            model=kwargs.get("model_name") or kwargs.get("model") or "gpt-5.1",
+            latency_ms=4,
+            token_usage=TokenUsage(prompt_tokens=120, completion_tokens=500, total_tokens=620),
+            estimated_cost=0.0,
+            finish_reason="length",
+            error=None,
+            metadata={"endpoint": "chat.completions"},
+        )
+
+    fake_orch.ask = _blank_success
+
+    owner_user_id = uuid4()
+    api_key_id = uuid4()
+    session_id = uuid4()
+    llm_request_pk = uuid4()
+    persisted_responses: list[UnifiedResponse] = []
+
+    chat_route.API_DB_ENABLED = True
+
+    monkeypatch.setattr(
+        chat_route,
+        "_resolve_and_enforce_caps",
+        lambda **_kwargs: chat_route.ApiKeyPersistenceResolution(
+            user_id=owner_user_id,
+            api_key_id=api_key_id,
+            decision_path="mapped",
+        ),
+    )
+
+    dummy = DummySession()
+    monkeypatch.setattr(persistence_service, "db_uow", _fake_db_uow_factory(dummy))
+    monkeypatch.setattr(persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id)
+    monkeypatch.setattr(persistence_service, "save_message", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service,
+        "create_llm_request",
+        lambda _db, **_kwargs: llm_request_pk,
+    )
+    monkeypatch.setattr(
+        persistence_service,
+        "create_llm_response",
+        lambda _db, _llm_request_id, _response: persisted_responses.append(_response),
+    )
+    monkeypatch.setattr(persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(persistence_service, "upsert_usage_daily", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+
+    response = client.post(
+        "/v1/chat",
+        headers={"X-API-Key": "dev-key-1"},
+        json={"prompt": "hello", "provider": "openai", "model": "gpt-5.1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == ""
+    assert body["finish_reason"] == "error"
+    assert body["error"] is not None
+    assert body["error"]["code"] == "provider_error"
+    assert body["error"]["details"]["finish_reason"] == "length"
+
+    assert len(persisted_responses) == 1
+    persisted = persisted_responses[0]
+    assert persisted.error is not None
+    assert persisted.error.code == "provider_error"
+    assert persisted.finish_reason == "error"
+
+
+@pytest.mark.integration
 def test_compare_persists_grouped_rows_and_usage_in_db_mode(fastapi_client, monkeypatch):
     client, _fake_orch = fastapi_client
 
@@ -1057,6 +1137,127 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
     )
     assert cmp_resp.status_code == 200
     assert len(compare_persist_calls) == 1
+
+
+@pytest.mark.integration
+def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client, monkeypatch):
+    client, fake_orch = fastapi_client
+
+    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+        return UnifiedResponse(
+            request_id="req_stream_blank_success",
+            text="",
+            provider=model_type or "openai",
+            model=kwargs.get("model_name") or kwargs.get("model") or "gpt-5.1",
+            latency_ms=4,
+            token_usage=TokenUsage(prompt_tokens=120, completion_tokens=500, total_tokens=620),
+            estimated_cost=0.0,
+            finish_reason="length",
+            error=None,
+            metadata={"endpoint": "chat.completions"},
+        )
+
+    fake_orch.ask = _blank_success
+
+    chat_route.API_DB_ENABLED = True
+    monkeypatch.setattr(
+        chat_route,
+        "_resolve_and_enforce_caps",
+        lambda **_kwargs: chat_route.ApiKeyPersistenceResolution(
+            user_id=uuid4(),
+            api_key_id=uuid4(),
+            decision_path="mapped",
+        ),
+    )
+
+    persisted: list[UnifiedResponse] = []
+    monkeypatch.setattr(
+        chat_route,
+        "_persist_chat_interaction",
+        lambda **kwargs: persisted.append(kwargs["response"]),
+    )
+
+    response = client.post(
+        "/v1/chat/stream",
+        headers={"X-API-Key": "dev-key-1"},
+        json={"prompt": "hello", "provider": "openai", "model": "gpt-5.1"},
+    )
+    assert response.status_code == 200
+    assert len(persisted) == 1
+    assert persisted[0].error is not None
+    assert persisted[0].error.code == "provider_error"
+    assert persisted[0].finish_reason == "error"
+
+
+@pytest.mark.integration
+def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_client, monkeypatch):
+    client, fake_orch = fastapi_client
+
+    def _ask_with_one_blank(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+        provider = model_type or "openai"
+        model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
+        if provider == "openai":
+            return UnifiedResponse(
+                request_id="req_cmp_stream_blank_target",
+                text="",
+                provider=provider,
+                model=model,
+                latency_ms=5,
+                token_usage=TokenUsage(prompt_tokens=140, completion_tokens=500, total_tokens=640),
+                estimated_cost=0.0,
+                finish_reason="length",
+                error=None,
+                metadata={"endpoint": "chat.completions"},
+            )
+        return UnifiedResponse(
+            request_id="req_cmp_stream_ok_target",
+            text="ok",
+            provider=provider,
+            model=model,
+            latency_ms=5,
+            token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+    fake_orch.ask = _ask_with_one_blank
+
+    compare_route.API_DB_ENABLED = True
+    monkeypatch.setattr(
+        compare_route,
+        "_resolve_and_enforce_caps",
+        lambda **_kwargs: compare_route.ApiKeyPersistenceResolution(
+            user_id=uuid4(),
+            api_key_id=uuid4(),
+            decision_path="mapped",
+        ),
+    )
+
+    persisted_batches: list[list[UnifiedResponse]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_persist_compare_interaction",
+        lambda **kwargs: persisted_batches.append(kwargs["responses"]),
+    )
+
+    response = client.post(
+        "/v1/compare/stream",
+        headers={"X-API-Key": "dev-key-1"},
+        json={
+            "prompt": "hello",
+            "targets": [
+                {"provider": "openai", "model": "gpt-5.1"},
+                {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert len(persisted_batches) == 1
+    persisted = persisted_batches[0]
+    assert len(persisted) == 2
+    assert any(item.error is not None and item.error.code == "provider_error" for item in persisted)
 
 
 @pytest.mark.integration

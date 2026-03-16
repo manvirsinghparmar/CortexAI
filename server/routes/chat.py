@@ -22,7 +22,11 @@ from server.dependencies import get_api_key, get_orchestrator
 from server import persistence as persistence_service
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
-from server.utils import clamp_max_tokens, validate_and_trim_context
+from server.utils import (
+    clamp_max_tokens,
+    normalize_empty_success_response,
+    validate_and_trim_context,
+)
 from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
@@ -403,6 +407,7 @@ async def chat(
         routing_constraints=execution_plan.routing_constraints,
         **kwargs,
     )
+    response = normalize_empty_success_response(response)
 
     resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
@@ -494,6 +499,7 @@ async def chat_stream(
                 routing_constraints=execution_plan.routing_constraints,
                 **kwargs,
             )
+            response = normalize_empty_success_response(response)
 
             stream_text = response.text or ""
             if not stream_text and response.error:

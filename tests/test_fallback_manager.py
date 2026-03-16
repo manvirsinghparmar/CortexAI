@@ -61,3 +61,99 @@ def test_retry_same_tier_on_refusal():
         next_tier_fn=lambda t: Tier.T3,
     )
     assert decision.action == NextAction.RETRY_SAME_TIER
+
+
+def test_latency_budget_allows_one_recovery_retry_for_quality_failures():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="provider_error", severity="high"),
+        attempt_index=0,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=2,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.RETRY_SAME_TIER
+    assert decision.reason == "latency_budget_recovery"
+
+
+def test_stop_on_latency_budget_after_recovery_attempt():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="provider_error", severity="high"),
+        attempt_index=1,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=2,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.STOP
+    assert decision.reason == "latency_budget"
+
+
+def test_latency_budget_recovery_requires_remaining_candidates():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="provider_error", severity="high"),
+        attempt_index=0,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=0,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.STOP
+    assert decision.reason == "latency_budget"
+
+
+def test_latency_budget_recovery_does_not_apply_to_rate_limit():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="rate_limit", severity="high"),
+        attempt_index=0,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=2,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.STOP
+    assert decision.reason == "latency_budget"
+
+
+def test_latency_budget_recovery_applies_to_too_short():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="too_short", severity="medium"),
+        attempt_index=0,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=1,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.RETRY_SAME_TIER
+    assert decision.reason == "latency_budget_recovery"
+
+
+def test_latency_budget_recovery_applies_to_truncated():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=500, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="truncated", severity="medium"),
+        attempt_index=0,
+        elapsed_ms=500,
+        remaining_same_tier_candidates=1,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.RETRY_SAME_TIER
+    assert decision.reason == "latency_budget_recovery"

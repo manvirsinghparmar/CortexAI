@@ -1,0 +1,72 @@
+name: Critical Routing and Guardrails Regression Suite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-critical-routing-guardrails-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run critical routing and guardrails regression tests
+        run: |
+          TESTS=(
+            "tests/test_routing_regression.py::test_direct_ask_normalizes_empty_length_output_to_provider_error"
+            "tests/test_routing_regression.py::test_smart_retry_on_empty_length_output_then_success"
+            "tests/test_routing_regression.py::test_smart_routing_records_latency_budget_recovery_reason"
+            "tests/test_routing_regression.py::test_system_prompt_uses_current_utc_date"
+            "tests/test_fallback_manager.py::test_latency_budget_allows_one_recovery_retry_for_quality_failures"
+            "tests/test_fallback_manager.py::test_stop_on_latency_budget_after_recovery_attempt"
+            "tests/test_fallback_manager.py::test_latency_budget_recovery_requires_remaining_candidates"
+            "tests/test_fallback_manager.py::test_latency_budget_recovery_does_not_apply_to_rate_limit"
+            "tests/test_fallback_manager.py::test_latency_budget_recovery_applies_to_too_short"
+            "tests/test_fallback_manager.py::test_latency_budget_recovery_applies_to_truncated"
+            "tests/test_smart_router_metadata.py::test_runtime_messages_raise_context_estimate_and_tier_for_web_injection"
+            "tests/test_smart_router_metadata.py::test_runtime_messages_preserve_higher_history_context_estimate"
+            "tests/test_smart_router_metadata.py::test_runtime_messages_increase_prompt_token_estimate_from_user_message"
+            "tests/test_smart_router_metadata.py::test_runtime_messages_empty_list_does_not_change_estimates"
+            "tests/test_smart_router_metadata.py::test_runtime_messages_high_context_adds_long_context_selection_reasons"
+            "tests/test_server_utils.py::test_clamp_max_tokens_returns_none_when_unset"
+            "tests/test_server_utils.py::test_clamp_max_tokens_caps_at_server_limit"
+            "tests/test_server_utils.py::test_clamp_max_tokens_preserves_small_values"
+            "tests/test_server_utils.py::test_normalize_empty_success_keeps_non_empty_response"
+            "tests/test_server_utils.py::test_normalize_empty_success_keeps_existing_error_unchanged"
+            "tests/test_server_utils.py::test_normalize_empty_success_converts_empty_length_to_provider_error"
+            "tests/test_server_utils.py::test_normalize_empty_success_content_filter_is_non_retryable"
+            "tests/test_server_utils.py::test_normalize_empty_success_works_without_metadata"
+            "tests/test_server_utils.py::test_redact_sensitive_headers_is_case_insensitive"
+            "tests/test_unified_response_contract.py::TestProviderContractCompliance::test_openai_defaults_to_2048_max_tokens_when_not_provided"
+            "tests/test_unified_response_contract.py::TestProviderContractCompliance::test_openai_length_finish_reason_with_empty_content_is_preserved"
+            "tests/test_unified_response_contract.py::TestProviderContractCompliance::test_gemini_accepts_max_tokens_alias_from_routes"
+            "tests/test_unified_response_contract.py::TestProviderContractCompliance::test_gemini_defaults_to_2048_output_tokens_when_unset"
+            "tests/test_fastapi_contract_and_guardrails.py::test_chat_normalizes_empty_success_payload_to_provider_error"
+            "tests/test_fastapi_contract_and_guardrails.py::test_chat_stream_normalizes_empty_success_payload_to_provider_error"
+            "tests/test_fastapi_contract_and_guardrails.py::test_compare_normalizes_empty_success_payload_to_provider_error"
+            "tests/test_fastapi_contract_and_guardrails.py::test_compare_stream_normalizes_empty_success_payload_to_provider_error"
+            "tests/test_fastapi_contract_and_guardrails.py::test_chat_clamps_max_tokens_to_server_cap"
+            "tests/test_fastapi_contract_and_guardrails.py::test_compare_clamps_max_tokens_to_server_cap"
+            "tests/test_fastapi_contract_and_guardrails.py::test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens"
+            "tests/test_api_persistence_guardrails.py::test_chat_persists_normalized_error_when_orchestrator_returns_blank_success"
+            "tests/test_api_persistence_guardrails.py::test_chat_stream_persists_normalized_error_for_blank_success"
+            "tests/test_api_persistence_guardrails.py::test_compare_stream_persists_normalized_errors_for_blank_target"
+          )
+
+          python -m pytest -q "${TESTS[@]}"

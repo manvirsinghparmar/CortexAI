@@ -1,3 +1,5 @@
+import re
+from dataclasses import replace
 from typing import Any
 
 from models.user_context import UserContext
@@ -33,8 +35,10 @@ class SmartRouter:
         context: UserContext | None,
         routing_mode: str,
         constraints: RoutingConstraints | None,
+        runtime_messages: list[dict[str, str]] | None = None,
     ) -> tuple[PromptFeatures, Tier, list[ModelCandidate], dict[str, Any]]:
         features = self._analyzer.analyze(prompt, context)
+        features = self._apply_runtime_message_features(features, runtime_messages)
         features = self._apply_constraints(features, constraints)
 
         forced_tier = self._resolve_forced_tier(routing_mode)
@@ -109,6 +113,52 @@ class SmartRouter:
             "features": features_payload,
             "prompt_category": prompt_category,
         }
+
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        if not text:
+            return 0
+        words = len(re.findall(r"\b[\w'-]+\b", text))
+        chars = len(text)
+        return max(int(words * 1.3), int(chars / 4))
+
+    def _apply_runtime_message_features(
+        self,
+        features: PromptFeatures,
+        runtime_messages: list[dict[str, str]] | None,
+    ) -> PromptFeatures:
+        """
+        Adjust prompt/context token estimates using the full runtime message payload.
+
+        This captures system prompts and current-turn web research injections that are
+        not represented in plain `prompt + conversation_history` analysis.
+        """
+        if not runtime_messages:
+            return features
+
+        total_runtime_tokens = 0
+        last_user_tokens = 0
+        for msg in runtime_messages:
+            content = str(msg.get("content", "") or "")
+            role = str(msg.get("role", "") or "").strip().lower()
+            msg_tokens = self._estimate_text_tokens(content)
+            total_runtime_tokens += msg_tokens
+            if role == "user":
+                last_user_tokens = msg_tokens
+
+        if total_runtime_tokens <= 0:
+            return features
+
+        prompt_tokens = max(last_user_tokens, features.token_estimate)
+        context_tokens = max(total_runtime_tokens - prompt_tokens, 0)
+        context_messages = max(len(runtime_messages) - 1, 0)
+
+        return replace(
+            features,
+            token_estimate=max(features.token_estimate, prompt_tokens),
+            context_token_estimate=max(features.context_token_estimate, context_tokens),
+            context_messages=max(features.context_messages, context_messages),
+        )
 
     def _build_candidate_plan(
         self,

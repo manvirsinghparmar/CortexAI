@@ -1,0 +1,10 @@
+# Project-scoped Codex defaults for OpenAIProject.
+# This layer is loaded only when the project is trusted.
+
+project_doc_max_bytes = 65536
+
+developer_instructions = """
+Follow repository AGENTS.md first.
+For long-running tasks, load .codex/project-context.md and .codex/playbooks-index.md before planning.
+If work spans multiple repositories, prefer relaunching with repeated --add-dir paths.
+"""

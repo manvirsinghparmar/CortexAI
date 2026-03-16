@@ -9,14 +9,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import MultiUnifiedResponse, NormalizedError, TokenUsage, UnifiedResponse
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import persistence as persistence_service
 from server.dependencies import get_api_key, get_orchestrator
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
-from server.utils import clamp_max_tokens, validate_and_trim_context
+from server.utils import (
+    clamp_max_tokens,
+    normalize_empty_success_response,
+    validate_and_trim_context,
+)
 from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["Compare"])
@@ -206,6 +210,15 @@ async def compare(
         research_mode=orchestrator_research_mode,
         **kwargs,
     )
+    normalized_responses = [
+        normalize_empty_success_response(item) if item is not None else None
+        for item in response.responses
+    ]
+    response = MultiUnifiedResponse.from_responses(
+        request_group_id=response.request_group_id,
+        prompt=response.prompt,
+        responses=normalized_responses,
+    )
 
     resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
@@ -341,6 +354,7 @@ async def compare_stream(
 
             for task in asyncio.as_completed(tasks):
                 idx, response = await task
+                response = normalize_empty_success_response(response)
                 ordered_responses[idx] = response
                 dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
 

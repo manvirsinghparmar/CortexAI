@@ -141,6 +141,41 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("openai.OpenAI")
+    def test_openai_defaults_to_2048_max_tokens_when_not_provided(self, mock_openai):
+        """OpenAI chat path should use the repository default output cap when caller omits max_tokens."""
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Default cap response"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        assert response.text == "Default cap response"
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["max_tokens"] == 2048
+
+    @patch("openai.OpenAI")
+    def test_openai_length_finish_reason_with_empty_content_is_preserved(self, mock_openai):
+        """
+        Reproduce provider payload where output cap is hit but assistant text is empty.
+        Downstream orchestrator tests assert this shape is normalized to provider_error.
+        """
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="", refusal=None), finish_reason="length")]
+        mock_response.usage = Mock(prompt_tokens=1200, completion_tokens=500, total_tokens=1700)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.1")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        assert response.text == ""
+        assert response.finish_reason == "length"
+        assert response.token_usage.completion_tokens == 500
+
+    @patch("openai.OpenAI")
     def test_openai_handles_errors_gracefully(self, mock_openai):
         """Test that OpenAI client returns UnifiedResponse with error on exception."""
         # Mock exception
@@ -408,6 +443,42 @@ class TestProviderContractCompliance:
         second_config = mock_genai.return_value.models.generate_content.call_args_list[1].kwargs["config"]
         assert first_config["temperature"] == 0.4
         assert "temperature" not in second_config
+
+    @patch("google.genai.Client")
+    def test_gemini_accepts_max_tokens_alias_from_routes(self, mock_genai):
+        """Route layer sends max_tokens; Gemini client should map it to max_output_tokens."""
+        mock_response = Mock()
+        mock_response.text = "Alias works"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-1.5-flash")
+        response = client.get_completion("Test prompt", max_tokens=333)
+
+        assert response.is_success
+        assert response.text == "Alias works"
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 333
+
+    @patch("google.genai.Client")
+    def test_gemini_defaults_to_2048_output_tokens_when_unset(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Default output limit"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-1.5-flash")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 2048
 
 
 class TestErrorHandlingContract:

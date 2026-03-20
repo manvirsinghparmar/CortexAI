@@ -14,6 +14,10 @@ All notable changes to OpenAIProject will be documented in this file.
 - DB migrations:
   - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
   - `db/migrations/20260218_add_request_group_id_to_llm_requests.sql`
+- Browser E2E reporting improvements:
+  - Playwright JUnit output for CI (`e2e/test-results/junit.xml`)
+  - GitHub Checks publishing in `live-e2e.yml`
+  - workflow run summary with top failure extraction from JUnit
 
 ### Changed
 - FastAPI `/v1/chat` persistence flow now enforces key-owner attribution:
@@ -29,6 +33,18 @@ All notable changes to OpenAIProject will be documented in this file.
   - `llm_requests.request_group_id`
 - `create_llm_request(...)` supports optional `request_group_id` (schema-aware insert)
 - Header redaction added for auth logs (`X-API-Key`, `Authorization`)
+- Smart routing + guardrail hardening:
+  - runtime-message-aware smart tiering
+  - fresh web research path in `research_mode=on` with cache bypass
+  - empty-success normalization for blank `finish_reason=length` payloads
+  - route/client output token default clamp alignment (`2048`)
+- Live E2E workflow:
+  - moved to `windows-latest`
+  - provisions local PostgreSQL in-workflow for E2E runs
+- Documentation refresh:
+  - updated `README.md`, `docs/FASTAPI_README.md`, and `docs/PROJECT_MAP.md`
+  - replaced stale snapshot docs with clearly marked historical summaries
+  - added `docs/README.md` index for source-of-truth vs historical docs
 
 ### Fixed
 - OpenAI newer model compatibility:
@@ -68,4 +84,4 @@ All notable changes to OpenAIProject will be documented in this file.
 
 ---
 
-**Note**: For detailed architecture, see `.claude-context.md` and `PROJECT_MAP.md`
+**Note**: For current architecture, prefer `README.md`, `.codex/project-context.md`, and `docs/PROJECT_MAP.md`.

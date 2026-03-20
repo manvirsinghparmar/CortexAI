@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   live-e2e:
@@ -16,6 +17,14 @@ jobs:
     env:
       E2E_LIVE_ENABLED: "true"
       E2E_LOAD_ROOT_DOTENV: "false"
+      E2E_SERVER_START_TIMEOUT_MS: "150000"
+      E2E_DISCOVERY_TIMEOUT_MS: "60000"
+      E2E_FRONTEND_READY_TIMEOUT_MS: "45000"
+      E2E_FIRST_CONTENT_TIMEOUT_MS: "90000"
+      E2E_ASK_TIMEOUT_MS: "300000"
+      E2E_COMPARE_TIMEOUT_MS: "420000"
+      E2E_HISTORY_RESTORE_TIMEOUT_MS: "30000"
+      E2E_FALLBACK_TIMEOUT_MS: "180000"
       E2E_API_KEY: ${{ secrets.E2E_API_KEY }}
       E2E_DATABASE_URL: postgresql+psycopg://postgres:cortex@127.0.0.1:5432/cortexai
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -168,6 +177,76 @@ jobs:
       - name: Run live E2E suite
         run: npm run test
         working-directory: e2e
+
+      - name: Publish live E2E test report in GitHub Checks
+        if: always() && hashFiles('e2e/test-results/junit.xml') != ''
+        uses: dorny/test-reporter@v1
+        with:
+          name: Live E2E (Playwright)
+          path: e2e/test-results/junit.xml
+          reporter: java-junit
+          fail-on-error: "false"
+
+      - name: Add quick failure summary
+        if: always()
+        run: |
+          @'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          report_path = Path("e2e/test-results/junit.xml")
+          if not report_path.exists():
+              summary_path.write_text("### Live E2E Summary\n\nJUnit report not found.\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          root = ET.parse(report_path).getroot()
+          suites = root.findall(".//testsuite")
+
+          tests = 0
+          failures = 0
+          errors = 0
+          skipped = 0
+          failed_cases = []
+
+          for suite in suites:
+              tests += int(suite.attrib.get("tests", 0) or 0)
+              failures += int(suite.attrib.get("failures", 0) or 0)
+              errors += int(suite.attrib.get("errors", 0) or 0)
+              skipped += int(suite.attrib.get("skipped", 0) or 0)
+
+          for case in root.findall(".//testcase"):
+              failed_node = case.find("failure") or case.find("error")
+              if failed_node is None:
+                  continue
+              cls = case.attrib.get("classname", "")
+              name = case.attrib.get("name", "")
+              msg = (failed_node.attrib.get("message", "") or "").strip().splitlines()[0] if failed_node is not None else ""
+              failed_cases.append((cls, name, msg))
+
+          lines = [
+              "### Live E2E Summary",
+              "",
+              f"- Total: **{tests}**",
+              f"- Failed: **{failures + errors}**",
+              f"- Skipped: **{skipped}**",
+              "",
+          ]
+
+          if failed_cases:
+              lines.append("#### First Failures")
+              for cls, name, msg in failed_cases[:10]:
+                  label = " / ".join([part for part in [cls, name] if part]).strip() or "Unnamed test"
+                  if msg:
+                      lines.append(f"- `{label}`: {msg}")
+                  else:
+                      lines.append(f"- `{label}`")
+          else:
+              lines.append("All tests passed.")
+
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          '@ | python -
 
       - name: Upload Playwright artifacts
         if: always()

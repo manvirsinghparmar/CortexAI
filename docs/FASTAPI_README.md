@@ -35,14 +35,26 @@ python run_server.py --reload
 ## Endpoints
 
 - `GET /health`
+- `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
 - `POST /v1/compare/stream`
+- `POST /v1/optimize`
 - `GET /v1/history`
+- `DELETE /v1/history/{entry_id}`
+- `DELETE /v1/history`
 - `GET /v1/whoami`
+- `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
+- `GET /v1/savings/export?format=csv&from=...&to=...&group_by=...`
+- `POST /v1/byok`
+- `GET /v1/byok/status`
+- `DELETE /v1/byok?provider=<provider-id>`
+- `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 
 ## Authentication
 
@@ -299,7 +311,8 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 Applied in `server/utils.py`:
 - Conversation history trimmed to last 10 messages.
 - Total context chars capped at 20000.
-- `max_tokens` clamped to 1024.
+- `max_tokens` clamped to 2048.
+- Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
 
 Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
@@ -324,4 +337,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-03-08
+Last updated: 2026-03-19

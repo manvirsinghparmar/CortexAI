@@ -449,6 +449,7 @@ It runs:
   - uses GitHub Environment `live-e2e`
   - runs on `windows-latest` and provisions local PostgreSQL in-workflow
   - initializes schema from `db/schema_public_snapshot.sql` + `db/migrations/*.sql`
+  - publishes Playwright JUnit results directly into GitHub Checks + run summary (no artifact download needed for first-pass triage)
 
 Required secrets for `live-e2e` environment:
 - `E2E_API_KEY` (gateway auth key used by E2E suite; not a provider billing key)
@@ -600,6 +601,7 @@ OpenAIProject/
     tables.py
 
   docs/
+    README.md
     CHANGELOG.md
     COMPARE_MODE_GUIDE.md
     DATABASE_INTEGRATION_COMPLETE.md
@@ -798,4 +800,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-15
+Last updated: 2026-03-19

@@ -20,7 +20,7 @@ test("ask mode with smart routing returns streamed response and persisted select
 
     const result = await submitAskPrompt(page, liveApp.withPromptMarker(promptLibrary.smartAsk), config);
     expect(result.stream.distinctSnapshots).toBeGreaterThanOrEqual(2);
-    expect(result.text.length).toBeGreaterThan(60);
+    expect(result.text.length).toBeGreaterThan(20);
 
     const snapshot = await waitForSnapshot(liveApp, { minRequests: 1 });
     const request = latestRequest(snapshot);

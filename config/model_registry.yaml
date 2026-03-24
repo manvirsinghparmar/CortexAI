@@ -1,5 +1,17 @@
 providers:
   openai:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
       - name: "gpt-4.1-nano"
         tier: "T0"
@@ -44,6 +56,18 @@ providers:
         tags: ["strong", "accurate", "balanced", "general"]
         enabled: true
   gemini:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
       - name: "gemini-2.5-flash-lite"
         tier: "T0"
@@ -67,6 +91,11 @@ providers:
         tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
   deepseek:
+    defaults:
+      supports_image_input: false
+      supported_attachment_mime_types: []
+      max_attachment_bytes: null
+      max_attachments_per_request: 0
     models:
       - name: "deepseek-chat"
         tier: "T1"
@@ -83,6 +112,11 @@ providers:
         tags: ["reasoning", "coding", "cheap", "long_context"]
         enabled: true
   grok:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif"]
+      max_attachment_bytes: 10485760
+      max_attachments_per_request: 5
     models:
       - name: "grok-4-1-fast-non-reasoning"
         tier: "T1"
@@ -99,6 +133,18 @@ providers:
         tags: ["fast", "reasoning", "coding", "long_context"]
         enabled: true
   claude:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
       - name: "claude-3-5-haiku-latest"
         tier: "T0"

@@ -72,6 +72,21 @@ def test_chat_request_rejects_unknown_provider():
         ChatRequest(prompt="hello", provider="unknown-provider", model="unknown-model")
 
 
+def test_chat_request_allows_attachments_without_prompt():
+    request = ChatRequest(
+        prompt="",
+        attachments=[{"file_id": str(uuid4())}],
+    )
+    assert request.prompt == ""
+    assert request.attachments is not None
+    assert len(request.attachments) == 1
+
+
+def test_chat_request_rejects_empty_prompt_without_attachments():
+    with pytest.raises(ValidationError):
+        ChatRequest(prompt="   ")
+
+
 def test_compare_request_rejects_unknown_target_provider():
     with pytest.raises(ValidationError):
         CompareRequest(
@@ -79,6 +94,31 @@ def test_compare_request_rejects_unknown_target_provider():
             targets=[
                 {"provider": "openai", "model": "gpt-4o-mini"},
                 {"provider": "unknown-provider", "model": "unknown-model"},
+            ],
+        )
+
+
+def test_compare_request_allows_attachments_without_prompt():
+    request = CompareRequest(
+        prompt="",
+        targets=[
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+        attachments=[{"file_id": str(uuid4())}],
+    )
+    assert request.prompt == ""
+    assert request.attachments is not None
+    assert len(request.attachments) == 1
+
+
+def test_compare_request_rejects_empty_prompt_without_attachments():
+    with pytest.raises(ValidationError):
+        CompareRequest(
+            prompt="",
+            targets=[
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
             ],
         )
 

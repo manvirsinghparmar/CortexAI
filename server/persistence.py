@@ -20,6 +20,7 @@ from db import (
     create_api_key,
     create_llm_request,
     create_llm_response,
+    create_request_attachment,
     create_routing_attempts,
     create_routing_decision,
     create_session,
@@ -54,6 +55,15 @@ class ApiKeyPersistenceResolution:
     user_id: UUID
     api_key_id: UUID | None
     decision_path: str
+
+
+@dataclass(frozen=True)
+class RequestAttachmentPersistenceItem:
+    file_id: UUID
+    usage_role: str = "primary"
+    transform_mode: str = "auto"
+    order_index: int = 0
+    resolved_artifact_meta: dict | None = None
 
 
 @contextmanager
@@ -670,6 +680,59 @@ def build_error_response(
     )
 
 
+def _persist_request_attachments(
+    db_session: Session,
+    *,
+    llm_request_id: UUID,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None,
+) -> None:
+    """Persist request attachment links for one llm_request row."""
+    if not attachments:
+        return
+
+    for idx, item in enumerate(attachments):
+        if isinstance(item, RequestAttachmentPersistenceItem):
+            file_id = item.file_id
+            usage_role = item.usage_role
+            transform_mode = item.transform_mode
+            order_index = int(item.order_index)
+            resolved_artifact_meta = (
+                dict(item.resolved_artifact_meta) if isinstance(item.resolved_artifact_meta, dict) else {}
+            )
+        elif isinstance(item, dict):
+            file_id = item.get("file_id")
+            usage_role = str(item.get("usage_role") or "primary")
+            transform_mode = str(item.get("transform_mode") or "auto")
+            order_index = int(item.get("order_index", idx))
+            resolved_artifact_meta = (
+                dict(item.get("resolved_artifact_meta"))
+                if isinstance(item.get("resolved_artifact_meta"), dict)
+                else {}
+            )
+        else:
+            file_id = getattr(item, "file_id", None)
+            usage_role = str(getattr(item, "usage_role", "primary") or "primary")
+            transform_mode = str(getattr(item, "transform_mode", "auto") or "auto")
+            order_index = int(getattr(item, "order_index", idx))
+            meta_raw = getattr(item, "resolved_artifact_meta", None)
+            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
+
+        if file_id is None:
+            raise ValueError("Attachment item is missing file_id")
+        if not isinstance(file_id, UUID):
+            file_id = UUID(str(file_id))
+
+        create_request_attachment(
+            db_session,
+            llm_request_id=llm_request_id,
+            file_id=file_id,
+            order_index=order_index,
+            usage_role=usage_role,
+            transform_mode=transform_mode,
+            resolved_artifact_meta=resolved_artifact_meta,
+        )
+
+
 def persist_chat_interaction(
     *,
     api_key: str,
@@ -679,6 +742,7 @@ def persist_chat_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
 ) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
@@ -706,6 +770,11 @@ def persist_chat_interaction(
             api_key_id=resolution.api_key_id,
             store_prompt=True,
             prompt_text_override=stored_user_message,
+        )
+        _persist_request_attachments(
+            db_session,
+            llm_request_id=llm_request_id,
+            attachments=attachments,
         )
         stored_response = privacy_service.sanitize_response_for_storage(response)
         create_llm_response(db_session, llm_request_id, stored_response)
@@ -763,6 +832,7 @@ def persist_compare_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
 ) -> str:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:
@@ -795,6 +865,11 @@ def persist_compare_interaction(
                 api_key_id=resolution.api_key_id,
                 store_prompt=True,
                 prompt_text_override=stored_user_message,
+            )
+            _persist_request_attachments(
+                db_session,
+                llm_request_id=llm_request_id,
+                attachments=attachments,
             )
             stored_response = privacy_service.sanitize_response_for_storage(response)
             stored_compare_responses.append(stored_response)

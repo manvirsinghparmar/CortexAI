@@ -40,3 +40,17 @@ def test_quality_intent_detection():
     analyzer = PromptAnalyzer()
     features = analyzer.analyze("Need best quality production code with deep reasoning.", context=None)
     assert features.needs_accuracy is True
+
+
+def test_let_in_plain_english_is_not_code():
+    analyzer = PromptAnalyzer()
+    prompt = "Please rephrase this sentence: they just let me go after the service."
+    features = analyzer.analyze(prompt, context=None)
+    assert features.has_code is False
+
+
+def test_js_let_declaration_is_code():
+    analyzer = PromptAnalyzer()
+    prompt = "Fix this snippet: let itemCount = cart.length;"
+    features = analyzer.analyze(prompt, context=None)
+    assert features.has_code is True

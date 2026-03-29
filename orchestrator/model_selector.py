@@ -120,11 +120,14 @@ class ModelSelector:
             return 999
 
         preferred_order = {
-            ("openai", "gpt-5.2-codex"): 0,
-            ("claude", "claude-sonnet-4-5"): 1,
-            ("claude", "claude-opus-4-5"): 2,
-            ("claude", "claude-sonnet-4"): 3,
-            ("claude", "claude-3-5-sonnet-latest"): 4,
+            ("openai", "gpt-5.4"): 0,
+            ("openai", "gpt-5.2-codex"): 1,
+            ("claude", "claude-sonnet-4-6"): 2,
+            ("claude", "claude-opus-4-6"): 3,
+            ("claude", "claude-sonnet-4-5"): 4,
+            ("claude", "claude-opus-4-5"): 5,
+            ("claude", "claude-sonnet-4"): 6,
+            ("claude", "claude-3-5-sonnet-latest"): 7,
         }
         key = (candidate.provider.lower(), candidate.model_name)
         if key in preferred_order:

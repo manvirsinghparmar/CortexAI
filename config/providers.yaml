@@ -64,7 +64,7 @@ providers:
     api_key_env: ANTHROPIC_API_KEY
     default_model_env: DEFAULT_CLAUDE_MODEL
     default_model: claude-sonnet-4-5
-    compare_default_model: claude-sonnet-4
+    compare_default_model: claude-sonnet-4-6
     byok_supported: true
     capabilities: [chat, stream, compare, smart_routing, prompt_optimization]
     ui:

@@ -97,8 +97,8 @@ test("compare mode is inline and no longer uses separate model-selection card", 
 test("compare transcript renders turn-based side-by-side columns with model headers", () => {
     assert.match(appJs, /function buildCompareModelHeader\(providerRaw, modelRaw\)/);
     assert.match(appJs, /class="compare-model-header"/);
-    assert.match(appJs, /function buildCompareStreamingTurn\(promptText, targets, indexMap\)/);
-    assert.match(appJs, /function buildCompareTurn\(promptText, responses, startIndex = 0\)/);
+    assert.match(appJs, /function buildCompareStreamingTurn\(promptText, targets, indexMap(?:, options = \{\})?\)/);
+    assert.match(appJs, /function buildCompareTurn\(promptText, responses, startIndex = 0(?:, options = \{\})?\)/);
     assert.match(appJs, /<section class="compare-turn/);
     assert.match(appJs, /const gridClass = getCompareGridClass\(targets\.length\);/);
     assert.match(appJs, /const gridClass = getCompareGridClass\(safeResponses\.length\);/);
@@ -107,7 +107,10 @@ test("compare transcript renders turn-based side-by-side columns with model head
 });
 
 test("compare mode sends session context and preserves prompt history between turns", () => {
-    assert.match(appJs, /async function doCompare\(prompt, \{ streamRequest = null \} = \{\}\) \{[\s\S]*const sessionId = ensureActiveSessionId\(\);/);
+    assert.match(
+        appJs,
+        /async function doCompare\(prompt, \{[\s\S]*streamRequest = null,[\s\S]*attachments = \[\],[\s\S]*const sessionId = ensureActiveSessionId\(\);/,
+    );
     assert.match(appJs, /await callAPIStream\("\/v1\/compare\/stream", \{[\s\S]*context: \{[\s\S]*session_id: sessionId,[\s\S]*conversation_history: conversationHistory,[\s\S]*new_session: pendingNewSession,/);
     assert.match(appJs, /const compareAssistantContext = buildCompareAssistantContext\(compareResponsesForContext\);/);
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
@@ -267,6 +270,63 @@ test("historical transcripts render persisted web source citations", () => {
     assert.match(appJs, /const webSourceItems = normalizeWebSources\(entry\.web_source_items \|\| \[\]\);/);
     assert.match(appJs, /const webSources = normalizeWebSources\(resp\.web_source_items \|\| \[\]\);/);
     assert.match(appJs, /class="web-source-strip\$\{webSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Web sources"/);
+});
+
+test("composer supports attachment upload chips and request wiring", () => {
+    assert.match(html, /id="attachmentInput"/);
+    assert.match(html, /id="attachmentStrip"/);
+    assert.match(html, /id="attachmentList"/);
+    assert.match(html, /id="attachmentHint"/);
+    assert.match(appJs, /function ensureComposerInputsInteractive\(\) \{/);
+    assert.match(appJs, /el\.promptAddBtn\.disabled = false;/);
+    assert.match(appJs, /const hasAnyAttachments = attachmentItems\.length > 0;/);
+    assert.match(appJs, /const disabled = stopMode \? false : !\(hasPrompt \|\| hasAnyAttachments\);/);
+    assert.match(appJs, /if \(!rawPrompt && !hasAnyAttachments\) \{/);
+    assert.match(appJs, /const clearComposerAttachments = \(\) => \{/);
+    assert.match(appJs, /onBeforeRequestSend: clearComposerAttachments,/);
+    assert.match(appJs, /buildRequestAttachmentPayload\(\)/);
+    assert.match(appJs, /\/v1\/files\/upload/);
+    assert.match(appJs, /\.\.\.\(attachments\.length \? \{ attachments \} : \{\}\),/);
+});
+
+test("user transcript can render file cards for sent attachments", () => {
+    assert.match(appJs, /function buildUserAttachmentCards\(attachments\) \{/);
+    assert.match(appJs, /class="chat-user-files"/);
+    assert.match(appJs, /class="user-file-card is-\$\{escHtml\(status\)\}"/);
+    assert.match(appJs, /const statusLabel = status === "uploading"/);
+    assert.match(styleCss, /\.chat-user-files \{/);
+    assert.match(styleCss, /\.user-file-card \{/);
+    assert.match(styleCss, /\.user-file-status \{/);
+});
+
+test("attachment compatibility treats text-extractable files as model-agnostic", () => {
+    assert.match(appJs, /const TEXT_MATERIALIZED_ATTACHMENT_MIME_TYPES = new Set\(\[/);
+    assert.match(
+        appJs,
+        /if \(binaryAttachments\.length === 0\) \{[\s\S]*return true;[\s\S]*\}/,
+    );
+    assert.match(appJs, /maxCount !== null && binaryAttachments\.length > maxCount/);
+    assert.match(
+        appJs,
+        /binaryAttachments\.every\(item => supportedMimeTypes\.has\(normalizeAttachmentMimeType\(item\.mime_type\)\)\)/,
+    );
+});
+
+test("composer remains interactive when submit button is disabled", () => {
+    assert.match(appJs, /function ensureComposerInputsInteractive\(\) \{/);
+    assert.match(
+        appJs,
+        /function ensureComposerInputsInteractive\(\) \{[\s\S]*el\.promptInput\.disabled = false;[\s\S]*el\.promptInput\.readOnly = false;[\s\S]*el\.promptAddBtn\.disabled = false;/,
+    );
+    assert.match(styleCss, /\.btn-submit:disabled \{[\s\S]*pointer-events:\s*none;/);
+    assert.match(styleCss, /#promptAddBtn \{[\s\S]*pointer-events:\s*auto !important;/);
+    assert.match(styleCss, /#promptInput \{[\s\S]*pointer-events:\s*auto !important;/);
+    assert.match(styleCss, /\.prompt-card \{[\s\S]*z-index:\s*320;/);
+});
+
+test("model picker options can render capability badges", () => {
+    assert.match(appJs, /model-picker-option-badge/);
+    assert.match(styleCss, /\.model-picker-option-badge \{/);
 });
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {

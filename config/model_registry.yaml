@@ -20,6 +20,13 @@ providers:
         context_limit: 128000
         tags: ["cheap", "fast", "non_reasoning", "general"]
         enabled: true
+      - name: "gpt-5.4-nano"
+        tier: "T0"
+        input_cost_per_1m: 0.200
+        output_cost_per_1m: 1.250
+        context_limit: 1000000
+        tags: ["cheap", "fast", "non_reasoning", "general", "long_context"]
+        enabled: true
       - name: "gpt-4o-mini"
         tier: "T1"
         input_cost_per_1m: 0.150
@@ -34,12 +41,26 @@ providers:
         context_limit: 128000
         tags: ["fast", "balanced", "coding", "general"]
         enabled: true
+      - name: "gpt-5.4-mini"
+        tier: "T2"
+        input_cost_per_1m: 0.750
+        output_cost_per_1m: 4.500
+        context_limit: 1000000
+        tags: ["fast", "reasoning", "coding", "general", "long_context"]
+        enabled: true
       - name: "gpt-5.1"
         tier: "T2"
         input_cost_per_1m: 1.250
         output_cost_per_1m: 10.000
         context_limit: 128000
         tags: ["strong", "reasoning", "coding", "general", "long_context"]
+        enabled: true
+      - name: "gpt-5.4"
+        tier: "T3"
+        input_cost_per_1m: 2.500
+        output_cost_per_1m: 15.000
+        context_limit: 1000000
+        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
       - name: "gpt-5.2-codex"
         tier: "T3"
@@ -120,16 +141,16 @@ providers:
     models:
       - name: "grok-4-1-fast-non-reasoning"
         tier: "T1"
-        input_cost_per_1m: 0.200
-        output_cost_per_1m: 0.500
-        context_limit: 128000
-        tags: ["fast", "non_reasoning", "general"]
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 5.000
+        context_limit: 2000000
+        tags: ["fast", "non_reasoning", "general", "long_context"]
         enabled: true
       - name: "grok-4-1-fast-reasoning"
         tier: "T3"
-        input_cost_per_1m: 0.200
-        output_cost_per_1m: 0.500
-        context_limit: 128000
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 5.000
+        context_limit: 2000000
         tags: ["fast", "reasoning", "coding", "long_context"]
         enabled: true
   claude:
@@ -154,10 +175,10 @@ providers:
         tags: ["cheap", "fast", "general", "long_context"]
         enabled: true
       - name: "claude-sonnet-4-6"
-        tier: "T2"
+        tier: "T3"
         input_cost_per_1m: 3.000
         output_cost_per_1m: 15.000
-        context_limit: 200000
+        context_limit: 1000000
         tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
       - name: "claude-sonnet-4-5"
@@ -178,7 +199,7 @@ providers:
         tier: "T3"
         input_cost_per_1m: 5.000
         output_cost_per_1m: 25.000
-        context_limit: 200000
+        context_limit: 1000000
         tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
 routing_defaults:

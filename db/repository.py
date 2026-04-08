@@ -275,6 +275,67 @@ def get_or_create_service_user(
     return service_user_id
 
 
+COGNITO_AUTH_PROVIDER = "cognito"
+
+
+def get_or_create_user_by_cognito(
+    db: Session,
+    *,
+    sub: str,
+    email: str | None = None,
+    issuer: str,
+) -> UUID:
+    """
+    Get or create a user identified by Cognito (e.g. Google sign-in).
+
+    Uses auth_provider='cognito', auth_subject=sub, auth_issuer=issuer.
+    Email is stored for display; sub is the unique identity.
+
+    Args:
+        db: Database session
+        sub: Cognito subject (unique per user in pool)
+        email: Email from token (optional)
+        issuer: Token issuer (Cognito user pool URL)
+
+    Returns:
+        UUID: user_id
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    users = get_table("users")
+
+    stmt = select(users.c.id).where(
+        and_(
+            users.c.auth_provider == COGNITO_AUTH_PROVIDER,
+            users.c.auth_subject == sub,
+            users.c.auth_issuer == issuer,
+        )
+    )
+    user_id = db.execute(stmt).scalar_one_or_none()
+    if user_id:
+        return user_id
+
+    display_name = (email or sub).split("@")[0] if email else sub[:16]
+    stmt = (
+        insert(users)
+        .values(
+            email=email,
+            display_name=display_name,
+            is_active=True,
+            auth_provider=COGNITO_AUTH_PROVIDER,
+            auth_subject=sub,
+            auth_issuer=issuer,
+        )
+        .returning(users.c.id)
+    )
+    user_id = db.execute(stmt).scalar_one()
+    logger.info(f"Created Cognito user: sub={sub[:12]}... (id: {user_id})")
+    return user_id
+
+
 def get_user_by_api_key(db: Session, api_key: str) -> tuple[UUID, UUID] | None:
     """
     Look up user_id AND api_key_id from API key via api_keys table.

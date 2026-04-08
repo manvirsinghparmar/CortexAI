@@ -35,6 +35,7 @@ from db.repository import (
     # User & Auth
     get_or_create_cli_user,
     get_or_create_service_user,
+    get_or_create_user_by_cognito,
     get_byok_provider_key,
     get_failed_routing_attempts_by_request_group,
     get_savings_aggregates,
@@ -102,6 +103,7 @@ __all__ = [
     "get_api_key_settings",
     "get_or_create_cli_user",
     "get_or_create_service_user",
+    "get_or_create_user_by_cognito",
     "get_byok_provider_key",
     "get_savings_aggregates",
     "get_failed_routing_attempts_by_request_group",

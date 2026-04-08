@@ -93,6 +93,22 @@ SMART_CHAT_ALLOWED_PROVIDERS=       # comma-separated, e.g. openai,gemini
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
 REDACT_PII=false          # true|false
 
+# Attachments / object storage (feature-flagged)
+ENABLE_ATTACHMENTS=false
+ATTACHMENTS_OBJECT_STORAGE_BACKEND=s3
+ATTACHMENTS_S3_BUCKET=
+ATTACHMENTS_S3_REGION=us-east-1
+ATTACHMENTS_S3_ENDPOINT_URL=      # set for MinIO/local S3, leave empty for AWS S3
+ATTACHMENTS_S3_ACCESS_KEY_ID=
+ATTACHMENTS_S3_SECRET_ACCESS_KEY=
+ATTACHMENTS_S3_SESSION_TOKEN=
+ATTACHMENTS_S3_USE_SSL=true
+ATTACHMENTS_S3_FORCE_PATH_STYLE=true
+ATTACHMENTS_S3_KEY_PREFIX=attachments
+ATTACHMENTS_MAX_FILE_BYTES=20971520
+ATTACHMENTS_FILE_TTL_HOURS=168
+ATTACHMENTS_ALLOWED_MIME_TYPES=image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
 # BYOK encryption
 MASTER_KEY=replace-with-strong-random-secret
 
@@ -181,8 +197,11 @@ Response includes:
 ## API Endpoints
 
 - `GET /health`
+- `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
+- `POST /v1/files/upload`
+- `GET /v1/files/{file_id}`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -215,18 +234,97 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_REDIRECT_URI` – (optional) Callback URL; defaults to current origin + pathname
 3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the ID token is stored and sent as `Authorization: Bearer <token>` on all API requests. Sessions/history are tied to the Cognito user (user created or looked up by `sub` in the database).
 
+`/v1/models` now includes attachment capability metadata per model:
+- `supports_image_input`
+- `supported_attachment_mime_types`
+- `max_attachment_bytes`
+- `max_attachments_per_request`
+
+## Attachment Upload Contract (Current)
+
+`POST /v1/files/upload` accepts raw bytes in the request body.
+
+Headers:
+- `X-API-Key: <tenant-api-key>`
+- `X-File-Name: <original-filename>` (optional, defaults to `file`)
+- `X-File-Content-Type: <mime-type>` (optional, falls back to `Content-Type`)
+
+Example:
+```bash
+curl -X POST http://127.0.0.1:8000/v1/files/upload \
+  -H "X-API-Key: dev-key-1" \
+  -H "X-File-Name: contract.pdf" \
+  -H "X-File-Content-Type: application/pdf" \
+  --data-binary "@contract.pdf"
+```
+
+`GET /v1/files/{file_id}` returns file metadata and processing status for the same API key owner.
+
+Upload status semantics:
+- `ready`: file is immediately usable in chat/compare.
+- `processing`: server accepted file and deferred/ongoing ingestion; client should poll status.
+- `failed`: ingestion failed; `error_code`/`error_message` explain why.
+
+MVP ingestion policy:
+- Small files are handled inline.
+- Office docs (`.docx`, `.pptx`, `.xlsx`) may return `processing` when above `ATTACHMENTS_SYNC_INGEST_MAX_BYTES`.
+- Poll `GET /v1/files/{file_id}` until `ready` before sending chat/compare with that `file_id`.
+- Frontend polling budget is 60 seconds; if exceeded, attachment is marked failed in UI and user can remove/retry upload.
+
+Use attachments in chat/compare payloads by passing file references:
+```json
+{
+  "prompt": "Analyze this file",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "attachments": [
+    {
+      "file_id": "11111111-1111-1111-1111-111111111111",
+      "usage_role": "primary",
+      "transform_mode": "auto"
+    }
+  ]
+}
+```
+
+Current guardrail behavior:
+- attachments require `DATABASE_URL` (DB mode)
+- all attachment `file_id` values must belong to the same API key owner
+- model compatibility is validated before orchestration starts
+- same-user deduplication is hash+size based (no cross-user dedup)
+- provider adapter support in this release:
+  - OpenAI: images + PDF
+  - Gemini: images + PDF (inline data)
+  - Claude: images + PDF (base64 document/image blocks)
+  - Grok: images only
+  - DeepSeek: binary attachments unsupported; text-materialized attachments are accepted
+
+Attachment metadata semantics:
+- `uploaded_files.ingestion_meta` is **file-level** metadata (ingestion requirement/state, extraction stats, etc.).
+- `request_attachments.resolved_artifact_meta` is **request-level** metadata (effective transform/materialization used for that specific turn).
+
 ## Routing Modes
 
 For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - Explicit `provider` + `model`: deterministic target.
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
-- `routing.research_mode=true`: optional orchestrator-managed web research flow with fresh sources for the current turn.
+- `routing.research_mode=true`: orchestrator-managed web research flow with fresh sources for the current turn.
+- Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+
+## Web Research Behavior (Current)
+
+- `research_mode=off`: hard stop for this turn (no research injection, no reuse).
+- `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
+- `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
+- If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
+- Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
+- When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
 
 ## Session Continuity
 
@@ -356,6 +454,14 @@ Common `detail.code` values:
 - `invalid_model`
 - `unauthorized`
 
+## Output Guardrails (Current)
+
+- Route-level `max_tokens` is clamped to `2048` (`server/utils.py`).
+- OpenAI client defaults to `max_tokens=2048` when caller omits output cap.
+- If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
+- Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
+- This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
+
 ## Minimal Python SDK Snippet
 
 ```python
@@ -438,12 +544,31 @@ It runs:
 - `pytest -q`
 - DB mode smoke test (`/v1/chat` + DB row assertions for `llm_requests` and `usage_daily`)
 
-## CI Component Detection
+## CI and Workflows
 
-- `.github/workflows/ci.yml` uses path detection to run component jobs selectively:
-  - frontend checks/build artifact for `frontend/**` (and shared files)
-  - backend checks/API image build for `api/**`, `server/**`, `orchestrator/**`, `db/**` (and shared files)
-- Deploy jobs are intentionally not included yet; this keeps CI focused on readiness checks and build artifacts.
+- `.github/workflows/ci.yml`:
+  - path-aware frontend/backend quality checks
+  - frontend artifact build
+  - API image build metadata export
+  - secrets scanning (gitleaks)
+- `.github/workflows/incident-regression-38.yml`:
+  - targeted backend regression pack for routing/guardrail mismatches (38 tests)
+  - no live provider keys required
+- `.github/workflows/live-e2e.yml`:
+  - live Playwright browser suite with real providers
+  - uses GitHub Environment `live-e2e`
+  - runs on `windows-latest` and provisions local PostgreSQL in-workflow
+  - initializes schema from `db/schema_public_snapshot.sql` + `db/migrations/*.sql`
+  - publishes Playwright JUnit results directly into GitHub Checks + run summary (no artifact download needed for first-pass triage)
+
+Required secrets for `live-e2e` environment:
+- `E2E_API_KEY` (gateway auth key used by E2E suite; not a provider billing key)
+- `OPENAI_API_KEY`
+- `GOOGLE_GEMINI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GROK_API_KEY`
+- `DEEPSEEK_API_KEY`
+- optional web/search keys used by test prompts: `BRAVE_API_KEY`, `SERPAPI_API_KEY`
 
 ## Tenant Onboarding Script
 
@@ -503,6 +628,28 @@ Run full B2B API checklist against a live server:
 python scripts/e2e_b2b_checklist.py --base-url http://127.0.0.1:8000 --api-key dev-key-1
 ```
 
+Run browser E2E suite (Playwright):
+```bash
+npm run --prefix e2e test
+```
+
+Run high-impact UI business scenarios only:
+```bash
+npm run --prefix e2e test -- specs/50.high-impact-business-ui.spec.mjs
+```
+
+Run incident regression pack locally (same target set as workflow):
+```bash
+python -m pytest -q \
+  tests/test_routing_regression.py \
+  tests/test_fallback_manager.py \
+  tests/test_smart_router_metadata.py \
+  tests/test_server_utils.py \
+  tests/test_unified_response_contract.py \
+  tests/test_fastapi_contract_and_guardrails.py \
+  tests/test_api_persistence_guardrails.py
+```
+
 Postman collection:
 - `docs/postman/CortexAI_B2B.postman_collection.json`
 
@@ -521,6 +668,12 @@ OpenAIProject/
   requirements-dev.txt
   pyproject.toml
   pytest.ini
+
+  .github/
+    workflows/
+      ci.yml
+      incident-regression-38.yml
+      live-e2e.yml
 
   api/
     base_client.py
@@ -547,6 +700,7 @@ OpenAIProject/
   db/
     __init__.py
     engine.py
+    schema_public_snapshot.sql
     migrations/
       20260218_add_request_group_id_to_llm_requests.sql
       20260218_llm_requests_api_key_owner_guard.sql
@@ -557,6 +711,7 @@ OpenAIProject/
     tables.py
 
   docs/
+    README.md
     CHANGELOG.md
     COMPARE_MODE_GUIDE.md
     DATABASE_INTEGRATION_COMPLETE.md
@@ -564,8 +719,10 @@ OpenAIProject/
     LOGGING.md
     PROJECT_MAP.md
     REFACTORING_SUMMARY.md
+    SMART_ROUTING_DIAGRAM.md
     TAVILY_INTEGRATION.md
     UNIFIED_RESPONSE_CONTRACT.md
+    USER_FLOW_DIAGRAM_SOURCE.md
     adr/
       0001-architecture-baseline-and-deploy-boundaries.md
       0002-provider-validation-and-safety-rails.md
@@ -611,7 +768,9 @@ OpenAIProject/
     generate_proof_pack.py
     onboard_tenant.py
     release_gate.py
+    run_playwright_mcp.py
     serve_frontend.py
+    test_report_runner.py
 
   server/
     __init__.py
@@ -623,6 +782,7 @@ OpenAIProject/
     persistence.py
     privacy.py
     rate_limit.py
+    runtime_checks.py
     savings.py
     usage_reporting.py
     utils.py
@@ -690,12 +850,48 @@ OpenAIProject/
     test_prompt_optimizer.py
     test_registry_pricing_alignment.py
     test_response_validator.py
+    test_research_pack.py
     test_routing_regression.py
+    test_server_utils.py
     test_smart_router_metadata.py
+    test_tavily_client.py
     test_tier_decider.py
     test_unified_response_contract.py
     test_dynamic_provider_discovery_e2e.py
     ... (additional unit/integration suites)
+
+  e2e/
+    README.md
+    package.json
+    playwright.config.mjs
+    global-setup.mjs
+    global-teardown.mjs
+    fixtures/
+      live-e2e.mjs
+    helpers/
+      api.mjs
+      cleanup.mjs
+      config.mjs
+      db.mjs
+      ids.mjs
+      network.mjs
+      prompts.mjs
+      runtime-state.mjs
+      ui.mjs
+    server/
+      run_e2e_server.py
+      fault_injection.py
+      stream_tuning.py
+    specs/
+      00.app-readiness.spec.mjs
+      10.ask-and-routing.spec.mjs
+      20.session-and-history.spec.mjs
+      30.persistence-and-fallback.spec.mjs
+      40.compare-three-models.spec.mjs
+      50.high-impact-business-ui.spec.mjs
+      _helpers.mjs
+    test-data/
+      routing-outcomes.mjs
 ```
 
 ## What to Edit for Common Changes
@@ -704,12 +900,14 @@ OpenAIProject/
 - Add business logic/service code: `server/*.py` (keep route handlers thin; move logic into services).
 - Add or change provider behavior: `api/*.py`, `api/client_registry.py`, orchestration flow in `orchestrator/core.py`, and provider metadata in `config/providers.yaml`.
 - Change smart routing rules: `orchestrator/prompt_analyzer.py`, `orchestrator/tier_decider.py`, `orchestrator/model_selector.py`, `orchestrator/smart_router.py`.
+- Change web research behavior: `orchestrator/core.py` + `tools/web/intent.py` + `tools/web/tavily_service.py` + `tools/web/research_pack.py`.
 - Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).
 - Change usage/savings/BYOK behavior: `server/usage_reporting.py`, `server/savings.py`, `server/byok_service.py`, and related routes under `server/routes/`.
 - Add/adjust guardrails: `server/rate_limit.py`, `server/circuit_breaker.py`, privacy policy in `server/privacy.py`.
+- Update CI/workflow behavior: `.github/workflows/ci.yml`, `.github/workflows/live-e2e.yml`, `.github/workflows/incident-regression-38.yml`.
 - Add tenant/dev tooling scripts: `scripts/` (runtime checks/reporting) and `tools/` (operator/dev helpers).
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-08
+Last updated: 2026-03-19

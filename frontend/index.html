@@ -12,7 +12,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=20260305b" />
+    <link rel="stylesheet" href="style.css?v=20260322e" />
 </head>
 
 <body>
@@ -140,14 +140,20 @@
             </div>
             <div class="prompt-input-wrap" id="promptInputWrap">
                 <button class="prompt-input-action prompt-input-add" id="promptAddBtn" type="button"
-                    aria-label="More actions">
-                    <span aria-hidden="true">+</span>
+                    aria-label="Attach files">
+                    <span aria-hidden="true">&#128206;</span>
                 </button>
                 <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything..." rows="1"
                     aria-label="Prompt input"></textarea>
                 <button class="btn-submit btn-submit-inline" id="submitBtn" aria-label="Send message">
                     <span class="btn-icon">&uarr;</span>
                 </button>
+            </div>
+            <input id="attachmentInput" class="attachment-input" type="file" multiple
+                accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.csv,.json,.docx,.pptx,.xlsx" />
+            <div class="attachment-strip hidden" id="attachmentStrip" aria-live="polite">
+                <div class="attachment-list" id="attachmentList"></div>
+                <div class="attachment-hint" id="attachmentHint"></div>
             </div>
             <div class="prompt-footer">
                 <div class="prompt-footer-left">
@@ -206,12 +212,8 @@
 
     </main>
 
-    <footer class="footer">
-        <p>CortexAI - Unified AI Comparison Engine</p>
-    </footer>
-
-    <script src="smart-routing-state.js?v=20260305b"></script>
-    <script src="app.js?v=20260305b"></script>
+    <script src="smart-routing-state.js?v=20260322g"></script>
+    <script src="app.js?v=20260322g"></script>
 </body>
 
 </html>

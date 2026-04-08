@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-02-28
+- Last reviewed: 2026-03-19 (decision unchanged)
 
 ## Context
 

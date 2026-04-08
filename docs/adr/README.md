@@ -2,6 +2,8 @@
 
 This folder captures architecture decisions that we want to keep stable over time.
 
+Operational behavior and endpoint contracts can evolve; when details differ, treat ADRs as design intent and use `README.md` + `docs/FASTAPI_README.md` for current runtime truth.
+
 ## Purpose
 
 - Make design tradeoffs explicit.
@@ -23,3 +25,7 @@ Each ADR includes:
 - `Context`
 - `Decision`
 - `Consequences`
+
+---
+
+Last reviewed: 2026-03-19

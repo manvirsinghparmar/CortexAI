@@ -126,6 +126,10 @@ class ModelCatalogItemDTO(BaseModel):
     context_limit: int
     tags: List[str] = Field(default_factory=list)
     enabled: bool
+    supports_image_input: bool = False
+    supported_attachment_mime_types: List[str] = Field(default_factory=list)
+    max_attachment_bytes: Optional[int] = None
+    max_attachments_per_request: Optional[int] = None
 
 
 class ProviderCatalogItemDTO(BaseModel):
@@ -279,3 +283,25 @@ class WhoAmIResponseDTO(BaseModel):
     baseline: WhoAmIBaselineDTO
     rate_limits: WhoAmIRateLimitConfigDTO
     breakers: WhoAmIBreakerConfigDTO
+
+
+class FileBaseDTO(BaseModel):
+    file_id: str
+    original_filename: str
+    mime_type: str
+    size_bytes: int
+    status: str
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    ingestion_meta: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class FileUploadResponseDTO(FileBaseDTO):
+    deduplicated: bool = False
+
+
+class FileStatusResponseDTO(FileBaseDTO):
+    deduplicated: bool = False

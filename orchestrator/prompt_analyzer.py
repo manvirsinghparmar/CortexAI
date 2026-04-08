@@ -208,7 +208,11 @@ class PromptAnalyzer:
     def _detect_code(self, text: str) -> bool:
         if "```" in text:
             return True
-        if re.search(r"\b(def|class|import|function|const|let|var)\b", text):
+        if re.search(r"\b(def|class|import|function)\b", text):
+            return True
+        # Avoid prose false positives like "let me go"; only treat JS vars as code
+        # when they look like declarations (e.g., "let x = 1", "const cfg = {...}").
+        if re.search(r"\b(let|const|var)\s+[A-Za-z_$][\w$]*\s*=", text):
             return True
         if re.search(r"\{[\s\S]*\}", text) and ":" in text:
             return True

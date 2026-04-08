@@ -45,6 +45,9 @@ TABLE_NAMES = [
     "feedback",
     "routing_decisions",
     "routing_attempts",
+    "uploaded_files",
+    "request_attachments",
+    "file_deletion_queue",
 ]
 
 

@@ -9,6 +9,10 @@ Compare Mode allows you to send every query to multiple LLM providers simultaneo
 - Comparing costs between providers
 - Testing prompt effectiveness across models
 
+This guide covers both:
+- API compare mode (`POST /v1/compare`, `POST /v1/compare/stream`)
+- CLI compare mode (`COMPARE_MODE=true`)
+
 ## Release Notes (2026-02-18)
 
 - FastAPI `POST /v1/compare` now persists compare runs to DB when `DATABASE_URL` is set.
@@ -248,5 +252,5 @@ COMPARE_TARGETS = [
 
 ---
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-03-19
 **Applies To:** OpenAI Project v2.0+

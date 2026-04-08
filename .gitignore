@@ -59,3 +59,20 @@ e2e/.runtime/
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+
+# Local object-storage runtime data (MinIO / S3-compatible)
+data/minio/
+tools/bin/data/
+**/.minio.sys/
+
+# Local tooling binaries
+tools/bin/minio.exe
+
+# Local temp server logs
+tmp_server*.log
+
+# Local prompt-benchmark artifacts (analysis-only)
+docs/startup_prompt_library.csv
+docs/startup_prompt_library_ready_to_use.csv
+docs/startup_prompt_library_benchmark_results.csv
+scripts/run_prompt_benchmark_modes.py

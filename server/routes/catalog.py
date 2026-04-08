@@ -54,6 +54,12 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
         context_limit=int(candidate.context_limit),
         tags=list(candidate.tags or []),
         enabled=bool(candidate.enabled),
+        supports_image_input=bool(getattr(candidate, "supports_image_input", False)),
+        supported_attachment_mime_types=list(
+            getattr(candidate, "supported_attachment_mime_types", []) or []
+        ),
+        max_attachment_bytes=getattr(candidate, "max_attachment_bytes", None),
+        max_attachments_per_request=getattr(candidate, "max_attachments_per_request", None),
     )
 
 

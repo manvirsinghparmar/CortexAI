@@ -40,7 +40,10 @@ class GeminiClient(BaseAIClient):
         self.cost_calculator = CostCalculator(model_type="gemini", model_name=model_name)
 
     def _convert_messages_to_gemini_format(
-        self, messages: list[dict[str, str]]
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         """
         Convert standard messages format to Gemini's format.
@@ -62,10 +65,16 @@ class GeminiClient(BaseAIClient):
         """
         system_instruction = None
         gemini_contents = []
+        attachments = attachments or []
 
-        for msg in messages:
+        last_user_index = None
+        for idx, msg in enumerate(messages):
+            if str(msg.get("role", "")).strip().lower() == "user":
+                last_user_index = idx
+
+        for idx, msg in enumerate(messages):
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = self._normalize_message_text(msg)
 
             if role == "system":
                 # Use first system message as system_instruction
@@ -76,8 +85,22 @@ class GeminiClient(BaseAIClient):
 
             # Map roles: user->user, assistant->model
             gemini_role = "model" if role == "assistant" else "user"
+            parts: list[dict[str, Any]] = []
+            if content:
+                parts.append({"text": content})
 
-            gemini_contents.append({"role": gemini_role, "parts": [{"text": content}]})
+            if attachments and last_user_index is not None and idx == last_user_index:
+                for attachment in attachments:
+                    parts.append(
+                        {
+                            "inline_data": {
+                                "mime_type": attachment["mime_type"],
+                                "data": attachment["data_base64"],
+                            }
+                        }
+                    )
+
+            gemini_contents.append({"role": gemini_role, "parts": parts or [{"text": ""}]})
 
         return system_instruction, gemini_contents
 
@@ -111,15 +134,22 @@ class GeminiClient(BaseAIClient):
 
         model_name = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
-        max_output_tokens = kwargs.get("max_output_tokens", 2048)
+        # Keep route-level max_tokens clamp compatible with Gemini's max_output_tokens naming.
+        max_output_tokens = kwargs.get("max_output_tokens", kwargs.get("max_tokens", 2048))
+        attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
+            normalized_messages, binary_attachments = self._merge_text_attachments_into_messages(
+                normalized_messages,
+                attachments,
+            )
 
             # Convert to Gemini format
             system_instruction, gemini_contents = self._convert_messages_to_gemini_format(
-                normalized_messages
+                normalized_messages,
+                attachments=binary_attachments,
             )
 
             # Build config

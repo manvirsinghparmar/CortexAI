@@ -5,6 +5,8 @@ Provides SQLAlchemy engine, session management, table reflection, and repository
 
 from db.engine import get_engine
 from db.repository import (
+    create_request_attachment,
+    create_uploaded_file,
     clear_llm_history,
     check_usage_limit,
     compute_context_hash,
@@ -20,6 +22,8 @@ from db.repository import (
     create_llm_request,
     create_llm_response,
     delete_llm_history_entry,
+    enqueue_file_deletion_job,
+    find_active_uploaded_file_by_hash,
     generate_api_key,
     get_api_key_settings,
     # Session Management
@@ -37,8 +41,13 @@ from db.repository import (
     get_savings_aggregates,
     get_session_by_id,
     get_session_messages,
+    get_uploaded_file_by_id,
+    get_uploaded_file_for_user,
     get_usage_aggregates,
     list_byok_provider_keys,
+    list_due_file_deletion_jobs,
+    list_expired_uploaded_files,
+    list_request_attachments_for_request,
     # Usage Tracking
     get_usage_daily,
     get_user_by_api_key,  # Returns (user_id, api_key_id) tuple
@@ -49,6 +58,8 @@ from db.repository import (
     # Message Management
     save_message,
     update_api_key_last_used,
+    update_file_deletion_job,
+    update_uploaded_file_status,
     update_session_timestamp,
     upsert_usage_daily,
     upsert_api_key_settings,
@@ -65,6 +76,8 @@ from db.tables import (
 
 __all__ = [
     "SessionLocal",
+    "create_request_attachment",
+    "create_uploaded_file",
     "clear_llm_history",
     "check_usage_limit",
     "compute_api_key_hash",
@@ -76,6 +89,8 @@ __all__ = [
     "create_llm_request",
     "create_llm_response",
     "delete_llm_history_entry",
+    "enqueue_file_deletion_job",
+    "find_active_uploaded_file_by_hash",
     "generate_api_key",
     "create_routing_attempts",
     "create_routing_decision",
@@ -94,16 +109,23 @@ __all__ = [
     "get_failed_routing_attempts_by_request_group",
     "get_session_by_id",
     "get_session_messages",
+    "get_uploaded_file_by_id",
+    "get_uploaded_file_for_user",
     "get_table",
     "get_usage_aggregates",
     "get_usage_daily",
     "get_user_by_api_key",
     "get_user_preferences",
     "list_byok_provider_keys",
+    "list_due_file_deletion_jobs",
+    "list_expired_uploaded_files",
+    "list_request_attachments_for_request",
     "metadata",
     "save_compare_summary",
     "save_message",
     "update_api_key_last_used",
+    "update_file_deletion_job",
+    "update_uploaded_file_status",
     "update_session_timestamp",
     "upsert_usage_daily",
     "upsert_api_key_settings",

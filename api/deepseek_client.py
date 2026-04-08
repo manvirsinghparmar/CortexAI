@@ -2,7 +2,7 @@ import time
 
 import openai
 
-from models.unified_response import TokenUsage, UnifiedResponse
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 
@@ -67,10 +67,32 @@ class DeepSeekClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
+            normalized_messages, binary_attachments = self._merge_text_attachments_into_messages(
+                normalized_messages,
+                attachments,
+            )
+            if binary_attachments:
+                error = NormalizedError(
+                    code="bad_request",
+                    message=(
+                        "DeepSeek models in this gateway do not support binary attachment inputs. "
+                        "Use an image/PDF-capable model (OpenAI/Gemini/Claude/Grok), or send "
+                        "text-extracted attachments."
+                    ),
+                    provider="deepseek",
+                    retryable=False,
+                )
+                return self._create_error_response(
+                    request_id=request_id,
+                    error=error,
+                    latency_ms=self._measure_latency(start_time),
+                    model=model,
+                )
 
             request_payload = {
                 "model": model,

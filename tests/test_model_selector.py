@@ -84,10 +84,20 @@ def test_respects_max_cost_constraint_when_possible():
     assert result.primary_candidate.model_name == "affordable"
 
 
-def test_coding_prefers_codex_and_claude_sonnet_opus_family():
+def test_coding_prefers_latest_frontier_coding_order():
     selector = ModelSelector()
     features = _features(has_code=True, intent="code")
     candidates = [
+        ModelCandidate(
+            provider="openai",
+            model_name="gpt-5.4",
+            tier=Tier.T3,
+            input_cost_per_1m=2.5,
+            output_cost_per_1m=15.0,
+            context_limit=1_000_000,
+            tags=["flagship", "reasoning", "coding", "accurate", "long_context"],
+            enabled=True,
+        ),
         ModelCandidate(
             provider="deepseek",
             model_name="deepseek-reasoner",
@@ -110,21 +120,21 @@ def test_coding_prefers_codex_and_claude_sonnet_opus_family():
         ),
         ModelCandidate(
             provider="claude",
-            model_name="claude-sonnet-4-5",
+            model_name="claude-sonnet-4-6",
             tier=Tier.T3,
             input_cost_per_1m=3.00,
             output_cost_per_1m=15.00,
-            context_limit=200000,
+            context_limit=1_000_000,
             tags=["strong", "reasoning", "coding", "accurate", "long_context"],
             enabled=True,
         ),
         ModelCandidate(
             provider="claude",
-            model_name="claude-opus-4-5",
+            model_name="claude-opus-4-6",
             tier=Tier.T3,
             input_cost_per_1m=5.00,
             output_cost_per_1m=25.00,
-            context_limit=200000,
+            context_limit=1_000_000,
             tags=["flagship", "reasoning", "coding", "accurate", "long_context"],
             enabled=True,
         ),
@@ -134,6 +144,7 @@ def test_coding_prefers_codex_and_claude_sonnet_opus_family():
     ordered = [result.primary_candidate, *result.fallback_candidates]
     ordered_names = [candidate.model_name for candidate in ordered]
 
-    assert ordered_names[0] == "gpt-5.2-codex"
-    assert ordered_names[1] == "claude-sonnet-4-5"
-    assert ordered_names[2] == "claude-opus-4-5"
+    assert ordered_names[0] == "gpt-5.4"
+    assert ordered_names[1] == "gpt-5.2-codex"
+    assert ordered_names[2] == "claude-sonnet-4-6"
+    assert ordered_names[3] == "claude-opus-4-6"

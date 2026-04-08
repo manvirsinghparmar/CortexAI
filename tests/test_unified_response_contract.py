@@ -141,6 +141,41 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("openai.OpenAI")
+    def test_openai_defaults_to_2048_max_tokens_when_not_provided(self, mock_openai):
+        """OpenAI chat path should use the repository default output cap when caller omits max_tokens."""
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Default cap response"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        assert response.text == "Default cap response"
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["max_tokens"] == 2048
+
+    @patch("openai.OpenAI")
+    def test_openai_length_finish_reason_with_empty_content_is_preserved(self, mock_openai):
+        """
+        Reproduce provider payload where output cap is hit but assistant text is empty.
+        Downstream orchestrator tests assert this shape is normalized to provider_error.
+        """
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="", refusal=None), finish_reason="length")]
+        mock_response.usage = Mock(prompt_tokens=1200, completion_tokens=500, total_tokens=1700)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.1")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        assert response.text == ""
+        assert response.finish_reason == "length"
+        assert response.token_usage.completion_tokens == 500
+
+    @patch("openai.OpenAI")
     def test_openai_handles_errors_gracefully(self, mock_openai):
         """Test that OpenAI client returns UnifiedResponse with error on exception."""
         # Mock exception
@@ -281,6 +316,38 @@ class TestProviderContractCompliance:
         assert second_payload["max_output_tokens"] == 77
 
     @patch("openai.OpenAI")
+    def test_openai_attachments_use_responses_input_blocks(self, mock_openai):
+        mock_response = Mock()
+        mock_response.output_text = "Image analyzed"
+        mock_response.usage = Mock(input_tokens=12, output_tokens=8, total_tokens=20)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
+        response = client.get_completion(
+            "What is in this image?",
+            attachments=[
+                {
+                    "file_id": "f1",
+                    "filename": "cat.png",
+                    "mime_type": "image/png",
+                    "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                }
+            ],
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assert payload["model"] == "gpt-4o"
+        assert isinstance(payload["input"], list) and payload["input"]
+        user_message = payload["input"][-1]
+        assert user_message["role"] == "user"
+        content_types = [item["type"] for item in user_message["content"]]
+        assert "input_text" in content_types
+        assert "input_image" in content_types
+
+    @patch("openai.OpenAI")
     def test_deepseek_returns_unified_response(self, mock_openai):
         """Test that DeepSeek client returns UnifiedResponse."""
         # Mock successful response
@@ -320,6 +387,52 @@ class TestProviderContractCompliance:
         second_payload = mock_openai.return_value.chat.completions.create.call_args_list[1].kwargs
         assert first_payload["temperature"] == 0.5
         assert "temperature" not in second_payload
+
+    @patch("openai.OpenAI")
+    def test_deepseek_rejects_binary_attachments(self, mock_openai):
+        client = DeepSeekClient(api_key="test-key", model_name="deepseek-chat")
+        response = client.get_completion(
+            "describe this",
+            attachments=[
+                {
+                    "file_id": "f1",
+                    "filename": "cat.png",
+                    "mime_type": "image/png",
+                    "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                }
+            ],
+        )
+
+        assert response.is_error
+        assert response.error.code == "bad_request"
+        mock_openai.return_value.chat.completions.create.assert_not_called()
+
+    @patch("openai.OpenAI")
+    def test_deepseek_accepts_text_materialized_attachments(self, mock_openai):
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Processed text attachment"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = DeepSeekClient(api_key="test-key", model_name="deepseek-chat")
+        response = client.get_completion(
+            "summarize this",
+            attachments=[
+                {
+                    "file_id": "f1",
+                    "filename": "report.txt",
+                    "mime_type": "text/plain",
+                    "extracted_text": "Quarterly revenue grew by 12%.",
+                }
+            ],
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["model"] == "deepseek-chat"
+        assert payload["messages"][-1]["role"] == "user"
+        assert "Attachment context:" in payload["messages"][-1]["content"]
+        assert "Quarterly revenue grew by 12%." in payload["messages"][-1]["content"]
 
     @patch("openai.OpenAI")
     def test_grok_returns_unified_response(self, mock_openai):
@@ -408,6 +521,70 @@ class TestProviderContractCompliance:
         second_config = mock_genai.return_value.models.generate_content.call_args_list[1].kwargs["config"]
         assert first_config["temperature"] == 0.4
         assert "temperature" not in second_config
+
+    @patch("google.genai.Client")
+    def test_gemini_accepts_max_tokens_alias_from_routes(self, mock_genai):
+        """Route layer sends max_tokens; Gemini client should map it to max_output_tokens."""
+        mock_response = Mock()
+        mock_response.text = "Alias works"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-1.5-flash")
+        response = client.get_completion("Test prompt", max_tokens=333)
+
+        assert response.is_success
+        assert response.text == "Alias works"
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 333
+
+    @patch("google.genai.Client")
+    def test_gemini_defaults_to_2048_output_tokens_when_unset(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Default output limit"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-1.5-flash")
+        response = client.get_completion("Test prompt")
+
+        assert response.is_success
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 2048
+
+    @patch("google.genai.Client")
+    def test_gemini_includes_inline_attachment_parts(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Image analyzed"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-2.5-flash")
+        response = client.get_completion(
+            "Describe this image",
+            attachments=[
+                {
+                    "file_id": "f1",
+                    "filename": "cat.png",
+                    "mime_type": "image/png",
+                    "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                }
+            ],
+        )
+
+        assert response.is_success
+        contents = mock_genai.return_value.models.generate_content.call_args.kwargs["contents"]
+        user_parts = contents[-1]["parts"]
+        assert any("inline_data" in part for part in user_parts)
 
 
 class TestErrorHandlingContract:

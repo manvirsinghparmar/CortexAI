@@ -26,7 +26,23 @@ class FallbackManager:
         if attempt_index + 1 >= policy.max_attempts:
             return FallbackDecision(action=NextAction.STOP, next_tier=None, reason="max_attempts")
 
+        recoverable_after_budget = {
+            "provider_error",
+            "too_short",
+            "truncated",
+        }
         if elapsed_ms >= policy.max_total_latency_ms:
+            # Permit one recovery retry even after latency budget on high-friction quality failures.
+            if (
+                attempt_index == 0
+                and remaining_same_tier_candidates > 0
+                and validation.reason in recoverable_after_budget
+            ):
+                return FallbackDecision(
+                    action=NextAction.RETRY_SAME_TIER,
+                    next_tier=None,
+                    reason="latency_budget_recovery",
+                )
             return FallbackDecision(action=NextAction.STOP, next_tier=None, reason="latency_budget")
 
         if validation.reason in {"provider_error", "rate_limit", "timeout", "refusal"}:

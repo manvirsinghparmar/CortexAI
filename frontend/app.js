@@ -142,6 +142,79 @@ const LEGACY_MODE_SESSION_STORAGE_KEYS = [
 ];
 const MAX_CONTEXT_MESSAGES_UI = 20;
 const REQUEST_TIMEOUT_MS = 20000;
+const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60000;
+const ATTACHMENT_POLL_TIMEOUT_MS = 60000;
+const ATTACHMENT_POLL_INTERVAL_MS = 1500;
+const ATTACHMENTS_MAX_FILES_UI = 5;
+const ATTACHMENTS_MAX_FILE_BYTES_UI = 20 * 1024 * 1024;
+const ATTACHMENT_ALLOWED_MIME_TYPES = new Set([
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "application/json",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+const ATTACHMENT_MIME_BY_EXTENSION = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+    pdf: "application/pdf",
+    txt: "text/plain",
+    csv: "text/csv",
+    json: "application/json",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+const TEXT_MATERIALIZED_ATTACHMENT_MIME_TYPES = new Set([
+    "text/plain",
+    "text/csv",
+    "application/json",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+const FALLBACK_ATTACHMENT_CAPABILITIES_BY_PROVIDER = {
+    openai: {
+        supports_image_input: true,
+        supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"],
+        max_attachment_bytes: ATTACHMENTS_MAX_FILE_BYTES_UI,
+        max_attachments_per_request: ATTACHMENTS_MAX_FILES_UI,
+    },
+    gemini: {
+        supports_image_input: true,
+        supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"],
+        max_attachment_bytes: ATTACHMENTS_MAX_FILE_BYTES_UI,
+        max_attachments_per_request: ATTACHMENTS_MAX_FILES_UI,
+    },
+    claude: {
+        supports_image_input: true,
+        supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"],
+        max_attachment_bytes: ATTACHMENTS_MAX_FILE_BYTES_UI,
+        max_attachments_per_request: ATTACHMENTS_MAX_FILES_UI,
+    },
+    grok: {
+        supports_image_input: true,
+        supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif"],
+        max_attachment_bytes: 10 * 1024 * 1024,
+        max_attachments_per_request: ATTACHMENTS_MAX_FILES_UI,
+    },
+    deepseek: {
+        supports_image_input: false,
+        supported_attachment_mime_types: [],
+        max_attachment_bytes: null,
+        max_attachments_per_request: 0,
+    },
+};
 
 function toProviderId(value) {
     return String(value || "").trim().toLowerCase();
@@ -228,6 +301,57 @@ function computeManualDefaultModelKey() {
     return "openai:gpt-4o";
 }
 
+function toNonNegativeIntOrNull(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) return null;
+    return Math.floor(num);
+}
+
+function normalizeMimeList(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map(item => String(item || "").trim().toLowerCase())
+        .filter(Boolean);
+}
+
+function fallbackAttachmentCapabilities(providerRaw) {
+    const provider = toProviderId(providerRaw);
+    const fallback = FALLBACK_ATTACHMENT_CAPABILITIES_BY_PROVIDER[provider];
+    if (fallback) {
+        return {
+            supports_image_input: !!fallback.supports_image_input,
+            supported_attachment_mime_types: [...(fallback.supported_attachment_mime_types || [])],
+            max_attachment_bytes: fallback.max_attachment_bytes,
+            max_attachments_per_request: fallback.max_attachments_per_request,
+        };
+    }
+    return {
+        supports_image_input: true,
+        supported_attachment_mime_types: [],
+        max_attachment_bytes: ATTACHMENTS_MAX_FILE_BYTES_UI,
+        max_attachments_per_request: ATTACHMENTS_MAX_FILES_UI,
+    };
+}
+
+function resolveModelAttachmentCapabilities(row, providerRaw) {
+    const fallback = fallbackAttachmentCapabilities(providerRaw);
+    const hasExplicitSupportFlag = typeof row?.supports_image_input === "boolean";
+    const supportedMimeTypes = normalizeMimeList(row?.supported_attachment_mime_types);
+
+    return {
+        supports_image_input: hasExplicitSupportFlag
+            ? !!row.supports_image_input
+            : !!fallback.supports_image_input,
+        supported_attachment_mime_types: supportedMimeTypes.length
+            ? supportedMimeTypes
+            : [...fallback.supported_attachment_mime_types],
+        max_attachment_bytes: toNonNegativeIntOrNull(row?.max_attachment_bytes) ?? fallback.max_attachment_bytes,
+        max_attachments_per_request: toNonNegativeIntOrNull(row?.max_attachments_per_request)
+            ?? fallback.max_attachments_per_request,
+    };
+}
+
 function applyCatalogData(nextProviders, nextModels) {
     const providerRows = Array.isArray(nextProviders) ? nextProviders : [];
     const modelRows = Array.isArray(nextModels) ? nextModels : [];
@@ -275,10 +399,15 @@ function applyCatalogData(nextProviders, nextModels) {
             const provider = toProviderId(row?.provider || row?.key || row?.id);
             const model = String(row?.model || row?.name || "").trim();
             if (!provider || !model || !allowedProviders.has(provider)) return null;
+            const capabilities = resolveModelAttachmentCapabilities(row, provider);
             return {
                 provider,
                 model,
                 enabled: row?.enabled !== false,
+                supports_image_input: capabilities.supports_image_input,
+                supported_attachment_mime_types: capabilities.supported_attachment_mime_types,
+                max_attachment_bytes: capabilities.max_attachment_bytes,
+                max_attachments_per_request: capabilities.max_attachments_per_request,
             };
         })
         .filter(Boolean);
@@ -293,10 +422,15 @@ function applyCatalogData(nextProviders, nextModels) {
         if (!provider || !defaultModel) return;
         const key = `${provider}:${defaultModel}`;
         if (!byKey.has(key)) {
+            const capabilities = fallbackAttachmentCapabilities(provider);
             byKey.set(key, {
                 provider,
                 model: defaultModel,
                 enabled: true,
+                supports_image_input: capabilities.supports_image_input,
+                supported_attachment_mime_types: capabilities.supported_attachment_mime_types,
+                max_attachment_bytes: capabilities.max_attachment_bytes,
+                max_attachments_per_request: capabilities.max_attachments_per_request,
             });
         }
     });
@@ -343,6 +477,183 @@ function buildProviderDotHtml(providerRaw, size = 7) {
 
 function getSelectableModels() {
     return modelCatalog.filter(item => item && item.enabled !== false && item.provider && item.model);
+}
+
+function getModelCatalogItemByKey(key) {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) return null;
+    return modelCatalog.find(item => modelKeyOf(item.provider, item.model) === normalizedKey) || null;
+}
+
+function normalizeAttachmentMimeType(mimeTypeRaw, filenameRaw = "") {
+    const direct = String(mimeTypeRaw || "").trim().toLowerCase();
+    if (direct) {
+        if (direct === "image/jpg") return "image/jpeg";
+        return direct;
+    }
+    const fileName = String(filenameRaw || "").trim().toLowerCase();
+    const dotIndex = fileName.lastIndexOf(".");
+    if (dotIndex < 0) return "";
+    const ext = fileName.slice(dotIndex + 1);
+    return ATTACHMENT_MIME_BY_EXTENSION[ext] || "";
+}
+
+function formatBytes(bytesRaw) {
+    const bytes = Number(bytesRaw);
+    if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function normalizeAttachmentCardStatus(statusRaw) {
+    const status = String(statusRaw || "").trim().toLowerCase();
+    if (status === "queued" || status === "uploading" || status === "uploaded" || status === "processing") {
+        return "uploading";
+    }
+    if (status === "error" || status === "failed") {
+        return "failed";
+    }
+    return "ready";
+}
+
+function getAttachmentCardTypeLabel(mimeTypeRaw, filenameRaw = "") {
+    const mimeType = normalizeAttachmentMimeType(mimeTypeRaw, filenameRaw);
+    if (!mimeType) return "FILE";
+    if (mimeType === "application/pdf") return "PDF";
+    if (mimeType === "text/plain") return "TXT";
+    if (mimeType === "text/csv") return "CSV";
+    if (mimeType === "application/json") return "JSON";
+    if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "DOCX";
+    if (mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "PPTX";
+    if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "XLSX";
+    if (mimeType.startsWith("image/")) return "IMG";
+    return "FILE";
+}
+
+function normalizeUserTurnAttachmentItems(items) {
+    if (!Array.isArray(items)) return [];
+
+    const seen = new Set();
+    const normalized = [];
+
+    items.forEach((item, index) => {
+        if (!item) return;
+        const fileName = normalizeAttachmentFileName(item?.file_name || item?.filename || item?.original_filename || `file-${index + 1}`);
+        const mimeType = normalizeAttachmentMimeType(item?.file_type || item?.mime_type, fileName);
+        const fileSize = Number(item?.file_size ?? item?.size_bytes) || 0;
+        const fileId = String(item?.file_id || "").trim();
+        const status = normalizeAttachmentCardStatus(item?.status);
+
+        const dedupeKey = [fileId, fileName, mimeType, fileSize].join("|").toLowerCase();
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+
+        normalized.push({
+            type: "file",
+            payload: {
+                file_name: fileName,
+                file_size: fileSize,
+                file_type: mimeType,
+                file_id: fileId,
+                status,
+            },
+        });
+    });
+
+    return normalized;
+}
+
+function buildUserAttachmentCards(attachments) {
+    const messageItems = normalizeUserTurnAttachmentItems(attachments);
+    if (messageItems.length === 0) return "";
+
+    const cardsHtml = messageItems.map(item => {
+        const payload = item?.payload || {};
+        const status = normalizeAttachmentCardStatus(payload.status);
+        const statusLabel = status === "uploading"
+            ? "Uploading..."
+            : (status === "failed" ? "Failed" : "Ready");
+        const fileName = normalizeAttachmentFileName(payload.file_name);
+        const sizeText = formatBytes(payload.file_size);
+        const typeLabel = getAttachmentCardTypeLabel(payload.file_type, fileName);
+
+        return `<article class="user-file-card is-${escHtml(status)}" data-file-id="${escHtml(String(payload.file_id || ""))}">
+            <span class="user-file-icon" aria-hidden="true">${escHtml(typeLabel)}</span>
+            <span class="user-file-main">
+                <span class="user-file-name">${escHtml(fileName)}</span>
+                <span class="user-file-meta">${escHtml(`${sizeText} | ${typeLabel}`)}</span>
+            </span>
+            <span class="user-file-status">${escHtml(statusLabel)}</span>
+        </article>`;
+    }).join("");
+
+    return `<div class="chat-user-files" aria-label="Attached files">${cardsHtml}</div>`;
+}
+
+function getAttachmentDescriptorsForCompatibility() {
+    if (!Array.isArray(attachmentItems)) return [];
+    return attachmentItems
+        .filter(item => item && item.status !== "error")
+        .map(item => ({
+            mime_type: normalizeAttachmentMimeType(item.mime_type, item.filename),
+            size_bytes: Number(item.size_bytes) || 0,
+        }))
+        .filter(item => item.mime_type);
+}
+
+function isModelCompatibleWithAttachments(modelItem, attachments) {
+    const attachmentItemsForCheck = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+    if (attachmentItemsForCheck.length === 0) return true;
+    if (!modelItem || typeof modelItem !== "object") return true;
+
+    const binaryAttachments = attachmentItemsForCheck.filter(item => {
+        const mimeType = normalizeAttachmentMimeType(item?.mime_type, item?.filename);
+        return !TEXT_MATERIALIZED_ATTACHMENT_MIME_TYPES.has(mimeType);
+    });
+
+    // Text-materialized attachments are extracted server-side and passed as text context,
+    // so model vision MIME/capability limits should only apply to binary attachments.
+    if (binaryAttachments.length === 0) {
+        return true;
+    }
+
+    if (modelItem.supports_image_input === false) {
+        return false;
+    }
+
+    const maxCount = toNonNegativeIntOrNull(modelItem.max_attachments_per_request);
+    if (maxCount !== null && binaryAttachments.length > maxCount) {
+        return false;
+    }
+
+    const maxBytes = toNonNegativeIntOrNull(modelItem.max_attachment_bytes);
+    if (
+        maxBytes !== null
+        && binaryAttachments.some(item => (Number(item.size_bytes) || 0) > maxBytes)
+    ) {
+        return false;
+    }
+
+    const supportedMimeTypes = new Set(
+        normalizeMimeList(modelItem.supported_attachment_mime_types).map(mime => normalizeAttachmentMimeType(mime))
+    );
+    if (supportedMimeTypes.size === 0) return true;
+
+    return binaryAttachments.every(item => supportedMimeTypes.has(normalizeAttachmentMimeType(item.mime_type)));
+}
+
+function getCompatibleModelKeySetForCurrentAttachments() {
+    const attachments = getAttachmentDescriptorsForCompatibility();
+    if (attachments.length === 0) return null;
+
+    const compatible = new Set();
+    getSelectableModels().forEach(item => {
+        if (isModelCompatibleWithAttachments(item, attachments)) {
+            compatible.add(modelKeyOf(item.provider, item.model));
+        }
+    });
+    return compatible;
 }
 
 function modelKeyOf(provider, model) {
@@ -433,6 +744,9 @@ let hasReceivedFirstStreamResponse = false;
 let historyUiReady = false;
 let lastOptimizeResult = null;   // { original, optimized, wasOptimized }
 let lastPromptForRetry = "";
+let lastAttachmentItemsForRetry = [];
+let lastAttachmentDescriptorsForRetry = [];
+let lastAttachmentMessageItemsForRetry = [];
 let _historyData = [];   // full fetched list
 let streamAutoScrollEnabled = false;
 let lastStreamAutoScrollTs = 0;
@@ -445,6 +759,9 @@ const pendingWebSourcesByCard = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
 let modelPickerOutsideHandlersAttached = false;
+let attachmentItems = [];
+let attachmentUploadInFlight = false;
+let attachmentLocalCounter = 0;
 const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
@@ -496,6 +813,10 @@ const el = {
     promptCard: $("promptCard"),
     promptInputWrap: $("promptInputWrap"),
     promptAddBtn: $("promptAddBtn"),
+    attachmentInput: $("attachmentInput"),
+    attachmentStrip: $("attachmentStrip"),
+    attachmentList: $("attachmentList"),
+    attachmentHint: $("attachmentHint"),
     promptInput: $("promptInput"),
     submitBtn: $("submitBtn"),
     routeOptimizeBtn: $("routeOptimizeBtn"),
@@ -814,6 +1135,8 @@ function renderModelPickerOptions(selectEl) {
             };
         const label = meta.shortLabel;
         const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
+        const catalogItem = getModelCatalogItemByKey(value);
+        const capabilityBadge = catalogItem?.supports_image_input ? "Vision" : "";
 
         return `<button type="button"
                 class="model-picker-option${isActive ? " is-active" : ""}${isDisabled ? " is-disabled" : ""}"
@@ -826,6 +1149,7 @@ function renderModelPickerOptions(selectEl) {
                 ${isDisabled ? "disabled" : ""}>
                 ${glyph}
                 <span class="model-picker-option-label">${escHtml(label)}</span>
+                ${capabilityBadge ? `<span class="model-picker-option-badge">${escHtml(capabilityBadge)}</span>` : ""}
             </button>`;
     }).join("");
 
@@ -981,6 +1305,7 @@ function initModelPickers() {
 function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
     const { allowEmpty = false, emptyLabel = "Select a model" } = options;
     const current = selectEl.value;
+    const attachmentCompatibleKeys = getCompatibleModelKeySetForCurrentAttachments();
     selectEl.innerHTML = "";
 
     if (allowEmpty) {
@@ -1003,12 +1328,29 @@ function buildOptions(selectEl, excludeKeys = new Set(), options = {}) {
         opt.title = meta.title;
         opt.setAttribute("title", meta.title);
         opt.setAttribute("aria-label", meta.ariaLabel);
+        const disabledForAttachments = !!attachmentCompatibleKeys && !attachmentCompatibleKeys.has(key);
+        opt.disabled = disabledForAttachments;
+        if (disabledForAttachments) {
+            const blockedTitle = `${meta.title}\nIncompatible with current attachments`;
+            opt.title = blockedTitle;
+            opt.setAttribute("title", blockedTitle);
+            opt.setAttribute("aria-label", `${meta.ariaLabel} (incompatible with current attachments)`);
+        }
         if (key === current) opt.selected = true;
         selectEl.appendChild(opt);
     });
 
-    if (!allowEmpty && !selectEl.value && selectEl.options.length > 0) {
-        selectEl.options[0].selected = true;
+    if (!allowEmpty && selectEl.options.length > 0) {
+        const selectedOption = Array.from(selectEl.options).find(option => option.selected);
+        if (!selectedOption || selectedOption.disabled) {
+            const firstAvailable = Array.from(selectEl.options).find(option => !option.disabled);
+            if (firstAvailable) {
+                firstAvailable.selected = true;
+                selectEl.value = String(firstAvailable.value || "");
+            } else {
+                selectEl.value = "";
+            }
+        }
     }
 
     syncModelPickerFromNativeSelect(selectEl);
@@ -1021,17 +1363,31 @@ function getCompareOptionStates(allModels, selectedModels, slotIndex) {
             .map((value, index) => (index === slotIndex ? "" : String(value || "")))
             .filter(Boolean)
     );
+    const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
+    const hasAttachmentConstraints = attachmentDescriptors.length > 0;
 
     return allModels.map(item => {
         const key = modelKeyOf(item.provider, item.model);
         const meta = getModelDisplayMetadata(item.provider, item.model);
+        const disabledByAttachment = hasAttachmentConstraints
+            && !isModelCompatibleWithAttachments(item, attachmentDescriptors);
+        const disabledByDuplicate = takenByOtherSlots.has(key) && key !== currentKey;
+        let title = meta.title;
+        let ariaLabel = meta.ariaLabel;
+        if (disabledByAttachment) {
+            title = `${meta.title}\nIncompatible with current attachments`;
+            ariaLabel = `${meta.ariaLabel} (incompatible with current attachments)`;
+        } else if (disabledByDuplicate) {
+            title = `${meta.title}\nAlready selected in another compare slot`;
+            ariaLabel = `${meta.ariaLabel} (already selected in another compare slot)`;
+        }
         return {
             key,
             label: meta.shortLabel,
-            title: meta.title,
-            ariaLabel: meta.ariaLabel,
+            title,
+            ariaLabel,
             // Keep the slot's own selected model visible while blocking duplicates elsewhere.
-            disabled: takenByOtherSlots.has(key) && key !== currentKey,
+            disabled: disabledByDuplicate || disabledByAttachment,
             selected: key === currentKey,
         };
     });
@@ -1085,7 +1441,10 @@ function reconcileCompareSelections(selects) {
 function canAddAnotherCompareSlot() {
     if (compareSlotCount >= 3) return false;
     const selected = new Set(getActiveCompareSelects().map(sel => String(sel.value || "")).filter(Boolean));
-    const keys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
+    const keys = getSelectableModels()
+        .filter(item => isModelCompatibleWithAttachments(item, attachmentDescriptors))
+        .map(item => modelKeyOf(item.provider, item.model));
     return keys.some(key => !selected.has(key));
 }
 
@@ -1241,6 +1600,10 @@ function startNewChatSession() {
     activeSessionId = setActiveSessionId(createSessionId());
     pendingNewSession = true;
     conversationHistory = [];
+    lastPromptForRetry = "";
+    lastAttachmentItemsForRetry = [];
+    lastAttachmentDescriptorsForRetry = [];
+    lastAttachmentMessageItemsForRetry = [];
     clearResults();
     clearError();
 }
@@ -1538,13 +1901,39 @@ function updateRoutingButtons() {
 
 function updateSendButtonState() {
     const hasPrompt = el.promptInput.value.trim().length > 0;
-    const missingManualModel = isSingleManualModePendingSelection();
+    const hasAnyAttachments = attachmentItems.length > 0;
     const stopMode = isComposerStopModeActive();
-    const disabled = stopMode ? false : (isSubmitting || !hasPrompt || missingManualModel);
+    const disabled = stopMode ? false : !(hasPrompt || hasAnyAttachments);
     el.submitBtn.disabled = disabled;
     el.compactSendBtn.disabled = disabled;
+    // Composer inputs should remain interactive independent of send-button state.
+    ensureComposerInputsInteractive();
     const isExpanded = autoSizePromptInput(hasPrompt);
     el.promptCard.classList.toggle("expanded", isExpanded);
+}
+
+function ensureComposerInputsInteractive() {
+    if (el.promptInput) {
+        el.promptInput.disabled = false;
+        el.promptInput.readOnly = false;
+        if (typeof el.promptInput.removeAttribute === "function") {
+            el.promptInput.removeAttribute("disabled");
+            el.promptInput.removeAttribute("readonly");
+        }
+    }
+    if (el.promptAddBtn) {
+        el.promptAddBtn.disabled = false;
+        if (typeof el.promptAddBtn.removeAttribute === "function") {
+            el.promptAddBtn.removeAttribute("disabled");
+            el.promptAddBtn.removeAttribute("aria-disabled");
+        }
+    }
+    if (el.attachmentInput) {
+        el.attachmentInput.disabled = false;
+        if (typeof el.attachmentInput.removeAttribute === "function") {
+            el.attachmentInput.removeAttribute("disabled");
+        }
+    }
 }
 
 function autoSizePromptInput(hasPrompt) {
@@ -1582,6 +1971,391 @@ function getRoutingPayload() {
     };
 }
 
+function getAttachmentStatusLabel(statusRaw) {
+    const status = String(statusRaw || "").toLowerCase();
+    if (status === "ready") return "Ready";
+    if (status === "uploading") return "Uploading";
+    if (status === "processing" || status === "uploaded") return "Processing";
+    if (status === "queued") return "Queued";
+    if (status === "error") return "Failed";
+    return status ? status[0].toUpperCase() + status.slice(1) : "Unknown";
+}
+
+function readAttachmentErrorMessage(error, fallback = "Attachment upload failed.") {
+    const message = String(error?.detail || error?.message || "").trim();
+    return message || fallback;
+}
+
+function getAttachmentItemByLocalId(localId) {
+    return attachmentItems.find(item => String(item.local_id || "") === String(localId || "")) || null;
+}
+
+function patchAttachmentItem(localId, patch) {
+    const idx = attachmentItems.findIndex(item => String(item.local_id || "") === String(localId || ""));
+    if (idx < 0) return null;
+    attachmentItems[idx] = {
+        ...attachmentItems[idx],
+        ...(patch || {}),
+    };
+    return attachmentItems[idx];
+}
+
+function refreshAttachmentUi({ refreshModels = false } = {}) {
+    if (el.attachmentStrip && el.attachmentList) {
+        const hasAttachments = attachmentItems.length > 0;
+        el.attachmentStrip.classList.toggle("hidden", !hasAttachments);
+        if (!hasAttachments) {
+            el.attachmentList.innerHTML = "";
+        } else {
+            el.attachmentList.innerHTML = attachmentItems.map(item => {
+                const status = String(item.status || "queued").toLowerCase();
+                const chipClass = `attachment-chip is-${escHtml(status)}`;
+                const filename = String(item.filename || "file");
+                const sizeText = formatBytes(item.size_bytes);
+                const statusText = getAttachmentStatusLabel(status);
+                const metaText = `${sizeText} | ${statusText}`;
+                const showRetry = status === "error" && !!item.file_blob;
+                const errorHint = status === "error" && item.error_message
+                    ? `<span class="attachment-chip-meta">${escHtml(String(item.error_message || ""))}</span>`
+                    : `<span class="attachment-chip-meta">${escHtml(metaText)}</span>`;
+                return `<span class="${chipClass}" title="${escHtml(filename)}">
+                    <span class="attachment-chip-name">${escHtml(filename)}</span>
+                    ${errorHint}
+                    ${showRetry
+                        ? `<button type="button" class="attachment-chip-retry" data-local-id="${escHtml(item.local_id)}" aria-label="Retry attachment upload">Retry</button>`
+                        : ""}
+                    <button type="button" class="attachment-chip-remove" data-local-id="${escHtml(item.local_id)}" aria-label="Remove attachment">&times;</button>
+                </span>`;
+            }).join("");
+        }
+    }
+
+    if (el.attachmentHint) {
+        if (attachmentItems.length === 0) {
+            el.attachmentHint.textContent = "";
+        } else {
+            const readyCount = attachmentItems.filter(item => item.status === "ready").length;
+            const pendingCount = attachmentItems.filter(item => ["queued", "uploading", "processing", "uploaded"].includes(String(item.status || "").toLowerCase())).length;
+            const failedCount = attachmentItems.filter(item => item.status === "error").length;
+            const compatibleModels = getCompatibleModelKeySetForCurrentAttachments();
+            const parts = [];
+            parts.push(`${readyCount}/${attachmentItems.length} ready`);
+            if (pendingCount > 0) parts.push(`${pendingCount} processing`);
+            if (failedCount > 0) parts.push(`${failedCount} failed (remove to continue)`);
+            if (compatibleModels && compatibleModels.size === 0) {
+                parts.push("No compatible models for these files");
+            }
+            el.attachmentHint.textContent = parts.join(" | ");
+        }
+    }
+
+    if (refreshModels) {
+        refreshModelSelectors({ preserveSingle: true, preserveCompare: true });
+        updateSingleModelRoutingUI();
+    }
+    updateSendButtonState();
+}
+
+function nextAttachmentLocalId() {
+    attachmentLocalCounter += 1;
+    return `att-${Date.now()}-${attachmentLocalCounter}`;
+}
+
+function normalizeAttachmentFileName(nameRaw) {
+    const raw = String(nameRaw || "").trim();
+    return raw || "file";
+}
+
+function toSafeHeaderFileName(nameRaw) {
+    const raw = normalizeAttachmentFileName(nameRaw);
+    return raw
+        .replace(/[\r\n\t]+/g, " ")
+        .replace(/[^\x20-\x7E]/g, "_")
+        .slice(0, 180)
+        .trim() || "file";
+}
+
+function enqueueSelectedFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+        if (attachmentItems.length >= ATTACHMENTS_MAX_FILES_UI) {
+            showError(`You can attach up to ${ATTACHMENTS_MAX_FILES_UI} files per request.`);
+            break;
+        }
+
+        const filename = normalizeAttachmentFileName(file?.name);
+        const mimeType = normalizeAttachmentMimeType(file?.type, filename);
+        const sizeBytes = Number(file?.size) || 0;
+
+        if (!mimeType || !ATTACHMENT_ALLOWED_MIME_TYPES.has(mimeType)) {
+            showError(`Unsupported attachment type for "${filename}".`);
+            continue;
+        }
+        if (sizeBytes <= 0) {
+            showError(`"${filename}" is empty.`);
+            continue;
+        }
+        if (sizeBytes > ATTACHMENTS_MAX_FILE_BYTES_UI) {
+            showError(`"${filename}" exceeds ${(ATTACHMENTS_MAX_FILE_BYTES_UI / (1024 * 1024)).toFixed(0)} MB.`);
+            continue;
+        }
+
+        const duplicate = attachmentItems.some(item =>
+            item
+            && item.filename === filename
+            && Number(item.size_bytes) === sizeBytes
+            && normalizeAttachmentMimeType(item.mime_type, item.filename) === mimeType
+            && item.status !== "error"
+        );
+        if (duplicate) {
+            continue;
+        }
+
+        attachmentItems.push({
+            local_id: nextAttachmentLocalId(),
+            filename,
+            mime_type: mimeType,
+            size_bytes: sizeBytes,
+            status: "queued",
+            file_id: "",
+            error_message: "",
+            file_blob: file || null,
+        });
+    }
+
+    refreshAttachmentUi({ refreshModels: true });
+    void processAttachmentUploadQueue();
+}
+
+async function uploadAttachmentFile(item) {
+    const fileNameHeader = toSafeHeaderFileName(item.filename);
+    const resp = await fetchWithTimeout(`${API_BASE}/v1/files/upload`, {
+        method: "POST",
+        headers: {
+            "X-API-Key": API_KEY,
+            "X-File-Name": fileNameHeader,
+            "X-File-Content-Type": item.mime_type,
+            "Content-Type": item.mime_type || "application/octet-stream",
+        },
+        body: item.file_blob,
+    }, ATTACHMENT_UPLOAD_TIMEOUT_MS);
+
+    if (!resp.ok) {
+        throw await toRequestFailureFromResponse(resp);
+    }
+    return resp.json();
+}
+
+async function fetchAttachmentStatus(fileId) {
+    const resp = await fetchWithTimeout(`${API_BASE}/v1/files/${encodeURIComponent(fileId)}`, {
+        method: "GET",
+        headers: { "X-API-Key": API_KEY },
+    }, ATTACHMENT_UPLOAD_TIMEOUT_MS);
+
+    if (!resp.ok) {
+        throw await toRequestFailureFromResponse(resp);
+    }
+    return resp.json();
+}
+
+async function waitForAttachmentReady(fileId) {
+    const startedAt = Date.now();
+    while ((Date.now() - startedAt) <= ATTACHMENT_POLL_TIMEOUT_MS) {
+        const payload = await fetchAttachmentStatus(fileId);
+        const status = String(payload?.status || "").toLowerCase();
+        if (status === "ready") {
+            return payload;
+        }
+        if (["error", "failed", "expired", "deleted"].includes(status)) {
+            throw createRequestFailure(
+                String(payload?.error_message || `Attachment processing failed with status '${status}'.`),
+                { kind: "service" }
+            );
+        }
+        await new Promise(resolve => setTimeout(resolve, ATTACHMENT_POLL_INTERVAL_MS));
+    }
+
+    throw createRequestFailure(
+        "Attachment is still processing. Please wait a moment and try again.",
+        { kind: "timeout" }
+    );
+}
+
+async function processAttachmentUploadQueue() {
+    if (attachmentUploadInFlight) return;
+    attachmentUploadInFlight = true;
+    try {
+        while (true) {
+            const next = attachmentItems.find(item => String(item?.status || "").toLowerCase() === "queued");
+            if (!next) break;
+
+            const localId = next.local_id;
+            patchAttachmentItem(localId, { status: "uploading", error_message: "" });
+            refreshAttachmentUi({ refreshModels: false });
+
+            const current = getAttachmentItemByLocalId(localId);
+            if (!current || !current.file_blob) {
+                patchAttachmentItem(localId, {
+                    status: "error",
+                    error_message: "File is no longer available in this browser tab.",
+                });
+                refreshAttachmentUi({ refreshModels: false });
+                continue;
+            }
+
+            try {
+                const uploadPayload = await uploadAttachmentFile(current);
+                const fileId = String(uploadPayload?.file_id || "").trim();
+                const reportedStatus = String(uploadPayload?.status || "uploaded").toLowerCase();
+                patchAttachmentItem(localId, {
+                    file_id: fileId,
+                    status: reportedStatus || "uploaded",
+                    error_message: "",
+                    file_blob: null,
+                    size_bytes: Number(uploadPayload?.size_bytes) || current.size_bytes,
+                    mime_type: normalizeAttachmentMimeType(uploadPayload?.mime_type, current.filename) || current.mime_type,
+                    filename: String(uploadPayload?.original_filename || current.filename),
+                });
+                refreshAttachmentUi({ refreshModels: false });
+
+                if (!fileId) {
+                    throw createRequestFailure("Upload response did not include file_id.", { kind: "service" });
+                }
+
+                if (reportedStatus !== "ready") {
+                    patchAttachmentItem(localId, { status: "processing" });
+                    refreshAttachmentUi({ refreshModels: false });
+                    const readyPayload = await waitForAttachmentReady(fileId);
+                    patchAttachmentItem(localId, {
+                        status: String(readyPayload?.status || "ready").toLowerCase(),
+                        error_message: "",
+                        size_bytes: Number(readyPayload?.size_bytes) || current.size_bytes,
+                        mime_type: normalizeAttachmentMimeType(readyPayload?.mime_type, current.filename) || current.mime_type,
+                        filename: String(readyPayload?.original_filename || current.filename),
+                    });
+                } else {
+                    patchAttachmentItem(localId, { status: "ready" });
+                }
+            } catch (error) {
+                patchAttachmentItem(localId, {
+                    status: "error",
+                    error_message: readAttachmentErrorMessage(error),
+                });
+            }
+            refreshAttachmentUi({ refreshModels: true });
+        }
+    } finally {
+        attachmentUploadInFlight = false;
+        refreshAttachmentUi({ refreshModels: true });
+    }
+}
+
+function removeAttachment(localId) {
+    attachmentItems = attachmentItems.filter(item => String(item?.local_id || "") !== String(localId || ""));
+    refreshAttachmentUi({ refreshModels: true });
+}
+
+function retryAttachment(localId) {
+    const current = getAttachmentItemByLocalId(localId);
+    if (!current || !current.file_blob) return;
+    patchAttachmentItem(localId, {
+        status: "queued",
+        error_message: "",
+        file_id: "",
+    });
+    refreshAttachmentUi({ refreshModels: false });
+    void processAttachmentUploadQueue();
+}
+
+function clearAttachmentSelection() {
+    attachmentItems = [];
+    if (el.attachmentInput) {
+        el.attachmentInput.value = "";
+    }
+    refreshAttachmentUi({ refreshModels: true });
+}
+
+function buildRequestAttachmentPayload() {
+    if (!attachmentItems.length) {
+        return { items: [], message_items: [], compatibility_descriptors: [], error: "" };
+    }
+
+    const hasPending = attachmentItems.some(item =>
+        ["queued", "uploading", "processing", "uploaded"].includes(String(item?.status || "").toLowerCase())
+    );
+    if (hasPending) {
+        return {
+            items: [],
+            message_items: [],
+            compatibility_descriptors: [],
+            error: "Attachments are still uploading or processing. Please wait until they are ready.",
+        };
+    }
+
+    const failed = attachmentItems.find(item => String(item?.status || "").toLowerCase() === "error");
+    if (failed) {
+        return {
+            items: [],
+            message_items: [],
+            compatibility_descriptors: [],
+            error: "Remove failed attachments before sending the request.",
+        };
+    }
+
+    const readyItems = attachmentItems.filter(item => String(item?.status || "").toLowerCase() === "ready");
+    if (readyItems.length !== attachmentItems.length) {
+        return {
+            items: [],
+            message_items: [],
+            compatibility_descriptors: [],
+            error: "One or more attachments are not ready yet.",
+        };
+    }
+
+    const payloadItems = readyItems
+        .filter(item => String(item.file_id || "").trim().length > 0)
+        .map(item => ({
+            file_id: String(item.file_id),
+            usage_role: "primary",
+            transform_mode: "auto",
+        }));
+
+    if (payloadItems.length !== readyItems.length) {
+        return {
+            items: [],
+            message_items: [],
+            compatibility_descriptors: [],
+            error: "Some attachments are missing file IDs. Remove and upload again.",
+        };
+    }
+
+    const messageItems = normalizeUserTurnAttachmentItems(
+        readyItems.map(item => ({
+            file_id: String(item.file_id || ""),
+            file_name: String(item.filename || ""),
+            file_size: Number(item.size_bytes) || 0,
+            file_type: normalizeAttachmentMimeType(item.mime_type, item.filename),
+            status: normalizeAttachmentCardStatus(item.status),
+        }))
+    );
+    const compatibilityDescriptors = readyItems
+        .map(item => ({
+            mime_type: normalizeAttachmentMimeType(item.mime_type, item.filename),
+            size_bytes: Number(item.size_bytes) || 0,
+            filename: String(item.filename || ""),
+        }))
+        .filter(item => item.mime_type);
+
+    return {
+        items: payloadItems,
+        message_items: messageItems,
+        compatibility_descriptors: compatibilityDescriptors,
+        error: "",
+    };
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    PROMPT FOCUS â€” card glow effect
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -1599,8 +2373,60 @@ if (el.promptInputWrap) {
     });
 }
 if (el.promptAddBtn) {
+    const openAttachmentPicker = () => {
+        if (!el.attachmentInput) {
+            return false;
+        }
+        // Prefer showPicker when available; fallback to click for older browsers.
+        try {
+            if (typeof el.attachmentInput.showPicker === "function") {
+                el.attachmentInput.showPicker();
+                return true;
+            }
+        } catch (_) {
+            // Ignore and fallback to click().
+        }
+        if (typeof el.attachmentInput.click === "function") {
+            el.attachmentInput.click();
+            return true;
+        }
+        return false;
+    };
+
     el.promptAddBtn.addEventListener("click", () => {
+        ensureComposerInputsInteractive();
+        if (openAttachmentPicker()) {
+            return;
+        }
         el.promptInput.focus();
+    });
+}
+ensureComposerInputsInteractive();
+if (el.attachmentInput) {
+    el.attachmentInput.addEventListener("change", event => {
+        enqueueSelectedFiles(event?.target?.files || []);
+        el.attachmentInput.value = "";
+    });
+}
+if (el.attachmentList) {
+    el.attachmentList.addEventListener("click", event => {
+        const target = event?.target;
+        const retryButton = target && typeof target.closest === "function"
+            ? target.closest(".attachment-chip-retry")
+            : null;
+        if (retryButton) {
+            const localId = String(retryButton.getAttribute("data-local-id") || "").trim();
+            if (!localId) return;
+            retryAttachment(localId);
+            return;
+        }
+        const removeButton = target && typeof target.closest === "function"
+            ? target.closest(".attachment-chip-remove")
+            : null;
+        if (!removeButton) return;
+        const localId = String(removeButton.getAttribute("data-local-id") || "").trim();
+        if (!localId) return;
+        removeAttachment(localId);
     });
 }
 
@@ -1675,8 +2501,14 @@ el.submitBtn.addEventListener("click", handlePrimaryComposerAction);
 
 async function handleSubmit() {
     const rawPrompt = el.promptInput.value.trim();
-    if (!rawPrompt) { el.promptInput.focus(); return; }
-    el.promptInput.value = "";
+    const hasAnyAttachments = attachmentItems.length > 0;
+    if (!rawPrompt && !hasAnyAttachments) {
+        el.promptInput.focus();
+        return;
+    }
+    if (rawPrompt) {
+        el.promptInput.value = "";
+    }
     updateSendButtonState();
     await submitPrompt(rawPrompt);
 }
@@ -1691,10 +2523,43 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
     setLoading(true);
     const streamRequest = beginActiveStreamRequest();
     lastPromptForRetry = String(rawPrompt || "");
+    let composerAttachmentsCleared = false;
+    const clearComposerAttachments = () => {
+        if (composerAttachmentsCleared) return;
+        composerAttachmentsCleared = true;
+        clearAttachmentSelection();
+    };
     try {
+        const useRetryAttachmentPayload = fromRetry
+            && attachmentItems.length === 0
+            && Array.isArray(lastAttachmentItemsForRetry)
+            && lastAttachmentItemsForRetry.length > 0;
+        const attachmentPayload = useRetryAttachmentPayload
+            ? {
+                items: lastAttachmentItemsForRetry.map(item => ({ ...item })),
+                message_items: lastAttachmentMessageItemsForRetry.map(item => ({
+                    ...(item || {}),
+                    payload: { ...(item?.payload || {}) },
+                })),
+                compatibility_descriptors: lastAttachmentDescriptorsForRetry.map(item => ({ ...item })),
+                error: "",
+            }
+            : buildRequestAttachmentPayload();
+        if (attachmentPayload.error) {
+            showError(attachmentPayload.error);
+            if (!el.promptInput.value.trim()) {
+                el.promptInput.value = rawPrompt;
+            }
+            updateSendButtonState();
+            return;
+        }
+        lastAttachmentItemsForRetry = attachmentPayload.items.map(item => ({ ...item }));
+        lastAttachmentDescriptorsForRetry = attachmentPayload.compatibility_descriptors.map(item => ({ ...item }));
+        lastAttachmentMessageItemsForRetry = normalizeUserTurnAttachmentItems(attachmentPayload.message_items);
+
         // Step 1: optionally optimize the prompt
         let prompt = rawPrompt;
-        if (optimizeEnabled) {
+        if (optimizeEnabled && rawPrompt.trim().length > 0) {
             prompt = await callOptimize(rawPrompt, {
                 signal: streamRequest?.controller?.signal,
             });
@@ -1705,16 +2570,33 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
         // Step 2: send to chat / compare
         let sent = false;
         if (currentMode === "single") {
-            sent = await doSingleChat(prompt, { streamRequest });
+            sent = await doSingleChat(prompt, {
+                streamRequest,
+                attachments: attachmentPayload.items,
+                attachmentDescriptors: attachmentPayload.compatibility_descriptors,
+                userTurnAttachments: attachmentPayload.message_items,
+                onBeforeRequestSend: clearComposerAttachments,
+            });
         } else {
-            sent = await doCompare(prompt, { streamRequest });
+            sent = await doCompare(prompt, {
+                streamRequest,
+                attachments: attachmentPayload.items,
+                attachmentDescriptors: attachmentPayload.compatibility_descriptors,
+                userTurnAttachments: attachmentPayload.message_items,
+                onBeforeRequestSend: clearComposerAttachments,
+            });
         }
         if (sent) {
             clearError();
+        } else {
+            if (!el.promptInput.value.trim()) {
+                el.promptInput.value = rawPrompt;
+            }
+            updateSendButtonState();
         }
     } catch (err) {
         if (!isRequestAbortedFailure(err)) {
-            showRequestFailure(err, { retryable: !!lastPromptForRetry });
+            showRequestFailure(err, { retryable: hasRetryableTurnPayload() });
         }
     } finally {
         endActiveStreamRequest(streamRequest);
@@ -1728,7 +2610,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
 }
 
 async function retryLastPrompt() {
-    if (!lastPromptForRetry || isSubmitting || isRetryingLastPrompt) return;
+    if (!hasRetryableTurnPayload() || isSubmitting || isRetryingLastPrompt) return;
     isRetryingLastPrompt = true;
     try {
         await submitPrompt(lastPromptForRetry, { fromRetry: true });
@@ -1741,7 +2623,13 @@ async function retryLastPrompt() {
    SINGLE CHAT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function doSingleChat(prompt, { streamRequest = null } = {}) {
+async function doSingleChat(prompt, {
+    streamRequest = null,
+    attachments = [],
+    attachmentDescriptors = [],
+    userTurnAttachments = [],
+    onBeforeRequestSend = null,
+} = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
     const { provider, model } = parseKey(el.singleModel.value);
@@ -1751,12 +2639,23 @@ async function doSingleChat(prompt, { streamRequest = null } = {}) {
         showError("Please select a model or turn Auto-Select back on.");
         return false;
     }
+    const compatibilityDescriptors = Array.isArray(attachmentDescriptors) && attachmentDescriptors.length > 0
+        ? attachmentDescriptors
+        : getAttachmentDescriptorsForCompatibility();
+    if (useManualModel && attachments.length > 0) {
+        const selectedModelItem = getModelCatalogItemByKey(modelKeyOf(provider, model));
+        if (!isModelCompatibleWithAttachments(selectedModelItem, compatibilityDescriptors)) {
+            showError("The selected model does not support the attached files. Choose a compatible model or enable Auto.");
+            return false;
+        }
+    }
 
     const sessionId = ensureActiveSessionId();
 
     const body = {
         prompt,
         ...(useManualModel ? { provider, model } : {}),
+        ...(attachments.length ? { attachments } : {}),
         routing: getRoutingPayload(),
         context: {
             session_id: sessionId,
@@ -1768,10 +2667,17 @@ async function doSingleChat(prompt, { streamRequest = null } = {}) {
     const streamTarget = useManualModel
         ? { provider, model }
         : { provider: "Auto", model: "Auto-selected model" };
+    if (typeof onBeforeRequestSend === "function") {
+        onBeforeRequestSend();
+    }
     const streamState = initStreamingResults(
         [streamTarget],
         false,
-        { append: true, promptText: prompt }
+        {
+            append: true,
+            promptText: prompt,
+            userAttachments: userTurnAttachments,
+        }
     );
     const cardIndex = streamState.indexMap[0];
 
@@ -1855,7 +2761,13 @@ async function doSingleChat(prompt, { streamRequest = null } = {}) {
    COMPARE
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-async function doCompare(prompt, { streamRequest = null } = {}) {
+async function doCompare(prompt, {
+    streamRequest = null,
+    attachments = [],
+    attachmentDescriptors = [],
+    userTurnAttachments = [],
+    onBeforeRequestSend = null,
+} = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
     const selects = getActiveCompareSelects();
@@ -1871,8 +2783,28 @@ async function doCompare(prompt, { streamRequest = null } = {}) {
         showError("Please select different models for each slot.");
         return false;
     }
+    const compatibilityDescriptors = Array.isArray(attachmentDescriptors) && attachmentDescriptors.length > 0
+        ? attachmentDescriptors
+        : getAttachmentDescriptorsForCompatibility();
+    if (attachments.length > 0) {
+        const incompatible = targets.find(target => {
+            const modelItem = getModelCatalogItemByKey(modelKeyOf(target.provider, target.model));
+            return !isModelCompatibleWithAttachments(modelItem, compatibilityDescriptors);
+        });
+        if (incompatible) {
+            showError("One or more compare models do not support the attached files.");
+            return false;
+        }
+    }
 
-    const streamState = initStreamingResults(targets, true, { append: true, promptText: prompt });
+    if (typeof onBeforeRequestSend === "function") {
+        onBeforeRequestSend();
+    }
+    const streamState = initStreamingResults(targets, true, {
+        append: true,
+        promptText: prompt,
+        userAttachments: userTurnAttachments,
+    });
 
     const responses = new Array(targets.length).fill(null);
     const partialTexts = new Array(targets.length).fill("");
@@ -1885,6 +2817,7 @@ async function doCompare(prompt, { streamRequest = null } = {}) {
         await callAPIStream("/v1/compare/stream", {
             prompt,
             targets,
+            ...(attachments.length ? { attachments } : {}),
             routing: getRoutingPayload(),
             context: {
                 session_id: sessionId,
@@ -2128,7 +3061,20 @@ async function readResponseErrorDetail(resp) {
     try {
         const jsonBody = await copy.json();
         if (jsonBody && typeof jsonBody === "object") {
-            return String(jsonBody.detail || jsonBody.message || "").trim();
+            const detail = jsonBody.detail;
+            if (typeof detail === "string") {
+                return detail.trim();
+            }
+            if (detail && typeof detail === "object") {
+                const nestedMessage = String(detail.message || detail.code || "").trim();
+                if (nestedMessage) return nestedMessage;
+                try {
+                    return JSON.stringify(detail);
+                } catch (_) {
+                    return String(jsonBody.message || "").trim();
+                }
+            }
+            return String(jsonBody.message || "").trim();
         }
     } catch (_) { }
     try {
@@ -2509,14 +3455,17 @@ function getCompareGridClass(columnCount) {
     return "compare-grid compare-grid-1";
 }
 
-function buildUserMessageBubble(promptText, delay = 0) {
+function buildUserMessageBubble(promptText, delay = 0, options = {}) {
     const userPrompt = String(promptText || "").trim();
-    if (!userPrompt) return "";
+    const userAttachments = normalizeUserTurnAttachmentItems(options?.attachments || []);
+    const attachmentCardsHtml = buildUserAttachmentCards(userAttachments);
+    if (!userPrompt && !attachmentCardsHtml) return "";
     return `
     <div class="chat-message chat-message-user"
          style="animation: messageIn .2s ease-out ${delay}ms both;">
       <div class="chat-bubble chat-bubble-user">
-        <p class="chat-user-text">${escHtml(userPrompt)}</p>
+        ${userPrompt ? `<p class="chat-user-text">${escHtml(userPrompt)}</p>` : ""}
+        ${attachmentCardsHtml}
       </div>
     </div>`;
 }
@@ -2542,13 +3491,13 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
           </span>
           <span class="sr-only">Assistant is thinking</span>
         </div>
-        <p class="response-text hidden" id="response-text-${index}" data-empty="true"></p>
+        <div class="response-text hidden" id="response-text-${index}" data-empty="true"></div>
         ${footerHtml}
       </div>
     </div>`;
 }
 
-function buildCompareStreamingTurn(promptText, targets, indexMap) {
+function buildCompareStreamingTurn(promptText, targets, indexMap, options = {}) {
     const gridClass = getCompareGridClass(targets.length);
     const columnsHtml = targets.map((target, offset) => {
         const cardIndex = indexMap[offset];
@@ -2561,14 +3510,14 @@ function buildCompareStreamingTurn(promptText, targets, indexMap) {
 
     return `
       <section class="compare-turn compare-turn-streaming">
-        ${buildUserMessageBubble(promptText)}
+        ${buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] })}
         <div class="${gridClass}">
           ${columnsHtml}
         </div>
       </section>`;
 }
 
-function buildCompareTurn(promptText, responses, startIndex = 0) {
+function buildCompareTurn(promptText, responses, startIndex = 0, options = {}) {
     const safeResponses = Array.isArray(responses) ? responses.filter(Boolean) : [];
     if (safeResponses.length === 0) {
         return { html: "", nextIndex: startIndex };
@@ -2588,7 +3537,7 @@ function buildCompareTurn(promptText, responses, startIndex = 0) {
     return {
         html: `
           <section class="compare-turn">
-            ${buildUserMessageBubble(promptText)}
+            ${buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] })}
             <div class="${gridClass}">
               ${columnsHtml}
             </div>
@@ -2604,6 +3553,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
 
     const append = Boolean(options.append);
     const promptText = String(options.promptText || "");
+    const userAttachments = options.userAttachments || [];
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -2618,8 +3568,8 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const indexMap = targets.map((_, offset) => baseIndex + offset);
 
     let html = "";
-    if (promptText) {
-        html += buildUserMessageBubble(promptText);
+    if (promptText || (Array.isArray(userAttachments) && userAttachments.length > 0)) {
+        html += buildUserMessageBubble(promptText, 0, { attachments: userAttachments });
     }
     html += targets.map((target, offset) => {
         const cardIndex = indexMap[offset];
@@ -2640,6 +3590,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
 function initCompareStreamingResults(targets, options = {}) {
     const append = options.append === undefined ? true : Boolean(options.append);
     const promptText = String(options.promptText || "");
+    const userAttachments = options.userAttachments || [];
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -2652,7 +3603,9 @@ function initCompareStreamingResults(targets, options = {}) {
 
     const baseIndex = append ? getNextStreamCardIndex() : 0;
     const indexMap = targets.map((_, offset) => baseIndex + offset);
-    const turnHtml = buildCompareStreamingTurn(promptText, targets, indexMap);
+    const turnHtml = buildCompareStreamingTurn(promptText, targets, indexMap, {
+        userAttachments,
+    });
 
     if (append) {
         el.resultsGrid.insertAdjacentHTML("beforeend", turnHtml);
@@ -2687,9 +3640,8 @@ function finalizeStreamCard(index, resp) {
 
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
-    const text = hasExplicitText
-        ? String(resp?.text ?? "")
-        : (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
+    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -2699,7 +3651,7 @@ function finalizeStreamCard(index, resp) {
     const summaryEl = document.getElementById(`response-provider-summary-${index}`);
 
     if (textEl) {
-        textEl.textContent = text;
+        renderResponseMarkdown(textEl, text, { hasError });
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
         textEl.classList.toggle("error-text", hasError);
@@ -2838,6 +3790,7 @@ function showResults(responses, isMulti, compareData) {
         el.resultsGrid.innerHTML = responses.map((r, i) => buildResponseCard(r, i, isMulti)).join("");
     }
     if (compareData) el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(compareData));
+    refreshResponseTableLayouts(el.resultsGrid);
 
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 96 });
 }
@@ -2853,6 +3806,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
     const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources);
+    const responseHtml = hasError ? escHtml(text) : renderMarkdownToHtml(text);
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} ${hasError ? "is-error" : ""}"
@@ -2860,7 +3814,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
          style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
-        <p class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${escHtml(text)}</p>
+        <div class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${responseHtml}</div>
         ${footerHtml}
       </div>
     </div>`;
@@ -2935,6 +3889,13 @@ function showRequestFailure(error, { retryable = true } = {}) {
     });
 }
 
+function hasRetryableTurnPayload() {
+    return Boolean(
+        String(lastPromptForRetry || "").trim().length > 0
+        || (Array.isArray(lastAttachmentItemsForRetry) && lastAttachmentItemsForRetry.length > 0)
+    );
+}
+
 function setErrorRetryBusy(busy) {
     if (!el.errorRetry) return;
     el.errorRetry.disabled = !!busy;
@@ -2961,7 +3922,7 @@ function renderErrorBanner({
     }
 
     if (el.errorRetry) {
-        const canRetry = Boolean(retryable && lastPromptForRetry);
+        const canRetry = Boolean(retryable && hasRetryableTurnPayload());
         el.errorRetry.classList.toggle("hidden", !canRetry);
         if (!canRetry) {
             setErrorRetryBusy(false);
@@ -3016,7 +3977,10 @@ function setLoading(loading) {
 
 function resolveCompareSelections(previousValues, slotCount = 3) {
     const rawPrev = Array.isArray(previousValues) ? previousValues : [];
-    const availableKeys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
+    const availableKeys = getSelectableModels()
+        .filter(item => isModelCompatibleWithAttachments(item, attachmentDescriptors))
+        .map(item => modelKeyOf(item.provider, item.model));
     const resolved = [];
     const used = new Set();
 
@@ -3042,11 +4006,20 @@ function refreshModelSelectors({ preserveSingle = true, preserveCompare = true }
         ? [el.compareModel1.value, el.compareModel2.value, el.compareModel3.value]
         : ["", "", ""];
 
+    const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
     const availableKeys = getSelectableModels().map(item => modelKeyOf(item.provider, item.model));
+    const attachmentCompatibleKeys = new Set(
+        getSelectableModels()
+            .filter(item => isModelCompatibleWithAttachments(item, attachmentDescriptors))
+            .map(item => modelKeyOf(item.provider, item.model))
+    );
     const fallbackSingle = getManualDefaultModelKey();
-    const desiredSingle = (previousSingle && availableKeys.includes(previousSingle))
+    const desiredSingleBase = (previousSingle && availableKeys.includes(previousSingle))
         ? previousSingle
         : SmartRoutingState.resolveManualSelection("", fallbackSingle);
+    const desiredSingle = attachmentCompatibleKeys.size > 0 && !attachmentCompatibleKeys.has(desiredSingleBase)
+        ? (Array.from(attachmentCompatibleKeys)[0] || desiredSingleBase)
+        : desiredSingleBase;
 
     el.singleModel.value = desiredSingle;
     buildOptions(el.singleModel, new Set());
@@ -3116,6 +4089,7 @@ async function loadDynamicProviderModelCatalog() {
     setComposerDocked(true);
     activeSessionId = loadActiveSessionId();
     setMode("single");
+    refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
     void initCognitoAuth().then(function () { return renderAuthUI(); });
     void loadDynamicProviderModelCatalog();
@@ -3131,6 +4105,285 @@ function escHtml(str) {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+}
+
+const GFM_TABLE_DELIMITER_RE = /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const CODE_BLOCK_TOKEN_RE = /^@@CODEBLOCK(\d+)@@$/;
+const WIDE_TABLE_COLUMN_THRESHOLD = 6;
+const WIDE_TABLE_HEADER_CHAR_THRESHOLD = 72;
+const WIDE_TABLE_ROW_CHAR_THRESHOLD = 140;
+
+function splitMarkdownTableRow(rawLine) {
+    let row = String(rawLine || "").trim();
+    if (row.startsWith("|")) row = row.slice(1);
+    if (row.endsWith("|")) row = row.slice(0, -1);
+    return row.split("|").map(cell => cell.trim());
+}
+
+function parseMarkdownTableAlignments(delimiterRow, expectedCells) {
+    const rawCells = splitMarkdownTableRow(delimiterRow);
+    const aligns = [];
+    for (let i = 0; i < expectedCells; i += 1) {
+        const cell = String(rawCells[i] || "").trim();
+        if (/^:-+:$/.test(cell)) {
+            aligns.push("center");
+            continue;
+        }
+        if (/^-+:$/.test(cell)) {
+            aligns.push("right");
+            continue;
+        }
+        if (/^:-+$/.test(cell)) {
+            aligns.push("left");
+            continue;
+        }
+        aligns.push("");
+    }
+    return aligns;
+}
+
+function renderInlineMarkdown(rawText) {
+    let source = String(rawText || "");
+    const codeTokens = [];
+    source = source.replace(/`([^`\n]+)`/g, (_, code) => {
+        const token = `@@INLCODE${codeTokens.length}@@`;
+        codeTokens.push(`<code>${escHtml(code)}</code>`);
+        return token;
+    });
+
+    const linkTokens = [];
+    source = source.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
+        const safeUrl = toSafeHttpUrl(url);
+        if (!safeUrl) return match;
+        const token = `@@INLLINK${linkTokens.length}@@`;
+        linkTokens.push(
+            `<a href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escHtml(label)}</a>`
+        );
+        return token;
+    });
+
+    let html = escHtml(source)
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+        .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+
+    linkTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLLINK${idx}@@`, tokenHtml);
+    });
+    codeTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLCODE${idx}@@`, tokenHtml);
+    });
+    return html;
+}
+
+function isMarkdownTableStart(lines, startIndex) {
+    if (startIndex + 1 >= lines.length) return false;
+    const headerLine = String(lines[startIndex] || "");
+    const delimiterLine = String(lines[startIndex + 1] || "");
+    if (!headerLine.includes("|")) return false;
+    return GFM_TABLE_DELIMITER_RE.test(delimiterLine.trim());
+}
+
+function renderMarkdownTable(lines, startIndex) {
+    const headerCells = splitMarkdownTableRow(lines[startIndex]);
+    if (headerCells.length === 0) {
+        return {
+            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""))}</p>`,
+            nextIndex: startIndex + 1,
+        };
+    }
+
+    const alignments = parseMarkdownTableAlignments(lines[startIndex + 1], headerCells.length);
+    const thHtml = headerCells.map((cell, idx) => {
+        const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
+        return `<th${align}>${renderInlineMarkdown(cell)}</th>`;
+    }).join("");
+
+    let cursor = startIndex + 2;
+    const rowHtml = [];
+    while (cursor < lines.length) {
+        const rawLine = String(lines[cursor] || "");
+        const trimmed = rawLine.trim();
+        if (!trimmed || !rawLine.includes("|") || CODE_BLOCK_TOKEN_RE.test(trimmed)) {
+            break;
+        }
+        if (/^(#{1,6})\s+/.test(trimmed) || /^[-*+]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+            break;
+        }
+        const cells = splitMarkdownTableRow(rawLine);
+        if (cells.length === 0) break;
+        const tds = headerCells.map((_, idx) => {
+            const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
+            return `<td${align}>${renderInlineMarkdown(cells[idx] || "")}</td>`;
+        }).join("");
+        rowHtml.push(`<tr>${tds}</tr>`);
+        cursor += 1;
+    }
+
+    return {
+        html: `<div class="response-table-wrap"><table><thead><tr>${thHtml}</tr></thead><tbody>${rowHtml.join("")}</tbody></table></div>`,
+        nextIndex: cursor,
+    };
+}
+
+function renderMarkdownToHtml(markdownText) {
+    let source = String(markdownText || "");
+    if (!source.trim()) return "";
+    source = source.replace(/\r\n?/g, "\n");
+
+    const codeBlocks = [];
+    source = source.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, lang, codeText) => {
+        const token = `@@CODEBLOCK${codeBlocks.length}@@`;
+        const language = String(lang || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+        const languageClass = language ? ` class="language-${language}"` : "";
+        const normalizedCode = String(codeText || "").replace(/\n$/, "");
+        codeBlocks.push(`<pre><code${languageClass}>${escHtml(normalizedCode)}</code></pre>`);
+        return `\n${token}\n`;
+    });
+
+    const lines = source.split("\n");
+    const htmlParts = [];
+    let paragraphLines = [];
+
+    const flushParagraph = () => {
+        if (paragraphLines.length === 0) return;
+        const paragraphText = paragraphLines.join("\n").trim();
+        paragraphLines = [];
+        if (!paragraphText) return;
+        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
+    };
+
+    let index = 0;
+    while (index < lines.length) {
+        const rawLine = String(lines[index] || "");
+        const trimmed = rawLine.trim();
+
+        if (!trimmed) {
+            flushParagraph();
+            index += 1;
+            continue;
+        }
+
+        const codeMatch = CODE_BLOCK_TOKEN_RE.exec(trimmed);
+        if (codeMatch) {
+            flushParagraph();
+            const tokenIndex = Number(codeMatch[1]);
+            if (Number.isInteger(tokenIndex) && codeBlocks[tokenIndex]) {
+                htmlParts.push(codeBlocks[tokenIndex]);
+            }
+            index += 1;
+            continue;
+        }
+
+        if (isMarkdownTableStart(lines, index)) {
+            flushParagraph();
+            const renderedTable = renderMarkdownTable(lines, index);
+            htmlParts.push(renderedTable.html);
+            index = renderedTable.nextIndex;
+            continue;
+        }
+
+        const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+        if (headingMatch) {
+            flushParagraph();
+            const level = headingMatch[1].length;
+            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+            index += 1;
+            continue;
+        }
+
+        if (/^[-*+]\s+/.test(trimmed)) {
+            flushParagraph();
+            const items = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "").trim();
+                if (!/^[-*+]\s+/.test(current)) break;
+                items.push(current.replace(/^[-*+]\s+/, ""));
+                index += 1;
+            }
+            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+            continue;
+        }
+
+        if (/^\d+\.\s+/.test(trimmed)) {
+            flushParagraph();
+            const items = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "").trim();
+                if (!/^\d+\.\s+/.test(current)) break;
+                items.push(current.replace(/^\d+\.\s+/, ""));
+                index += 1;
+            }
+            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            continue;
+        }
+
+        paragraphLines.push(rawLine);
+        index += 1;
+    }
+
+    flushParagraph();
+    return htmlParts.join("");
+}
+
+function shouldStackTableForChat(tableEl) {
+    const headerCells = Array.from(tableEl.querySelectorAll("thead th"));
+    if (headerCells.length >= WIDE_TABLE_COLUMN_THRESHOLD) return true;
+
+    const headerChars = headerCells.reduce((sum, th) => {
+        return sum + String(th.textContent || "").trim().length;
+    }, 0);
+    if (headerChars >= WIDE_TABLE_HEADER_CHAR_THRESHOLD) return true;
+
+    const bodyRows = Array.from(tableEl.querySelectorAll("tbody tr"));
+    return bodyRows.some(row => {
+        const rowChars = Array.from(row.querySelectorAll("td")).reduce((sum, td) => {
+            return sum + String(td.textContent || "").trim().length;
+        }, 0);
+        return rowChars >= WIDE_TABLE_ROW_CHAR_THRESHOLD;
+    });
+}
+
+function applyWideTableLayout(containerEl) {
+    if (!containerEl) return;
+    containerEl.querySelectorAll(".response-table-wrap").forEach(wrapper => {
+        const tableEl = wrapper.querySelector("table");
+        if (!tableEl) return;
+
+        tableEl.classList.remove("is-stacked");
+        wrapper.classList.remove("is-stacked");
+
+        const labels = Array.from(tableEl.querySelectorAll("thead th")).map(cell => String(cell.textContent || "").trim());
+        tableEl.querySelectorAll("tbody tr").forEach(row => {
+            row.querySelectorAll("td").forEach((cell, idx) => {
+                const label = labels[idx] || `Column ${idx + 1}`;
+                cell.setAttribute("data-label", label);
+            });
+        });
+
+        if (shouldStackTableForChat(tableEl)) {
+            tableEl.classList.add("is-stacked");
+            wrapper.classList.add("is-stacked");
+        }
+    });
+}
+
+function renderResponseMarkdown(targetEl, text, { hasError = false } = {}) {
+    if (!targetEl) return;
+    const value = String(text ?? "");
+    if (hasError) {
+        targetEl.textContent = value;
+        return;
+    }
+    targetEl.innerHTML = renderMarkdownToHtml(value);
+    applyWideTableLayout(targetEl);
+}
+
+function refreshResponseTableLayouts(root = el.resultsGrid) {
+    if (!root) return;
+    root.querySelectorAll(".response-text").forEach(responseEl => {
+        applyWideTableLayout(responseEl);
+    });
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3236,13 +4489,14 @@ function buildHistoricalAssistantCardPayload(entry) {
     const response = String(entry.response || "").trim();
     const hasError = isResponsePlaceholder(response);
     const errorMessage = hasError ? response.replace(/^\[error\]\s*/i, "").trim() : "";
+    const safeResponse = response || "(empty response)";
     const tokens = Number(entry.tokens);
     const provider = String(entry.provider || "").trim().toLowerCase();
     const model = String(entry.model || "").trim();
     const webSourceItems = normalizeWebSources(entry.web_source_items || []);
 
     return {
-        text: hasError ? `Error: ${errorMessage || "Request failed"}` : response,
+        text: hasError ? `Error: ${errorMessage || "Request failed"}` : safeResponse,
         provider,
         model,
         web_source_items: webSourceItems,
@@ -3317,6 +4571,7 @@ function renderConversationFromEntries(entries) {
     el.resultsGrid.className = hasCompareTurns ? "results-grid compare-transcript" : "results-grid";
     el.resultsGrid.style.gridTemplateColumns = "";
     el.resultsGrid.innerHTML = htmlParts.join("");
+    refreshResponseTableLayouts(el.resultsGrid);
     hasReceivedFirstStreamResponse = true;
     setComposerDocked(true);
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 80 });

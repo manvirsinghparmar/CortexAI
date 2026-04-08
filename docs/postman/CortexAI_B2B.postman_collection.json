@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Complete Postman collection for CortexAI B2B gateway checks: chat/compare/streaming, BYOK, reporting, exports, history, optimize, and admin diagnostics.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. Some endpoints intentionally return 501 when DATABASE_URL (DB mode) is not configured.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -36,6 +36,30 @@
                   "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
                   "var body = pm.response.json();",
                   "pm.test('healthy status', function () { pm.expect(body.status).to.eql('healthy'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /health/runtime",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health/runtime"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('runtime health has status + claude diagnostics', function () {",
+                  "  pm.expect(body).to.have.property('status');",
+                  "  pm.expect(body).to.have.property('python_executable');",
+                  "  pm.expect(body).to.have.property('claude');",
+                  "});"
                 ]
               }
             }
@@ -265,10 +289,14 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
-                  "var body = pm.response.json();",
-                  "pm.test('history is an array', function () { pm.expect(body).to.be.an('array'); });",
-                  "if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }"
+                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "  pm.expect([200, 501]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('history is an array', function () { pm.expect(body).to.be.an('array'); });",
+                  "  if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }",
+                  "}"
                 ]
               }
             }
@@ -289,8 +317,31 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 204 or 404', function () {",
-                  "  pm.expect([204, 404]).to.include(pm.response.code);",
+                  "pm.test('status is 204 or 404 or 501', function () {",
+                  "  pm.expect([204, 404, 501]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /v1/history (all)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" }
+            ],
+            "url": "{{base_url}}/v1/history"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204 or 501', function () {",
+                  "  pm.expect([204, 501]).to.include(pm.response.code);",
                   "});"
                 ]
               }

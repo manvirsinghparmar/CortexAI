@@ -44,6 +44,23 @@ codex --cd C:\path\to\primary\repo `
   - update reflected table/query usage in `db/tables.py` and `db/repository.py`
   - follow [db-migrations.md](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/docs/runbooks/db-migrations.md)
 
+## Documentation Sync Requirement (Mandatory)
+
+- Documentation sync is a required completion gate for every task that changes behavior, contracts, configuration, tests, or operations.
+- A task is not complete until all impacted docs are updated in the same change set.
+- Always review and update impacted documentation, including at minimum:
+  - `README.md`
+  - `docs/FASTAPI_README.md`
+  - `docs/postman/CortexAI_B2B.postman_collection.json`
+  - `docs/PROJECT_MAP.md` (when code-path ownership/change map shifts)
+  - `docs/runbooks/*.md` (when operational workflow changes)
+  - `.codex/project-context.md` (when core invariants/guardrails change)
+- For endpoint or schema changes, update route lists, request/response examples, error semantics, and Postman entries in the same task.
+- For runtime/config changes, update environment variable docs and startup/runtime assumptions.
+- For routing/research/compare/front-end behavior changes, update the corresponding guide docs/diagrams in `docs/`.
+- Before handoff, explicitly verify there is no known documentation drift. If no doc files changed, state why docs were unaffected.
+- Do not defer documentation updates to a follow-up task.
+
 ## Validation Gates
 
 - Default test command: `python -m pytest -q`

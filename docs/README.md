@@ -14,6 +14,7 @@ Use this index to quickly find the current source of truth and avoid stale imple
 - `runbooks/db-migrations.md` - migration authoring/apply/rollback runbook
 - `UNIFIED_RESPONSE_CONTRACT.md` - provider adapter response contract
 - `postman/CortexAI_B2B.postman_collection.json` - API collection/examples
+- `SRED_TECHNICAL_NARRATIVE_2026_DRAFT.md` - SR&ED technical narrative draft from git history (uncertainty/experiments/validation)
 
 ## Historical/Snapshot Docs
 
@@ -26,4 +27,4 @@ When details conflict, prefer `../README.md` and `FASTAPI_README.md`.
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-03-30

@@ -126,11 +126,6 @@ class FakeElement {
 
 function createRuntime({ providersPayload, modelsPayload }) {
     const elementIds = [
-        "compactBar",
-        "compactModelInfo",
-        "cBtnSingle",
-        "cBtnCompare",
-        "compactSendBtn",
         "mainHeader",
         "btnSingleMode",
         "btnCompareMode",
@@ -425,4 +420,85 @@ test("compare selectors enforce unique model choices with disabled taken options
 
     const selected = [compareModel1.value, compareModel2.value, compareModel3.value].map(value => String(value || ""));
     assert.equal(new Set(selected).size, selected.length);
+});
+
+test("upload errors are mapped to safe user-facing messages", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+        ],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [{ provider: "openai", model: "gpt-4o", enabled: true }],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context } = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(typeof context.sanitizeUploadError, "function");
+    assert.equal(typeof context.getUserFriendlyUploadError, "function");
+    assert.equal(typeof context.getUploadErrorMessage, "function");
+    assert.equal(typeof context.getSafeAttachmentItemErrorMessage, "function");
+
+    assert.equal(
+        context.getUploadErrorMessage({
+            uiErrorKind: "connection",
+            message: "Failed to fetch object from s3://internal-bucket/private-key",
+        }),
+        "Upload failed due to a network issue. Please check your internet connection and try again.",
+    );
+    assert.equal(
+        context.getUploadErrorMessage({
+            status: 413,
+            detail: "File exceeds ATTACHMENTS_MAX_FILE_BYTES (20971520).",
+        }),
+        "Upload failed. This file may be too large. Try a smaller file.",
+    );
+    assert.equal(
+        context.getUploadErrorMessage({
+            status: 415,
+            detail: "Unsupported MIME type 'application/x-msdownload'.",
+        }),
+        "Upload failed. This file type is not supported. Make sure the file type is supported and try again.",
+    );
+    assert.equal(
+        context.getUploadErrorMessage({
+            uiErrorKind: "timeout",
+            detail: "request timed out after 60000ms",
+        }),
+        "Upload failed because the request timed out. Please try again.",
+    );
+
+    const fallback = context.getUploadErrorMessage({
+        detail: "storage upload failed for bucket internal-prod-uploads and key users/13/file.pdf",
+    });
+    assert.equal(
+        fallback,
+        "Upload failed. Please try again.",
+    );
+    assert.equal(fallback.includes("internal-prod-uploads"), false);
+
+    const displaySafe = context.getSafeAttachmentItemErrorMessage({
+        status: "error",
+        error_message: "storage upload failed for bucket internal-prod-uploads and key users/13/file.pdf",
+    });
+    assert.equal(
+        displaySafe,
+        "Upload failed. Please try again.",
+    );
+    assert.equal(displaySafe.includes("internal-prod-uploads"), false);
 });

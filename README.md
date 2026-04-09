@@ -57,7 +57,7 @@ GROK_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-Enable DB mode:
+Configure DB (required):
 ```ini
 DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname
 DB_SCHEMA=public
@@ -160,6 +160,7 @@ Optional frontend runtime config for separate API host:
 - Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
 - Include it before `app.js` in `frontend/index.html`
 - Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and `apiKey`
+- Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication
 
@@ -241,6 +242,9 @@ Upload status semantics:
 - `ready`: file is immediately usable in chat/compare.
 - `processing`: server accepted file and deferred/ongoing ingestion; client should poll status.
 - `failed`: ingestion failed; `error_code`/`error_message` explain why.
+- Upload API responses now sanitize `error_message` for client safety (no bucket/key/internal storage paths in response text).
+- Frontend upload UX maps failures to safe user-facing messages (network issue, file too large, unsupported type, timeout, generic retry prompt) and does not render raw backend/object-storage error text.
+- Raw upload errors are still logged in frontend developer console for debugging.
 
 MVP ingestion policy:
 - Small files are handled inline.
@@ -287,6 +291,7 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
 - `routing.research_mode=true`: orchestrator-managed web research flow with fresh sources for the current turn.
+- API contract note: `routing.research_mode` is boolean (`true|false`) and is mapped to orchestrator modes `on|off`.
 - Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
@@ -296,6 +301,8 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 
 ## Web Research Behavior (Current)
 
+- API contract: `routing.research_mode` accepts `true|false` (mapped to `on|off`).
+- Internal orchestrator modes:
 - `research_mode=off`: hard stop for this turn (no research injection, no reuse).
 - `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
 - `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
@@ -770,6 +777,7 @@ OpenAIProject/
       catalog.py
       chat.py
       compare.py
+      files.py
       health.py
       history.py
       optimize.py
@@ -887,4 +895,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-19
+Last updated: 2026-04-08

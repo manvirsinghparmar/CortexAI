@@ -12,10 +12,15 @@ pip install -r requirements.txt
 API_KEYS=dev-key-1,dev-key-2
 ```
 
-3. Optional DB persistence:
+3. Configure required DB persistence:
 ```ini
 DATABASE_URL=postgresql+psycopg://...
 ```
+
+Notes:
+- `DATABASE_URL` is required at startup.
+- PostgreSQL URLs are required by default (`postgresql://` or `postgresql+psycopg://`).
+- Dev-only override: `ALLOW_NON_POSTGRES_DATABASE_URL=true`.
 
 4. Optional deployment boundary controls:
 ```ini
@@ -31,6 +36,7 @@ python run_server.py --reload
 6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
+- Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 
 ## Endpoints
 
@@ -38,6 +44,8 @@ python run_server.py --reload
 - `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
+- `POST /v1/files/upload`
+- `GET /v1/files/{file_id}`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -63,9 +71,9 @@ Protected endpoints require:
 
 Invalid or missing key returns `401`.
 
-## API Key Persistence Policy (DB-enabled routes)
+## API Key Persistence Policy
 
-When `DATABASE_URL` is set, chat/compare persistence resolves API key ownership before model invocation.
+In required DB runtime mode, chat/compare persistence resolves API key ownership before model invocation.
 
 Env flags:
 - `AUTO_REGISTER_UNMAPPED_API_KEYS=false` (safe default)
@@ -317,6 +325,8 @@ Applied in `server/utils.py`:
 Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
+- File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
+- Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
 
 ## Testing
 
@@ -337,4 +347,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-04-08

@@ -26,7 +26,7 @@ function buildCognitoLoginUrl() {
         if (base.indexOf("http://") !== 0 && base.indexOf("https://") !== 0) base = "https://" + base;
         var redirect = (window.location.origin || "") + (window.location.pathname || "/");
         redirect = redirect.replace(/\/+$/, "") || redirect;
-        return base + "/oauth2/authorize?client_id=" + encodeURIComponent(cognitoConfig.clientId) + "&response_type=token&scope=openid+email&redirect_uri=" + encodeURIComponent(redirect);
+        return base + "/login?client_id=" + encodeURIComponent(cognitoConfig.clientId) + "&response_type=code&scope=openid+email&redirect_uri=" + encodeURIComponent(redirect) + "/auth";
     }
 async function cognitoSignOut() {
     try { await fetch(API_BASE + "/v1/auth/logout", { method: "POST", credentials: "include" }); } catch (_) {}
@@ -36,9 +36,8 @@ async function cognitoSignOut() {
     } else {
         window.location.reload();
     }
-    //https://us-east-1duh9ar9jk.auth.us-east-1.amazoncognito.com/login?client_id=5i9cjes5hpui0okrfi656jk3ss&&response_type=code&scope=email+openidredirect_uri=http://localhost:8000/auth
-    //https://us-east-1duh9ar9jk.auth.us-east-1.amazoncognito.com/login?client_id=5i9cjes5hpui0okrfi656jk3ss&response_type=code&scope=email+openid&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fauth
-}
+    
+    }
 async function renderAuthUI() {
     const wrap = document.getElementById("authNavWrap");
     if (!wrap) return;

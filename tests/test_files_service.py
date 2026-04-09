@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from server import files_service
+from server.object_storage import ObjectStorageOperationError
 
 
 @contextmanager
@@ -75,6 +76,67 @@ def test_upload_rejects_too_large(monkeypatch):
 
     assert exc.value.status_code == 413
     assert exc.value.detail["code"] == "file_too_large"
+
+
+def test_upload_storage_operation_error_is_sanitized(monkeypatch):
+    _configure_enabled_db(monkeypatch)
+    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None)
+
+    class _FailingStorage:
+        bucket = "cortex-attachments"
+        key_prefix = "attachments"
+
+        def put_bytes(self, **_kwargs):
+            raise ObjectStorageOperationError(
+                "Failed to upload object to bucket 'cortex-attachments' key 'attachments/users/abc/private.pdf'"
+            )
+
+        def delete_object(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr(files_service, "get_object_storage", lambda: _FailingStorage())
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.upload_user_file(
+            api_key="dev-key-1",
+            request_id="req-storage-error",
+            filename="demo.txt",
+            mime_type="text/plain",
+            payload=b"hello",
+        )
+
+    assert exc.value.status_code == 502
+    assert exc.value.detail["code"] == "storage_upload_failed"
+    assert exc.value.detail["message"] == "This file could not be uploaded right now. Please try again in a moment."
+    assert "bucket" not in exc.value.detail["message"].lower()
+
+
+def test_serialize_uploaded_row_hides_sensitive_error_details():
+    row = {
+        "id": uuid4(),
+        "original_filename": "demo.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "failed",
+        "error_code": "storage_upload_failed",
+        "error_message": "Failed to upload object to bucket 'cortex-attachments' key 'attachments/users/abc/private.pdf'",
+        "ingestion_meta": {
+            "ingestion_required": True,
+            "ingestion_state": "failed",
+            "last_error": "Failed to read object key attachments/users/abc/private.pdf",
+            "artifact_meta": {"materialization": "text"},
+        },
+        "created_at": "2026-03-20T00:00:00Z",
+        "updated_at": "2026-03-20T00:00:00Z",
+        "expires_at": "2026-03-27T00:00:00Z",
+    }
+
+    payload = files_service._serialize_uploaded_file_row(row, deduplicated=False)
+
+    assert payload["error_message"] == "This file could not be uploaded right now. Please try again in a moment."
+    assert payload["ingestion_meta"]["ingestion_state"] == "failed"
+    assert payload["ingestion_meta"]["artifact_meta"]["materialization"] == "text"
+    assert "last_error" not in payload["ingestion_meta"]
 
 
 def test_upload_returns_dedup_row_when_hash_exists(monkeypatch):

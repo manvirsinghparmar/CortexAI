@@ -17,22 +17,6 @@
 
 <body>
 
-    <div class="compact-bar" id="compactBar" aria-hidden="true">
-        <div class="compact-bar-inner">
-            <div class="compact-logo">
-                <span class="compact-logo-text">CortexAI</span>
-            </div>
-            <div class="compact-mode-toggle">
-                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Ask</button>
-                <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">Compare</button>
-            </div>
-            <div class="compact-model-info" id="compactModelInfo"></div>
-            <button class="compact-send-btn" id="compactSendBtn">
-                <span class="btn-icon">&uarr;</span> Send
-            </button>
-        </div>
-    </div>
-
     <header class="header" id="mainHeader">
         <div class="header-inner">
             <div class="logo">
@@ -160,32 +144,33 @@
                     <div class="composer-footer-features feature-strip" id="singleRoutingControls">
                         <span class="feature-chip-wrap">
                             <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
-                                aria-checked="true" aria-label="Auto"
+                                aria-checked="true" aria-label="Smart"
                                 aria-describedby="smartRoutingTooltip">
-                                Auto
+                                <span class="chip-icon" aria-hidden="true">&#10024;</span>
+                                <span class="chip-label">Smart</span>
                             </button>
                             <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
-                                Automatically selects the best model based on quality, speed, and cost.
+                                Gets you the best answer automatically
                             </span>
                         </span>
                         <span class="feature-chip-wrap">
                             <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                aria-checked="false" aria-label="With sources" aria-describedby="researchRoutingTooltip">
                                 <span class="chip-icon" aria-hidden="true">&#127760;</span>
-                                <span>Web</span>
+                                <span class="chip-label">With sources</span>
                             </button>
                             <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
-                                Searches the internet and includes citations.
+                                Uses latest information from the web
                             </span>
                         </span>
                         <span class="feature-chip-wrap">
                             <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
-                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
-                                <span>Rewrite</span>
+                                aria-checked="false" aria-label="Improve" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9998;</span>
+                                <span class="chip-label">Improve</span>
                             </button>
                             <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
-                                Improves your prompt before sending.
+                                Helps you ask better for better results
                             </span>
                         </span>
                     </div>

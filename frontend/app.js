@@ -127,9 +127,9 @@ let providerSortOrderById = {};
 let manualDefaultModelKey = "openai:gpt-4o";
 
 const ACTIVE_ROUTING_INDICATORS = {
-    auto: "Auto",
-    web: "Web",
-    rewrite: "Rewrite",
+    auto: "Smart",
+    web: "With sources",
+    rewrite: "Improve",
 };
 const COMPARE_CONTEXT_MODEL_TEXT_LIMIT = 260;
 const COMPARE_CONTEXT_TOTAL_LIMIT = 2200;
@@ -790,11 +790,6 @@ const el = {
     hero: $("hero"),
     heroContent: $("heroContent"),
     heroScrollHint: $("heroScrollHint"),
-    compactBar: $("compactBar"),
-    compactModelInfo: $("compactModelInfo"),
-    cBtnSingle: $("cBtnSingle"),
-    cBtnCompare: $("cBtnCompare"),
-    compactSendBtn: $("compactSendBtn"),
     mainHeader: $("mainHeader"),
     btnSingleMode: $("btnSingleMode"),
     btnCompareMode: $("btnCompareMode"),
@@ -833,12 +828,11 @@ const el = {
 };
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   SCROLL BEHAVIOUR â€” Hero fade + Compact bar
+   SCROLL BEHAVIOUR â€” Hero fade + Header shadow
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 (function initScrollBehaviour() {
     const hasHero = Boolean(el.hero && el.heroContent);
-    const compactBarRevealOffset = 160;
 
     // 1. Scroll-linked transforms via rAF (60fps)
     let ticking = false;
@@ -859,17 +853,15 @@ const el = {
             // Fade + slide the hero content
             el.heroContent.style.opacity = 1 - prog;
             el.heroContent.style.transform = `translateY(${prog * -40}px)`;
-        } else {
-            const showBar = scrollY > compactBarRevealOffset;
-            el.compactBar.classList.toggle("visible", showBar);
-            el.compactBar.setAttribute("aria-hidden", showBar ? "false" : "true");
         }
 
         // Header shadow
-        if (scrollY > 10) {
-            el.mainHeader.classList.add("scrolled");
-        } else {
-            el.mainHeader.classList.remove("scrolled");
+        if (el.mainHeader) {
+            if (scrollY > 10) {
+                el.mainHeader.classList.add("scrolled");
+            } else {
+                el.mainHeader.classList.remove("scrolled");
+            }
         }
 
         ticking = false;
@@ -878,62 +870,7 @@ const el = {
     window.addEventListener("scroll", onScroll, { passive: true });
     updateHero();
 
-    if (hasHero) {
-        // 2. IntersectionObserver â€” show compact bar once hero is mostly gone
-        const observer = new IntersectionObserver(
-            ([entry]) => {
-                const showBar = !entry.isIntersecting;
-                el.compactBar.classList.toggle("visible", showBar);
-                el.compactBar.setAttribute("aria-hidden", showBar ? "false" : "true");
-            },
-            { threshold: 0.15 }   // trigger when <15% of hero is visible
-        );
-        observer.observe(el.hero);
-    }
 })();
-
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   COMPACT BAR â€” SYNC
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-
-function updateCompactBar() {
-    // Mode buttons
-    el.cBtnSingle.classList.toggle("active", currentMode === "single");
-    el.cBtnCompare.classList.toggle("active", currentMode === "compare");
-
-    // Model badges
-    const badgesHTML = getCompactBadges();
-    el.compactModelInfo.innerHTML = badgesHTML;
-
-    // Primary action state (Send/Compare/Stop)
-    renderComposerActionButtons();
-}
-
-function getCompactBadges() {
-    if (currentMode === "single") {
-        const { provider, model } = parseKey(el.singleModel.value || "");
-        if (smartModeEnabled) {
-            return `<span class="compact-model-badge">Auto</span>`;
-        }
-        if (!provider) {
-            const fallbackLabel = providerLabelById.openai || providerCatalog[0]?.label || "Assistant";
-            return `<span class="compact-model-badge">Using: ${escHtml(fallbackLabel)}</span>`;
-        }
-        return `<span class="compact-model-badge">
-              ${buildProviderDotHtml(provider, 7)}
-              ${escHtml(providerLabelById[provider] || model)}
-            </span>`;
-    }
-    return getActiveCompareSelects().map(sel => {
-        const { provider, model } = parseKey(sel.value || "");
-        if (!provider) return "";
-        const { shortLabel, title } = getModelDisplayMetadata(provider, model);
-        return `<span class="compact-model-badge">
-              ${buildProviderDotHtml(provider, 7)}
-              <span title="${escHtml(title)}">${escHtml(shortLabel)}</span>
-            </span>`;
-    }).join("");
-}
 
 function isComposerStopModeActive() {
     return composerRequestState === "connecting" || composerRequestState === "streaming";
@@ -946,37 +883,21 @@ function renderComposerActionButtons() {
         el.submitBtn.innerHTML = `<span class="stop-icon" aria-hidden="true"></span>`;
         el.submitBtn.setAttribute("aria-label", "Stop generating");
         el.submitBtn.setAttribute("title", "Stop generating");
-
-        el.compactSendBtn.classList.add("is-stop");
-        el.compactSendBtn.innerHTML = `<span class="stop-icon stop-icon-compact" aria-hidden="true"></span> Stop`;
-        el.compactSendBtn.setAttribute("aria-label", "Stop generating");
-        el.compactSendBtn.setAttribute("title", "Stop generating");
         return;
     }
 
     el.submitBtn.classList.remove("is-stop");
-    el.compactSendBtn.classList.remove("is-stop");
 
     if (isSubmitting) {
         el.submitBtn.innerHTML = `<span class="spinner"></span>`;
         el.submitBtn.setAttribute("aria-label", "Generating response");
         el.submitBtn.setAttribute("title", "Generating response");
-
-        el.compactSendBtn.innerHTML = `<span class="spinner"></span>`;
-        el.compactSendBtn.setAttribute("aria-label", "Generating response");
-        el.compactSendBtn.setAttribute("title", "Generating response");
         return;
     }
 
     el.submitBtn.innerHTML = `<span class="btn-icon">&uarr;</span>`;
     el.submitBtn.setAttribute("aria-label", "Send message");
     el.submitBtn.setAttribute("title", "Send message");
-
-    const compactLabel = currentMode === "single" ? "Send" : "Compare";
-    const compactAria = currentMode === "single" ? "Send message" : "Compare models";
-    el.compactSendBtn.innerHTML = `<span class="btn-icon">&uarr;</span> ${compactLabel}`;
-    el.compactSendBtn.setAttribute("aria-label", compactAria);
-    el.compactSendBtn.setAttribute("title", compactAria);
 }
 
 function setComposerRequestState(nextState) {
@@ -1028,11 +949,6 @@ function stopActiveGeneration() {
 // Main workspace mode toggle buttons
 el.btnSingleMode.addEventListener("click", () => setMode("single"));
 el.btnCompareMode.addEventListener("click", () => setMode("compare"));
-
-// Compact bar mirrors
-el.cBtnSingle.addEventListener("click", () => setMode("single"));
-el.cBtnCompare.addEventListener("click", () => setMode("compare"));
-el.compactSendBtn.addEventListener("click", handlePrimaryComposerAction);
 function getModelPicker(selectEl) {
     if (!selectEl || !selectEl.id) return null;
     return modelPickerBySelectId.get(selectEl.id) || null;
@@ -1459,7 +1375,6 @@ function syncCompareDropdowns() {
     });
     closeAllModelPickers();
     updateCompareAddButton();
-    updateCompactBar();
 }
 
 function updateCompareAddButton() {
@@ -1755,7 +1670,6 @@ function updateSingleModelRoutingUI() {
 
     updateRoutingButtons();
     syncAllModelPickers();
-    updateCompactBar();
     updateSendButtonState();
 }
 
@@ -1885,7 +1799,7 @@ function triggerChipToggleFeedback(button) {
 }
 
 function updateRoutingButtons() {
-    setRoutingButtonState(el.routeOptimizeBtn, "Rewrite", optimizeEnabled);
+    setRoutingButtonState(el.routeOptimizeBtn, "Improve", optimizeEnabled);
     const smartAllowed = currentMode === "single";
     const smartChipWrap = el.routeSmartBtn ? el.routeSmartBtn.closest(".feature-chip-wrap") : null;
     if (smartChipWrap) {
@@ -1893,8 +1807,8 @@ function updateRoutingButtons() {
         smartChipWrap.setAttribute("aria-hidden", smartAllowed ? "false" : "true");
     }
     el.routeSmartBtn.disabled = !smartAllowed;
-    setRoutingButtonState(el.routeSmartBtn, "Auto", smartAllowed && smartModeEnabled);
-    setRoutingButtonState(el.routeResearchBtn, "Web", isResearchEnabledForCurrentMode());
+    setRoutingButtonState(el.routeSmartBtn, "Smart", smartAllowed && smartModeEnabled);
+    setRoutingButtonState(el.routeResearchBtn, "With sources", isResearchEnabledForCurrentMode());
     updateRoutingHint();
 }
 
@@ -1904,7 +1818,6 @@ function updateSendButtonState() {
     const stopMode = isComposerStopModeActive();
     const disabled = stopMode ? false : !(hasPrompt || hasAnyAttachments);
     el.submitBtn.disabled = disabled;
-    el.compactSendBtn.disabled = disabled;
     // Composer inputs should remain interactive independent of send-button state.
     ensureComposerInputsInteractive();
     const isExpanded = autoSizePromptInput(hasPrompt);
@@ -1976,13 +1889,110 @@ function getAttachmentStatusLabel(statusRaw) {
     if (status === "uploading") return "Uploading";
     if (status === "processing" || status === "uploaded") return "Processing";
     if (status === "queued") return "Queued";
-    if (status === "error") return "Failed";
+    if (status === "error" || status === "failed") return "Failed";
     return status ? status[0].toUpperCase() + status.slice(1) : "Unknown";
 }
 
-function readAttachmentErrorMessage(error, fallback = "Attachment upload failed.") {
-    const message = String(error?.detail || error?.message || "").trim();
-    return message || fallback;
+function isAttachmentFailureStatus(statusRaw) {
+    const status = String(statusRaw || "").toLowerCase();
+    return status === "error" || status === "failed";
+}
+
+function extractErrorMessage(error) {
+    if (typeof error === "string") {
+        return error.trim();
+    }
+    if (!error || typeof error !== "object") {
+        return "";
+    }
+    const detail = String(error?.detail || "").trim();
+    if (detail) return detail;
+    return String(error?.message || "").trim();
+}
+
+function sanitizeUploadError(apiError) {
+    const statusNumber = Number(apiError?.status || apiError?.httpStatus);
+    const status = Number.isFinite(statusNumber) ? statusNumber : null;
+    const kind = String(apiError?.uiErrorKind || apiError?.errorKind || "").trim().toLowerCase();
+    const rawMessage = extractErrorMessage(apiError);
+    const message = rawMessage.toLowerCase();
+    return { status, kind, message, rawMessage };
+}
+
+function getUserFriendlyUploadError(error) {
+    const { status, kind, message } = sanitizeUploadError(error);
+
+    if (
+        kind === "timeout"
+        || status === 408
+        || status === 504
+        || message.includes("timeout")
+        || message.includes("timed out")
+        || message.includes("took too long")
+    ) {
+        return "Upload failed because the request timed out. Please try again.";
+    }
+
+    if (
+        kind === "connection"
+        || message.includes("failed to fetch")
+        || message.includes("networkerror")
+        || message.includes("network request failed")
+        || /\bload failed\b/.test(message)
+        || message.includes("connection")
+        || message.includes("offline")
+    ) {
+        return "Upload failed due to a network issue. Please check your internet connection and try again.";
+    }
+
+    if (
+        status === 413
+        || message.includes("payload too large")
+        || message.includes("request entity too large")
+        || message.includes("too large")
+        || message.includes("max_file_bytes")
+        || message.includes("exceeds attachments_max_file_bytes")
+    ) {
+        return "Upload failed. This file may be too large. Try a smaller file.";
+    }
+
+    if (
+        status === 415
+        || message.includes("unsupported")
+        || message.includes("file type")
+        || message.includes("mime type")
+        || message.includes("media type")
+        || message.includes("content type")
+    ) {
+        return "Upload failed. This file type is not supported. Make sure the file type is supported and try again.";
+    }
+
+    return "Upload failed. Please try again.";
+}
+
+function getUploadErrorMessage(error) {
+    return getUserFriendlyUploadError(error);
+}
+
+function reportAttachmentUploadFailure(error, { localId = "", filename = "" } = {}) {
+    if (typeof console === "undefined" || typeof console.error !== "function") {
+        return;
+    }
+    console.error("Attachment upload failed", {
+        local_id: String(localId || ""),
+        filename: String(filename || ""),
+        status: Number(error?.status || error?.httpStatus) || null,
+        ui_error_kind: String(error?.uiErrorKind || "").trim() || "",
+        detail: extractErrorMessage(error),
+    }, error);
+}
+
+function getSafeAttachmentItemErrorMessage(item) {
+    return getUserFriendlyUploadError({
+        detail: String(item?.error_message || ""),
+        status: Number(item?.status_code || item?.error_status || item?.statusCode),
+        uiErrorKind: String(item?.ui_error_kind || item?.error_kind || "").trim(),
+    });
 }
 
 function getAttachmentItemByLocalId(localId) {
@@ -2007,15 +2017,18 @@ function refreshAttachmentUi({ refreshModels = false } = {}) {
             el.attachmentList.innerHTML = "";
         } else {
             el.attachmentList.innerHTML = attachmentItems.map(item => {
-                const status = String(item.status || "queued").toLowerCase();
-                const chipClass = `attachment-chip is-${escHtml(status)}`;
+                const statusRaw = String(item.status || "queued").toLowerCase();
+                const normalizedStatus = statusRaw === "failed" ? "error" : statusRaw;
+                const chipClass = `attachment-chip is-${escHtml(normalizedStatus)}`;
                 const filename = String(item.filename || "file");
                 const sizeText = formatBytes(item.size_bytes);
-                const statusText = getAttachmentStatusLabel(status);
+                const statusText = getAttachmentStatusLabel(statusRaw);
                 const metaText = `${sizeText} | ${statusText}`;
-                const showRetry = status === "error" && !!item.file_blob;
-                const errorHint = status === "error" && item.error_message
-                    ? `<span class="attachment-chip-meta">${escHtml(String(item.error_message || ""))}</span>`
+                const isFailed = isAttachmentFailureStatus(statusRaw);
+                const showRetry = isFailed && !!item.file_blob;
+                const safeErrorMessage = isFailed ? getSafeAttachmentItemErrorMessage(item) : "";
+                const errorHint = isFailed
+                    ? `<span class="attachment-chip-meta">${escHtml(safeErrorMessage)}</span>`
                     : `<span class="attachment-chip-meta">${escHtml(metaText)}</span>`;
                 return `<span class="${chipClass}" title="${escHtml(filename)}">
                     <span class="attachment-chip-name">${escHtml(filename)}</span>
@@ -2035,7 +2048,7 @@ function refreshAttachmentUi({ refreshModels = false } = {}) {
         } else {
             const readyCount = attachmentItems.filter(item => item.status === "ready").length;
             const pendingCount = attachmentItems.filter(item => ["queued", "uploading", "processing", "uploaded"].includes(String(item.status || "").toLowerCase())).length;
-            const failedCount = attachmentItems.filter(item => item.status === "error").length;
+            const failedCount = attachmentItems.filter(item => isAttachmentFailureStatus(item?.status)).length;
             const compatibleModels = getCompatibleModelKeySetForCurrentAttachments();
             const parts = [];
             parts.push(`${readyCount}/${attachmentItems.length} ready`);
@@ -2106,7 +2119,7 @@ function enqueueSelectedFiles(fileList) {
             && item.filename === filename
             && Number(item.size_bytes) === sizeBytes
             && normalizeAttachmentMimeType(item.mime_type, item.filename) === mimeType
-            && item.status !== "error"
+            && !isAttachmentFailureStatus(item.status)
         );
         if (duplicate) {
             continue;
@@ -2212,7 +2225,6 @@ async function processAttachmentUploadQueue() {
                     file_id: fileId,
                     status: reportedStatus || "uploaded",
                     error_message: "",
-                    file_blob: null,
                     size_bytes: Number(uploadPayload?.size_bytes) || current.size_bytes,
                     mime_type: normalizeAttachmentMimeType(uploadPayload?.mime_type, current.filename) || current.mime_type,
                     filename: String(uploadPayload?.original_filename || current.filename),
@@ -2230,17 +2242,25 @@ async function processAttachmentUploadQueue() {
                     patchAttachmentItem(localId, {
                         status: String(readyPayload?.status || "ready").toLowerCase(),
                         error_message: "",
+                        file_blob: null,
                         size_bytes: Number(readyPayload?.size_bytes) || current.size_bytes,
                         mime_type: normalizeAttachmentMimeType(readyPayload?.mime_type, current.filename) || current.mime_type,
                         filename: String(readyPayload?.original_filename || current.filename),
                     });
                 } else {
-                    patchAttachmentItem(localId, { status: "ready" });
+                    patchAttachmentItem(localId, {
+                        status: "ready",
+                        file_blob: null,
+                    });
                 }
             } catch (error) {
+                reportAttachmentUploadFailure(error, {
+                    localId,
+                    filename: current?.filename || "",
+                });
                 patchAttachmentItem(localId, {
                     status: "error",
-                    error_message: readAttachmentErrorMessage(error),
+                    error_message: getUploadErrorMessage(error),
                 });
             }
             refreshAttachmentUi({ refreshModels: true });
@@ -2293,7 +2313,7 @@ function buildRequestAttachmentPayload() {
         };
     }
 
-    const failed = attachmentItems.find(item => String(item?.status || "").toLowerCase() === "error");
+    const failed = attachmentItems.find(item => isAttachmentFailureStatus(item?.status));
     if (failed) {
         return {
             items: [],
@@ -2448,10 +2468,11 @@ document.querySelectorAll(".chip").forEach(chip => {
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 el.promptInput.addEventListener("keydown", e => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        handlePrimaryComposerAction();
-    }
+    if (e.key !== "Enter") return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.shiftKey) return;
+    e.preventDefault();
+    handlePrimaryComposerAction();
 });
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2635,7 +2656,7 @@ async function doSingleChat(prompt, {
     const manualMode = currentMode === "single" && !smartModeEnabled;
     const useManualModel = manualMode && !!provider;
     if (manualMode && !useManualModel) {
-        showError("Please select a model or turn Auto-Select back on.");
+        showError("Please select a model or turn Smart mode back on.");
         return false;
     }
     const compatibilityDescriptors = Array.isArray(attachmentDescriptors) && attachmentDescriptors.length > 0
@@ -2644,7 +2665,7 @@ async function doSingleChat(prompt, {
     if (useManualModel && attachments.length > 0) {
         const selectedModelItem = getModelCatalogItemByKey(modelKeyOf(provider, model));
         if (!isModelCompatibleWithAttachments(selectedModelItem, compatibilityDescriptors)) {
-            showError("The selected model does not support the attached files. Choose a compatible model or enable Auto.");
+            showError("The selected model does not support the attached files. Choose a compatible model or enable Smart.");
             return false;
         }
     }
@@ -2665,7 +2686,7 @@ async function doSingleChat(prompt, {
 
     const streamTarget = useManualModel
         ? { provider, model }
-        : { provider: "Auto", model: "Auto-selected model" };
+        : { provider: "Smart", model: "Smart-selected model" };
     if (typeof onBeforeRequestSend === "function") {
         onBeforeRequestSend();
     }
@@ -4872,6 +4893,7 @@ function renderHistory(data, filter = "") {
         });
     });
 }
+
 
 
 

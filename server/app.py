@@ -9,20 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import (
-    admin,
-    auth as auth_routes,
-    byok,
-    catalog,
-    chat,
-    compare,
-    files,
-    health,
-    history,
-    optimize,
-    reporting,
-    whoami,
-)
+from server.routes import admin, auth as auth_routes, byok, catalog, chat, compare, files, health, history, optimize, reporting, whoami
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

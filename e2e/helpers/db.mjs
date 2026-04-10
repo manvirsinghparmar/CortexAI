@@ -339,6 +339,27 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
         ORDER BY requests.created_at ASC, attempts.attempt_number ASC
     `;
 
+    const requestAttachmentsQuery = `
+        SELECT
+            attachments.id::text AS id,
+            attachments.llm_request_id::text AS llm_request_id,
+            attachments.file_id::text AS file_id,
+            attachments.order_index,
+            attachments.usage_role,
+            attachments.transform_mode,
+            attachments.resolved_artifact_meta,
+            attachments.created_at
+        FROM ${tableRef(config, "request_attachments")} AS attachments
+        JOIN ${tableRef(config, "llm_requests")} AS requests
+          ON requests.id = attachments.llm_request_id
+        WHERE requests.user_id = $1::uuid
+          AND (
+              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
+          )
+        ORDER BY requests.created_at ASC, attachments.order_index ASC, attachments.id ASC
+    `;
+
     const requests = (await pool.query(requestsQuery, [ownerId, pattern, sessionId])).rows;
     const sessionIds = [...new Set(requests.map(row => row.session_id).filter(Boolean))];
 
@@ -375,8 +396,9 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
     const responses = (await pool.query(responsesQuery, [ownerId, pattern, sessionId])).rows;
     const routingDecisions = (await pool.query(decisionsQuery, [ownerId, pattern, sessionId])).rows;
     const routingAttempts = (await pool.query(attemptsQuery, [ownerId, pattern, sessionId])).rows;
+    const requestAttachments = (await pool.query(requestAttachmentsQuery, [ownerId, pattern, sessionId])).rows;
 
-    return { requests, responses, routingDecisions, routingAttempts, messages, sessions };
+    return { requests, responses, routingDecisions, routingAttempts, requestAttachments, messages, sessions };
 }
 
 /** Find requests by a raw prompt fragment when a spec needs ad-hoc inspection. */

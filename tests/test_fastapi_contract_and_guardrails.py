@@ -282,6 +282,44 @@ def test_compare_requires_api_key(client):
     assert r.status_code in (401, 403)
 
 
+def test_chat_with_attachments_requires_db_mode(client):
+    payload = {
+        "prompt": "describe this file",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "attachments": [
+            {"file_id": "11111111-1111-1111-1111-111111111111", "usage_role": "primary", "transform_mode": "auto"}
+        ],
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 501
+    assert r.json()["detail"]["code"] == "attachments_require_db"
+
+
+def test_compare_with_attachments_requires_db_mode(client):
+    payload = {
+        "prompt": "compare this file",
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+        "attachments": [
+            {"file_id": "22222222-2222-2222-2222-222222222222", "usage_role": "primary", "transform_mode": "auto"}
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 501
+    assert r.json()["detail"]["code"] == "attachments_require_db"
+
+
 def test_providers_catalog_requires_api_key(client):
     r = client.get("/v1/providers")
     assert r.status_code in (401, 403)
@@ -341,6 +379,10 @@ def test_models_catalog_lists_enabled_models_by_default(client):
         "context_limit",
         "tags",
         "enabled",
+        "supports_image_input",
+        "supported_attachment_mime_types",
+        "max_attachment_bytes",
+        "max_attachments_per_request",
     }
     for item in body["models"]:
         assert required_keys.issubset(item.keys())

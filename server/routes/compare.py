@@ -12,8 +12,9 @@ from fastapi.responses import StreamingResponse
 from models.unified_response import MultiUnifiedResponse, NormalizedError, TokenUsage, UnifiedResponse
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
+from server import attachments as attachments_service
 from server import persistence as persistence_service
-from server.dependencies import get_api_key, get_orchestrator
+from server.dependencies import get_auth, get_orchestrator
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.utils import (
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/v1", tags=["Compare"])
 
 MAX_COMPARE_TARGETS = 4
 STREAM_LINE_DELAY_S = 0.1
+ATTACHMENTS_ONLY_FALLBACK_PROMPT = "Please analyze the attached file(s)."
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
@@ -72,6 +74,15 @@ def _build_user_context(context_req):
         session_id=context_req.session_id,
         conversation_history=history,
     )
+
+
+def _resolve_effective_prompt(prompt: str | None, *, has_attachments: bool) -> str:
+    value = str(prompt or "").strip()
+    if value:
+        return value
+    if has_attachments:
+        return ATTACHMENTS_ONLY_FALLBACK_PROMPT
+    return ""
 
 
 def _iter_stream_lines(text: str):
@@ -163,7 +174,7 @@ async def compare(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Send a prompt to multiple AI models and compare responses."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -183,12 +194,59 @@ async def compare(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=providers,
         )
+
+    resolved_attachments = []
+    inference_attachments = []
+    persistence_attachments = []
+    if request.attachments:
+        if persistence_resolution is None:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail={
+                    "code": "attachments_require_db",
+                    "message": "Attachments require DATABASE_URL (DB mode).",
+                },
+            )
+        resolved_attachments = attachments_service.resolve_request_attachments(
+            user_id=persistence_resolution.user_id,
+            attachments=request.attachments,
+        )
+        for target in request.targets:
+            provider = (target.provider or "").strip().lower()
+            model = (target.model or "").strip()
+            if not model:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "attachment_model_required",
+                        "message": (
+                            "Compare targets must specify model when attachments are present."
+                        ),
+                    },
+                )
+            attachments_service.enforce_model_attachment_compatibility(
+                provider=provider,
+                model=model,
+                attachments=resolved_attachments,
+                mode="compare",
+            )
+        inference_attachments = attachments_service.materialize_inference_attachments(
+            resolved_attachments
+        )
+        persistence_attachments = attachments_service.build_request_attachment_persistence_items(
+            resolved_attachments=resolved_attachments,
+            inference_attachments=inference_attachments,
+        )
+    effective_prompt = _resolve_effective_prompt(
+        request.prompt,
+        has_attachments=bool(resolved_attachments),
+    )
 
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
@@ -199,10 +257,12 @@ async def compare(
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
+    if inference_attachments:
+        kwargs["attachments"] = inference_attachments
 
     response = await asyncio.to_thread(
         orchestrator.compare,
-        prompt=request.prompt,
+        prompt=effective_prompt,
         models_list=models_list,
         context=context,
         timeout_s=request.timeout_s,
@@ -225,14 +285,15 @@ async def compare(
         try:
             persistable = [r for r in response.responses if r is not None]
             resolved_session_id = _persist_compare_interaction(
-                api_key=api_key,
+                api_key=auth.api_key_or_none(),
                 resolution=persistence_resolution,
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 responses=persistable,
                 request_group_id=response.request_group_id,
                 requested_session_id=requested_session_id,
                 research_mode=research_mode,
                 force_new_session=force_new_session,
+                attachments=persistence_attachments,
             )
         except Exception:
             logger.exception("Compare persistence failed in DB mode")
@@ -246,7 +307,7 @@ async def compare_stream(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Stream compare responses as NDJSON events, then emit aggregate summary."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -266,12 +327,59 @@ async def compare_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=providers,
         )
+
+    resolved_attachments = []
+    inference_attachments = []
+    persistence_attachments = []
+    if request.attachments:
+        if persistence_resolution is None:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail={
+                    "code": "attachments_require_db",
+                    "message": "Attachments require DATABASE_URL (DB mode).",
+                },
+            )
+        resolved_attachments = attachments_service.resolve_request_attachments(
+            user_id=persistence_resolution.user_id,
+            attachments=request.attachments,
+        )
+        for target in request.targets:
+            provider = (target.provider or "").strip().lower()
+            model = (target.model or "").strip()
+            if not model:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "attachment_model_required",
+                        "message": (
+                            "Compare targets must specify model when attachments are present."
+                        ),
+                    },
+                )
+            attachments_service.enforce_model_attachment_compatibility(
+                provider=provider,
+                model=model,
+                attachments=resolved_attachments,
+                mode="compare",
+            )
+        inference_attachments = attachments_service.materialize_inference_attachments(
+            resolved_attachments
+        )
+        persistence_attachments = attachments_service.build_request_attachment_persistence_items(
+            resolved_attachments=resolved_attachments,
+            inference_attachments=inference_attachments,
+        )
+    effective_prompt = _resolve_effective_prompt(
+        request.prompt,
+        has_attachments=bool(resolved_attachments),
+    )
 
     kwargs = {}
     if request.temperature is not None:
@@ -280,6 +388,8 @@ async def compare_stream(
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
+    if inference_attachments:
+        kwargs["attachments"] = inference_attachments
 
     request_group_id = str(uuid.uuid4())
 
@@ -340,7 +450,7 @@ async def compare_stream(
                     asyncio.create_task(
                         _run_compare_target(
                             index=i,
-                            prompt=request.prompt,
+                            prompt=effective_prompt,
                             provider=provider,
                             model=model,
                             context=context,
@@ -387,14 +497,15 @@ async def compare_stream(
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     resolved_session_id = _persist_compare_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
-                        prompt=request.prompt,
+                        prompt=effective_prompt,
                         responses=raw_responses,
                         request_group_id=request_group_id,
                         requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
+                        attachments=persistence_attachments,
                     )
                 except Exception:
                     logger.exception("Compare stream persistence failed in DB mode")
@@ -437,14 +548,15 @@ async def compare_stream(
                             )
                         partial_responses = [fallback_error]
                     _persist_compare_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
-                        prompt=request.prompt,
+                        prompt=effective_prompt,
                         responses=partial_responses,
                         request_group_id=request_group_id,
                         requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
+                        attachments=persistence_attachments,
                     )
                 except Exception:
                     logger.exception("Compare stream error persistence failed in DB mode")

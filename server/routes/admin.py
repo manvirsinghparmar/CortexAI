@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Query, Request
 
 from server import persistence as persistence_service
-from server.dependencies import get_api_key
+from server.dependencies import get_auth
 from server.schemas.responses import FailedAttemptDTO, FailedAttemptsByGroupDTO
 
 router = APIRouter(prefix="/v1/admin", tags=["Admin"])
@@ -22,7 +22,7 @@ async def get_failed_attempts(
     request_group_id: UUID,
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """
     Return failed routing attempts for one compare request_group_id.
@@ -38,7 +38,7 @@ async def get_failed_attempts(
 
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     rows = _get_failed_attempts_by_request_group(
-        api_key=api_key,
+        auth=auth,
         request_id=req_id,
         request_group_id=request_group_id,
         limit=limit,

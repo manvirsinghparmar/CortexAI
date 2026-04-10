@@ -1,6 +1,7 @@
 """Pydantic request models for FastAPI endpoints."""
 
 from typing import Dict, List, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -42,12 +43,22 @@ class ChatRoutingRequest(BaseModel):
     research_mode: bool = False
 
 
+class AttachmentRequestItem(BaseModel):
+    file_id: UUID
+    usage_role: str = Field("primary", pattern="^(primary|reference)$")
+    transform_mode: str = Field(
+        "auto",
+        pattern="^(auto|text_only|vision_pages|table_summary)$",
+    )
+
+
 class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
+    prompt: str = Field("", min_length=0)
     provider: Optional[str] = None
     model: Optional[str] = None
     context: Optional[UserContextRequest] = None
     routing: Optional[ChatRoutingRequest] = None
+    attachments: Optional[List[AttachmentRequestItem]] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
 
@@ -62,6 +73,10 @@ class ChatRequest(BaseModel):
     def validate_provider_model_pair(self):
         if self.model and not self.provider:
             raise ValueError("provider is required when model is provided")
+        has_prompt = bool(str(self.prompt or "").strip())
+        has_attachments = bool(self.attachments)
+        if not has_prompt and not has_attachments:
+            raise ValueError("prompt is required when attachments are not provided")
         return self
 
 
@@ -76,13 +91,22 @@ class CompareTargetRequest(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
+    prompt: str = Field("", min_length=0)
     targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=4)
     routing: Optional[ChatRoutingRequest] = None
     context: Optional[UserContextRequest] = None
+    attachments: Optional[List[AttachmentRequestItem]] = None
     timeout_s: Optional[float] = Field(None, gt=0, le=300)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_prompt_or_attachments(self):
+        has_prompt = bool(str(self.prompt or "").strip())
+        has_attachments = bool(self.attachments)
+        if not has_prompt and not has_attachments:
+            raise ValueError("prompt is required when attachments are not provided")
+        return self
 
 
 class ByokUpdateRequest(BaseModel):

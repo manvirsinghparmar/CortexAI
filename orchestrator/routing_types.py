@@ -58,6 +58,10 @@ class ModelCandidate:
     context_limit: int
     tags: list[str]
     enabled: bool = True
+    supports_image_input: bool = False
+    supported_attachment_mime_types: list[str] = field(default_factory=list)
+    max_attachment_bytes: int | None = None
+    max_attachments_per_request: int | None = None
 
 
 @dataclass(frozen=True)

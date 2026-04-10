@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
@@ -18,7 +18,8 @@ from config.provider_catalog import (
 )
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
-from server.dependencies import get_api_key, get_orchestrator
+from server import attachments as attachments_service
+from server.dependencies import get_auth, get_orchestrator
 from server import persistence as persistence_service
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
@@ -40,6 +41,7 @@ DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
 SUPPORTED_PROVIDERS = tuple(DEFAULT_MODELS.keys())
 SMART_ROUTING_MODE = "smart"
 LEGACY_ROUTING_MODE = "legacy"
+ATTACHMENTS_ONLY_FALLBACK_PROMPT = "Please analyze the attached file(s)."
 TRUE_SMART_ROUTING_ENABLED = os.getenv(
     "ENABLE_TRUE_SMART_CHAT_ROUTING", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -220,6 +222,7 @@ def _resolve_chat_execution_plan(
     context: UserContext | None,
     orchestrator: CortexOrchestrator,
     provider_api_keys: dict[str, str] | None = None,
+    attachment_compatible_providers: list[str] | None = None,
 ) -> ChatExecutionPlan:
     manual_provider = (request.provider or "").strip().lower()
     manual_model = (request.model or "").strip()
@@ -243,6 +246,33 @@ def _resolve_chat_execution_plan(
 
     if TRUE_SMART_ROUTING_ENABLED and smart_mode:
         constraints = _build_chat_routing_constraints()
+        if attachment_compatible_providers:
+            compatible_providers = _normalize_provider_list(attachment_compatible_providers)
+            if compatible_providers:
+                constraints = dict(constraints or {})
+                existing_allowed = _normalize_provider_list(
+                    constraints.get("allowed_providers")
+                    if isinstance(constraints.get("allowed_providers"), (list, tuple))
+                    else None
+                )
+                if existing_allowed:
+                    compatible_set = set(compatible_providers)
+                    intersected = [provider for provider in existing_allowed if provider in compatible_set]
+                    if not intersected:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "code": "no_attachment_compatible_provider",
+                                "message": (
+                                    "No providers remain after applying SMART_CHAT_ALLOWED_PROVIDERS "
+                                    "and attachment compatibility filters."
+                                ),
+                            },
+                        )
+                    constraints["allowed_providers"] = intersected
+                else:
+                    constraints["allowed_providers"] = compatible_providers
+
         preview = None
         preview_fn = getattr(orchestrator, "preview_smart_target", None)
         if callable(preview_fn):
@@ -267,6 +297,30 @@ def _resolve_chat_execution_plan(
             available_fn = getattr(orchestrator, "available_providers", None)
             if callable(available_fn):
                 available_providers = available_fn(provider_api_keys=provider_api_keys)
+            if constraints:
+                allowed_providers = _normalize_provider_list(
+                    constraints.get("allowed_providers")
+                    if isinstance(constraints.get("allowed_providers"), (list, tuple))
+                    else None
+                )
+                if allowed_providers:
+                    if available_providers is None:
+                        available_providers = allowed_providers
+                    else:
+                        allowed_set = set(allowed_providers)
+                        available_providers = [
+                            provider for provider in available_providers if provider in allowed_set
+                        ]
+            if available_providers is not None and len(available_providers) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "no_attachment_compatible_provider",
+                        "message": (
+                            "No providers available for this request after attachment compatibility preflight."
+                        ),
+                    },
+                )
 
             fallback_provider = _pick_smart_provider_from_candidates(
                 request.prompt,
@@ -336,6 +390,15 @@ def _build_user_context(context_req):
     )
 
 
+def _resolve_effective_prompt(prompt: str | None, *, has_attachments: bool) -> str:
+    value = str(prompt or "").strip()
+    if value:
+        return value
+    if has_attachments:
+        return ATTACHMENTS_ONLY_FALLBACK_PROMPT
+    return ""
+
+
 def _iter_stream_lines(text: str):
     """Split response text into line chunks while preserving newline boundaries."""
     if not text:
@@ -358,7 +421,7 @@ async def chat(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Send a prompt to a single AI model and get a response."""
     request.context = validate_and_trim_context(request.context)
@@ -373,19 +436,67 @@ async def chat(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
         )
 
+    resolved_attachments = []
+    attachment_compatible_providers: list[str] | None = None
+    if request.attachments:
+        if persistence_resolution is None:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "code": "attachments_require_db",
+                    "message": "Attachments require DATABASE_URL (DB mode).",
+                },
+            )
+        resolved_attachments = attachments_service.resolve_request_attachments(
+            user_id=persistence_resolution.user_id,
+            attachments=request.attachments,
+        )
+        attachment_compatible_providers = attachments_service.compatible_providers_for_attachments(
+            resolved_attachments
+        )
+        if not attachment_compatible_providers:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "no_attachment_compatible_provider",
+                    "message": "No configured providers can accept the supplied attachments.",
+                },
+            )
+
+    effective_prompt = _resolve_effective_prompt(
+        request.prompt,
+        has_attachments=bool(resolved_attachments),
+    )
     execution_plan = _resolve_chat_execution_plan(
         request,
-        effective_prompt=request.prompt,
+        effective_prompt=effective_prompt,
         context=context,
         orchestrator=orchestrator,
         provider_api_keys=provider_api_keys,
+        attachment_compatible_providers=attachment_compatible_providers,
     )
+    inference_attachments = []
+    persistence_attachments = []
+    if resolved_attachments:
+        attachments_service.enforce_model_attachment_compatibility(
+            provider=execution_plan.preview_provider,
+            model=execution_plan.preview_model,
+            attachments=resolved_attachments,
+            mode="chat",
+        )
+        inference_attachments = attachments_service.materialize_inference_attachments(
+            resolved_attachments
+        )
+        persistence_attachments = attachments_service.build_request_attachment_persistence_items(
+            resolved_attachments=resolved_attachments,
+            inference_attachments=inference_attachments,
+        )
 
     kwargs = {}
     if request.temperature is not None:
@@ -394,10 +505,12 @@ async def chat(
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
+    if inference_attachments:
+        kwargs["attachments"] = inference_attachments
 
     response = await asyncio.to_thread(
         orchestrator.ask,
-        prompt=request.prompt,
+        prompt=effective_prompt,
         model_type=execution_plan.model_type,
         context=context,
         model_name=execution_plan.model_name,
@@ -413,13 +526,14 @@ async def chat(
     if API_DB_ENABLED and persistence_resolution is not None:
         try:
             resolved_session_id = _persist_chat_interaction(
-                api_key=api_key,
+                api_key=auth.api_key_or_none(),
                 resolution=persistence_resolution,
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 response=response,
                 requested_session_id=requested_session_id,
                 research_mode=research_mode,
                 force_new_session=force_new_session,
+                attachments=persistence_attachments,
             )
         except Exception:
             logger.exception("Chat persistence failed in DB mode")
@@ -433,7 +547,7 @@ async def chat_stream(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Stream a single-model chat response as NDJSON events."""
     request.context = validate_and_trim_context(request.context)
@@ -448,19 +562,67 @@ async def chat_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
-        persistence_resolution = _resolve_and_enforce_caps(api_key=api_key, request_id=req_id)
+        persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
         )
 
+    resolved_attachments = []
+    attachment_compatible_providers: list[str] | None = None
+    if request.attachments:
+        if persistence_resolution is None:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "code": "attachments_require_db",
+                    "message": "Attachments require DATABASE_URL (DB mode).",
+                },
+            )
+        resolved_attachments = attachments_service.resolve_request_attachments(
+            user_id=persistence_resolution.user_id,
+            attachments=request.attachments,
+        )
+        attachment_compatible_providers = attachments_service.compatible_providers_for_attachments(
+            resolved_attachments
+        )
+        if not attachment_compatible_providers:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "no_attachment_compatible_provider",
+                    "message": "No configured providers can accept the supplied attachments.",
+                },
+            )
+
+    effective_prompt = _resolve_effective_prompt(
+        request.prompt,
+        has_attachments=bool(resolved_attachments),
+    )
     execution_plan = _resolve_chat_execution_plan(
         request,
-        effective_prompt=request.prompt,
+        effective_prompt=effective_prompt,
         context=context,
         orchestrator=orchestrator,
         provider_api_keys=provider_api_keys,
+        attachment_compatible_providers=attachment_compatible_providers,
     )
+    inference_attachments = []
+    persistence_attachments = []
+    if resolved_attachments:
+        attachments_service.enforce_model_attachment_compatibility(
+            provider=execution_plan.preview_provider,
+            model=execution_plan.preview_model,
+            attachments=resolved_attachments,
+            mode="chat",
+        )
+        inference_attachments = attachments_service.materialize_inference_attachments(
+            resolved_attachments
+        )
+        persistence_attachments = attachments_service.build_request_attachment_persistence_items(
+            resolved_attachments=resolved_attachments,
+            inference_attachments=inference_attachments,
+        )
     target_provider = execution_plan.preview_provider
     target_model = execution_plan.preview_model
 
@@ -471,6 +633,8 @@ async def chat_stream(
         kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
+    if inference_attachments:
+        kwargs["attachments"] = inference_attachments
 
     async def event_stream():
         yield _to_ndjson(
@@ -489,7 +653,7 @@ async def chat_stream(
         try:
             response = await asyncio.to_thread(
                 orchestrator.ask,
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 model_type=execution_plan.model_type,
                 context=context,
                 model_name=execution_plan.model_name,
@@ -513,13 +677,14 @@ async def chat_stream(
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     resolved_session_id = _persist_chat_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
-                        prompt=request.prompt,
+                        prompt=effective_prompt,
                         response=response,
                         requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
+                        attachments=persistence_attachments,
                     )
                 except Exception:
                     logger.exception("Chat stream persistence failed in DB mode")
@@ -545,13 +710,14 @@ async def chat_stream(
                         retryable=True,
                     )
                     _persist_chat_interaction(
-                        api_key=api_key,
+                        api_key=auth.api_key_or_none(),
                         resolution=persistence_resolution,
-                        prompt=request.prompt,
+                        prompt=effective_prompt,
                         response=error_response,
                         requested_session_id=requested_session_id,
                         research_mode=research_mode,
                         force_new_session=force_new_session,
+                        attachments=persistence_attachments,
                     )
                 except Exception:
                     logger.exception("Chat stream error persistence failed in DB mode")

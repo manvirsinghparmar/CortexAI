@@ -26,6 +26,9 @@ class ModelRegistry:
 
         providers: dict[str, list[ModelCandidate]] = {}
         for provider, pdata in data["providers"].items():
+            provider_defaults = pdata.get("defaults", {})
+            if not isinstance(provider_defaults, dict):
+                provider_defaults = {}
             models = pdata.get("models", [])
             if not isinstance(models, list):
                 raise ValueError(f"Invalid models list for provider {provider}")
@@ -42,6 +45,28 @@ class ModelRegistry:
                 if any(key not in model for key in required):
                     raise ValueError(f"Missing required fields in model for provider {provider}")
                 tier = Tier(model["tier"])
+                supported_mime_types = model.get(
+                    "supported_attachment_mime_types",
+                    provider_defaults.get("supported_attachment_mime_types", []),
+                )
+                if not isinstance(supported_mime_types, list):
+                    supported_mime_types = []
+                max_attachment_bytes_raw = model.get(
+                    "max_attachment_bytes",
+                    provider_defaults.get("max_attachment_bytes"),
+                )
+                max_attachment_bytes = None
+                if max_attachment_bytes_raw not in (None, ""):
+                    max_attachment_bytes = int(max_attachment_bytes_raw)
+
+                max_attachments_raw = model.get(
+                    "max_attachments_per_request",
+                    provider_defaults.get("max_attachments_per_request"),
+                )
+                max_attachments = None
+                if max_attachments_raw not in (None, ""):
+                    max_attachments = int(max_attachments_raw)
+
                 candidates.append(
                     ModelCandidate(
                         provider=provider,
@@ -52,6 +77,19 @@ class ModelRegistry:
                         context_limit=int(model["context_limit"]),
                         tags=list(model.get("tags", [])),
                         enabled=bool(model.get("enabled", True)),
+                        supports_image_input=bool(
+                            model.get(
+                                "supports_image_input",
+                                provider_defaults.get("supports_image_input", False),
+                            )
+                        ),
+                        supported_attachment_mime_types=[
+                            str(mime).strip().lower()
+                            for mime in supported_mime_types
+                            if str(mime).strip()
+                        ],
+                        max_attachment_bytes=max_attachment_bytes,
+                        max_attachments_per_request=max_attachments,
                     )
                 )
             providers[provider] = candidates

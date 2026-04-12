@@ -1,21 +1,62 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. Some endpoints intentionally return 501 when DATABASE_URL (DB mode) is not configured.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url", "value": "http://127.0.0.1:8000" },
-    { "key": "api_key", "value": "dev-key-1" },
-    { "key": "chat_provider", "value": "openai" },
-    { "key": "chat_model", "value": "gpt-4o-mini" },
-    { "key": "compare_provider", "value": "gemini" },
-    { "key": "compare_model", "value": "gemini-2.5-flash-lite" },
-    { "key": "request_group_id", "value": "" },
-    { "key": "history_entry_id", "value": "1" },
-    { "key": "byok_openai_key", "value": "sk-tenant-openai-example-1234" },
-    { "key": "from_date", "value": "2026-02-01" },
-    { "key": "to_date", "value": "2026-02-22" }
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "api_key",
+      "value": "dev-key-1"
+    },
+    {
+      "key": "chat_provider",
+      "value": "openai"
+    },
+    {
+      "key": "chat_model",
+      "value": "gpt-4o-mini"
+    },
+    {
+      "key": "compare_provider",
+      "value": "gemini"
+    },
+    {
+      "key": "compare_model",
+      "value": "gemini-2.5-flash-lite"
+    },
+    {
+      "key": "request_group_id",
+      "value": ""
+    },
+    {
+      "key": "history_entry_id",
+      "value": "1"
+    },
+    {
+      "key": "byok_openai_key",
+      "value": "sk-tenant-openai-example-1234"
+    },
+    {
+      "key": "from_date",
+      "value": "2026-02-01"
+    },
+    {
+      "key": "to_date",
+      "value": "2026-02-22"
+    },
+    {
+      "key": "provider_filter",
+      "value": "openai"
+    },
+    {
+      "key": "file_id",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -75,7 +116,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/whoami"
           },
@@ -103,6 +147,152 @@
       ]
     },
     {
+      "name": "Catalog",
+      "item": [
+        {
+          "name": "GET /v1/providers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/providers"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('providers response shape', function () {",
+                  "  pm.expect(body.providers).to.be.an('array');",
+                  "  pm.expect(body.total).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/models",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('models response shape', function () {",
+                  "  pm.expect(body.models).to.be.an('array');",
+                  "  pm.expect(body.enabled_only).to.eql(true);",
+                  "  if (body.models.length > 0) {",
+                  "    pm.expect(body.models[0]).to.have.property('supports_image_input');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "POST /v1/files/upload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "X-File-Name",
+                "value": "postman-upload.txt"
+              },
+              {
+                "key": "X-File-Content-Type",
+                "value": "text/plain"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "Postman file upload probe."
+            },
+            "url": "{{base_url}}/v1/files/upload"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 404 (attachments disabled)', function () {",
+                  "  pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('file upload response has file_id', function () {",
+                  "    pm.expect(body.file_id).to.be.a('string');",
+                  "  });",
+                  "  pm.collectionVariables.set('file_id', body.file_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/files/{file_id}",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/files/{{file_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 404', function () {",
+                  "  pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Chat",
       "item": [
         {
@@ -110,8 +300,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -142,9 +338,18 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Accept", "value": "application/x-ndjson" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/x-ndjson"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -179,8 +384,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -212,9 +423,18 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Accept", "value": "application/x-ndjson" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/x-ndjson"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -248,7 +468,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/admin/request-groups/{{request_group_id}}/failed-attempts?limit=200"
           },
@@ -279,7 +502,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/history?limit=20"
           },
@@ -289,7 +515,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
                   "  pm.expect([200, 501]).to.include(pm.response.code);",
                   "});",
                   "if (pm.response.code === 200) {",
@@ -307,7 +533,10 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/history/{{history_entry_id}}"
           },
@@ -330,7 +559,10 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/history"
           },
@@ -358,7 +590,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/usage?from={{from_date}}&to={{to_date}}&group_by=day"
           },
@@ -368,7 +603,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
                   "  pm.expect([200, 501]).to.include(pm.response.code);",
                   "});"
                 ]
@@ -381,7 +616,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/savings?from={{from_date}}&to={{to_date}}&group_by=provider"
           },
@@ -391,7 +629,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 501 (no DB mode)', function () {",
+                  "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
                   "  pm.expect([200, 501]).to.include(pm.response.code);",
                   "});"
                 ]
@@ -404,7 +642,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/usage/export?format=csv&from={{from_date}}&to={{to_date}}&group_by=provider"
           },
@@ -430,7 +671,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/savings/export?format=csv&from={{from_date}}&to={{to_date}}&group_by=day"
           },
@@ -461,8 +705,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -487,7 +737,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/byok/status"
           },
@@ -514,7 +767,10 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/byok?provider=openai"
           },
@@ -535,7 +791,10 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
             ],
             "url": "{{base_url}}/v1/byok"
           },
@@ -561,8 +820,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "X-API-Key", "value": "{{api_key}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",

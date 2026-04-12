@@ -56,6 +56,29 @@ SYNC_INGEST_REQUIRED_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
+CLIENT_SAFE_UPLOAD_ERROR_MESSAGES_BY_CODE = {
+    "invalid_mime_type": "Upload failed. This file type is not supported.",
+    "unsupported_file_type": "Upload failed. This file type is not supported.",
+    "empty_file": "Upload failed. The selected file is empty.",
+    "file_too_large": "Upload failed. This file is too large.",
+    "storage_not_configured": "This file could not be uploaded right now. Please try again in a moment.",
+    "storage_upload_failed": "This file could not be uploaded right now. Please try again in a moment.",
+    "ingestion_failed": "This file could not be uploaded right now. Please try again in a moment.",
+    "ingestion_read_failed": "This file could not be uploaded right now. Please try again in a moment.",
+}
+
+SENSITIVE_UPLOAD_ERROR_TOKENS = (
+    "bucket",
+    "object key",
+    "storage key",
+    "attachments/users/",
+    "s3://",
+    "request_id",
+    "request id",
+    "traceback",
+    "stack trace",
+)
+
 
 def _env_bool(name: str, *, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -136,20 +159,92 @@ def _serialize_uploaded_file_row(
     *,
     deduplicated: bool = False,
 ) -> dict[str, Any]:
+    status_value = str(row.get("status") or "uploaded")
+    error_code = row.get("error_code")
+    safe_error_message = _get_client_safe_upload_error_message(
+        error_code=error_code,
+        raw_message=row.get("error_message"),
+        status_value=status_value,
+    )
     return {
         "file_id": str(row.get("id")),
         "original_filename": str(row.get("original_filename") or "file"),
         "mime_type": str(row.get("mime_type") or ""),
         "size_bytes": int(row.get("size_bytes") or 0),
-        "status": str(row.get("status") or "uploaded"),
-        "error_code": row.get("error_code"),
-        "error_message": row.get("error_message"),
-        "ingestion_meta": row.get("ingestion_meta") if isinstance(row.get("ingestion_meta"), dict) else {},
+        "status": status_value,
+        "error_code": error_code,
+        "error_message": safe_error_message,
+        "ingestion_meta": _sanitize_ingestion_meta_for_client(row.get("ingestion_meta")),
         "created_at": _iso_or_none(row.get("created_at")) or "",
         "updated_at": _iso_or_none(row.get("updated_at")),
         "expires_at": _iso_or_none(row.get("expires_at")),
         "deduplicated": deduplicated,
     }
+
+
+def _contains_sensitive_upload_error(raw_message: str | None) -> bool:
+    text = str(raw_message or "").strip().lower()
+    if not text:
+        return False
+    return any(token in text for token in SENSITIVE_UPLOAD_ERROR_TOKENS)
+
+
+def _get_client_safe_upload_error_message(
+    *,
+    error_code: str | None,
+    raw_message: str | None,
+    status_value: str | None = None,
+) -> str | None:
+    code = str(error_code or "").strip().lower()
+    if code in CLIENT_SAFE_UPLOAD_ERROR_MESSAGES_BY_CODE:
+        return CLIENT_SAFE_UPLOAD_ERROR_MESSAGES_BY_CODE[code]
+
+    raw = str(raw_message or "").strip()
+    if not raw:
+        if str(status_value or "").strip().lower() in {"failed", "error"}:
+            return "Upload failed. Please try again."
+        return None
+
+    lowered = raw.lower()
+    if "payload too large" in lowered or "request entity too large" in lowered or "too large" in lowered:
+        return "Upload failed. This file is too large."
+    if "unsupported" in lowered or "mime type" in lowered or "file type" in lowered or "media type" in lowered:
+        return "Upload failed. This file type is not supported."
+    if "timeout" in lowered or "timed out" in lowered:
+        return "Upload failed because the request timed out. Please try again."
+    if _contains_sensitive_upload_error(raw):
+        return "Upload failed. Please try again."
+
+    return "Upload failed. Please try again."
+
+
+def _sanitize_ingestion_meta_for_client(ingestion_meta: Any) -> dict[str, Any]:
+    if not isinstance(ingestion_meta, dict):
+        return {}
+
+    sanitized: dict[str, Any] = {}
+    blocked_keys = {
+        "last_error",
+        "error",
+        "error_message",
+        "storage_key",
+        "storage_bucket",
+        "bucket",
+        "object_key",
+        "object_path",
+        "request_id",
+        "traceback",
+        "stack",
+    }
+    for key, value in ingestion_meta.items():
+        key_text = str(key or "").strip().lower()
+        if key_text in blocked_keys:
+            continue
+        if isinstance(value, dict):
+            sanitized[key] = _sanitize_ingestion_meta_for_client(value)
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 def _attachment_ttl_hours() -> int:
@@ -232,6 +327,7 @@ def _run_sync_ingestion(
         )
         return "ready", merged_meta, None, None
     except Exception as exc:
+        logger.exception("Attachment sync ingestion failed")
         finished_at = datetime.now(timezone.utc)
         elapsed_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
         merged_meta = _merge_ingestion_meta(
@@ -271,6 +367,7 @@ def _maybe_finalize_processing_file(
         storage = get_object_storage()
         payload = storage.get_bytes(key=storage_key)
     except Exception as exc:
+        logger.exception("Attachment deferred ingestion read failed")
         error_text = str(exc)
         update_uploaded_file_status(
             db_session,
@@ -413,11 +510,12 @@ def upload_user_file(
         try:
             storage = get_object_storage()
         except ObjectStorageConfigurationError as exc:
+            logger.exception("Attachment object storage is not configured")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
                     "code": "storage_not_configured",
-                    "message": str(exc),
+                    "message": "This file could not be uploaded right now. Please try again in a moment.",
                 },
             ) from exc
 
@@ -443,7 +541,10 @@ def upload_user_file(
             logger.exception("Attachment object upload failed")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "storage_upload_failed", "message": str(exc)},
+                detail={
+                    "code": "storage_upload_failed",
+                    "message": "This file could not be uploaded right now. Please try again in a moment.",
+                },
             ) from exc
 
         try:

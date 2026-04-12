@@ -7,7 +7,8 @@ from uuid import uuid4, UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from server import files_service
-from server.dependencies import get_api_key
+#from server.dependencies import get_api_key
+from server.dependencies import get_auth #, get_orchestrator
 from server.schemas.responses import FileUploadResponseDTO, FileStatusResponseDTO
 
 router = APIRouter(prefix="/v1/files", tags=["Files"])
@@ -24,7 +25,8 @@ def _header_value(request: Request, key: str) -> str | None:
 @router.post("/upload", response_model=FileUploadResponseDTO)
 async def upload_file(
     request: Request,
-    api_key: str = Depends(get_api_key),
+    #api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """
     Upload one attachment file as raw request bytes.
@@ -51,7 +53,7 @@ async def upload_file(
 
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
     result = files_service.upload_user_file(
-        api_key=api_key,
+        api_key=auth.api_key_or_none(),
         request_id=request_id,
         filename=filename,
         mime_type=mime_type,
@@ -64,7 +66,7 @@ async def upload_file(
 async def get_file_status(
     request: Request,
     file_id: UUID,
-    api_key: str = Depends(get_api_key),
+    api_key: str = Depends(get_auth),
 ):
     """Get one uploaded file metadata row scoped to API key ownership."""
     request_id = str(getattr(request.state, "request_id", "") or uuid4())

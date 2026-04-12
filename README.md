@@ -109,6 +109,16 @@ ATTACHMENTS_MAX_FILE_BYTES=20971520
 ATTACHMENTS_FILE_TTL_HOURS=168
 ATTACHMENTS_ALLOWED_MIME_TYPES=image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
+# Structured logging (EC2 / CloudWatch friendly)
+LOG_LEVEL=INFO
+LOG_DESTINATION=both              # file|stdout|both (default: file)
+LOG_CONSOLE_LEVEL=INFO
+LOG_DIR=logs                      # relative paths resolve from repo root
+LOG_FILE_MAX_BYTES=10485760
+LOG_FILE_BACKUP_COUNT=5
+LOG_NOISY_LIBRARIES_LEVEL=WARNING # httpx/urllib3/boto3/botocore logger level
+# Backward compatibility: LOG_TO_CONSOLE=true implies LOG_DESTINATION=both when LOG_DESTINATION is unset
+
 # BYOK encryption
 MASTER_KEY=replace-with-strong-random-secret
 
@@ -182,6 +192,7 @@ Optional request correlation:
 ```http
 X-Request-ID: <custom-id>
 ```
+For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
 
 Integration debug snapshot:
 ```bash

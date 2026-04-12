@@ -59,7 +59,7 @@ class OpenAIClient(BaseAIClient):
 
         IMPORTANT: Never raises exceptions - returns UnifiedResponse with error instead
         """
-        request_id = self._generate_request_id()
+        request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)

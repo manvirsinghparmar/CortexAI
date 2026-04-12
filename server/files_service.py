@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,13 @@ def _normalize_filename(filename: str | None) -> str:
     # Keep keys URL-safe and deterministic enough for debugging.
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
     return safe[:180] or "file"
+
+
+def _hash_for_logs(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _build_storage_key(
@@ -300,8 +308,24 @@ def _run_sync_ingestion(
     normalized_mime: str,
     filename: str,
     base_meta: dict[str, Any],
+    request_id: str | None = None,
+    file_id: UUID | None = None,
 ) -> tuple[str, dict[str, Any], str | None, str | None]:
     started_at = datetime.now(timezone.utc)
+    started = time.perf_counter()
+    logger.info(
+        "Attachment ingestion started",
+        extra={
+            "extra_fields": {
+                "event": "upload.ingestion.start",
+                "request_id": request_id,
+                "file_id": str(file_id) if file_id else None,
+                "mime_type": normalized_mime,
+                "filename_hash": _hash_for_logs(filename),
+                "size_bytes": len(payload or b""),
+            }
+        },
+    )
     try:
         artifact = attachments_service.extract_text_attachment_artifact(
             payload=payload,
@@ -325,9 +349,42 @@ def _run_sync_ingestion(
                 "artifact_meta": dict(artifact_meta) if isinstance(artifact_meta, dict) else {},
             },
         )
+        logger.info(
+            "Attachment ingestion succeeded",
+            extra={
+                "extra_fields": {
+                    "event": "upload.ingestion.success",
+                    "request_id": request_id,
+                    "file_id": str(file_id) if file_id else None,
+                    "mime_type": normalized_mime,
+                    "filename_hash": _hash_for_logs(filename),
+                    "latency_ms": elapsed_ms,
+                    "wall_latency_ms": int((time.perf_counter() - started) * 1000),
+                    "effective_transform_mode": str(
+                        artifact.get("effective_transform_mode") or "text_only"
+                    ),
+                    "chunk_count": int((artifact_meta or {}).get("chunk_count") or 0)
+                    if isinstance(artifact_meta, dict)
+                    else 0,
+                }
+            },
+        )
         return "ready", merged_meta, None, None
     except Exception as exc:
-        logger.exception("Attachment sync ingestion failed")
+        logger.exception(
+            "Attachment ingestion failed",
+            extra={
+                "extra_fields": {
+                    "event": "upload.ingestion.failure",
+                    "request_id": request_id,
+                    "file_id": str(file_id) if file_id else None,
+                    "mime_type": normalized_mime,
+                    "filename_hash": _hash_for_logs(filename),
+                    "error_type": type(exc).__name__,
+                    "wall_latency_ms": int((time.perf_counter() - started) * 1000),
+                }
+            },
+        )
         finished_at = datetime.now(timezone.utc)
         elapsed_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
         merged_meta = _merge_ingestion_meta(
@@ -346,6 +403,7 @@ def _maybe_finalize_processing_file(
     *,
     db_session,
     row: dict[str, Any],
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     status_value = str(row.get("status") or "").strip().lower()
     if status_value not in {"uploaded", "processing"}:
@@ -362,12 +420,37 @@ def _maybe_finalize_processing_file(
     storage_key = str(row.get("storage_key") or "").strip()
     if not storage_key:
         return row
+    file_id = row.get("id")
+    logger.info(
+        "Attachment deferred ingestion fetch started",
+        extra={
+            "extra_fields": {
+                "event": "upload.ingestion.deferred.start",
+                "request_id": request_id,
+                "file_id": str(file_id) if file_id else None,
+                "mime_type": normalized_mime,
+                "storage_key_hash": _hash_for_logs(storage_key),
+            }
+        },
+    )
 
     try:
         storage = get_object_storage()
         payload = storage.get_bytes(key=storage_key)
     except Exception as exc:
-        logger.exception("Attachment deferred ingestion read failed")
+        logger.exception(
+            "Attachment deferred ingestion read failed",
+            extra={
+                "extra_fields": {
+                    "event": "upload.ingestion.deferred.read_failure",
+                    "request_id": request_id,
+                    "file_id": str(file_id) if file_id else None,
+                    "mime_type": normalized_mime,
+                    "storage_key_hash": _hash_for_logs(storage_key),
+                    "error_type": type(exc).__name__,
+                }
+            },
+        )
         error_text = str(exc)
         update_uploaded_file_status(
             db_session,
@@ -392,6 +475,8 @@ def _maybe_finalize_processing_file(
         normalized_mime=normalized_mime,
         filename=str(row.get("original_filename") or "file"),
         base_meta=ingestion_meta,
+        request_id=request_id,
+        file_id=(file_id if isinstance(file_id, UUID) else None),
     )
     update_uploaded_file_status(
         db_session,
@@ -405,6 +490,18 @@ def _maybe_finalize_processing_file(
         db_session,
         file_id=row["id"],
         include_deleted=False,
+    )
+    logger.info(
+        "Attachment deferred ingestion finalized",
+        extra={
+            "extra_fields": {
+                "event": "upload.ingestion.deferred.finalized",
+                "request_id": request_id,
+                "file_id": str(file_id) if file_id else None,
+                "status": sync_status,
+                "error_code": sync_error_code,
+            }
+        },
     )
     return refreshed or row
 
@@ -444,6 +541,19 @@ def upload_user_file(
     """Validate, store, and persist attachment metadata for one user file."""
     _assert_feature_enabled()
     _assert_db_enabled()
+
+    logger.info(
+        "Attachment upload received",
+        extra={
+            "extra_fields": {
+                "event": "upload.received",
+                "request_id": request_id,
+                "filename_hash": _hash_for_logs(filename),
+                "mime_type": str(mime_type or "").strip().lower(),
+                "size_bytes": len(payload or b""),
+            }
+        },
+    )
 
     normalized_mime = str(mime_type or "").strip().lower()
     if not normalized_mime:
@@ -505,12 +615,37 @@ def upload_user_file(
         }:
             if resolution.api_key_id is not None:
                 update_api_key_last_used(db_session, api_key)
+            logger.info(
+                "Attachment upload deduplicated",
+                extra={
+                    "extra_fields": {
+                        "event": "upload.deduplicated",
+                        "request_id": request_id,
+                        "file_id": str(existing.get("id") or ""),
+                        "status": str(existing.get("status") or ""),
+                        "mime_type": normalized_mime,
+                        "size_bytes": len(payload),
+                        "sha256_prefix": sha256[:16],
+                    }
+                },
+            )
             return _serialize_uploaded_file_row(existing, deduplicated=True)
 
         try:
             storage = get_object_storage()
         except ObjectStorageConfigurationError as exc:
-            logger.exception("Attachment object storage is not configured")
+            logger.exception(
+                "Attachment object storage is not configured",
+                extra={
+                    "extra_fields": {
+                        "event": "upload.storage.not_configured",
+                        "request_id": request_id,
+                        "mime_type": normalized_mime,
+                        "size_bytes": len(payload),
+                        "filename_hash": _hash_for_logs(normalized_filename),
+                    }
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
@@ -525,6 +660,20 @@ def upload_user_file(
             sha256=sha256,
             filename=normalized_filename,
         )
+        storage_key_hash = _hash_for_logs(storage_key)
+        logger.info(
+            "Attachment storage upload dispatch",
+            extra={
+                "extra_fields": {
+                    "event": "upload.storage.put.start",
+                    "request_id": request_id,
+                    "mime_type": normalized_mime,
+                    "size_bytes": len(payload),
+                    "filename_hash": _hash_for_logs(normalized_filename),
+                    "storage_key_hash": storage_key_hash,
+                }
+            },
+        )
 
         try:
             storage.put_bytes(
@@ -537,8 +686,33 @@ def upload_user_file(
                     "uploaded_at": now_utc.isoformat(),
                 },
             )
+            logger.info(
+                "Attachment storage upload completed",
+                extra={
+                    "extra_fields": {
+                        "event": "upload.storage.put.success",
+                        "request_id": request_id,
+                        "mime_type": normalized_mime,
+                        "size_bytes": len(payload),
+                        "storage_key_hash": storage_key_hash,
+                    }
+                },
+            )
         except ObjectStorageOperationError as exc:
-            logger.exception("Attachment object upload failed")
+            logger.exception(
+                "Attachment object upload failed",
+                extra={
+                    "extra_fields": {
+                        "event": "upload.storage.put.failure",
+                        "request_id": request_id,
+                        "mime_type": normalized_mime,
+                        "size_bytes": len(payload),
+                        "filename_hash": _hash_for_logs(normalized_filename),
+                        "storage_key_hash": storage_key_hash,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -568,6 +742,22 @@ def upload_user_file(
                 ingestion_meta=ingestion_meta,
                 expires_at=expires_at,
             )
+            logger.info(
+                "Attachment metadata persisted",
+                extra={
+                    "extra_fields": {
+                        "event": "upload.metadata.persisted",
+                        "request_id": request_id,
+                        "file_id": str(uploaded_file_id),
+                        "status": initial_status,
+                        "ingestion_required": ingestion_required,
+                        "mime_type": normalized_mime,
+                        "size_bytes": len(payload),
+                        "storage_key_hash": storage_key_hash,
+                        "sha256_prefix": sha256[:16],
+                    }
+                },
+            )
 
             if ingestion_required:
                 if len(payload) <= _sync_ingest_inline_max_bytes():
@@ -576,6 +766,8 @@ def upload_user_file(
                         normalized_mime=normalized_mime,
                         filename=normalized_filename,
                         base_meta=ingestion_meta,
+                        request_id=request_id,
+                        file_id=uploaded_file_id,
                     )
                     update_uploaded_file_status(
                         db_session,
@@ -586,6 +778,19 @@ def upload_user_file(
                         ingestion_meta=sync_meta,
                     )
                 else:
+                    logger.info(
+                        "Attachment ingestion deferred",
+                        extra={
+                            "extra_fields": {
+                                "event": "upload.ingestion.deferred",
+                                "request_id": request_id,
+                                "file_id": str(uploaded_file_id),
+                                "mime_type": normalized_mime,
+                                "size_bytes": len(payload),
+                                "sync_inline_max_bytes": _sync_ingest_inline_max_bytes(),
+                            }
+                        },
+                    )
                     deferred_meta = _merge_ingestion_meta(
                         ingestion_meta,
                         {
@@ -607,7 +812,16 @@ def upload_user_file(
             try:
                 storage.delete_object(key=storage_key)
             except Exception:
-                logger.exception("Failed to rollback object after metadata write failure")
+                logger.exception(
+                    "Failed to rollback object after metadata write failure",
+                    extra={
+                        "extra_fields": {
+                            "event": "upload.storage.rollback.failure",
+                            "request_id": request_id,
+                            "storage_key_hash": storage_key_hash,
+                        }
+                    },
+                )
             raise
 
         if resolution.api_key_id is not None:
@@ -627,6 +841,20 @@ def upload_user_file(
                     "message": "File metadata not found after upload.",
                 },
             )
+        logger.info(
+            "Attachment upload completed",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completed",
+                    "request_id": request_id,
+                    "file_id": str(uploaded_file_id),
+                    "status": str(row.get("status") or ""),
+                    "mime_type": normalized_mime,
+                    "size_bytes": len(payload),
+                    "storage_key_hash": storage_key_hash,
+                }
+            },
+        )
         return _serialize_uploaded_file_row(row, deduplicated=False)
 
 
@@ -639,6 +867,16 @@ def get_user_file(
     """Fetch file metadata scoped to the API key owner."""
     _assert_feature_enabled()
     _assert_db_enabled()
+    logger.info(
+        "Attachment status lookup requested",
+        extra={
+            "extra_fields": {
+                "event": "upload.status.lookup.start",
+                "request_id": request_id,
+                "file_id": str(file_id),
+            }
+        },
+    )
 
     with _db_uow() as db_session:
         resolution = _resolve_api_key_for_request(
@@ -660,5 +898,19 @@ def get_user_file(
         row = _maybe_finalize_processing_file(
             db_session=db_session,
             row=row,
+            request_id=request_id,
+        )
+        logger.info(
+            "Attachment status lookup completed",
+            extra={
+                "extra_fields": {
+                    "event": "upload.status.lookup.success",
+                    "request_id": request_id,
+                    "file_id": str(file_id),
+                    "status": str(row.get("status") or ""),
+                    "mime_type": str(row.get("mime_type") or ""),
+                    "size_bytes": int(row.get("size_bytes") or 0),
+                }
+            },
         )
         return _serialize_uploaded_file_row(row, deduplicated=False)

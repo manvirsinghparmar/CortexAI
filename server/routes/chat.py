@@ -431,11 +431,11 @@ async def chat(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
-        req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -507,6 +507,7 @@ async def chat(
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
         kwargs["attachments"] = inference_attachments
+    kwargs["request_id"] = req_id
 
     response = await asyncio.to_thread(
         orchestrator.ask,
@@ -557,11 +558,11 @@ async def chat_stream(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
-        req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -635,6 +636,7 @@ async def chat_stream(
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
         kwargs["attachments"] = inference_attachments
+    kwargs["request_id"] = req_id
 
     async def event_stream():
         yield _to_ndjson(

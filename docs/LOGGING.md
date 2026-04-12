@@ -2,45 +2,14 @@
 
 ## Overview
 
-The project uses structured JSON logging via `utils/logger.py` with rotating file handlers.
+The API uses structured JSON logging (`utils/logger.py`) designed for Linux/EC2 operations:
 
-Key characteristics:
+- request correlation via `X-Request-ID` + async-safe context propagation
+- configurable file/stdout log destinations
+- rotating file logs to control disk usage
+- structured event names (`event`) for filtering and alerting
 
-- JSON logs for machine parsing and aggregation
-- Separate app/error log streams
-- Optional debug log stream
-- Optional stderr error output (`LOG_TO_CONSOLE=true`)
-- Request correlation support through `X-Request-ID` middleware + route/persistence context
-
-## Log Files
-
-All logs are written under `logs/`:
-
-- `app.log` (INFO and above)
-- `error.log` (ERROR and above)
-- `debug.log` (DEBUG and above, created when `LOG_LEVEL=DEBUG`)
-
-Rotation policy:
-
-- Max file size: `10 MB`
-- Backups kept: `5`
-
-## Configuration
-
-Environment variables:
-
-```ini
-LOG_LEVEL=INFO
-LOG_TO_CONSOLE=false
-```
-
-`LOG_LEVEL` options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
-
-`LOG_TO_CONSOLE=true` mirrors ERROR logs to stderr (useful in container logs / CI); default `false` keeps terminal output cleaner.
-
-## Log Shape
-
-Base fields emitted by formatter:
+Base fields on every log line:
 
 - `timestamp`
 - `level`
@@ -50,30 +19,138 @@ Base fields emitted by formatter:
 - `function`
 - `line`
 
-Additional context is attached through `extra={"extra_fields": {...}}`.
+Application-specific fields are attached through `extra={"extra_fields": {...}}`.
 
-## Security and Privacy
+## Destination Strategy
 
-- Sensitive request headers are redacted before auth logging:
-  - `X-API-Key`
-  - `Authorization`
-- Route/persistence flows can include `request_id` for tracing.
-- Prompt/response storage behavior is controlled separately by privacy/storage settings (`STORAGE_POLICY`, `REDACT_PII`), not by logger formatter rules alone.
+`LOG_DESTINATION` controls where logs go:
 
-## Operational Notes
+- `file`: write rotating files only (default)
+- `stdout`: write JSON lines to stdout only
+- `both`: write to rotating files and stdout
 
-- Middleware sets/propagates `X-Request-ID`; use it to correlate route logs, provider calls, and persistence records.
-- Start with `error.log` for incident triage, then pivot to `app.log` for full sequence.
-- In local troubleshooting, `LOG_LEVEL=DEBUG` plus `LOG_TO_CONSOLE=true` provides fastest feedback.
+Defaults:
+
+- file logs under `<repo>/logs/`
+- `app.log` (INFO+)
+- `error.log` (ERROR+)
+- `debug.log` (DEBUG+, only when `LOG_LEVEL=DEBUG`)
+
+EC2 recommendation:
+
+- `LOG_DESTINATION=both`
+- ship stdout with CloudWatch Agent / ECS / systemd collectors
+- keep local rotating files for on-box forensics
+
+## Configuration
+
+Environment variables:
+
+```ini
+LOG_LEVEL=INFO
+LOG_DESTINATION=both
+LOG_CONSOLE_LEVEL=INFO
+LOG_DIR=logs
+LOG_FILE_MAX_BYTES=10485760
+LOG_FILE_BACKUP_COUNT=5
+LOG_NOISY_LIBRARIES_LEVEL=WARNING
+```
+
+Notes:
+
+- relative `LOG_DIR` values are resolved from repository root
+- `LOG_NOISY_LIBRARIES_LEVEL` applies to `httpx`, `urllib3`, `boto3`, `botocore`
+- backward compatibility: if `LOG_DESTINATION` is unset, `LOG_TO_CONSOLE=true` implies `LOG_DESTINATION=both`
+
+## Request Correlation
+
+- Incoming `X-Request-ID` is accepted when it matches `[A-Za-z0-9._:-]{1,128}`.
+- Invalid/missing IDs are replaced with generated UUIDs.
+- Response always includes `X-Request-ID`.
+- Request ID is injected into logs through context filter, so nested service logs automatically correlate.
+
+HTTP lifecycle events:
+
+- `http.request.start`
+- `http.request.complete`
+- `http.request.exception`
+
+## Event Families
+
+Tavily / research:
+
+- `research.provider.selected`
+- `research.cache.hit|bypass`
+- `research.dispatch`
+- `research.query.rewritten`
+- `research.search.start|success|failure|empty`
+- `research.qna.start|success|failure`
+- `research.context.ready|failure`
+
+Attachments and object storage:
+
+- `upload.received|deduplicated|completed`
+- `upload.storage.put.start|success|failure`
+- `upload.metadata.persisted`
+- `upload.ingestion.start|success|failure|deferred`
+- `upload.ingestion.deferred.start|read_failure|finalized`
+- `storage.client.initialized`
+- `storage.put.start|success|failure`
+- `storage.get.success|failure`
+- `storage.delete.success|failure`
+
+Governance and preflight:
+
+- `usage.cap.checked|exceeded`
+- `rate_limit.checked`
+- `api.preflight.success|rejected`
+- `byok.resolve.success`
+
+Provider orchestration and resilience:
+
+- `provider.call.timeout|exception`
+- `circuit.failure.recorded`
+- `circuit.transition.open|closed`
+- `circuit.open.blocked`
+- `circuit.success.reset`
+- `circuit.reset.all`
+
+## Privacy and Safety
+
+- Auth-bearing headers are redacted before auth logging (`X-API-Key`, `Authorization`).
+- Sensitive text is not logged in clear form for research/upload observability paths:
+  - Tavily prompt/query fields are hashed (`prompt_hash`, `query_hash`)
+  - filenames/object keys are hashed (`filename_hash`, `object_key_hash`, `storage_key_hash`)
+- Client-facing attachment errors remain sanitized; detailed failures are available in server logs.
+
+## EC2 Troubleshooting Workflow
+
+1. Capture `X-Request-ID` from API response.
+2. Filter by request id in file logs:
+```bash
+grep '"request_id":"<request-id>"' logs/app.log
+```
+3. If using stdout shipping, filter in system logs:
+```bash
+journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
+```
+4. Follow event progression:
+   - `http.request.start`
+   - preflight/governance events
+   - research/upload/provider events
+   - `http.request.complete` (or `http.request.exception`)
 
 ## Related Files
 
 - `utils/logger.py`
 - `server/middleware.py`
-- `server/dependencies.py`
-- `server/utils.py` (header redaction)
 - `server/persistence.py`
+- `server/files_service.py`
+- `server/object_storage.py`
+- `server/circuit_breaker.py`
+- `tools/web/tavily_client.py`
+- `tools/web/tavily_service.py`
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-04-11

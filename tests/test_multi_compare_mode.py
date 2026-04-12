@@ -38,12 +38,15 @@ class FakeClient(BaseAIClient):
         self.error_code = error_code
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.seen_request_ids: list[str | None] = []
 
     def get_completion(
         self, prompt: str = None, messages: list = None, **kwargs
     ) -> UnifiedResponse:
         """Return a fake UnifiedResponse."""
-        request_id = f"{self.provider_name}-{self.model_name}"
+        provided_request_id = kwargs.get("request_id")
+        self.seen_request_ids.append(provided_request_id)
+        request_id = str(provided_request_id or f"{self.provider_name}-{self.model_name}")
 
         if self.should_error:
             error = NormalizedError(
@@ -305,6 +308,26 @@ class TestMultiModelOrchestrator:
         )
 
         assert result.request_group_id == group_id
+
+    def test_request_id_fanout_per_compare_target(self):
+        """Caller request_id should fan out to per-target provider calls."""
+        orchestrator = MultiModelOrchestrator()
+        clients = [
+            FakeClient(provider_name="openai", model_name="gpt-4"),
+            FakeClient(provider_name="gemini", model_name="gemini-2.5-flash"),
+        ]
+
+        result = orchestrator.get_comparisons_sync(
+            "Test prompt",
+            clients,
+            request_id="req-root-123",
+        )
+
+        assert len(result.responses) == 2
+        assert clients[0].seen_request_ids == ["req-root-123:cmp:0"]
+        assert clients[1].seen_request_ids == ["req-root-123:cmp:1"]
+        assert result.responses[0].request_id == "req-root-123:cmp:0"
+        assert result.responses[1].request_id == "req-root-123:cmp:1"
 
     def test_empty_client_list(self):
         """Test orchestrator with empty client list."""

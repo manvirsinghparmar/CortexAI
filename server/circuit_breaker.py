@@ -8,6 +8,9 @@ import time
 from collections import deque
 
 from models.unified_response import UnifiedResponse
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -48,6 +51,8 @@ class CircuitBreakerStore:
 
     def allow(self, provider: str, model: str) -> bool:
         now = time.time()
+        provider_norm = (provider or "").strip().lower()
+        model_norm = (model or "").strip()
         key = _key(provider, model)
         with self._lock:
             item = self._state.get(key)
@@ -55,21 +60,64 @@ class CircuitBreakerStore:
                 return True
             open_until = float(item.get("open_until") or 0.0)
             if open_until <= now:
+                if open_until > 0.0:
+                    logger.info(
+                        "Circuit closed after cooldown",
+                        extra={
+                            "extra_fields": {
+                                "event": "circuit.transition.closed",
+                                "provider": provider_norm,
+                                "model": model_norm,
+                                "open_until_epoch_s": open_until,
+                            }
+                        },
+                    )
                 item["open_until"] = 0.0
                 return True
+            retry_after_ms = int(max(0.0, open_until - now) * 1000)
+            logger.warning(
+                "Circuit open; provider/model call blocked",
+                extra={
+                    "extra_fields": {
+                        "event": "circuit.open.blocked",
+                        "provider": provider_norm,
+                        "model": model_norm,
+                        "retry_after_ms": retry_after_ms,
+                    }
+                },
+            )
             return False
 
     def record_success(self, provider: str, model: str) -> None:
+        provider_norm = (provider or "").strip().lower()
+        model_norm = (model or "").strip()
         key = _key(provider, model)
         with self._lock:
             item = self._state.setdefault(key, {"failures": deque(), "open_until": 0.0})
             failures = item["failures"]
+            prior_failures = len(failures) if isinstance(failures, deque) else 0
+            prior_open_until = float(item.get("open_until") or 0.0)
             if isinstance(failures, deque):
                 failures.clear()
             item["open_until"] = 0.0
+            if prior_failures > 0 or prior_open_until > 0.0:
+                logger.info(
+                    "Circuit failure history reset after success",
+                    extra={
+                        "extra_fields": {
+                            "event": "circuit.success.reset",
+                            "provider": provider_norm,
+                            "model": model_norm,
+                            "prior_failures": prior_failures,
+                            "was_open": prior_open_until > 0.0,
+                        }
+                    },
+                )
 
     def record_failure(self, provider: str, model: str) -> None:
         now = time.time()
+        provider_norm = (provider or "").strip().lower()
+        model_norm = (model or "").strip()
         key = _key(provider, model)
         threshold = failure_threshold()
         window_s = window_seconds()
@@ -82,9 +130,37 @@ class CircuitBreakerStore:
                 item["failures"] = failures
             failures.append(now)
             self._prune(failures, now=now, window_s=window_s)
+            failure_count = len(failures)
+            logger.info(
+                "Circuit failure recorded",
+                extra={
+                    "extra_fields": {
+                        "event": "circuit.failure.recorded",
+                        "provider": provider_norm,
+                        "model": model_norm,
+                        "failure_count": failure_count,
+                        "threshold": threshold,
+                        "window_seconds": window_s,
+                    }
+                },
+            )
             if len(failures) >= threshold:
                 item["open_until"] = now + cooldown_s
                 failures.clear()
+                logger.warning(
+                    "Circuit opened after failure threshold reached",
+                    extra={
+                        "extra_fields": {
+                            "event": "circuit.transition.open",
+                            "provider": provider_norm,
+                            "model": model_norm,
+                            "threshold": threshold,
+                            "window_seconds": window_s,
+                            "cooldown_seconds": cooldown_s,
+                            "open_until_epoch_s": float(item["open_until"]),
+                        }
+                    },
+                )
 
     def record_response(self, response: UnifiedResponse) -> None:
         if response.is_error:
@@ -94,7 +170,17 @@ class CircuitBreakerStore:
 
     def reset(self) -> None:
         with self._lock:
+            count = len(self._state)
             self._state.clear()
+            logger.info(
+                "Circuit breaker store reset",
+                extra={
+                    "extra_fields": {
+                        "event": "circuit.reset.all",
+                        "entry_count": count,
+                    }
+                },
+            )
 
 
 _BREAKER = CircuitBreakerStore()

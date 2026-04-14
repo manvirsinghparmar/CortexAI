@@ -193,6 +193,7 @@ Optional request correlation:
 X-Request-ID: <custom-id>
 ```
 For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
+For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
 Integration debug snapshot:
 ```bash
@@ -931,4 +932,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-04-08
+Last updated: 2026-04-13

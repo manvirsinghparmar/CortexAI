@@ -167,7 +167,8 @@ journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
 - `server/circuit_breaker.py`
 - `tools/web/tavily_client.py`
 - `tools/web/tavily_service.py`
+- `docs/runbooks/aws-ec2-logging.md`
 
 ---
 
-Last updated: 2026-04-11
+Last updated: 2026-04-13

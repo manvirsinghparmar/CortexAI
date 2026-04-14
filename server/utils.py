@@ -10,7 +10,7 @@ from models.unified_response import NormalizedError, UnifiedResponse
 MAX_CONTEXT_MESSAGES = 10
 MAX_CONTEXT_CHARS = 20000
 MAX_OUTPUT_TOKENS = 2048
-SENSITIVE_HEADERS = {"x-api-key", "authorization"}
+SENSITIVE_HEADERS = {"x-api-key", "authorization", "cookie", "set-cookie"}
 
 
 def validate_and_trim_context(context_req):

@@ -89,11 +89,13 @@ Tavily / research:
 
 Attachments and object storage:
 
+- `upload.route.received|payload.read|success|rejected|rejected.empty_body|exception`
 - `upload.received|deduplicated|completed`
 - `upload.storage.put.start|success|failure`
 - `upload.metadata.persisted`
 - `upload.ingestion.start|success|failure|deferred`
 - `upload.ingestion.deferred.start|read_failure|finalized`
+- `upload.auth.resolved`
 - `storage.client.initialized`
 - `storage.put.start|success|failure`
 - `storage.get.success|failure`
@@ -115,6 +117,13 @@ Provider orchestration and resilience:
 - `circuit.success.reset`
 - `circuit.reset.all`
 
+Authentication diagnostics:
+
+- `auth.failed`
+- `auth.config.missing`
+
+`auth.*` logs include request method/path and auth-header presence booleans.
+
 ## Privacy and Safety
 
 - Auth-bearing headers are redacted before auth logging (`X-API-Key`, `Authorization`).
@@ -122,6 +131,7 @@ Provider orchestration and resilience:
   - Tavily prompt/query fields are hashed (`prompt_hash`, `query_hash`)
   - filenames/object keys are hashed (`filename_hash`, `object_key_hash`, `storage_key_hash`)
 - Client-facing attachment errors remain sanitized; detailed failures are available in server logs.
+- Upload route logs include CloudFront/proxy context fields when forwarded by infrastructure (`X-Amz-Cf-Id`, `X-Forwarded-*`, viewer hints) to speed edge-origin triage.
 
 ## EC2 Troubleshooting Workflow
 

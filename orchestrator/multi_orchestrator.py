@@ -106,7 +106,7 @@ class MultiModelOrchestrator:
 
         Note: If 'messages' is present in kwargs, it will be used instead of 'prompt'.
         """
-        request_id = str(uuid.uuid4())
+        request_id = str(kwargs.get("request_id") or "").strip() or str(uuid.uuid4())
         start_time = asyncio.get_event_loop().time()
 
         try:
@@ -138,9 +138,12 @@ class MultiModelOrchestrator:
                 f"Timeout for {client.provider_name}/{client.model_name}",
                 extra={
                     "extra_fields": {
+                        "event": "provider.call.timeout",
+                        "request_id": request_id,
                         "provider": client.provider_name,
                         "model": client.model_name,
                         "timeout_s": timeout_s,
+                        "latency_ms": elapsed_ms,
                     }
                 },
             )
@@ -152,10 +155,13 @@ class MultiModelOrchestrator:
                 f"Unexpected error for {client.provider_name}/{client.model_name}: {e}",
                 extra={
                     "extra_fields": {
+                        "event": "provider.call.exception",
+                        "request_id": request_id,
                         "provider": client.provider_name,
                         "model": client.model_name,
                         "error": str(e),
                         "error_type": type(e).__name__,
+                        "latency_ms": elapsed_ms,
                     }
                 },
             )
@@ -198,7 +204,13 @@ class MultiModelOrchestrator:
         )
 
         # Create tasks for all clients
-        tasks = [self._safe_call(client, prompt, timeout, **kwargs) for client in clients]
+        base_request_id = str(kwargs.get("request_id") or "").strip()
+        tasks = []
+        for idx, client in enumerate(clients):
+            call_kwargs = dict(kwargs)
+            if base_request_id:
+                call_kwargs["request_id"] = f"{base_request_id}:cmp:{idx}"
+            tasks.append(self._safe_call(client, prompt, timeout, **call_kwargs))
 
         # Run all concurrently - no return_exceptions since _safe_call handles errors
         responses = await asyncio.gather(*tasks)

@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ObjectStorageError(RuntimeError):
     """Base object storage runtime error."""
@@ -136,6 +140,15 @@ class S3ObjectStorage:
         self._config = config
         self._client: Any | None = None
 
+    @staticmethod
+    def _hash_key(key: str) -> str:
+        import hashlib
+
+        text = str(key or "").strip()
+        if not text:
+            return ""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
     @property
     def bucket(self) -> str:
         return self._config.bucket
@@ -176,6 +189,21 @@ class S3ObjectStorage:
             use_ssl=self._config.use_ssl,
             config=botocore_config,
         )
+        logger.info(
+            "Initialized S3 object storage client",
+            extra={
+                "extra_fields": {
+                    "event": "storage.client.initialized",
+                    "storage_backend": "s3",
+                    "region": self._config.region,
+                    "endpoint_url": self._config.endpoint_url,
+                    "use_ssl": bool(self._config.use_ssl),
+                    "force_path_style": bool(self._config.force_path_style),
+                    "bucket": self._config.bucket,
+                    "key_prefix": self._config.key_prefix,
+                }
+            },
+        )
         return self._client
 
     def put_bytes(
@@ -190,6 +218,23 @@ class S3ObjectStorage:
         if not object_key:
             raise ObjectStorageOperationError("Storage key is required")
 
+        import time
+
+        started = time.perf_counter()
+        object_key_hash = self._hash_key(object_key)
+        logger.info(
+            "Object storage upload started",
+            extra={
+                "extra_fields": {
+                    "event": "storage.put.start",
+                    "storage_backend": "s3",
+                    "bucket": self._config.bucket,
+                    "object_key_hash": object_key_hash,
+                    "content_type": str(content_type or ""),
+                    "size_bytes": len(payload or b""),
+                }
+            },
+        )
         try:
             kwargs: dict[str, Any] = {
                 "Bucket": self._config.bucket,
@@ -199,8 +244,46 @@ class S3ObjectStorage:
             }
             if metadata:
                 kwargs["Metadata"] = {str(k): str(v) for k, v in metadata.items()}
-            self._get_client().put_object(**kwargs)
+            response = self._get_client().put_object(**kwargs)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            request_metadata = response.get("ResponseMetadata") if isinstance(response, dict) else {}
+            logger.info(
+                "Object storage upload completed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.put.success",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "http_status": (
+                            request_metadata.get("HTTPStatusCode")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                        "provider_request_id": (
+                            request_metadata.get("RequestId")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                    }
+                },
+            )
         except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "Object storage upload failed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.put.failure",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             raise ObjectStorageOperationError(
                 f"Failed to upload object to bucket '{self._config.bucket}' key '{object_key}'"
             ) from exc
@@ -209,9 +292,51 @@ class S3ObjectStorage:
         object_key = str(key or "").strip()
         if not object_key:
             return
+        import time
+
+        started = time.perf_counter()
+        object_key_hash = self._hash_key(object_key)
         try:
-            self._get_client().delete_object(Bucket=self._config.bucket, Key=object_key)
+            response = self._get_client().delete_object(Bucket=self._config.bucket, Key=object_key)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            request_metadata = response.get("ResponseMetadata") if isinstance(response, dict) else {}
+            logger.info(
+                "Object storage delete completed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.delete.success",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "http_status": (
+                            request_metadata.get("HTTPStatusCode")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                        "provider_request_id": (
+                            request_metadata.get("RequestId")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                    }
+                },
+            )
         except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "Object storage delete failed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.delete.failure",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             raise ObjectStorageOperationError(
                 f"Failed to delete object '{object_key}' from bucket '{self._config.bucket}'"
             ) from exc
@@ -220,6 +345,10 @@ class S3ObjectStorage:
         object_key = str(key or "").strip()
         if not object_key:
             raise ObjectStorageOperationError("Storage key is required")
+        import time
+
+        started = time.perf_counter()
+        object_key_hash = self._hash_key(object_key)
         try:
             response = self._get_client().get_object(Bucket=self._config.bucket, Key=object_key)
             body = response.get("Body")
@@ -232,10 +361,50 @@ class S3ObjectStorage:
                 raise ObjectStorageOperationError(
                     f"Object read returned non-bytes payload for key '{object_key}'"
                 )
-            return bytes(data)
+            payload = bytes(data)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            request_metadata = response.get("ResponseMetadata") if isinstance(response, dict) else {}
+            logger.info(
+                "Object storage read completed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.get.success",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "size_bytes": len(payload),
+                        "http_status": (
+                            request_metadata.get("HTTPStatusCode")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                        "provider_request_id": (
+                            request_metadata.get("RequestId")
+                            if isinstance(request_metadata, dict)
+                            else None
+                        ),
+                    }
+                },
+            )
+            return payload
         except ObjectStorageOperationError:
             raise
         except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "Object storage read failed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.get.failure",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": object_key_hash,
+                        "latency_ms": latency_ms,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             raise ObjectStorageOperationError(
                 f"Failed to read object '{object_key}' from bucket '{self._config.bucket}'"
             ) from exc

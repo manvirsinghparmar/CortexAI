@@ -1,6 +1,8 @@
 """Tavily API client for AI-powered web research."""
 
+import hashlib
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,11 +42,21 @@ class TavilyResearchClient:
             ) from exc
 
         self.client = TavilyClient(api_key=self.api_key)
-        logger.info("Tavily client initialized")
+        logger.info(
+            "Tavily client initialized",
+            extra={"extra_fields": {"event": "research.client.initialized", "provider": "tavily"}},
+        )
 
     @staticmethod
     def _utc_now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _query_hash(query: str) -> str:
+        text = str(query or "").strip()
+        if not text:
+            return ""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
     def _normalize_timestamp(value: Any) -> str:
@@ -135,7 +147,22 @@ class TavilyResearchClient:
         Returns:
             List of SourceDoc objects with extracted content
         """
-        logger.info(f"Tavily search: '{query}' (max_results={max_results}, depth={search_depth})")
+        query_hash = self._query_hash(query)
+        query_length = len(str(query or ""))
+        started = time.perf_counter()
+        logger.info(
+            "Tavily search started",
+            extra={
+                "extra_fields": {
+                    "event": "research.search.start",
+                    "provider": "tavily",
+                    "query_hash": query_hash,
+                    "query_length": query_length,
+                    "max_results": int(max_results),
+                    "search_depth": str(search_depth or "advanced"),
+                }
+            },
+        )
 
         try:
             response = self.client.search(
@@ -149,7 +176,8 @@ class TavilyResearchClient:
             request_timestamp = self._utc_now_iso()
             sources: list[SourceDoc] = []
 
-            for idx, result in enumerate(response.get("results", []), start=1):
+            raw_results = response.get("results", []) or []
+            for idx, result in enumerate(raw_results, start=1):
                 relevance_score = result.get("score", 0.0)
                 fetched_at = self._resolve_fetched_at(response, result, request_timestamp)
 
@@ -161,13 +189,56 @@ class TavilyResearchClient:
                     fetched_at=fetched_at,
                 )
                 sources.append(source)
-                logger.debug(f"[{idx}] {source.title[:50]} (score: {relevance_score:.2f})")
+                logger.debug(
+                    "Tavily source candidate",
+                    extra={
+                        "extra_fields": {
+                            "event": "research.search.source",
+                            "provider": "tavily",
+                            "query_hash": query_hash,
+                            "source_index": idx,
+                            "score": float(relevance_score),
+                            "title_length": len(str(source.title or "")),
+                        }
+                    },
+                )
 
-            logger.info(f"Tavily returned {len(sources)} sources")
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.info(
+                "Tavily search completed",
+                extra={
+                    "extra_fields": {
+                        "event": "research.search.success",
+                        "provider": "tavily",
+                        "query_hash": query_hash,
+                        "query_length": query_length,
+                        "result_count": len(sources),
+                        "raw_result_count": len(raw_results),
+                        "latency_ms": latency_ms,
+                        "max_results": int(max_results),
+                        "search_depth": str(search_depth or "advanced"),
+                    }
+                },
+            )
             return sources
 
         except Exception as exc:
-            logger.error(f"Tavily search failed: {exc}", exc_info=True)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "Tavily search failed",
+                extra={
+                    "extra_fields": {
+                        "event": "research.search.failure",
+                        "provider": "tavily",
+                        "query_hash": query_hash,
+                        "query_length": query_length,
+                        "max_results": int(max_results),
+                        "search_depth": str(search_depth or "advanced"),
+                        "latency_ms": latency_ms,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             return []
 
     def qna_search(self, query: str) -> tuple[str, list[SourceDoc]]:
@@ -180,7 +251,20 @@ class TavilyResearchClient:
         Returns:
             Tuple of (answer, sources)
         """
-        logger.info(f"Tavily QnA search: '{query}'")
+        query_hash = self._query_hash(query)
+        query_length = len(str(query or ""))
+        started = time.perf_counter()
+        logger.info(
+            "Tavily QnA started",
+            extra={
+                "extra_fields": {
+                    "event": "research.qna.start",
+                    "provider": "tavily",
+                    "query_hash": query_hash,
+                    "query_length": query_length,
+                }
+            },
+        )
 
         try:
             response = self.client.qna_search(query=query)
@@ -198,9 +282,36 @@ class TavilyResearchClient:
                 )
                 sources.append(source)
 
-            logger.info(f"Tavily QnA complete: {len(sources)} sources, answer length: {len(answer)}")
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.info(
+                "Tavily QnA completed",
+                extra={
+                    "extra_fields": {
+                        "event": "research.qna.success",
+                        "provider": "tavily",
+                        "query_hash": query_hash,
+                        "query_length": query_length,
+                        "result_count": len(sources),
+                        "answer_length": len(answer),
+                        "latency_ms": latency_ms,
+                    }
+                },
+            )
             return answer, sources
 
         except Exception as exc:
-            logger.error(f"Tavily QnA failed: {exc}", exc_info=True)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "Tavily QnA failed",
+                extra={
+                    "extra_fields": {
+                        "event": "research.qna.failure",
+                        "provider": "tavily",
+                        "query_hash": query_hash,
+                        "query_length": query_length,
+                        "latency_ms": latency_ms,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
             return "", []

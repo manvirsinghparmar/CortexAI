@@ -266,6 +266,16 @@ class BaseAIClient(ABC):
         """
         return str(uuid.uuid4())
 
+    def _resolve_request_id_from_kwargs(self, kwargs: dict[str, Any]) -> str:
+        """
+        Pop caller-provided request_id from kwargs when present.
+
+        This lets API-layer correlation ids flow through provider clients while
+        preserving backward compatibility for call sites that don't provide one.
+        """
+        provided = str(kwargs.pop("request_id", "") or "").strip()
+        return provided or self._generate_request_id()
+
     def _measure_latency(self, start_time: float) -> int:
         """
         Calculate request latency in milliseconds.

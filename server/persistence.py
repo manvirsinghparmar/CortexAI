@@ -352,6 +352,18 @@ def _read_api_key_usage_today(db_session: Session, api_key_id: UUID) -> tuple[in
 
 
 def _deny_usage_limit(*, reason: str, current_tokens: int, current_cost: float, scope: str) -> None:
+    logger.warning(
+        "Usage limit exceeded",
+        extra={
+            "extra_fields": {
+                "event": "usage.cap.exceeded",
+                "scope": scope,
+                "current_tokens": int(current_tokens),
+                "current_cost": float(current_cost),
+                "reason": reason,
+            }
+        },
+    )
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={
@@ -393,6 +405,20 @@ def _enforce_usage_caps_in_session(
 
         if usage is not None:
             current_tokens, current_cost = usage
+            logger.info(
+                "Usage cap check evaluated",
+                extra={
+                    "extra_fields": {
+                        "event": "usage.cap.checked",
+                        "scope": "api_key",
+                        "api_key_id": str(api_key_id),
+                        "token_cap": token_cap,
+                        "cost_cap": cost_cap,
+                        "current_tokens": int(current_tokens),
+                        "current_cost": float(current_cost),
+                    }
+                },
+            )
             if token_cap is not None and current_tokens >= token_cap:
                 _deny_usage_limit(
                     reason=f"Daily token limit exceeded ({current_tokens}/{token_cap})",
@@ -415,6 +441,21 @@ def _enforce_usage_caps_in_session(
         user_id,
         token_cap=token_cap,
         cost_cap=cost_cap,
+    )
+    logger.info(
+        "Usage cap check evaluated",
+        extra={
+            "extra_fields": {
+                "event": "usage.cap.checked",
+                "scope": "user",
+                "user_id": str(user_id),
+                "token_cap": token_cap,
+                "cost_cap": cost_cap,
+                "current_tokens": int(result.get("current_tokens") or 0),
+                "current_cost": float(result.get("current_cost") or 0.0),
+                "allowed": bool(result.get("allowed")),
+            }
+        },
     )
     if not result["allowed"]:
         _deny_usage_limit(
@@ -462,6 +503,17 @@ def _enforce_rate_limit_in_session(
     rate_limit_service.enforce_rate_limit(
         subject_key=subject,
         requests_per_minute=rpm,
+    )
+    logger.info(
+        "Rate limit check passed",
+        extra={
+            "extra_fields": {
+                "event": "rate_limit.checked",
+                "subject_type": "api_key" if api_key_id is not None else "user",
+                "subject": subject,
+                "requests_per_minute": int(rpm),
+            }
+        },
     )
 
 
@@ -517,8 +569,29 @@ def resolve_and_enforce_usage_caps(
                 user_id=resolution.user_id,
                 api_key_id=resolution.api_key_id,
             )
+            logger.info(
+                "API preflight passed",
+                extra={
+                    "extra_fields": {
+                        "event": "api.preflight.success",
+                        "request_id": request_id,
+                        "user_id": str(resolution.user_id),
+                        "api_key_id": str(resolution.api_key_id) if resolution.api_key_id else None,
+                        "decision_path": resolution.decision_path,
+                    }
+                },
+            )
             return resolution
     except HTTPException:
+        logger.warning(
+            "API preflight rejected request",
+            extra={
+                "extra_fields": {
+                    "event": "api.preflight.rejected",
+                    "request_id": request_id,
+                }
+            },
+        )
         raise
     except Exception as exc:
         logger.exception("API preflight failed")
@@ -571,11 +644,24 @@ def resolve_runtime_byok_provider_keys(
     """
     try:
         with db_uow(commit_on_success=False) as db_session:
-            return byok_service.resolve_provider_api_keys(
+            resolved = byok_service.resolve_provider_api_keys(
                 db_session,
                 api_key_id=resolution.api_key_id,
                 providers=providers,
             )
+            logger.info(
+                "BYOK provider keys resolved",
+                extra={
+                    "extra_fields": {
+                        "event": "byok.resolve.success",
+                        "user_id": str(resolution.user_id),
+                        "api_key_id": str(resolution.api_key_id) if resolution.api_key_id else None,
+                        "provider_count": len(resolved),
+                        "providers": sorted(list(resolved.keys())),
+                    }
+                },
+            )
+            return resolved
     except Exception:
         logger.exception("BYOK resolution failed")
         return {}

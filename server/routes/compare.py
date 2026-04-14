@@ -141,9 +141,12 @@ async def _run_compare_target(
     orchestrator: CortexOrchestrator,
     timeout_s: float | None,
     research_mode: str,
+    request_id: str,
     kwargs: dict,
 ):
     """Run one compare target and capture timeout as UnifiedResponse."""
+    call_kwargs = dict(kwargs or {})
+    call_kwargs.pop("request_id", None)
     ask_coro = asyncio.to_thread(
         orchestrator.ask,
         prompt=prompt,
@@ -152,7 +155,8 @@ async def _run_compare_target(
         model_name=model,
         token_tracker=None,
         research_mode=research_mode,
-        **kwargs,
+        request_id=f"{request_id}:target:{index}",
+        **call_kwargs,
     )
 
     try:
@@ -189,11 +193,11 @@ async def compare(
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
-        req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
@@ -259,6 +263,7 @@ async def compare(
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
         kwargs["attachments"] = inference_attachments
+    kwargs["request_id"] = req_id
 
     response = await asyncio.to_thread(
         orchestrator.compare,
@@ -322,11 +327,11 @@ async def compare_stream(
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
-        req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
@@ -390,6 +395,7 @@ async def compare_stream(
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
         kwargs["attachments"] = inference_attachments
+    kwargs["request_id"] = req_id
 
     request_group_id = str(uuid.uuid4())
 
@@ -457,6 +463,7 @@ async def compare_stream(
                             orchestrator=orchestrator,
                             timeout_s=request.timeout_s,
                             research_mode=orchestrator_research_mode,
+                            request_id=req_id,
                             kwargs=kwargs,
                         )
                     )

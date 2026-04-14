@@ -80,12 +80,19 @@ HTTP lifecycle events:
 Tavily / research:
 
 - `research.provider.selected`
+- `research.network.diagnostics`
 - `research.cache.hit|bypass`
 - `research.dispatch`
 - `research.query.rewritten`
 - `research.search.start|success|failure|empty`
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
+
+Tavily failure logs include:
+
+- `error_kind` classifier (`dns_resolution_failed`, `timeout`, `proxy_error`, `auth_forbidden`, `rate_limited`, etc.)
+- exception chain type list (`error_chain_types`)
+- latest network diagnostic snapshot (`network_diag_status`, `network_diag_age_ms`)
 
 Attachments and object storage:
 

@@ -343,6 +343,8 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
 - When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
+- Tavily runtime diagnostics emit `research.network.diagnostics` with DNS + TCP egress health (host/port configurable via `TAVILY_NETWORK_DIAGNOSTICS_*` envs) for EC2 troubleshooting.
+- Tavily failures emit normalized `error_kind` fields (for example `dns_resolution_failed`, `timeout`, `auth_forbidden`, `rate_limited`) without logging raw query text.
 
 ## Session Continuity
 

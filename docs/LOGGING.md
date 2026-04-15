@@ -80,6 +80,7 @@ HTTP lifecycle events:
 Tavily / research:
 
 - `research.provider.selected`
+- `research.network.diagnostics`
 - `research.cache.hit|bypass`
 - `research.dispatch`
 - `research.query.rewritten`
@@ -87,13 +88,21 @@ Tavily / research:
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
 
+Tavily failure logs include:
+
+- `error_kind` classifier (`dns_resolution_failed`, `timeout`, `proxy_error`, `auth_forbidden`, `rate_limited`, etc.)
+- exception chain type list (`error_chain_types`)
+- latest network diagnostic snapshot (`network_diag_status`, `network_diag_age_ms`)
+
 Attachments and object storage:
 
+- `upload.route.received|payload.read|success|rejected|rejected.empty_body|exception`
 - `upload.received|deduplicated|completed`
 - `upload.storage.put.start|success|failure`
 - `upload.metadata.persisted`
 - `upload.ingestion.start|success|failure|deferred`
 - `upload.ingestion.deferred.start|read_failure|finalized`
+- `upload.auth.resolved`
 - `storage.client.initialized`
 - `storage.put.start|success|failure`
 - `storage.get.success|failure`
@@ -115,6 +124,13 @@ Provider orchestration and resilience:
 - `circuit.success.reset`
 - `circuit.reset.all`
 
+Authentication diagnostics:
+
+- `auth.failed`
+- `auth.config.missing`
+
+`auth.*` logs include request method/path and auth-header presence booleans.
+
 ## Privacy and Safety
 
 - Auth-bearing headers are redacted before auth logging (`X-API-Key`, `Authorization`).
@@ -122,6 +138,7 @@ Provider orchestration and resilience:
   - Tavily prompt/query fields are hashed (`prompt_hash`, `query_hash`)
   - filenames/object keys are hashed (`filename_hash`, `object_key_hash`, `storage_key_hash`)
 - Client-facing attachment errors remain sanitized; detailed failures are available in server logs.
+- Upload route logs include CloudFront/proxy context fields when forwarded by infrastructure (`X-Amz-Cf-Id`, `X-Forwarded-*`, viewer hints) to speed edge-origin triage.
 
 ## EC2 Troubleshooting Workflow
 
@@ -150,7 +167,8 @@ journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
 - `server/circuit_breaker.py`
 - `tools/web/tavily_client.py`
 - `tools/web/tavily_service.py`
+- `docs/runbooks/aws-ec2-logging.md`
 
 ---
 
-Last updated: 2026-04-11
+Last updated: 2026-04-13

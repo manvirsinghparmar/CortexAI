@@ -57,6 +57,7 @@ class TavilyResearchService:
         try:
             prompt_hash = _text_hash(prompt)
             prompt_length = len(str(prompt or ""))
+            client_diag = self.client.get_network_diagnostics_snapshot()
             if use_cache:
                 cached = self.cache.get(prompt)
                 if cached:
@@ -115,6 +116,7 @@ class TavilyResearchService:
                         "query_length": query_length,
                         "use_cache": bool(use_cache),
                         "max_sources": int(self.max_sources),
+                        **client_diag,
                     }
                 },
             )
@@ -134,6 +136,7 @@ class TavilyResearchService:
                             "prompt_hash": prompt_hash,
                             "query_hash": query_hash,
                             "query_length": query_length,
+                            **client_diag,
                         }
                     },
                 )
@@ -161,12 +164,14 @@ class TavilyResearchService:
                         "query_hash": query_hash,
                         "source_count": len(sources),
                         "cache_written": bool(use_cache),
+                        **client_diag,
                     }
                 },
             )
             return context
 
         except Exception as exc:
+            client_diag = self.client.get_network_diagnostics_snapshot()
             logger.exception(
                 "Research context build failed",
                 extra={
@@ -176,6 +181,7 @@ class TavilyResearchService:
                         "prompt_hash": _text_hash(prompt),
                         "prompt_length": len(str(prompt or "")),
                         "error_type": type(exc).__name__,
+                        **client_diag,
                     }
                 },
             )

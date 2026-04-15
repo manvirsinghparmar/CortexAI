@@ -44,6 +44,11 @@ async def get_auth(
     """
     request_id = getattr(request.state, "request_id", "unknown")
     redacted = redact_sensitive_headers(dict(request.headers))
+    method = str(request.method or "").upper()
+    path = str(request.url.path or "")
+    has_api_key_header = bool(x_api_key)
+    has_authorization_header = bool(authorization)
+    has_session_cookie = bool(session_cookie)
 
     # 1. Try session cookie (cortex_session)
     user_id = parse_session(session_cookie)
@@ -74,7 +79,18 @@ async def get_auth(
     if not cognito_enabled() and not valid_keys:
         logger.error(
             "API authentication not configured",
-            extra={"extra_fields": {"request_id": request_id, "headers": redacted}},
+            extra={
+                "extra_fields": {
+                    "event": "auth.config.missing",
+                    "request_id": request_id,
+                    "method": method,
+                    "path": path,
+                    "has_x_api_key_header": has_api_key_header,
+                    "has_authorization_header": has_authorization_header,
+                    "has_session_cookie": has_session_cookie,
+                    "headers": redacted,
+                }
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -83,7 +99,18 @@ async def get_auth(
 
     logger.warning(
         "Authentication failed",
-        extra={"extra_fields": {"request_id": request_id, "headers": redacted}},
+        extra={
+            "extra_fields": {
+                "event": "auth.failed",
+                "request_id": request_id,
+                "method": method,
+                "path": path,
+                "has_x_api_key_header": has_api_key_header,
+                "has_authorization_header": has_authorization_header,
+                "has_session_cookie": has_session_cookie,
+                "headers": redacted,
+            }
+        },
     )
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

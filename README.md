@@ -46,6 +46,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
+`requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set.
 
 3. Configure `.env`.
 
@@ -176,17 +177,20 @@ Optional frontend runtime config for separate API host:
 
 ## Authentication
 
-All `/v1/*` routes accept either **API key** or **Cognito (e.g. Gmail/Google) ID token**:
+Most `/v1/*` routes accept either **API key** or **Cognito (e.g. Gmail/Google) ID token**.
 
-1. **API key** (unchanged):
-```http
-X-API-Key: <tenant-api-key>
-```
+Session-scoped routes require signed-in identity auth (not API key):
+- `/v1/chat`
+- `/v1/chat/stream`
+- `/v1/compare`
+- `/v1/compare/stream`
+- `/v1/files/*`
 
-2. **Cognito / Gmail (Google) sign-in** (optional): when [Cognito is configured](#cognito-gmail-sign-in), the frontend can use "Sign in with Google". The API then accepts:
+Accepted auth for session-scoped routes:
 ```http
 Authorization: Bearer <Cognito-ID-token>
 ```
+or `cortex_session` cookie.
 
 Optional request correlation:
 ```http
@@ -257,21 +261,25 @@ To enable "Sign in with Google" via Amazon Cognito:
 
 `POST /v1/files/upload` accepts raw bytes in the request body.
 
+Authentication (session-scoped routes):
+- `cortex_session` cookie, or
+- `Authorization: Bearer <Cognito-ID-token>`
+
 Headers:
-- `X-API-Key: <tenant-api-key>`
 - `X-File-Name: <original-filename>` (optional, defaults to `file`)
 - `X-File-Content-Type: <mime-type>` (optional, falls back to `Content-Type`)
 
 Example:
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/files/upload \
-  -H "X-API-Key: dev-key-1" \
+  -H "Authorization: Bearer <cognito-id-token>" \
   -H "X-File-Name: contract.pdf" \
   -H "X-File-Content-Type: application/pdf" \
   --data-binary "@contract.pdf"
 ```
 
-`GET /v1/files/{file_id}` returns file metadata and processing status for the same API key owner.
+`GET /v1/files/{file_id}` returns file metadata and processing status for the same authenticated owner.
+Attachment routes reject API-key-only auth with `403` (`session_auth_required`).
 
 Upload status semantics:
 - `ready`: file is immediately usable in chat/compare.
@@ -322,6 +330,7 @@ Attachment metadata semantics:
 ## Routing Modes
 
 For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
+- auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Explicit `provider` + `model`: deterministic target.
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
@@ -330,6 +339,7 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
+- auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
@@ -489,9 +499,9 @@ Common `detail.code` values:
 import requests
 
 class CortexClient:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, cognito_id_token: str):
         self.base_url = base_url.rstrip("/")
-        self.headers = {"X-API-Key": api_key}
+        self.headers = {"Authorization": f"Bearer {cognito_id_token}"}
 
     def chat(self, prompt: str, provider: str | None = None, model: str | None = None):
         payload = {"prompt": prompt}

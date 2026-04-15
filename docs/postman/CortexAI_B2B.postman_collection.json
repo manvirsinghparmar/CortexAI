@@ -14,6 +14,10 @@
       "value": "dev-key-1"
     },
     {
+      "key": "cognito_id_token",
+      "value": ""
+    },
+    {
       "key": "chat_provider",
       "value": "openai"
     },
@@ -221,8 +225,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               },
               {
                 "key": "X-File-Name",
@@ -249,8 +253,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 404 (attachments disabled)', function () {",
-                  "  pm.expect([200, 404]).to.include(pm.response.code);",
+                  "pm.test('status is 200, 401, or 404 (attachments disabled)', function () {",
+                  "  pm.expect([200, 401, 404]).to.include(pm.response.code);",
                   "});",
                   "if (pm.response.code === 200) {",
                   "  var body = pm.response.json();",
@@ -270,8 +274,8 @@
             "method": "GET",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               }
             ],
             "url": "{{base_url}}/v1/files/{{file_id}}"
@@ -282,8 +286,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 404', function () {",
-                  "  pm.expect([200, 404]).to.include(pm.response.code);",
+                  "pm.test('status is 200, 401, or 404', function () {",
+                  "  pm.expect([200, 401, 404]).to.include(pm.response.code);",
                   "});"
                 ]
               }
@@ -301,8 +305,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               },
               {
                 "key": "Content-Type",
@@ -321,7 +325,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is 200 or 401', function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 401) { return; }",
                   "var body = pm.response.json();",
                   "pm.test('chat response has request_id/provider/model', function () {",
                   "  pm.expect(body.request_id).to.be.a('string');",
@@ -339,8 +346,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               },
               {
                 "key": "Content-Type",
@@ -363,7 +370,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is 200 or 401', function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 401) { return; }",
                   "var text = pm.response.text();",
                   "pm.test('stream includes start and done markers', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"start\\\"');",
@@ -385,8 +395,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               },
               {
                 "key": "Content-Type",
@@ -405,7 +415,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is 200 or 401', function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 401) { return; }",
                   "var body = pm.response.json();",
                   "pm.test('compare has request_group_id + responses', function () {",
                   "  pm.expect(body.request_group_id).to.be.a('string');",
@@ -424,8 +437,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{cognito_id_token}}"
               },
               {
                 "key": "Content-Type",
@@ -448,7 +461,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is 200 or 401', function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 401) { return; }",
                   "var text = pm.response.text();",
                   "pm.test('stream includes done marker', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",

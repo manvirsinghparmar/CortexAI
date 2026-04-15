@@ -14,7 +14,7 @@ from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import attachments as attachments_service
 from server import persistence as persistence_service
-from server.dependencies import get_auth, get_orchestrator
+from server.dependencies import AuthResult, get_auth, get_orchestrator
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.utils import (
@@ -38,6 +38,44 @@ logger = get_logger(__name__)
 _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _persist_compare_interaction = persistence_service.persist_compare_interaction
 _resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
+
+
+def _auth_mode(auth: AuthResult) -> str:
+    if auth.user_id is not None:
+        return "session_cookie"
+    if auth.is_cognito:
+        return "cognito"
+    if auth.api_key_or_none():
+        return "api_key"
+    return "unknown"
+
+
+def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
+    """
+    Compare routes are session-scoped to user identity and must not use API-key auth.
+    """
+    if auth.user_id is not None or auth.is_cognito:
+        return
+    logger.warning(
+        "Compare route rejected non-session auth",
+        extra={
+            "extra_fields": {
+                "event": "compare.route.rejected.auth_mode",
+                "request_id": request_id,
+                "auth_mode": _auth_mode(auth),
+            }
+        },
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "session_auth_required",
+            "message": (
+                "Compare routes require session-based auth "
+                "(cortex_session cookie or Authorization: Bearer)."
+            ),
+        },
+    )
 
 
 def _resolve_compare_research_mode(request: CompareRequest) -> bool:
@@ -178,7 +216,7 @@ async def compare(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Send a prompt to multiple AI models and compare responses."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -187,13 +225,14 @@ async def compare(
             detail=f"Maximum {MAX_COMPARE_TARGETS} targets allowed",
         )
 
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=req_id)
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
     requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
-    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -312,7 +351,7 @@ async def compare_stream(
     request: CompareRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Stream compare responses as NDJSON events, then emit aggregate summary."""
     if len(request.targets) > MAX_COMPARE_TARGETS:
@@ -321,13 +360,14 @@ async def compare_stream(
             detail=f"Maximum {MAX_COMPARE_TARGETS} targets allowed",
         )
 
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=req_id)
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
     requested_session_id = request.context.session_id if request.context else None
     force_new_session = bool(request.context and request.context.new_session)
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
-    req_id = str(getattr(http_request.state, "request_id", "") or uuid.uuid4())
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}

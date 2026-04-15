@@ -14,6 +14,15 @@ def app(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     monkeypatch.setenv("ENABLE_ATTACHMENTS", "true")
+    session_user_id = uuid.uuid4()
+
+    from server import dependencies
+
+    monkeypatch.setattr(
+        dependencies,
+        "parse_session",
+        lambda cookie: session_user_id if cookie else None,
+    )
 
     app = create_app()
 
@@ -34,7 +43,12 @@ def client(app):
     return TestClient(app)
 
 
-def test_files_upload_requires_api_key(client):
+@pytest.fixture()
+def session_cookie():
+    return {"cortex_session": "test-session-cookie"}
+
+
+def test_files_upload_requires_auth(client):
     response = client.post(
         "/v1/files/upload",
         data=b"hello",
@@ -47,7 +61,7 @@ def test_files_upload_requires_api_key(client):
     assert response.status_code in (401, 403)
 
 
-def test_files_upload_uses_service_result(client, monkeypatch):
+def test_files_upload_uses_service_result(client, monkeypatch, session_cookie):
     from server import files_service
 
     captured: dict[str, object] = {}
@@ -75,11 +89,11 @@ def test_files_upload_uses_service_result(client, monkeypatch):
         "/v1/files/upload",
         data=b"hello",
         headers={
-            "X-API-Key": "dev-key-1",
             "Content-Type": "text/plain",
             "X-File-Name": "demo.txt",
             "X-File-Content-Type": "text/plain",
         },
+        cookies=session_cookie,
     )
 
     assert response.status_code == 200
@@ -91,10 +105,11 @@ def test_files_upload_uses_service_result(client, monkeypatch):
     assert captured["filename"] == "demo.txt"
     assert captured["mime_type"] == "text/plain"
     assert captured["payload"] == b"hello"
-    assert captured["api_key"] == "dev-key-1"
+    assert captured["auth"].user_id is not None
+    assert captured["auth"].api_key is None
 
 
-def test_files_upload_propagates_http_errors(client, monkeypatch):
+def test_files_upload_propagates_http_errors(client, monkeypatch, session_cookie):
     from server import files_service
 
     def _fake_upload_user_file(**_kwargs):
@@ -109,17 +124,17 @@ def test_files_upload_propagates_http_errors(client, monkeypatch):
         "/v1/files/upload",
         data=b"\x01\x02",
         headers={
-            "X-API-Key": "dev-key-1",
             "Content-Type": "application/octet-stream",
             "X-File-Name": "demo.exe",
             "X-File-Content-Type": "application/octet-stream",
         },
+        cookies=session_cookie,
     )
     assert response.status_code == 415
     assert response.json()["detail"]["code"] == "unsupported_file_type"
 
 
-def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog):
+def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog, session_cookie):
     from server import files_service
 
     def _fake_upload_user_file(**_kwargs):
@@ -145,7 +160,6 @@ def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog):
         "/v1/files/upload",
         data=b"hello",
         headers={
-            "X-API-Key": "dev-key-1",
             "Content-Type": "text/plain",
             "Content-Length": "5",
             "X-File-Name": "demo.txt",
@@ -154,6 +168,7 @@ def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog):
             "X-Forwarded-For": "1.1.1.1,2.2.2.2",
             "Host": "kudlo.triobrain.com",
         },
+        cookies=session_cookie,
     )
     assert response.status_code == 200
 
@@ -167,13 +182,13 @@ def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog):
         for record in caplog.records
         if getattr(record, "extra_fields", {}).get("event") == "upload.route.received"
     )
-    assert received.extra_fields["has_x_api_key_header"] is True
+    assert received.extra_fields["has_x_api_key_header"] is False
     assert received.extra_fields["x_forwarded_for_first"] == "1.1.1.1"
     assert received.extra_fields["x_forwarded_for_hops"] == 2
     assert received.extra_fields["edge_headers"]["x_amz_cf_id"] == "edge-id-123"
 
 
-def test_files_upload_logs_route_rejection(client, monkeypatch, caplog):
+def test_files_upload_logs_route_rejection(client, monkeypatch, caplog, session_cookie):
     from server import files_service
 
     def _fake_upload_user_file(**_kwargs):
@@ -189,11 +204,11 @@ def test_files_upload_logs_route_rejection(client, monkeypatch, caplog):
         "/v1/files/upload",
         data=b"\x01\x02",
         headers={
-            "X-API-Key": "dev-key-1",
             "Content-Type": "application/octet-stream",
             "X-File-Name": "demo.exe",
             "X-File-Content-Type": "application/octet-stream",
         },
+        cookies=session_cookie,
     )
     assert response.status_code == 415
 
@@ -232,7 +247,7 @@ def test_files_get_status_uses_service_result(client, monkeypatch):
 
     response = client.get(
         f"/v1/files/{file_id}",
-        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
 
     assert response.status_code == 200
@@ -240,3 +255,18 @@ def test_files_get_status_uses_service_result(client, monkeypatch):
     assert body["file_id"] == str(file_id)
     assert body["status"] == "ready"
     assert body["original_filename"] == "demo.txt"
+
+
+def test_files_routes_reject_api_key_auth(client):
+    response = client.post(
+        "/v1/files/upload",
+        data=b"hello",
+        headers={
+            "X-API-Key": "dev-key-1",
+            "Content-Type": "text/plain",
+            "X-File-Name": "demo.txt",
+            "X-File-Content-Type": "text/plain",
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "session_auth_required"

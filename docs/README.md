@@ -12,6 +12,7 @@ Use this index to quickly find the current source of truth and avoid stale imple
 - `COMPARE_MODE_GUIDE.md` - compare-mode behavior and persistence notes
 - `TAVILY_INTEGRATION.md` - web research/Tavily integration behavior
 - `runbooks/db-migrations.md` - migration authoring/apply/rollback runbook
+- `runbooks/aws-ec2-logging.md` - AWS EC2 Linux logging and incident triage runbook
 - `UNIFIED_RESPONSE_CONTRACT.md` - provider adapter response contract
 - `postman/CortexAI_B2B.postman_collection.json` - API collection/examples
 - `SRED_TECHNICAL_NARRATIVE_2026_DRAFT.md` - SR&ED technical narrative draft from git history (uncertainty/experiments/validation)
@@ -27,4 +28,4 @@ When details conflict, prefer `../README.md` and `FASTAPI_README.md`.
 
 ---
 
-Last updated: 2026-03-30
+Last updated: 2026-04-13

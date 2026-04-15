@@ -1,7 +1,11 @@
 """Tavily API client for AI-powered web research."""
 
+from __future__ import annotations
+
+import errno
 import hashlib
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +23,9 @@ class TavilyResearchClient:
 
     Replaces direct search + extractor plumbing with one API call.
     """
+
+    _DEFAULT_DIAGNOSTIC_HOST = "api.tavily.com"
+    _DEFAULT_DIAGNOSTIC_PORT = 443
 
     def __init__(self, api_key: str | None = None):
         """
@@ -42,14 +49,52 @@ class TavilyResearchClient:
             ) from exc
 
         self.client = TavilyClient(api_key=self.api_key)
+        self._network_diag_interval_seconds = self._coerce_positive_int(
+            os.getenv("TAVILY_NETWORK_DIAGNOSTICS_INTERVAL_SECONDS"),
+            default=300,
+        )
+        self._network_diag_timeout_seconds = float(
+            self._coerce_positive_int(os.getenv("TAVILY_NETWORK_DIAGNOSTICS_TIMEOUT_SECONDS"), default=2)
+        )
+        self._diagnostic_host = (
+            str(os.getenv("TAVILY_NETWORK_DIAGNOSTICS_HOST") or "").strip()
+            or self._DEFAULT_DIAGNOSTIC_HOST
+        )
+        self._diagnostic_port = self._coerce_positive_int(
+            os.getenv("TAVILY_NETWORK_DIAGNOSTICS_PORT"),
+            default=self._DEFAULT_DIAGNOSTIC_PORT,
+        )
+        self._last_network_diag_at = 0.0
+        self._last_network_diag_status = "never"
+        self._last_network_diag: dict[str, Any] = {}
         logger.info(
             "Tavily client initialized",
-            extra={"extra_fields": {"event": "research.client.initialized", "provider": "tavily"}},
+            extra={
+                "extra_fields": {
+                    "event": "research.client.initialized",
+                    "provider": "tavily",
+                    "api_key_hash": self._query_hash(self.api_key),
+                    "diagnostic_host": self._diagnostic_host,
+                    "diagnostic_port": int(self._diagnostic_port),
+                    "diagnostic_interval_seconds": int(self._network_diag_interval_seconds),
+                    "diagnostic_timeout_seconds": float(self._network_diag_timeout_seconds),
+                    **self._proxy_flags(),
+                }
+            },
         )
+        self._maybe_emit_network_diagnostics(trigger="init")
 
     @staticmethod
     def _utc_now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _coerce_positive_int(raw: str | None, default: int) -> int:
+        try:
+            parsed = int(str(raw or "").strip())
+        except Exception:
+            return default
+        return parsed if parsed > 0 else default
 
     @staticmethod
     def _query_hash(query: str) -> str:
@@ -57,6 +102,184 @@ class TavilyResearchClient:
         if not text:
             return ""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _error_message_excerpt(exc: Exception) -> str:
+        message = str(exc or "").strip()
+        if not message:
+            return ""
+        return message[:220]
+
+    @classmethod
+    def _exception_chain_types(cls, exc: Exception, *, max_depth: int = 5) -> list[str]:
+        chain: list[str] = []
+        current: Exception | None = exc
+        depth = 0
+        while current is not None and depth < max_depth:
+            chain.append(type(current).__name__)
+            current = current.__cause__ or current.__context__
+            depth += 1
+        return chain
+
+    @classmethod
+    def _classify_error_kind(cls, exc: Exception) -> str:
+        chain_types = cls._exception_chain_types(exc)
+        lower_message = str(exc or "").lower()
+        for marker in (
+            "name or service not known",
+            "temporary failure in name resolution",
+            "nodename nor servname provided",
+            "getaddrinfo failed",
+            "dns",
+        ):
+            if marker in lower_message:
+                return "dns_resolution_failed"
+        if isinstance(exc, socket.gaierror):
+            return "dns_resolution_failed"
+        if "timed out" in lower_message or "timeout" in lower_message:
+            return "timeout"
+        if "connection refused" in lower_message:
+            return "connection_refused"
+        if "proxy" in lower_message:
+            return "proxy_error"
+        if "certificate" in lower_message or "ssl" in lower_message or "tls" in lower_message:
+            return "tls_error"
+        if "429" in lower_message or "rate limit" in lower_message:
+            return "rate_limited"
+        if "401" in lower_message or "403" in lower_message or "forbidden" in lower_message:
+            return "auth_forbidden"
+        if "500" in lower_message or "502" in lower_message or "503" in lower_message or "504" in lower_message:
+            return "provider_server_error"
+        if "connectionerror" in (name.lower() for name in chain_types):
+            return "connection_error"
+        return "unknown"
+
+    @staticmethod
+    def _proxy_flags() -> dict[str, bool]:
+        return {
+            "http_proxy_present": bool(str(os.getenv("HTTP_PROXY") or "").strip()),
+            "https_proxy_present": bool(str(os.getenv("HTTPS_PROXY") or "").strip()),
+            "no_proxy_present": bool(str(os.getenv("NO_PROXY") or "").strip()),
+        }
+
+    def _network_diag_snapshot(self) -> dict[str, Any]:
+        now = time.time()
+        last_at = float(getattr(self, "_last_network_diag_at", 0.0) or 0.0)
+        age_ms = int(max(0.0, now - last_at) * 1000) if last_at > 0.0 else None
+        return {
+            "network_diag_status": str(getattr(self, "_last_network_diag_status", "never") or "never"),
+            "network_diag_age_ms": age_ms,
+        }
+
+    def get_network_diagnostics_snapshot(self) -> dict[str, Any]:
+        """Return latest diagnostics summary for callers that need context fields."""
+        snapshot = dict(self._network_diag_snapshot())
+        last_diag = getattr(self, "_last_network_diag", {})
+        if isinstance(last_diag, dict):
+            if "diagnostic_host" not in snapshot:
+                snapshot["diagnostic_host"] = str(last_diag.get("host") or "")
+            if "diagnostic_port" not in snapshot:
+                snapshot["diagnostic_port"] = int(last_diag.get("port") or 0) or None
+            if "network_diag_dns_ok" not in snapshot:
+                snapshot["network_diag_dns_ok"] = (
+                    bool(last_diag.get("dns_ok")) if "dns_ok" in last_diag else None
+                )
+            if "network_diag_tcp_ok" not in snapshot:
+                snapshot["network_diag_tcp_ok"] = (
+                    bool(last_diag.get("tcp_ok")) if "tcp_ok" in last_diag else None
+                )
+        return snapshot
+
+    def _maybe_emit_network_diagnostics(self, *, trigger: str) -> None:
+        interval_s = self._coerce_positive_int(
+            str(getattr(self, "_network_diag_interval_seconds", "300")),
+            default=300,
+        )
+        now = time.time()
+        last = float(getattr(self, "_last_network_diag_at", 0.0) or 0.0)
+        if last > 0.0 and now - last < interval_s:
+            return
+        self._last_network_diag_at = now
+
+        host = str(getattr(self, "_diagnostic_host", self._DEFAULT_DIAGNOSTIC_HOST) or self._DEFAULT_DIAGNOSTIC_HOST)
+        port = int(getattr(self, "_diagnostic_port", self._DEFAULT_DIAGNOSTIC_PORT) or self._DEFAULT_DIAGNOSTIC_PORT)
+        timeout_s = float(
+            self._coerce_positive_int(
+                str(getattr(self, "_network_diag_timeout_seconds", "2")),
+                default=2,
+            )
+        )
+
+        dns_ok = False
+        dns_error_type = ""
+        dns_error_message = ""
+        dns_addresses: list[str] = []
+        dns_started = time.perf_counter()
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            dns_addresses = sorted({str(info[4][0]) for info in infos if info and len(info) >= 5 and info[4]})
+            dns_ok = True
+        except Exception as exc:
+            dns_error_type = type(exc).__name__
+            dns_error_message = self._error_message_excerpt(exc)
+        dns_latency_ms = int((time.perf_counter() - dns_started) * 1000)
+
+        tcp_ok = False
+        tcp_error_type = ""
+        tcp_error_message = ""
+        tcp_error_errno = None
+        tcp_started = time.perf_counter()
+        try:
+            with socket.create_connection((host, port), timeout=timeout_s):
+                tcp_ok = True
+        except OSError as exc:
+            tcp_error_type = type(exc).__name__
+            tcp_error_message = self._error_message_excerpt(exc)
+            tcp_error_errno = exc.errno if getattr(exc, "errno", None) is not None else None
+        except Exception as exc:
+            tcp_error_type = type(exc).__name__
+            tcp_error_message = self._error_message_excerpt(exc)
+        tcp_latency_ms = int((time.perf_counter() - tcp_started) * 1000)
+
+        status = "ok" if (dns_ok and tcp_ok) else "degraded"
+        self._last_network_diag_status = status
+        self._last_network_diag = {
+            "host": host,
+            "port": port,
+            "dns_ok": dns_ok,
+            "dns_latency_ms": dns_latency_ms,
+            "dns_ip_count": len(dns_addresses),
+            "tcp_ok": tcp_ok,
+            "tcp_latency_ms": tcp_latency_ms,
+            "tcp_error_errno": tcp_error_errno,
+        }
+
+        log_fn = logger.info if status == "ok" else logger.warning
+        log_fn(
+            "Tavily network diagnostics",
+            extra={
+                "extra_fields": {
+                    "event": "research.network.diagnostics",
+                    "provider": "tavily",
+                    "trigger": trigger,
+                    "status": status,
+                    "diagnostic_host": host,
+                    "diagnostic_port": port,
+                    "dns_ok": dns_ok,
+                    "dns_latency_ms": dns_latency_ms,
+                    "dns_ip_count": len(dns_addresses),
+                    "dns_error_type": dns_error_type,
+                    "dns_error_message": dns_error_message,
+                    "tcp_ok": tcp_ok,
+                    "tcp_latency_ms": tcp_latency_ms,
+                    "tcp_error_type": tcp_error_type,
+                    "tcp_error_message": tcp_error_message,
+                    "tcp_error_errno": tcp_error_errno,
+                    "tcp_error_is_eacces": tcp_error_errno == errno.EACCES if tcp_error_errno is not None else None,
+                    **self._proxy_flags(),
+                }
+            },
+        )
 
     @staticmethod
     def _normalize_timestamp(value: Any) -> str:
@@ -160,6 +383,7 @@ class TavilyResearchClient:
                     "query_length": query_length,
                     "max_results": int(max_results),
                     "search_depth": str(search_depth or "advanced"),
+                    **self._network_diag_snapshot(),
                 }
             },
         )
@@ -217,12 +441,14 @@ class TavilyResearchClient:
                         "latency_ms": latency_ms,
                         "max_results": int(max_results),
                         "search_depth": str(search_depth or "advanced"),
+                        **self._network_diag_snapshot(),
                     }
                 },
             )
             return sources
 
         except Exception as exc:
+            self._maybe_emit_network_diagnostics(trigger="search_failure")
             latency_ms = int((time.perf_counter() - started) * 1000)
             logger.exception(
                 "Tavily search failed",
@@ -236,6 +462,17 @@ class TavilyResearchClient:
                         "search_depth": str(search_depth or "advanced"),
                         "latency_ms": latency_ms,
                         "error_type": type(exc).__name__,
+                        "error_kind": self._classify_error_kind(exc),
+                        "error_message": self._error_message_excerpt(exc),
+                        "error_chain_types": self._exception_chain_types(exc),
+                        "diagnostic_host": str(
+                            getattr(self, "_diagnostic_host", self._DEFAULT_DIAGNOSTIC_HOST)
+                        ),
+                        "diagnostic_port": int(
+                            getattr(self, "_diagnostic_port", self._DEFAULT_DIAGNOSTIC_PORT)
+                        ),
+                        **self._network_diag_snapshot(),
+                        **self._proxy_flags(),
                     }
                 },
             )
@@ -262,6 +499,7 @@ class TavilyResearchClient:
                     "provider": "tavily",
                     "query_hash": query_hash,
                     "query_length": query_length,
+                    **self._network_diag_snapshot(),
                 }
             },
         )
@@ -294,12 +532,14 @@ class TavilyResearchClient:
                         "result_count": len(sources),
                         "answer_length": len(answer),
                         "latency_ms": latency_ms,
+                        **self._network_diag_snapshot(),
                     }
                 },
             )
             return answer, sources
 
         except Exception as exc:
+            self._maybe_emit_network_diagnostics(trigger="qna_failure")
             latency_ms = int((time.perf_counter() - started) * 1000)
             logger.exception(
                 "Tavily QnA failed",
@@ -311,6 +551,17 @@ class TavilyResearchClient:
                         "query_length": query_length,
                         "latency_ms": latency_ms,
                         "error_type": type(exc).__name__,
+                        "error_kind": self._classify_error_kind(exc),
+                        "error_message": self._error_message_excerpt(exc),
+                        "error_chain_types": self._exception_chain_types(exc),
+                        "diagnostic_host": str(
+                            getattr(self, "_diagnostic_host", self._DEFAULT_DIAGNOSTIC_HOST)
+                        ),
+                        "diagnostic_port": int(
+                            getattr(self, "_diagnostic_port", self._DEFAULT_DIAGNOSTIC_PORT)
+                        ),
+                        **self._network_diag_snapshot(),
+                        **self._proxy_flags(),
                     }
                 },
             )

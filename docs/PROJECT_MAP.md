@@ -82,6 +82,11 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Update repository/table usage under `db/` + `server/`
   3. Follow `docs/runbooks/db-migrations.md`
 
+- Investigate production logging incidents on AWS EC2:
+  1. Follow `docs/runbooks/aws-ec2-logging.md`
+  2. Correlate CloudFront/WAF logs with `request_id`/`X-Amz-Cf-Id`
+  3. Use upload (`upload.*`) and research (`research.*`) event families for root cause
+
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-04-13

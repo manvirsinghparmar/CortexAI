@@ -1,4 +1,5 @@
 import uuid
+import logging
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -116,6 +117,93 @@ def test_files_upload_propagates_http_errors(client, monkeypatch):
     )
     assert response.status_code == 415
     assert response.json()["detail"]["code"] == "unsupported_file_type"
+
+
+def test_files_upload_emits_route_logging_events(client, monkeypatch, caplog):
+    from server import files_service
+
+    def _fake_upload_user_file(**_kwargs):
+        return {
+            "file_id": "7f8bb1b7-e5ef-4d6d-b8a8-43d14d6fd7bb",
+            "original_filename": "demo.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 5,
+            "status": "ready",
+            "error_code": None,
+            "error_message": None,
+            "ingestion_meta": {"ingestion_state": "none"},
+            "created_at": "2026-03-20T00:00:00Z",
+            "updated_at": "2026-03-20T00:00:00Z",
+            "expires_at": "2026-03-27T00:00:00Z",
+            "deduplicated": False,
+        }
+
+    monkeypatch.setattr(files_service, "upload_user_file", _fake_upload_user_file)
+
+    caplog.set_level(logging.INFO)
+    response = client.post(
+        "/v1/files/upload",
+        data=b"hello",
+        headers={
+            "X-API-Key": "dev-key-1",
+            "Content-Type": "text/plain",
+            "Content-Length": "5",
+            "X-File-Name": "demo.txt",
+            "X-File-Content-Type": "text/plain",
+            "X-Amz-Cf-Id": "edge-id-123",
+            "X-Forwarded-For": "1.1.1.1,2.2.2.2",
+            "Host": "kudlo.triobrain.com",
+        },
+    )
+    assert response.status_code == 200
+
+    events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "upload.route.received" in events
+    assert "upload.route.payload.read" in events
+    assert "upload.route.success" in events
+
+    received = next(
+        record
+        for record in caplog.records
+        if getattr(record, "extra_fields", {}).get("event") == "upload.route.received"
+    )
+    assert received.extra_fields["has_x_api_key_header"] is True
+    assert received.extra_fields["x_forwarded_for_first"] == "1.1.1.1"
+    assert received.extra_fields["x_forwarded_for_hops"] == 2
+    assert received.extra_fields["edge_headers"]["x_amz_cf_id"] == "edge-id-123"
+
+
+def test_files_upload_logs_route_rejection(client, monkeypatch, caplog):
+    from server import files_service
+
+    def _fake_upload_user_file(**_kwargs):
+        raise HTTPException(
+            status_code=415,
+            detail={"code": "unsupported_file_type", "message": "Unsupported file type"},
+        )
+
+    monkeypatch.setattr(files_service, "upload_user_file", _fake_upload_user_file)
+
+    caplog.set_level(logging.INFO)
+    response = client.post(
+        "/v1/files/upload",
+        data=b"\x01\x02",
+        headers={
+            "X-API-Key": "dev-key-1",
+            "Content-Type": "application/octet-stream",
+            "X-File-Name": "demo.exe",
+            "X-File-Content-Type": "application/octet-stream",
+        },
+    )
+    assert response.status_code == 415
+
+    rejected = next(
+        record
+        for record in caplog.records
+        if getattr(record, "extra_fields", {}).get("event") == "upload.route.rejected"
+    )
+    assert rejected.extra_fields["status_code"] == 415
+    assert rejected.extra_fields["error_code"] == "unsupported_file_type"
 
 
 def test_files_get_status_uses_service_result(client, monkeypatch):

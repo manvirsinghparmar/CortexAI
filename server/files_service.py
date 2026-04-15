@@ -506,9 +506,19 @@ def _maybe_finalize_processing_file(
     return refreshed or row
 
 
-def _assert_feature_enabled() -> None:
+def _assert_feature_enabled(*, request_id: str | None = None) -> None:
     if attachments_enabled():
         return
+    logger.warning(
+        "Attachment request rejected because feature is disabled",
+        extra={
+            "extra_fields": {
+                "event": "upload.feature.disabled",
+                "request_id": request_id,
+                "env_enable_attachments": str(os.getenv("ENABLE_ATTACHMENTS", "")),
+            }
+        },
+    )
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
@@ -518,9 +528,20 @@ def _assert_feature_enabled() -> None:
     )
 
 
-def _assert_db_enabled() -> None:
+def _assert_db_enabled(*, request_id: str | None = None) -> None:
     if API_DB_ENABLED:
         return
+    logger.warning(
+        "Attachment request rejected because DB mode is disabled",
+        extra={
+            "extra_fields": {
+                "event": "upload.db.disabled",
+                "request_id": request_id,
+                "api_db_enabled": bool(API_DB_ENABLED),
+                "database_url_configured": bool(str(os.getenv("DATABASE_URL") or "").strip()),
+            }
+        },
+    )
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail={
@@ -539,8 +560,8 @@ def upload_user_file(
     payload: bytes,
 ) -> dict[str, Any]:
     """Validate, store, and persist attachment metadata for one user file."""
-    _assert_feature_enabled()
-    _assert_db_enabled()
+    _assert_feature_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
 
     logger.info(
         "Attachment upload received",
@@ -557,6 +578,17 @@ def upload_user_file(
 
     normalized_mime = str(mime_type or "").strip().lower()
     if not normalized_mime:
+        logger.warning(
+            "Attachment upload rejected: missing MIME type",
+            extra={
+                "extra_fields": {
+                    "event": "upload.validation.invalid_mime",
+                    "request_id": request_id,
+                    "filename_hash": _hash_for_logs(filename),
+                    "size_bytes": len(payload or b""),
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_mime_type", "message": "File MIME type is required."},
@@ -564,6 +596,18 @@ def upload_user_file(
 
     allowed = _allowed_mime_types()
     if normalized_mime not in allowed:
+        logger.warning(
+            "Attachment upload rejected: unsupported MIME type",
+            extra={
+                "extra_fields": {
+                    "event": "upload.validation.unsupported_mime",
+                    "request_id": request_id,
+                    "mime_type": normalized_mime,
+                    "filename_hash": _hash_for_logs(filename),
+                    "size_bytes": len(payload or b""),
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail={
@@ -575,11 +619,35 @@ def upload_user_file(
 
     max_file_bytes = _max_upload_bytes()
     if not payload:
+        logger.warning(
+            "Attachment upload rejected: empty payload",
+            extra={
+                "extra_fields": {
+                    "event": "upload.validation.empty_payload",
+                    "request_id": request_id,
+                    "mime_type": normalized_mime,
+                    "filename_hash": _hash_for_logs(filename),
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "empty_file", "message": "Uploaded file is empty."},
         )
     if len(payload) > max_file_bytes:
+        logger.warning(
+            "Attachment upload rejected: file too large",
+            extra={
+                "extra_fields": {
+                    "event": "upload.validation.file_too_large",
+                    "request_id": request_id,
+                    "mime_type": normalized_mime,
+                    "filename_hash": _hash_for_logs(filename),
+                    "size_bytes": len(payload),
+                    "max_file_bytes": max_file_bytes,
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail={
@@ -600,6 +668,22 @@ def upload_user_file(
             api_key=api_key,
             request_id=request_id,
             db_session=db_session,
+        )
+        logger.info(
+            "Attachment upload auth resolved",
+            extra={
+                "extra_fields": {
+                    "event": "upload.auth.resolved",
+                    "request_id": request_id,
+                    "user_id": str(getattr(resolution, "user_id", "")),
+                    "api_key_id": (
+                        str(getattr(resolution, "api_key_id", "") or "")
+                        if getattr(resolution, "api_key_id", None)
+                        else None
+                    ),
+                    "decision_path": str(getattr(resolution, "decision_path", "")),
+                }
+            },
         )
 
         existing = find_active_uploaded_file_by_hash(
@@ -865,8 +949,8 @@ def get_user_file(
     file_id: UUID,
 ) -> dict[str, Any]:
     """Fetch file metadata scoped to the API key owner."""
-    _assert_feature_enabled()
-    _assert_db_enabled()
+    _assert_feature_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
     logger.info(
         "Attachment status lookup requested",
         extra={

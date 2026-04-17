@@ -14,7 +14,7 @@
       "value": "dev-key-1"
     },
     {
-      "key": "cognito_id_token",
+      "key": "bearer_token",
       "value": ""
     },
     {
@@ -226,7 +226,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "X-File-Name",
@@ -275,7 +275,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/files/{{file_id}}"
@@ -306,7 +306,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",
@@ -347,7 +347,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",
@@ -396,7 +396,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",
@@ -438,7 +438,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{cognito_id_token}}"
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",

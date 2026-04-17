@@ -69,19 +69,19 @@ python run_server.py --reload
 
 Protected `/v1/*` endpoints accept any one of:
 - `cortex_session` cookie
-- `Authorization: Bearer <Cognito-ID-token>`
+- `Authorization: Bearer <gateway-bearer-token>`
 - `X-API-Key: <key-from-API_KEYS>`
 
 Invalid or missing credentials return `401`.
 
 Session-scoped endpoints (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`) are session-scoped:
-- accepted auth: `cortex_session` cookie or `Authorization: Bearer <Cognito-ID-token>`
+- accepted auth: `cortex_session` cookie or `Authorization: Bearer <gateway-bearer-token>`
 - API-key-only auth is rejected with `403` (`session_auth_required`)
 
 ## API Key Persistence Policy
 
 In required DB runtime mode, API-key flows can resolve key ownership before model invocation.
-Session-scoped chat/compare/files flows resolve persisted user identity from session/cognito auth.
+Session-scoped chat/compare/files flows resolve persisted user identity from session/bearer auth.
 
 Env flags:
 - `AUTO_REGISTER_UNMAPPED_API_KEYS=false` (safe default)

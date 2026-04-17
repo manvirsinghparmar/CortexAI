@@ -177,7 +177,7 @@ Optional frontend runtime config for separate API host:
 
 ## Authentication
 
-Most `/v1/*` routes accept either **API key** or **Cognito (e.g. Gmail/Google) ID token**.
+Most `/v1/*` routes accept either **API key** or a **gateway bearer token**.
 
 Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/chat`
@@ -188,7 +188,7 @@ Session-scoped routes require signed-in identity auth (not API key):
 
 Accepted auth for session-scoped routes:
 ```http
-Authorization: Bearer <Cognito-ID-token>
+Authorization: Bearer <gateway-bearer-token>
 ```
 or `cortex_session` cookie.
 
@@ -249,7 +249,7 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_REGION` – AWS region
    - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
    - `COGNITO_REDIRECT_URI` – (optional) Callback URL; defaults to current origin + pathname
-3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the ID token is stored and sent as `Authorization: Bearer <token>` on all API requests. Sessions/history are tied to the Cognito user (user created or looked up by `sub` in the database).
+3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the bearer token is stored and sent as `Authorization: Bearer <token>` on API requests. Sessions/history are tied to the authenticated user identity.
 
 `/v1/models` now includes attachment capability metadata per model:
 - `supports_image_input`
@@ -263,7 +263,7 @@ To enable "Sign in with Google" via Amazon Cognito:
 
 Authentication (session-scoped routes):
 - `cortex_session` cookie, or
-- `Authorization: Bearer <Cognito-ID-token>`
+- `Authorization: Bearer <gateway-bearer-token>`
 
 Headers:
 - `X-File-Name: <original-filename>` (optional, defaults to `file`)
@@ -272,7 +272,7 @@ Headers:
 Example:
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/files/upload \
-  -H "Authorization: Bearer <cognito-id-token>" \
+  -H "Authorization: Bearer <gateway-bearer-token>" \
   -H "X-File-Name: contract.pdf" \
   -H "X-File-Content-Type: application/pdf" \
   --data-binary "@contract.pdf"
@@ -499,9 +499,9 @@ Common `detail.code` values:
 import requests
 
 class CortexClient:
-    def __init__(self, base_url: str, cognito_id_token: str):
+    def __init__(self, base_url: str, bearer_token: str):
         self.base_url = base_url.rstrip("/")
-        self.headers = {"Authorization": f"Bearer {cognito_id_token}"}
+        self.headers = {"Authorization": f"Bearer {bearer_token}"}
 
     def chat(self, prompt: str, provider: str | None = None, model: str | None = None):
         payload = {"prompt": prompt}

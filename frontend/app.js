@@ -16,6 +16,7 @@ const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
 function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
 function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
 function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return { "X-API-Key": API_KEY }; }
+function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
 function handleCognitoCallback() { const hash = window.location.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, window.location.pathname + (window.location.search || "")); } }
 async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
@@ -1923,6 +1924,41 @@ function getUserFriendlyUploadError(error) {
     const { status, kind, message } = sanitizeUploadError(error);
 
     if (
+        status === 404
+        && (message.includes("attachments are disabled") || message.includes("attachments_disabled"))
+    ) {
+        return "Attachment uploads are disabled in this environment.";
+    }
+
+    if (
+        status === 401
+        || message.includes("invalid or missing credentials")
+        || message.includes("not authenticated")
+        || message.includes("missing credentials")
+    ) {
+        return "Upload failed because your session is not authenticated. Please sign in again and retry.";
+    }
+
+    if (
+        status === 403
+        && (
+            message.includes("session_auth_required")
+            || message.includes("session-based auth")
+            || message.includes("cortex_session")
+        )
+    ) {
+        return "Upload requires a signed-in session. Please sign in and retry.";
+    }
+
+    if (
+        status === 403
+        || message.includes("forbidden")
+        || message.includes("not mapped for persistence")
+    ) {
+        return "Upload failed because this account is not allowed to store attachments in the current workspace.";
+    }
+
+    if (
         kind === "timeout"
         || status === 408
         || status === 504
@@ -2145,8 +2181,9 @@ async function uploadAttachmentFile(item) {
     const fileNameHeader = toSafeHeaderFileName(item.filename);
     const resp = await fetchWithTimeout(`${API_BASE}/v1/files/upload`, {
         method: "POST",
+        credentials: "include",
         headers: {
-            "X-API-Key": API_KEY,
+            ...getSessionScopedAuthHeaders(),
             "X-File-Name": fileNameHeader,
             "X-File-Content-Type": item.mime_type,
             "Content-Type": item.mime_type || "application/octet-stream",
@@ -2163,7 +2200,8 @@ async function uploadAttachmentFile(item) {
 async function fetchAttachmentStatus(fileId) {
     const resp = await fetchWithTimeout(`${API_BASE}/v1/files/${encodeURIComponent(fileId)}`, {
         method: "GET",
-        headers: { "X-API-Key": API_KEY },
+        credentials: "include",
+        headers: getSessionScopedAuthHeaders(),
     }, ATTACHMENT_UPLOAD_TIMEOUT_MS);
 
     if (!resp.ok) {
@@ -2961,10 +2999,11 @@ async function callAPIStream(path, body, onEvent, options = {}) {
     const signal = options?.signal;
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
+        credentials: "include",
         headers: {
             "Content-Type": "application/json",
             "Accept": "application/x-ndjson",
-            ...getAuthHeaders(),
+            ...getSessionScopedAuthHeaders(),
         },
         body: JSON.stringify(body),
         signal,
@@ -3036,6 +3075,7 @@ function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
 function mapStatusToErrorKind(statusRaw) {
     const status = Number(statusRaw);
     if (!Number.isFinite(status)) return "";
+    if (status === 401 || status === 403) return "auth";
     if (status === 408 || status === 504) return "timeout";
     if (status >= 500) return "service";
     return "";
@@ -3071,6 +3111,16 @@ function inferErrorKindFromMessage(rawMessage) {
         || message.includes("server error")
     ) {
         return "service";
+    }
+    if (
+        message.includes("session_auth_required")
+        || message.includes("session-based auth")
+        || message.includes("cortex_session")
+        || message.includes("not authenticated")
+        || message.includes("invalid or missing credentials")
+        || message.includes("authorization: bearer")
+    ) {
+        return "auth";
     }
     return "";
 }
@@ -3869,6 +3919,11 @@ function clearResults() {
 }
 
 const FRIENDLY_ERROR_COPY = {
+    auth: {
+        title: "Sign-in required",
+        message: "This action requires a signed-in session.",
+        hint: "Sign in, then try your request again.",
+    },
     connection: {
         title: "Connection issue",
         message: "We're having trouble reaching the CortexAI service right now. Your request wasn't processed.",

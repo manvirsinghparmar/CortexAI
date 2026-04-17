@@ -41,11 +41,9 @@ Set API key in environment:
 TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Install dependency:
+Dependency:
 
-```bash
-pip install tavily-python
-```
+- `tavily-python` is included in `requirements.txt` for standard installs.
 
 ## Validation
 
@@ -62,4 +60,4 @@ Recommended checks:
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-04-15

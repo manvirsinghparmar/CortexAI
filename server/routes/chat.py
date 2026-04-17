@@ -19,7 +19,7 @@ from config.provider_catalog import (
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import attachments as attachments_service
-from server.dependencies import get_auth, get_orchestrator
+from server.dependencies import AuthResult, get_auth, get_orchestrator
 from server import persistence as persistence_service
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
@@ -50,6 +50,44 @@ ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _persist_chat_interaction = persistence_service.persist_chat_interaction
 _resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
+
+
+def _auth_mode(auth: AuthResult) -> str:
+    if auth.user_id is not None:
+        return "session_cookie"
+    if auth.is_cognito:
+        return "cognito"
+    if auth.api_key_or_none():
+        return "api_key"
+    return "unknown"
+
+
+def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
+    """
+    Chat routes are session-scoped to user identity and must not use API-key auth.
+    """
+    if auth.user_id is not None or auth.is_cognito:
+        return
+    logger.warning(
+        "Chat route rejected non-session auth",
+        extra={
+            "extra_fields": {
+                "event": "chat.route.rejected.auth_mode",
+                "request_id": request_id,
+                "auth_mode": _auth_mode(auth),
+            }
+        },
+    )
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "session_auth_required",
+            "message": (
+                "Chat routes require session-based auth "
+                "(cortex_session cookie or Authorization: Bearer)."
+            ),
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -421,9 +459,11 @@ async def chat(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Send a prompt to a single AI model and get a response."""
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=req_id)
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
     requested_session_id = request.context.session_id if request.context else None
@@ -431,7 +471,7 @@ async def chat(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -548,9 +588,11 @@ async def chat_stream(
     request: ChatRequest,
     http_request: Request,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Stream a single-model chat response as NDJSON events."""
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=req_id)
     request.context = validate_and_trim_context(request.context)
     context = _build_user_context(request.context)
     requested_session_id = request.context.session_id if request.context else None
@@ -558,7 +600,7 @@ async def chat_stream(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    
 
     persistence_resolution: ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}

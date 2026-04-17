@@ -22,6 +22,7 @@ from db import (
     update_uploaded_file_status,
 )
 from server import attachments as attachments_service
+from server.dependencies import AuthResult
 from server import persistence as persistence_service
 from server.object_storage import (
     ObjectStorageConfigurationError,
@@ -35,6 +36,7 @@ logger = get_logger(__name__)
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _db_uow = persistence_service.db_uow
 _resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
+_resolve_identity = persistence_service.resolve_identity
 
 DEFAULT_ALLOWED_MIME_TYPES = (
     "image/jpeg",
@@ -553,13 +555,14 @@ def _assert_db_enabled(*, request_id: str | None = None) -> None:
 
 def upload_user_file(
     *,
-    api_key: str,
+    api_key: str | None = None,
+    auth: AuthResult | None = None,
     request_id: str,
     filename: str,
     mime_type: str,
     payload: bytes,
 ) -> dict[str, Any]:
-    """Validate, store, and persist attachment metadata for one user file."""
+    """Validate, store, and persist attachment metadata for one authenticated user file."""
     _assert_feature_enabled(request_id=request_id)
     _assert_db_enabled(request_id=request_id)
 
@@ -664,11 +667,19 @@ def upload_user_file(
     expires_at = now_utc + timedelta(hours=_attachment_ttl_hours())
 
     with _db_uow() as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=request_id,
-            db_session=db_session,
-        )
+        raw_api_key = str((auth.api_key if auth else api_key) or "").strip()
+        if auth is not None:
+            resolution = _resolve_identity(
+                auth=auth,
+                request_id=request_id,
+                db_session=db_session,
+            )
+        else:
+            resolution = _resolve_api_key_for_request(
+                api_key=raw_api_key,
+                request_id=request_id,
+                db_session=db_session,
+            )
         logger.info(
             "Attachment upload auth resolved",
             extra={
@@ -697,8 +708,8 @@ def upload_user_file(
             "processing",
             "ready",
         }:
-            if resolution.api_key_id is not None:
-                update_api_key_last_used(db_session, api_key)
+            if resolution.api_key_id is not None and raw_api_key:
+                update_api_key_last_used(db_session, raw_api_key)
             logger.info(
                 "Attachment upload deduplicated",
                 extra={
@@ -908,8 +919,8 @@ def upload_user_file(
                 )
             raise
 
-        if resolution.api_key_id is not None:
-            update_api_key_last_used(db_session, api_key)
+        if resolution.api_key_id is not None and raw_api_key:
+            update_api_key_last_used(db_session, raw_api_key)
 
         row = get_uploaded_file_for_user(
             db_session,
@@ -944,11 +955,12 @@ def upload_user_file(
 
 def get_user_file(
     *,
-    api_key: str,
+    api_key: str | None = None,
+    auth: AuthResult | None = None,
     request_id: str,
     file_id: UUID,
 ) -> dict[str, Any]:
-    """Fetch file metadata scoped to the API key owner."""
+    """Fetch file metadata scoped to the authenticated owner."""
     _assert_feature_enabled(request_id=request_id)
     _assert_db_enabled(request_id=request_id)
     logger.info(
@@ -963,11 +975,18 @@ def get_user_file(
     )
 
     with _db_uow() as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=request_id,
-            db_session=db_session,
-        )
+        if auth is not None:
+            resolution = _resolve_identity(
+                auth=auth,
+                request_id=request_id,
+                db_session=db_session,
+            )
+        else:
+            resolution = _resolve_api_key_for_request(
+                api_key=str(api_key or "").strip(),
+                request_id=request_id,
+                db_session=db_session,
+            )
         row = get_uploaded_file_for_user(
             db_session,
             user_id=resolution.user_id,

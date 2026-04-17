@@ -80,6 +80,8 @@ HTTP lifecycle events:
 Tavily / research:
 
 - `research.provider.selected`
+- `research.init.failed` (ERROR when configured research cannot start, e.g. missing dependency)
+- `research.init.unavailable` (WARNING when research is not configured/available)
 - `research.network.diagnostics`
 - `research.cache.hit|bypass`
 - `research.dispatch`
@@ -97,6 +99,9 @@ Tavily failure logs include:
 Attachments and object storage:
 
 - `upload.route.received|payload.read|success|rejected|rejected.empty_body|exception`
+- `upload.route.rejected.auth_mode` (API-key auth blocked on session-scoped attachment routes)
+- `chat.route.rejected.auth_mode` (API-key auth blocked on session-scoped chat routes)
+- `compare.route.rejected.auth_mode` (API-key auth blocked on session-scoped compare routes)
 - `upload.received|deduplicated|completed`
 - `upload.storage.put.start|success|failure`
 - `upload.metadata.persisted`
@@ -171,4 +176,4 @@ journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
 
 ---
 
-Last updated: 2026-04-13
+Last updated: 2026-04-15

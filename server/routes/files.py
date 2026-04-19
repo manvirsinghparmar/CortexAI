@@ -80,6 +80,34 @@ def _auth_mode(auth: AuthResult) -> str:
     return "unknown"
 
 
+def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
+    """
+    Attachments are session-scoped to user identity and must not use API-key auth.
+    """
+    if auth.user_id is not None or auth.is_cognito:
+        return
+    logger.warning(
+        "Attachment route rejected non-session auth",
+        extra={
+            "extra_fields": {
+                "event": "upload.route.rejected.auth_mode",
+                "request_id": request_id,
+                "auth_mode": _auth_mode(auth),
+            }
+        },
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "session_auth_required",
+            "message": (
+                "Attachment routes require session-based auth "
+                "(cortex_session cookie or Authorization: Bearer)."
+            ),
+        },
+    )
+
+
 def _edge_context_fields(request: Request, *, request_id: str, auth: AuthResult) -> dict[str, Any]:
     x_forwarded_for = _header_value(request, "X-Forwarded-For") or ""
     forwarded_chain = [part.strip() for part in x_forwarded_for.split(",") if part.strip()]
@@ -131,6 +159,7 @@ async def upload_file(
     - X-File-Content-Type: file MIME type (optional; falls back to Content-Type)
     """
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=request_id)
     filename = _header_value(request, "X-File-Name") or "file"
     mime_type = (
         _header_value(request, "X-File-Content-Type")
@@ -191,7 +220,7 @@ async def upload_file(
 
     try:
         result = files_service.upload_user_file(
-            api_key=auth.api_key_or_none(),
+            auth=auth,
             request_id=request_id,
             filename=filename,
             mime_type=mime_type,
@@ -253,10 +282,11 @@ async def get_file_status(
     file_id: UUID,
     auth: AuthResult = Depends(get_auth),
 ):
-    """Get one uploaded file metadata row scoped to API key ownership."""
+    """Get one uploaded file metadata row scoped to authenticated user identity."""
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _require_session_scoped_auth(auth=auth, request_id=request_id)
     result = files_service.get_user_file(
-        api_key=auth.api_key_or_none(),
+        auth=auth,
         request_id=request_id,
         file_id=file_id,
     )

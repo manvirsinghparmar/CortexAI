@@ -176,10 +176,20 @@ def resolve_api_key_for_request(
 
     When db_session is provided, caller owns transaction boundaries.
     """
+    normalized_api_key = str(api_key or "").strip()
+    if not normalized_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Invalid or missing credentials "
+                "(send cortex_session cookie, X-API-Key, or Authorization: Bearer)"
+            ),
+        )
+
     if db_session is not None:
         return _resolve_api_key_for_request_in_session(
             db_session,
-            api_key=api_key,
+            api_key=normalized_api_key,
             request_id=request_id,
         )
 
@@ -187,7 +197,7 @@ def resolve_api_key_for_request(
         with db_uow() as owned_session:
             return _resolve_api_key_for_request_in_session(
                 owned_session,
-                api_key=api_key,
+                api_key=normalized_api_key,
                 request_id=request_id,
             )
     except HTTPException:

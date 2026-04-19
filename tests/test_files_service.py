@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from server import files_service
+from server.dependencies import AuthResult
 from server.object_storage import ObjectStorageOperationError
 
 
@@ -482,3 +483,88 @@ def test_get_user_file_finalizes_processing_file(monkeypatch):
     assert result["status"] == "ready"
     assert result["ingestion_meta"]["ingestion_state"] == "ready"
     assert result["ingestion_meta"]["artifact_meta"]["materialization"] == "text"
+
+
+def test_upload_resolves_identity_from_session_auth(monkeypatch):
+    _configure_enabled_db(monkeypatch)
+
+    session_user_id = uuid4()
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_identity",
+        lambda **_kwargs: SimpleNamespace(user_id=session_user_id, api_key_id=None),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_api_key_for_request",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API-key-only resolver should not be used")),
+    )
+
+    existing_row = {
+        "id": uuid4(),
+        "original_filename": "demo.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "ready",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {"ingestion_state": "none"},
+        "created_at": "2026-03-20T00:00:00Z",
+        "updated_at": "2026-03-20T00:00:00Z",
+        "expires_at": "2026-03-27T00:00:00Z",
+    }
+    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: existing_row)
+
+    payload = files_service.upload_user_file(
+        auth=AuthResult(api_key=None, cognito_claims=None, user_id=session_user_id),
+        request_id="req-session-auth",
+        filename="demo.txt",
+        mime_type="text/plain",
+        payload=b"hello",
+    )
+
+    assert payload["deduplicated"] is True
+    assert payload["status"] == "ready"
+
+
+def test_get_user_file_resolves_identity_from_session_auth(monkeypatch):
+    _configure_enabled_db(monkeypatch)
+
+    session_user_id = uuid4()
+    file_id = uuid4()
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_identity",
+        lambda **_kwargs: SimpleNamespace(user_id=session_user_id, api_key_id=None),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_api_key_for_request",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API-key-only resolver should not be used")),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: {
+            "id": file_id,
+            "original_filename": "demo.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 5,
+            "status": "ready",
+            "error_code": None,
+            "error_message": None,
+            "ingestion_meta": {"ingestion_state": "none"},
+            "created_at": "2026-03-20T00:00:00Z",
+            "updated_at": "2026-03-20T00:00:00Z",
+            "expires_at": "2026-03-27T00:00:00Z",
+        },
+    )
+
+    result = files_service.get_user_file(
+        auth=AuthResult(api_key=None, cognito_claims=None, user_id=session_user_id),
+        request_id="req-session-status",
+        file_id=file_id,
+    )
+
+    assert result["file_id"] == str(file_id)
+    assert result["status"] == "ready"

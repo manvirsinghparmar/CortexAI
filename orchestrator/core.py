@@ -102,7 +102,25 @@ class CortexOrchestrator:
         except Exception as e:
             self.research_service = None
             self.session_store = None
-            logger.warning(f"Research service not available: {e}")
+            if isinstance(e, ModuleNotFoundError):
+                logger.error(
+                    f"Research service initialization failed: {e}",
+                    extra={
+                        "extra_fields": {
+                            "event": "research.init.failed",
+                            "error_kind": "missing_dependency",
+                        }
+                    },
+                )
+            else:
+                logger.warning(
+                    f"Research service not available: {e}",
+                    extra={
+                        "extra_fields": {
+                            "event": "research.init.unavailable",
+                        }
+                    },
+                )
 
         # Initialize smart routing components (optional but preferred)
         try:

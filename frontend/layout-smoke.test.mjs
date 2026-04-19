@@ -56,20 +56,24 @@ test("top mode tabs use Ask and Compare labels", () => {
     assert.match(html, /id="btnCompareMode"[\s\S]*>\s*Compare\s*</);
 });
 
-test("toolbar keeps compact auto, web, and rewrite feature chips", () => {
+test("toolbar uses Smart, With sources, and Improve chip labels", () => {
     assert.doesNotMatch(html, /route-pill-group/);
     assert.match(html, /id="routeOptimizeBtn"/);
     assert.match(html, /id="routeResearchBtn"/);
-    assert.match(html, /id="routeSmartBtn"[\s\S]*>\s*Auto\s*</);
-    assert.match(html, /id="routeResearchBtn"[\s\S]*chip-icon/);
-    assert.match(html, /id="routeResearchBtn"[\s\S]*>\s*<span>Web<\/span>/);
-    assert.match(html, /id="routeOptimizeBtn"[\s\S]*Rewrite/);
+    assert.match(html, /id="routeSmartBtn"[\s\S]*chip-icon/);
+    assert.match(html, /id="routeSmartBtn"[\s\S]*>\s*<span class="chip-label">Smart<\/span>/);
+    assert.match(html, /id="routeResearchBtn"[\s\S]*>\s*<span class="chip-label">With sources<\/span>/);
+    assert.match(html, /id="routeOptimizeBtn"[\s\S]*>\s*<span class="chip-label">Improve<\/span>/);
 });
 
 test("composer chips have premium motion and visual-state styling without status text", () => {
     assert.match(appJs, /function triggerChipToggleFeedback\(button\) \{/);
+    assert.match(appJs, /setRoutingButtonState\(el\.routeSmartBtn, "Smart", smartAllowed && smartModeEnabled\);/);
+    assert.match(appJs, /setRoutingButtonState\(el\.routeResearchBtn, "With sources", isResearchEnabledForCurrentMode\(\)\);/);
+    assert.match(appJs, /setRoutingButtonState\(el\.routeOptimizeBtn, "Improve", optimizeEnabled\);/);
     assert.match(styleCss, /\.feature-chip:hover:not\(:disabled\) \{/);
     assert.match(styleCss, /transform:\s*translateY\(-1px\);/);
+    assert.match(styleCss, /transform:\s*scale\(1\.02\);/);
     assert.match(styleCss, /\.feature-chip\.active,/);
     assert.match(styleCss, /\.feature-chip:disabled \{/);
     assert.match(styleCss, /\.feature-chip\.is-toggling \{/);
@@ -77,12 +81,29 @@ test("composer chips have premium motion and visual-state styling without status
     assert.match(styleCss, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.feature-chip\.is-toggling \{/);
 });
 
-test("feature chips expose concise tooltip copy and compact active hint container", () => {
-    assert.match(html, /Automatically selects the best model based on quality, speed, and cost\./);
-    assert.match(html, /Searches the internet and includes citations\./);
-    assert.match(html, /Improves your prompt before sending\./);
-    assert.doesNotMatch(html, /Automatically picks the best model for your prompt\./);
+test("feature chips expose premium tooltip copy and compact active hint container", () => {
+    assert.match(html, /Gets you the best answer automatically/);
+    assert.match(html, /Uses latest information from the web/);
+    assert.match(html, /Helps you ask better for better results/);
+    assert.doesNotMatch(html, /Automatically selects the best model based on quality, speed, and cost\./);
+    assert.doesNotMatch(html, /Searches the internet and includes citations\./);
+    assert.doesNotMatch(html, /Automatically selects the best model for your request based on cost, latency, and token efficiency\./);
+    assert.doesNotMatch(html, /Searches the web and injects relevant up-to-date information into the prompt so the response can use the latest available context\./);
+    assert.doesNotMatch(html, /Optimizes your prompt before sending it so the model can generate a clearer and better response\./);
+    assert.doesNotMatch(html, /Rewrites your prompt for better results/);
     assert.match(html, /id="workspaceTagline"/);
+});
+
+test("composer chips use natural auto-width layout with premium spacing", () => {
+    assert.match(styleCss, /\.feature-strip \{[\s\S]*gap:\s*11px;[\s\S]*justify-content:\s*flex-start;[\s\S]*flex-wrap:\s*nowrap;/);
+    assert.match(styleCss, /\.composer-footer-features \{[\s\S]*width:\s*100%;[\s\S]*justify-content:\s*flex-start;[\s\S]*flex-wrap:\s*nowrap;/);
+    assert.match(styleCss, /\.feature-chip-wrap \{[^}]*display:\s*inline-flex;[^}]*flex:\s*0 0 auto;/);
+    assert.match(styleCss, /\.feature-chip \{[^}]*justify-content:\s*center;/);
+    assert.match(styleCss, /\.feature-chip \{[^}]*width:\s*auto;/);
+    assert.match(styleCss, /\.chip-label \{[\s\S]*text-overflow:\s*ellipsis;/);
+    assert.match(styleCss, /\.chip-tooltip \{[\s\S]*top:\s*auto;[\s\S]*bottom:\s*calc\(100%\s*\+\s*8px\);[\s\S]*max-width:\s*360px;[\s\S]*padding:\s*10px 12px;[\s\S]*border-radius:\s*12px;/);
+    assert.doesNotMatch(styleCss, /\.feature-chip-wrap \{[^}]*flex:\s*1 1 0;/);
+    assert.doesNotMatch(styleCss, /\.feature-chip \{[^}]*width:\s*100%;/);
 });
 
 test("compare mode is inline and no longer uses separate model-selection card", () => {
@@ -97,8 +118,8 @@ test("compare mode is inline and no longer uses separate model-selection card", 
 test("compare transcript renders turn-based side-by-side columns with model headers", () => {
     assert.match(appJs, /function buildCompareModelHeader\(providerRaw, modelRaw\)/);
     assert.match(appJs, /class="compare-model-header"/);
-    assert.match(appJs, /function buildCompareStreamingTurn\(promptText, targets, indexMap\)/);
-    assert.match(appJs, /function buildCompareTurn\(promptText, responses, startIndex = 0\)/);
+    assert.match(appJs, /function buildCompareStreamingTurn\(promptText, targets, indexMap(?:, options = \{\})?\)/);
+    assert.match(appJs, /function buildCompareTurn\(promptText, responses, startIndex = 0(?:, options = \{\})?\)/);
     assert.match(appJs, /<section class="compare-turn/);
     assert.match(appJs, /const gridClass = getCompareGridClass\(targets\.length\);/);
     assert.match(appJs, /const gridClass = getCompareGridClass\(safeResponses\.length\);/);
@@ -107,7 +128,10 @@ test("compare transcript renders turn-based side-by-side columns with model head
 });
 
 test("compare mode sends session context and preserves prompt history between turns", () => {
-    assert.match(appJs, /async function doCompare\(prompt, \{ streamRequest = null \} = \{\}\) \{[\s\S]*const sessionId = ensureActiveSessionId\(\);/);
+    assert.match(
+        appJs,
+        /async function doCompare\(prompt, \{[\s\S]*streamRequest = null,[\s\S]*attachments = \[\],[\s\S]*const sessionId = ensureActiveSessionId\(\);/,
+    );
     assert.match(appJs, /await callAPIStream\("\/v1\/compare\/stream", \{[\s\S]*context: \{[\s\S]*session_id: sessionId,[\s\S]*conversation_history: conversationHistory,[\s\S]*new_session: pendingNewSession,/);
     assert.match(appJs, /const compareAssistantContext = buildCompareAssistantContext\(compareResponsesForContext\);/);
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
@@ -143,9 +167,28 @@ test("header keeps only slim nav links without subtitle block", () => {
 
 test("brand uses typography-first wordmark without AI badge icon", () => {
     assert.match(html, /<span class="logo-text">CortexAI<\/span>/);
-    assert.match(html, /<span class="compact-logo-text">CortexAI<\/span>/);
     assert.doesNotMatch(html, /class="logo-icon"/);
-    assert.doesNotMatch(html, /class="compact-logo-icon"/);
+});
+
+test("floating compact header bar is removed from html, css, and script logic", () => {
+    assert.doesNotMatch(html, /id="compactBar"/);
+    assert.doesNotMatch(html, /id="compactModelInfo"/);
+    assert.doesNotMatch(html, /id="cBtnSingle"/);
+    assert.doesNotMatch(html, /id="cBtnCompare"/);
+    assert.doesNotMatch(html, /id="compactSendBtn"/);
+
+    assert.doesNotMatch(appJs, /compactBar/);
+    assert.doesNotMatch(appJs, /compactModelInfo/);
+    assert.doesNotMatch(appJs, /cBtnSingle/);
+    assert.doesNotMatch(appJs, /cBtnCompare/);
+    assert.doesNotMatch(appJs, /compactSendBtn/);
+    assert.doesNotMatch(appJs, /updateCompactBar/);
+    assert.doesNotMatch(appJs, /getCompactBadges/);
+
+    assert.doesNotMatch(styleCss, /\.compact-bar/);
+    assert.doesNotMatch(styleCss, /\.compact-model-info/);
+    assert.doesNotMatch(styleCss, /\.compact-mode-btn/);
+    assert.doesNotMatch(styleCss, /\.compact-send-btn/);
 });
 
 test("response cards and history hide price and latency metadata", () => {
@@ -267,6 +310,75 @@ test("historical transcripts render persisted web source citations", () => {
     assert.match(appJs, /const webSourceItems = normalizeWebSources\(entry\.web_source_items \|\| \[\]\);/);
     assert.match(appJs, /const webSources = normalizeWebSources\(resp\.web_source_items \|\| \[\]\);/);
     assert.match(appJs, /class="web-source-strip\$\{webSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Web sources"/);
+});
+
+test("composer supports attachment upload chips and request wiring", () => {
+    assert.match(html, /id="attachmentInput"/);
+    assert.match(html, /id="attachmentStrip"/);
+    assert.match(html, /id="attachmentList"/);
+    assert.match(html, /id="attachmentHint"/);
+    assert.match(appJs, /function ensureComposerInputsInteractive\(\) \{/);
+    assert.match(appJs, /el\.promptAddBtn\.disabled = false;/);
+    assert.match(appJs, /const hasAnyAttachments = attachmentItems\.length > 0;/);
+    assert.match(appJs, /const disabled = stopMode \? false : !\(hasPrompt \|\| hasAnyAttachments\);/);
+    assert.match(appJs, /if \(!rawPrompt && !hasAnyAttachments\) \{/);
+    assert.match(appJs, /const clearComposerAttachments = \(\) => \{/);
+    assert.match(appJs, /onBeforeRequestSend: clearComposerAttachments,/);
+    assert.match(appJs, /buildRequestAttachmentPayload\(\)/);
+    assert.match(appJs, /\/v1\/files\/upload/);
+    assert.match(appJs, /\.\.\.\(attachments\.length \? \{ attachments \} : \{\}\),/);
+    assert.match(appJs, /function getUserFriendlyUploadError\(error\) \{/);
+    assert.match(appJs, /function sanitizeUploadError\(apiError\) \{/);
+    assert.match(appJs, /const safeErrorMessage = isFailed \? getSafeAttachmentItemErrorMessage\(item\) : "";/);
+    assert.doesNotMatch(appJs, /escHtml\(String\(item\.error_message \|\| ""\)\)/);
+});
+
+test("composer enter key submits while shift+enter keeps newline", () => {
+    assert.match(
+        appJs,
+        /el\.promptInput\.addEventListener\("keydown", e => \{[\s\S]*if \(e\.key !== "Enter"\) return;[\s\S]*if \(e\.isComposing \|\| e\.keyCode === 229\) return;[\s\S]*if \(e\.shiftKey\) return;[\s\S]*e\.preventDefault\(\);[\s\S]*handlePrimaryComposerAction\(\);[\s\S]*\}\);/,
+    );
+    assert.doesNotMatch(appJs, /if \(e\.key === "Enter" && \(e\.ctrlKey \|\| e\.metaKey\)\)/);
+});
+
+test("user transcript can render file cards for sent attachments", () => {
+    assert.match(appJs, /function buildUserAttachmentCards\(attachments\) \{/);
+    assert.match(appJs, /class="chat-user-files"/);
+    assert.match(appJs, /class="user-file-card is-\$\{escHtml\(status\)\}"/);
+    assert.match(appJs, /const statusLabel = status === "uploading"/);
+    assert.match(styleCss, /\.chat-user-files \{/);
+    assert.match(styleCss, /\.user-file-card \{/);
+    assert.match(styleCss, /\.user-file-status \{/);
+});
+
+test("attachment compatibility treats text-extractable files as model-agnostic", () => {
+    assert.match(appJs, /const TEXT_MATERIALIZED_ATTACHMENT_MIME_TYPES = new Set\(\[/);
+    assert.match(
+        appJs,
+        /if \(binaryAttachments\.length === 0\) \{[\s\S]*return true;[\s\S]*\}/,
+    );
+    assert.match(appJs, /maxCount !== null && binaryAttachments\.length > maxCount/);
+    assert.match(
+        appJs,
+        /binaryAttachments\.every\(item => supportedMimeTypes\.has\(normalizeAttachmentMimeType\(item\.mime_type\)\)\)/,
+    );
+});
+
+test("composer remains interactive when submit button is disabled", () => {
+    assert.match(appJs, /function ensureComposerInputsInteractive\(\) \{/);
+    assert.match(
+        appJs,
+        /function ensureComposerInputsInteractive\(\) \{[\s\S]*el\.promptInput\.disabled = false;[\s\S]*el\.promptInput\.readOnly = false;[\s\S]*el\.promptAddBtn\.disabled = false;/,
+    );
+    assert.match(styleCss, /\.btn-submit:disabled \{[\s\S]*pointer-events:\s*none;/);
+    assert.match(styleCss, /#promptAddBtn \{[\s\S]*pointer-events:\s*auto !important;/);
+    assert.match(styleCss, /#promptInput \{[\s\S]*pointer-events:\s*auto !important;/);
+    assert.match(styleCss, /\.prompt-card \{[\s\S]*z-index:\s*320;/);
+});
+
+test("model picker options can render capability badges", () => {
+    assert.match(appJs, /model-picker-option-badge/);
+    assert.match(styleCss, /\.model-picker-option-badge \{/);
 });
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {

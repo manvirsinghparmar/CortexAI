@@ -8,13 +8,13 @@ from pydantic import BaseModel, Field
 
 from db import clear_llm_history, delete_llm_history_entry, get_llm_history_entries
 from server import persistence as persistence_service
-from server.dependencies import get_api_key
+from server.dependencies import get_auth
 
 router = APIRouter(prefix="/v1", tags=["History"])
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
-_resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
+_resolve_identity = persistence_service.resolve_identity
 _db_uow = persistence_service.db_uow
 
 
@@ -47,17 +47,17 @@ async def list_history(
     request: Request,
     limit: int = 100,
     session_id: str | None = None,
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Return recent chat history entries (newest first)."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     with _db_uow(commit_on_success=False) as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         return get_llm_history_entries(
             db_session,
             resolution.user_id,
@@ -70,17 +70,17 @@ async def list_history(
 async def delete_entry(
     request: Request,
     entry_id: int,
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Delete a single history entry by ID."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     with _db_uow() as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         removed = delete_llm_history_entry(db_session, resolution.user_id, entry_id)
 
     if not removed:
@@ -90,15 +90,15 @@ async def delete_entry(
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_history(
     request: Request,
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """Delete all history entries."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     with _db_uow() as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         clear_llm_history(db_session, resolution.user_id)

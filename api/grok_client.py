@@ -1,8 +1,9 @@
 import time
+from typing import Any
 
 import openai
 
-from models.unified_response import TokenUsage, UnifiedResponse
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 
@@ -58,20 +59,47 @@ class GrokClient(BaseAIClient):
 
         IMPORTANT: Never raises exceptions - returns UnifiedResponse with error instead
         """
-        request_id = self._generate_request_id()
+        request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
-            # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
+            normalized_messages, binary_attachments = self._merge_text_attachments_into_messages(
+                normalized_messages,
+                attachments,
+            )
+            unsupported_attachments = [
+                attachment["mime_type"]
+                for attachment in binary_attachments
+                if not str(attachment["mime_type"]).startswith("image/")
+            ]
+            if unsupported_attachments:
+                error = NormalizedError(
+                    code="bad_request",
+                    message=(
+                        "Grok adapter currently supports image attachments only. "
+                        f"Unsupported MIME types: {', '.join(sorted(set(unsupported_attachments)))}"
+                    ),
+                    provider="grok",
+                    retryable=False,
+                )
+                return self._create_error_response(
+                    request_id=request_id,
+                    error=error,
+                    latency_ms=self._measure_latency(start_time),
+                    model=model,
+                )
 
             request_payload = {
                 "model": model,
-                "messages": normalized_messages,
+                "messages": self._build_chat_messages(
+                    normalized_messages, attachments=binary_attachments
+                ),
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
@@ -218,6 +246,41 @@ class GrokClient(BaseAIClient):
             return self._create_error_response(
                 request_id=request_id, error=error, latency_ms=latency_ms, model=model
             )
+
+    @classmethod
+    def _build_chat_messages(
+        cls,
+        normalized_messages: list[dict[str, Any]],
+        *,
+        attachments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not attachments:
+            return normalized_messages
+
+        out: list[dict[str, Any]] = []
+        last_user_idx = None
+        for idx, message in enumerate(normalized_messages):
+            if str(message.get("role") or "").strip().lower() == "user":
+                last_user_idx = idx
+
+        for idx, message in enumerate(normalized_messages):
+            role = str(message.get("role") or "user").strip().lower()
+            text = cls._normalize_message_text(message)
+            if last_user_idx is not None and idx == last_user_idx:
+                content_parts: list[dict[str, Any]] = []
+                if text:
+                    content_parts.append({"type": "text", "text": text})
+                for attachment in attachments:
+                    data_uri = (
+                        f"data:{attachment['mime_type']};base64,{attachment['data_base64']}"
+                    )
+                    content_parts.append(
+                        {"type": "image_url", "image_url": {"url": data_uri}}
+                    )
+                out.append({"role": role, "content": content_parts or [{"type": "text", "text": ""}]})
+            else:
+                out.append({"role": role, "content": text})
+        return out
 
     @classmethod
     def list_available_models(cls, api_key: str = None, **kwargs) -> None:

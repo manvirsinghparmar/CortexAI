@@ -1,5 +1,17 @@
 providers:
   openai:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
       - name: "gpt-4.1-nano"
         tier: "T0"
@@ -7,6 +19,13 @@ providers:
         output_cost_per_1m: 0.400
         context_limit: 128000
         tags: ["cheap", "fast", "non_reasoning", "general"]
+        enabled: true
+      - name: "gpt-5.4-nano"
+        tier: "T0"
+        input_cost_per_1m: 0.200
+        output_cost_per_1m: 1.250
+        context_limit: 1000000
+        tags: ["cheap", "fast", "non_reasoning", "general", "long_context"]
         enabled: true
       - name: "gpt-4o-mini"
         tier: "T1"
@@ -22,12 +41,26 @@ providers:
         context_limit: 128000
         tags: ["fast", "balanced", "coding", "general"]
         enabled: true
+      - name: "gpt-5.4-mini"
+        tier: "T2"
+        input_cost_per_1m: 0.750
+        output_cost_per_1m: 4.500
+        context_limit: 1000000
+        tags: ["fast", "reasoning", "coding", "general", "long_context"]
+        enabled: true
       - name: "gpt-5.1"
         tier: "T2"
         input_cost_per_1m: 1.250
         output_cost_per_1m: 10.000
         context_limit: 128000
         tags: ["strong", "reasoning", "coding", "general", "long_context"]
+        enabled: true
+      - name: "gpt-5.4"
+        tier: "T3"
+        input_cost_per_1m: 2.500
+        output_cost_per_1m: 15.000
+        context_limit: 1000000
+        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
       - name: "gpt-5.2-codex"
         tier: "T3"
@@ -44,6 +77,18 @@ providers:
         tags: ["strong", "accurate", "balanced", "general"]
         enabled: true
   gemini:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
       - name: "gemini-2.5-flash-lite"
         tier: "T0"
@@ -67,6 +112,11 @@ providers:
         tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
   deepseek:
+    defaults:
+      supports_image_input: false
+      supported_attachment_mime_types: []
+      max_attachment_bytes: null
+      max_attachments_per_request: 0
     models:
       - name: "deepseek-chat"
         tier: "T1"
@@ -83,42 +133,52 @@ providers:
         tags: ["reasoning", "coding", "cheap", "long_context"]
         enabled: true
   grok:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif"]
+      max_attachment_bytes: 10485760
+      max_attachments_per_request: 5
     models:
       - name: "grok-4-1-fast-non-reasoning"
         tier: "T1"
-        input_cost_per_1m: 0.200
-        output_cost_per_1m: 0.500
-        context_limit: 128000
-        tags: ["fast", "non_reasoning", "general"]
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 5.000
+        context_limit: 2000000
+        tags: ["fast", "non_reasoning", "general", "long_context"]
         enabled: true
       - name: "grok-4-1-fast-reasoning"
         tier: "T3"
-        input_cost_per_1m: 0.200
-        output_cost_per_1m: 0.500
-        context_limit: 128000
+        input_cost_per_1m: 2.000
+        output_cost_per_1m: 5.000
+        context_limit: 2000000
         tags: ["fast", "reasoning", "coding", "long_context"]
         enabled: true
   claude:
+    defaults:
+      supports_image_input: true
+      supported_attachment_mime_types:
+        [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "application/pdf",
+        ]
+      max_attachment_bytes: 20971520
+      max_attachments_per_request: 5
     models:
-      - name: "claude-3-5-haiku-latest"
-        tier: "T0"
-        input_cost_per_1m: 0.800
-        output_cost_per_1m: 4.000
-        context_limit: 200000
-        tags: ["fast", "balanced", "non_reasoning", "general", "long_context"]
-        enabled: true
-      - name: "claude-3-5-sonnet-latest"
+      - name: "claude-haiku-4-5"
         tier: "T1"
-        input_cost_per_1m: 3.000
-        output_cost_per_1m: 15.000
+        input_cost_per_1m: 1.000
+        output_cost_per_1m: 5.000
         context_limit: 200000
-        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        tags: ["cheap", "fast", "general", "long_context"]
         enabled: true
-      - name: "claude-sonnet-4"
-        tier: "T2"
+      - name: "claude-sonnet-4-6"
+        tier: "T3"
         input_cost_per_1m: 3.000
         output_cost_per_1m: 15.000
-        context_limit: 200000
+        context_limit: 1000000
         tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
       - name: "claude-sonnet-4-5"
@@ -133,6 +193,13 @@ providers:
         input_cost_per_1m: 5.000
         output_cost_per_1m: 25.000
         context_limit: 200000
+        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
+        enabled: true
+      - name: "claude-opus-4-6"
+        tier: "T3"
+        input_cost_per_1m: 5.000
+        output_cost_per_1m: 25.000
+        context_limit: 1000000
         tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
 routing_defaults:

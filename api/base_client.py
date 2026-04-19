@@ -92,8 +92,8 @@ class BaseAIClient(ABC):
     # ============================================================
 
     def _normalize_input(
-        self, prompt: str | None = None, messages: list[dict[str, str]] | None = None
-    ) -> list[dict[str, str]]:
+        self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Normalize input to messages format.
 
@@ -124,6 +124,139 @@ class BaseAIClient(ABC):
         # Neither provided
         raise ValueError("Either 'prompt' or 'messages' must be provided")
 
+    @staticmethod
+    def _extract_text_from_content(content: Any) -> str:
+        """Extract plain text from provider-neutral message content."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return str(content or "")
+
+        text_chunks: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type") or "").strip().lower()
+            if block_type in {"text", "input_text", "output_text"}:
+                value = block.get("text")
+                if value is None:
+                    value = block.get("content")
+                if value:
+                    text_chunks.append(str(value))
+        return "".join(text_chunks).strip()
+
+    @classmethod
+    def _normalize_message_text(cls, message: dict[str, Any]) -> str:
+        return cls._extract_text_from_content(message.get("content"))
+
+    @staticmethod
+    def _normalize_inference_attachments(attachments: Any) -> list[dict[str, Any]]:
+        """Normalize attachment payloads passed from API layer to provider clients."""
+        if not attachments:
+            return []
+        if not isinstance(attachments, list):
+            raise ValueError("attachments must be a list when provided")
+
+        normalized: list[dict[str, Any]] = []
+        for idx, item in enumerate(attachments):
+            if not isinstance(item, dict):
+                raise ValueError(f"attachments[{idx}] must be an object")
+
+            mime_type = str(item.get("mime_type") or "").strip().lower()
+            data_base64 = str(item.get("data_base64") or "").strip()
+            extracted_text = str(item.get("extracted_text") or "").strip()
+            if not mime_type:
+                raise ValueError(f"attachments[{idx}].mime_type is required")
+            if not data_base64 and not extracted_text:
+                raise ValueError(
+                    f"attachments[{idx}] must include either data_base64 or extracted_text"
+                )
+
+            normalized.append(
+                {
+                    "file_id": str(item.get("file_id") or ""),
+                    "filename": str(item.get("filename") or "file"),
+                    "mime_type": mime_type,
+                    "data_base64": data_base64,
+                    "extracted_text": extracted_text,
+                    "usage_role": str(item.get("usage_role") or "primary"),
+                    "transform_mode": str(item.get("transform_mode") or "auto"),
+                    "order_index": int(item.get("order_index", idx)),
+                }
+            )
+        return normalized
+
+    @classmethod
+    def _merge_text_attachments_into_messages(
+        cls,
+        messages: list[dict[str, Any]],
+        attachments: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """
+        Merge extracted text attachments into the last user message.
+
+        Returns:
+            (messages_with_text_context, binary_attachments_only)
+        """
+        if not attachments:
+            return messages, []
+
+        text_attachments = [item for item in attachments if str(item.get("extracted_text") or "").strip()]
+        binary_attachments = [item for item in attachments if str(item.get("data_base64") or "").strip()]
+        if not text_attachments:
+            return messages, binary_attachments
+
+        text_block = cls._build_text_attachment_context(text_attachments)
+        if not text_block:
+            return messages, binary_attachments
+
+        merged_messages: list[dict[str, Any]] = [dict(message) for message in (messages or [])]
+        last_user_index = None
+        for idx, message in enumerate(merged_messages):
+            role = str(message.get("role") or "").strip().lower()
+            if role == "user":
+                last_user_index = idx
+
+        if last_user_index is None:
+            merged_messages.append({"role": "user", "content": text_block})
+            return merged_messages, binary_attachments
+
+        current = merged_messages[last_user_index]
+        current_content = current.get("content")
+        if isinstance(current_content, str):
+            combined = current_content.strip()
+            if combined:
+                combined = f"{combined}\n\n{text_block}"
+            else:
+                combined = text_block
+            current["content"] = combined
+            return merged_messages, binary_attachments
+
+        if isinstance(current_content, list):
+            next_content = list(current_content)
+            next_content.append({"type": "text", "text": text_block})
+            current["content"] = next_content
+            return merged_messages, binary_attachments
+
+        current["content"] = f"{cls._extract_text_from_content(current_content)}\n\n{text_block}".strip()
+        return merged_messages, binary_attachments
+
+    @staticmethod
+    def _build_text_attachment_context(attachments: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for attachment in attachments:
+            filename = str(attachment.get("filename") or "file").strip() or "file"
+            mime_type = str(attachment.get("mime_type") or "").strip().lower()
+            extracted_text = str(attachment.get("extracted_text") or "").strip()
+            if not extracted_text:
+                continue
+            parts.append(
+                f"[Attachment: {filename} ({mime_type})]\n{extracted_text}"
+            )
+        if not parts:
+            return ""
+        return "Attachment context:\n\n" + "\n\n".join(parts)
+
     def _generate_request_id(self) -> str:
         """
         Generate a unique request ID for tracking.
@@ -132,6 +265,16 @@ class BaseAIClient(ABC):
             UUID string
         """
         return str(uuid.uuid4())
+
+    def _resolve_request_id_from_kwargs(self, kwargs: dict[str, Any]) -> str:
+        """
+        Pop caller-provided request_id from kwargs when present.
+
+        This lets API-layer correlation ids flow through provider clients while
+        preserving backward compatibility for call sites that don't provide one.
+        """
+        provided = str(kwargs.pop("request_id", "") or "").strip()
+        return provided or self._generate_request_id()
 
     def _measure_latency(self, start_time: float) -> int:
         """

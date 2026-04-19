@@ -59,17 +59,22 @@ class OpenAIClient(BaseAIClient):
 
         IMPORTANT: Never raises exceptions - returns UnifiedResponse with error instead
         """
-        request_id = self._generate_request_id()
+        request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
+        attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
             # Normalize input to messages format
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
+            normalized_messages, binary_attachments = self._merge_text_attachments_into_messages(
+                normalized_messages,
+                attachments,
+            )
             response, endpoint_used, adaptive_retry = self._create_openai_completion(
                 request_id=request_id,
                 model=model,
@@ -77,6 +82,7 @@ class OpenAIClient(BaseAIClient):
                 temperature=temperature,
                 max_tokens=max_tokens,
                 max_completion_tokens=max_completion_tokens,
+                attachments=binary_attachments,
             )
 
             latency_ms = self._measure_latency(start_time)
@@ -202,18 +208,20 @@ class OpenAIClient(BaseAIClient):
         *,
         request_id: str,
         model: str,
-        normalized_messages: list[dict[str, str]],
+        normalized_messages: list[dict[str, Any]],
         temperature: float | None,
         max_tokens: int,
         max_completion_tokens: int | None,
+        attachments: list[dict[str, Any]],
     ) -> tuple[Any, str, dict[str, Any] | None]:
-        if self._should_use_responses_api_for_model(model):
+        if self._should_use_responses_api_for_model(model, attachments=attachments):
             payload = self._build_responses_payload(
                 model=model,
                 normalized_messages=normalized_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 max_completion_tokens=max_completion_tokens,
+                attachments=attachments,
             )
             return self._create_openai_response_with_compat_retries(
                 request_id=request_id,
@@ -223,7 +231,9 @@ class OpenAIClient(BaseAIClient):
 
         request_payload = {
             "model": model,
-            "messages": normalized_messages,
+            "messages": self._build_chat_completions_messages(
+                normalized_messages, attachments=attachments
+            ),
         }
         if temperature is not None:
             request_payload["temperature"] = temperature
@@ -266,6 +276,7 @@ class OpenAIClient(BaseAIClient):
                     temperature=temperature,
                     max_tokens=max_tokens,
                     max_completion_tokens=max_completion_tokens,
+                    attachments=attachments,
                 )
                 logger.warning(
                     "Retrying OpenAI request with responses API",
@@ -316,7 +327,13 @@ class OpenAIClient(BaseAIClient):
             raise
 
     @staticmethod
-    def _should_use_responses_api_for_model(model: str) -> bool:
+    def _should_use_responses_api_for_model(
+        model: str,
+        *,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        if attachments:
+            return True
         model_norm = (model or "").strip().lower()
         return "codex" in model_norm
 
@@ -337,14 +354,21 @@ class OpenAIClient(BaseAIClient):
     def _build_responses_payload(
         *,
         model: str,
-        normalized_messages: list[dict[str, str]],
+        normalized_messages: list[dict[str, Any]],
         temperature: float | None,
         max_tokens: int,
         max_completion_tokens: int | None,
+        attachments: list[dict[str, Any]],
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "input": normalized_messages,
+            "input": (
+                OpenAIClient._build_responses_input_messages(
+                    normalized_messages, attachments=attachments
+                )
+                if attachments
+                else normalized_messages
+            ),
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -353,6 +377,85 @@ class OpenAIClient(BaseAIClient):
         else:
             payload["max_output_tokens"] = max_tokens
         return payload
+
+    @staticmethod
+    def _last_user_message_index(messages: list[dict[str, Any]]) -> int | None:
+        idx = None
+        for i, message in enumerate(messages):
+            role = str(message.get("role") or "").strip().lower()
+            if role == "user":
+                idx = i
+        return idx
+
+    @classmethod
+    def _build_chat_completions_messages(
+        cls,
+        normalized_messages: list[dict[str, Any]],
+        *,
+        attachments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not attachments:
+            return normalized_messages
+
+        out: list[dict[str, Any]] = []
+        last_user_idx = cls._last_user_message_index(normalized_messages)
+        for idx, message in enumerate(normalized_messages):
+            role = str(message.get("role") or "user").strip().lower()
+            text = cls._normalize_message_text(message)
+            if last_user_idx is not None and idx == last_user_idx:
+                content_parts: list[dict[str, Any]] = []
+                if text:
+                    content_parts.append({"type": "text", "text": text})
+                for attachment in attachments:
+                    data_uri = (
+                        f"data:{attachment['mime_type']};base64,{attachment['data_base64']}"
+                    )
+                    content_parts.append(
+                        {"type": "image_url", "image_url": {"url": data_uri}}
+                    )
+                out.append({"role": role, "content": content_parts or [{"type": "text", "text": ""}]})
+            else:
+                out.append({"role": role, "content": text})
+        return out
+
+    @classmethod
+    def _build_responses_input_messages(
+        cls,
+        normalized_messages: list[dict[str, Any]],
+        *,
+        attachments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        last_user_idx = cls._last_user_message_index(normalized_messages)
+
+        for idx, message in enumerate(normalized_messages):
+            role = str(message.get("role") or "user").strip().lower()
+            text = cls._normalize_message_text(message)
+            content_items: list[dict[str, Any]] = []
+            if text:
+                content_items.append({"type": "input_text", "text": text})
+
+            if attachments and last_user_idx is not None and idx == last_user_idx:
+                for attachment in attachments:
+                    mime_type = attachment["mime_type"]
+                    data_uri = f"data:{mime_type};base64,{attachment['data_base64']}"
+                    if mime_type.startswith("image/"):
+                        content_items.append({"type": "input_image", "image_url": data_uri})
+                    elif mime_type == "application/pdf":
+                        content_items.append(
+                            {
+                                "type": "input_file",
+                                "filename": attachment.get("filename") or "file.pdf",
+                                "file_data": data_uri,
+                            }
+                        )
+
+            if not content_items:
+                content_items.append({"type": "input_text", "text": ""})
+
+            out.append({"role": role, "content": content_items})
+
+        return out
 
     def _create_openai_response_with_compat_retries(
         self,

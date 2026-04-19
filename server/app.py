@@ -1,14 +1,17 @@
 """FastAPI application factory."""
 
-from fastapi import FastAPI
+import asyncio
+from contextlib import asynccontextmanager
+import os
+
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import admin, byok, catalog, chat, compare, health, history, optimize, reporting, whoami
+from server.routes import admin, auth as auth_routes, byok, catalog, chat, compare, files, health, history, optimize, reporting, whoami
+
 from utils.logger import get_logger
-import os
 
 logger = get_logger(__name__)
 
@@ -27,9 +30,27 @@ def _resolve_frontend_dir() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 
 
+def _parse_positive_int_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except Exception:
+        logger.warning("Invalid %s value '%s'; using default %s", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("Non-positive %s value '%s'; using default %s", name, raw, default)
+        return default
+    return value
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
+    cleanup_task: asyncio.Task | None = None
+    cleanup_stop_event: asyncio.Event | None = None
+
     runtime_check = check_claude_runtime()
     logger.info(
         "FastAPI server starting up",
@@ -97,7 +118,46 @@ async def lifespan(app: FastAPI):
             },
         )
 
+    if _env_bool("ENABLE_ATTACHMENTS_CLEANUP_WORKER", default=False):
+        from server import attachment_cleanup as attachment_cleanup_service
+
+        interval_seconds = _parse_positive_int_env(
+            "ATTACHMENTS_CLEANUP_INTERVAL_SECONDS",
+            default=300,
+        )
+        cleanup_stop_event = asyncio.Event()
+
+        async def _cleanup_loop():
+            while not cleanup_stop_event.is_set():
+                try:
+                    stats = await asyncio.to_thread(attachment_cleanup_service.run_cleanup_cycle)
+                    logger.info(
+                        "Attachment cleanup cycle completed",
+                        extra={"extra_fields": {"stats": stats}},
+                    )
+                except Exception:
+                    logger.exception("Attachment cleanup cycle failed")
+
+                try:
+                    await asyncio.wait_for(cleanup_stop_event.wait(), timeout=interval_seconds)
+                except TimeoutError:
+                    continue
+
+        cleanup_task = asyncio.create_task(_cleanup_loop(), name="attachment-cleanup-worker")
+        logger.info(
+            "Attachment cleanup worker started",
+            extra={"extra_fields": {"interval_seconds": interval_seconds}},
+        )
+
     yield
+
+    if cleanup_stop_event is not None:
+        cleanup_stop_event.set()
+    if cleanup_task is not None:
+        try:
+            await asyncio.wait_for(cleanup_task, timeout=5)
+        except Exception:
+            cleanup_task.cancel()
 
     logger.info("FastAPI server shutting down")
 
@@ -123,6 +183,11 @@ def create_app() -> FastAPI:
 
     # API routes - registered first so /v1/* takes precedence over static files
     app.include_router(health.router)
+    # Cognito callback at /auth (when app client callback URL is e.g. .../auth)
+    @app.get("/auth")
+    async def auth_callback(request: Request, response: Response, code: str | None = None):
+        return await auth_routes.handle_oauth_callback(request, response, code)
+    app.include_router(auth_routes.router)
     app.include_router(chat.router)
     app.include_router(compare.router)
     app.include_router(optimize.router)
@@ -132,6 +197,7 @@ def create_app() -> FastAPI:
     app.include_router(byok.router)
     app.include_router(whoami.router)
     app.include_router(catalog.router)
+    app.include_router(files.router)
 
     # Optional static frontend mount for monolith mode.
     serve_frontend = _env_bool("SERVE_FRONTEND", default=True)

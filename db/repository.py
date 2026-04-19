@@ -11,7 +11,7 @@ Design principles:
 import hashlib
 import json
 import zlib
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -61,6 +61,10 @@ ALLOWED_PROMPT_CATEGORIES = {
 
 ALLOWED_RESEARCH_MODES = {"off", "auto", "on"}
 ALLOWED_ROUTING_MODES = {"smart", "cheap", "strong", "explicit", "legacy"}
+ALLOWED_FILE_STATUSES = {"uploaded", "processing", "ready", "failed", "expired", "deleted"}
+ALLOWED_ATTACHMENT_USAGE_ROLES = {"primary", "reference"}
+ALLOWED_ATTACHMENT_TRANSFORM_MODES = {"auto", "text_only", "vision_pages", "table_summary"}
+ALLOWED_FILE_DELETION_JOB_STATUSES = {"pending", "in_progress", "retry", "succeeded", "failed"}
 SERVICE_AUTH_PROVIDER = "service"
 SERVICE_AUTH_SUBJECT = "api-service"
 SERVICE_AUTH_ISSUER = "cortexai"
@@ -269,6 +273,67 @@ def get_or_create_service_user(
     service_user_id = db.execute(stmt).scalar_one()
     logger.info(f"Created service user: {email} (id: {service_user_id})")
     return service_user_id
+
+
+COGNITO_AUTH_PROVIDER = "cognito"
+
+
+def get_or_create_user_by_cognito(
+    db: Session,
+    *,
+    sub: str,
+    email: str | None = None,
+    issuer: str,
+) -> UUID:
+    """
+    Get or create a user identified by Cognito (e.g. Google sign-in).
+
+    Uses auth_provider='cognito', auth_subject=sub, auth_issuer=issuer.
+    Email is stored for display; sub is the unique identity.
+
+    Args:
+        db: Database session
+        sub: Cognito subject (unique per user in pool)
+        email: Email from token (optional)
+        issuer: Token issuer (Cognito user pool URL)
+
+    Returns:
+        UUID: user_id
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    users = get_table("users")
+
+    stmt = select(users.c.id).where(
+        and_(
+            users.c.auth_provider == COGNITO_AUTH_PROVIDER,
+            users.c.auth_subject == sub,
+            users.c.auth_issuer == issuer,
+        )
+    )
+    user_id = db.execute(stmt).scalar_one_or_none()
+    if user_id:
+        return user_id
+
+    display_name = (email or sub).split("@")[0] if email else sub[:16]
+    stmt = (
+        insert(users)
+        .values(
+            email=email,
+            display_name=display_name,
+            is_active=True,
+            auth_provider=COGNITO_AUTH_PROVIDER,
+            auth_subject=sub,
+            auth_issuer=issuer,
+        )
+        .returning(users.c.id)
+    )
+    user_id = db.execute(stmt).scalar_one()
+    logger.info(f"Created Cognito user: sub={sub[:12]}... (id: {user_id})")
+    return user_id
 
 
 def get_user_by_api_key(db: Session, api_key: str) -> tuple[UUID, UUID] | None:
@@ -649,6 +714,430 @@ def create_context_snapshot(
         existing_id = db.execute(stmt).scalar_one()
         logger.debug(f"Context snapshot already exists: {existing_id}")
         return existing_id
+
+
+# ============================================================================
+# ATTACHMENT FILES
+# ============================================================================
+
+
+def _normalize_jsonb_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize optional JSON payloads to dict for JSONB columns."""
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("JSON payload must be a dict")
+    return payload
+
+
+def create_uploaded_file(
+    db: Session,
+    *,
+    user_id: UUID,
+    original_filename: str,
+    mime_type: str,
+    size_bytes: int,
+    sha256: str,
+    storage_bucket: str,
+    storage_key: str,
+    api_key_id: UUID | None = None,
+    status: str = "uploaded",
+    ingestion_meta: dict[str, Any] | None = None,
+    expires_at: datetime | None = None,
+) -> UUID:
+    """
+    Insert a file metadata row into uploaded_files.
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    if status not in ALLOWED_FILE_STATUSES:
+        raise ValueError(f"Invalid uploaded file status: {status}")
+    if int(size_bytes) <= 0:
+        raise ValueError("size_bytes must be > 0")
+
+    normalized_sha = str(sha256 or "").strip().lower()
+    if not normalized_sha:
+        raise ValueError("sha256 is required")
+
+    uploaded_files = get_table("uploaded_files")
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "api_key_id": api_key_id,
+        "original_filename": str(original_filename or "").strip() or "file",
+        "mime_type": str(mime_type or "").strip().lower(),
+        "size_bytes": int(size_bytes),
+        "sha256": normalized_sha,
+        "storage_bucket": str(storage_bucket or "").strip(),
+        "storage_key": str(storage_key or "").strip(),
+        "status": status,
+        "ingestion_meta": _normalize_jsonb_payload(ingestion_meta),
+        "expires_at": expires_at,
+    }
+
+    if not values["mime_type"]:
+        raise ValueError("mime_type is required")
+    if not values["storage_bucket"] or not values["storage_key"]:
+        raise ValueError("storage_bucket and storage_key are required")
+
+    stmt = insert(uploaded_files).values(**values).returning(uploaded_files.c.id)
+    uploaded_file_id = db.execute(stmt).scalar_one()
+    logger.debug("Created uploaded_file %s for user %s", uploaded_file_id, user_id)
+    return uploaded_file_id
+
+
+def find_active_uploaded_file_by_hash(
+    db: Session,
+    *,
+    user_id: UUID,
+    sha256: str,
+    size_bytes: int,
+) -> dict[str, Any] | None:
+    """
+    Lookup an active uploaded file for same-user dedup by hash + size.
+    """
+    from db.tables import get_table
+
+    uploaded_files = get_table("uploaded_files")
+    normalized_sha = str(sha256 or "").strip().lower()
+    if not normalized_sha or int(size_bytes) <= 0:
+        return None
+
+    conditions = [
+        uploaded_files.c.user_id == user_id,
+        uploaded_files.c.sha256 == normalized_sha,
+        uploaded_files.c.size_bytes == int(size_bytes),
+    ]
+    column_names = {col.name for col in uploaded_files.columns}
+    if "deleted_at" in column_names:
+        conditions.append(uploaded_files.c.deleted_at.is_(None))
+
+    stmt = (
+        select(uploaded_files)
+        .where(and_(*conditions))
+        .order_by(desc(uploaded_files.c.created_at))
+        .limit(1)
+    )
+    row = db.execute(stmt).first()
+    if not row:
+        return None
+    return dict(row._mapping)
+
+
+def get_uploaded_file_for_user(
+    db: Session,
+    *,
+    user_id: UUID,
+    file_id: UUID,
+    include_deleted: bool = False,
+) -> dict[str, Any] | None:
+    """
+    Fetch one uploaded file row scoped by user ownership.
+    """
+    from db.tables import get_table
+
+    uploaded_files = get_table("uploaded_files")
+    conditions = [
+        uploaded_files.c.id == file_id,
+        uploaded_files.c.user_id == user_id,
+    ]
+    column_names = {col.name for col in uploaded_files.columns}
+    if "deleted_at" in column_names and not include_deleted:
+        conditions.append(uploaded_files.c.deleted_at.is_(None))
+
+    stmt = select(uploaded_files).where(and_(*conditions)).limit(1)
+    row = db.execute(stmt).first()
+    if not row:
+        return None
+    return dict(row._mapping)
+
+
+def get_uploaded_file_by_id(
+    db: Session,
+    *,
+    file_id: UUID,
+    include_deleted: bool = True,
+) -> dict[str, Any] | None:
+    """
+    Fetch one uploaded file row by ID.
+
+    This helper is intended for internal background jobs (cleanup/retention)
+    where user scoping is already handled at the caller boundary.
+    """
+    from db.tables import get_table
+
+    uploaded_files = get_table("uploaded_files")
+    conditions = [uploaded_files.c.id == file_id]
+    column_names = {col.name for col in uploaded_files.columns}
+    if "deleted_at" in column_names and not include_deleted:
+        conditions.append(uploaded_files.c.deleted_at.is_(None))
+
+    stmt = select(uploaded_files).where(and_(*conditions)).limit(1)
+    row = db.execute(stmt).first()
+    if not row:
+        return None
+    return dict(row._mapping)
+
+
+def list_expired_uploaded_files(
+    db: Session,
+    *,
+    now_utc: datetime | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    List uploaded files whose TTL has elapsed and are not yet deleted.
+    """
+    from db.tables import get_table
+
+    uploaded_files = get_table("uploaded_files")
+    cap = max(1, min(int(limit), 5000))
+    expiry_cutoff = now_utc if now_utc is not None else func.now()
+
+    conditions = [
+        uploaded_files.c.expires_at.is_not(None),
+        uploaded_files.c.expires_at <= expiry_cutoff,
+    ]
+    column_names = {col.name for col in uploaded_files.columns}
+    if "deleted_at" in column_names:
+        conditions.append(uploaded_files.c.deleted_at.is_(None))
+    if "status" in column_names:
+        conditions.append(uploaded_files.c.status != "deleted")
+
+    stmt = (
+        select(uploaded_files)
+        .where(and_(*conditions))
+        .order_by(uploaded_files.c.expires_at.asc(), uploaded_files.c.created_at.asc())
+        .limit(cap)
+    )
+    rows = db.execute(stmt).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def update_uploaded_file_status(
+    db: Session,
+    *,
+    file_id: UUID,
+    status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    ingestion_meta: dict[str, Any] | None = None,
+    expires_at: datetime | None = None,
+    deleted_at: datetime | None = None,
+) -> bool:
+    """
+    Update uploaded file status and optional metadata fields.
+    """
+    from db.tables import get_table
+
+    if status not in ALLOWED_FILE_STATUSES:
+        raise ValueError(f"Invalid uploaded file status: {status}")
+
+    uploaded_files = get_table("uploaded_files")
+    values: dict[str, Any] = {"status": status}
+    column_names = {col.name for col in uploaded_files.columns}
+
+    if "updated_at" in column_names:
+        values["updated_at"] = func.now()
+    if "error_code" in column_names:
+        values["error_code"] = error_code
+    if "error_message" in column_names:
+        values["error_message"] = error_message
+    if "ingestion_meta" in column_names and ingestion_meta is not None:
+        values["ingestion_meta"] = _normalize_jsonb_payload(ingestion_meta)
+    if "expires_at" in column_names and expires_at is not None:
+        values["expires_at"] = expires_at
+    if "deleted_at" in column_names and deleted_at is not None:
+        values["deleted_at"] = deleted_at
+
+    stmt = update(uploaded_files).where(uploaded_files.c.id == file_id).values(**values)
+    result = db.execute(stmt)
+    return bool(result.rowcount and result.rowcount > 0)
+
+
+def create_request_attachment(
+    db: Session,
+    *,
+    llm_request_id: UUID,
+    file_id: UUID,
+    order_index: int,
+    usage_role: str = "primary",
+    transform_mode: str = "auto",
+    resolved_artifact_meta: dict[str, Any] | None = None,
+) -> UUID:
+    """
+    Link a persisted llm_request row to one uploaded file.
+
+    Note:
+        Does NOT commit. Caller must commit.
+    """
+    from db.tables import get_table
+
+    if usage_role not in ALLOWED_ATTACHMENT_USAGE_ROLES:
+        raise ValueError(f"Invalid attachment usage_role: {usage_role}")
+    if transform_mode not in ALLOWED_ATTACHMENT_TRANSFORM_MODES:
+        raise ValueError(f"Invalid attachment transform_mode: {transform_mode}")
+    if int(order_index) < 0:
+        raise ValueError("order_index must be >= 0")
+
+    request_attachments = get_table("request_attachments")
+    stmt = (
+        insert(request_attachments)
+        .values(
+            llm_request_id=llm_request_id,
+            file_id=file_id,
+            order_index=int(order_index),
+            usage_role=usage_role,
+            transform_mode=transform_mode,
+            resolved_artifact_meta=_normalize_jsonb_payload(resolved_artifact_meta),
+        )
+        .returning(request_attachments.c.id)
+    )
+
+    attachment_id = db.execute(stmt).scalar_one()
+    logger.debug(
+        "Created request_attachment %s (request=%s, file=%s)",
+        attachment_id,
+        llm_request_id,
+        file_id,
+    )
+    return attachment_id
+
+
+def list_request_attachments_for_request(
+    db: Session,
+    *,
+    llm_request_id: UUID,
+) -> list[dict[str, Any]]:
+    """
+    List request attachment rows for one llm_request in deterministic order.
+    """
+    from db.tables import get_table
+
+    request_attachments = get_table("request_attachments")
+    stmt = (
+        select(request_attachments)
+        .where(request_attachments.c.llm_request_id == llm_request_id)
+        .order_by(request_attachments.c.order_index.asc())
+    )
+    rows = db.execute(stmt).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def enqueue_file_deletion_job(
+    db: Session,
+    *,
+    file_id: UUID,
+    available_at: datetime | None = None,
+    status: str = "pending",
+    last_error: str | None = None,
+) -> UUID:
+    """
+    Create (or reuse) an active file deletion queue job for one file.
+    """
+    from db.tables import get_table
+
+    if status not in ALLOWED_FILE_DELETION_JOB_STATUSES:
+        raise ValueError(f"Invalid file deletion job status: {status}")
+
+    file_deletion_queue = get_table("file_deletion_queue")
+    existing_stmt = (
+        select(file_deletion_queue.c.id)
+        .where(
+            and_(
+                file_deletion_queue.c.file_id == file_id,
+                file_deletion_queue.c.status.in_(("pending", "in_progress", "retry")),
+            )
+        )
+        .order_by(desc(file_deletion_queue.c.created_at))
+        .limit(1)
+    )
+    existing_job_id = db.execute(existing_stmt).scalar_one_or_none()
+    if existing_job_id:
+        return existing_job_id
+
+    values: dict[str, Any] = {
+        "file_id": file_id,
+        "status": status,
+        "last_error": last_error,
+    }
+    column_names = {col.name for col in file_deletion_queue.columns}
+    if "available_at" in column_names and available_at is not None:
+        values["available_at"] = available_at
+    if "updated_at" in column_names:
+        values["updated_at"] = func.now()
+
+    stmt = insert(file_deletion_queue).values(**values).returning(file_deletion_queue.c.id)
+    return db.execute(stmt).scalar_one()
+
+
+def list_due_file_deletion_jobs(
+    db: Session,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    List deletion jobs ready for execution.
+    """
+    from db.tables import get_table
+
+    file_deletion_queue = get_table("file_deletion_queue")
+    cap = max(1, min(int(limit), 1000))
+    stmt = (
+        select(file_deletion_queue)
+        .where(
+            and_(
+                file_deletion_queue.c.status.in_(("pending", "retry")),
+                file_deletion_queue.c.available_at <= func.now(),
+            )
+        )
+        .order_by(file_deletion_queue.c.available_at.asc(), file_deletion_queue.c.created_at.asc())
+        .limit(cap)
+    )
+    rows = db.execute(stmt).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def update_file_deletion_job(
+    db: Session,
+    *,
+    job_id: UUID,
+    status: str,
+    attempt_count: int | None = None,
+    last_error: str | None = None,
+    available_at: datetime | None = None,
+    locked_at: datetime | None = None,
+) -> bool:
+    """
+    Update deletion queue job status and retry metadata.
+    """
+    from db.tables import get_table
+
+    if status not in ALLOWED_FILE_DELETION_JOB_STATUSES:
+        raise ValueError(f"Invalid file deletion job status: {status}")
+    if attempt_count is not None and int(attempt_count) < 0:
+        raise ValueError("attempt_count must be >= 0")
+
+    file_deletion_queue = get_table("file_deletion_queue")
+    values: dict[str, Any] = {"status": status}
+    column_names = {col.name for col in file_deletion_queue.columns}
+
+    if attempt_count is not None and "attempt_count" in column_names:
+        values["attempt_count"] = int(attempt_count)
+    if "last_error" in column_names:
+        values["last_error"] = last_error
+    if available_at is not None and "available_at" in column_names:
+        values["available_at"] = available_at
+    if locked_at is not None and "locked_at" in column_names:
+        values["locked_at"] = locked_at
+    if "updated_at" in column_names:
+        values["updated_at"] = func.now()
+
+    stmt = update(file_deletion_queue).where(file_deletion_queue.c.id == job_id).values(**values)
+    result = db.execute(stmt)
+    return bool(result.rowcount and result.rowcount > 0)
 
 
 # ============================================================================

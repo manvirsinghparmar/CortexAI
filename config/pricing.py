@@ -11,11 +11,14 @@ class ModelPricing:
     # OpenAI Models Pricing (per million tokens)
     OPENAI_PRICING = {
         "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+        "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
         "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+        "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         "gpt-4o": {"input": 2.50, "output": 10.00},
         "gpt-5.1": {"input": 1.25, "output": 10.00},
+        "gpt-5.4": {"input": 2.50, "output": 15.00},
         "gpt-5.2-codex": {"input": 1.75, "output": 14.00},
         # GPT-4 Models
         "gpt-4": {"input": 30.00, "output": 60.00},
@@ -59,8 +62,8 @@ class ModelPricing:
     # Grok Models Pricing (per million tokens)
     GROK_PRICING = {
         "grok-4-latest": {"input": 3.00, "output": 15.00},
-        "grok-4-1-fast-non-reasoning": {"input": 0.20, "output": 0.50},
-        "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},
+        "grok-4-1-fast-non-reasoning": {"input": 2.00, "output": 5.00},
+        "grok-4-1-fast-reasoning": {"input": 2.00, "output": 5.00},
         "grok-2": {"input": 2.00, "output": 10.00},
         "grok-2-mini": {"input": 0.50, "output": 2.50},
     }
@@ -70,8 +73,11 @@ class ModelPricing:
         "claude-3-5-haiku-latest": {"input": 0.80, "output": 4.00},
         "claude-3-5-sonnet-latest": {"input": 3.00, "output": 15.00},
         "claude-sonnet-4": {"input": 3.00, "output": 15.00},
+        "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
         "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
+        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
         "claude-opus-4-5": {"input": 5.00, "output": 25.00},
+        "claude-opus-4-6": {"input": 5.00, "output": 25.00},
     }
 
     @classmethod

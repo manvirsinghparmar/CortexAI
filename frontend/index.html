@@ -12,26 +12,10 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=20260305b" />
+    <link rel="stylesheet" href="style.css?v=20260322e" />
 </head>
 
 <body>
-
-    <div class="compact-bar" id="compactBar" aria-hidden="true">
-        <div class="compact-bar-inner">
-            <div class="compact-logo">
-                <span class="compact-logo-text">CortexAI</span>
-            </div>
-            <div class="compact-mode-toggle">
-                <button class="compact-mode-btn active" id="cBtnSingle" data-mode="single">Ask</button>
-                <button class="compact-mode-btn" id="cBtnCompare" data-mode="compare">Compare</button>
-            </div>
-            <div class="compact-model-info" id="compactModelInfo"></div>
-            <button class="compact-send-btn" id="compactSendBtn">
-                <span class="btn-icon">&uarr;</span> Send
-            </button>
-        </div>
-    </div>
 
     <header class="header" id="mainHeader">
         <div class="header-inner">
@@ -39,6 +23,7 @@
                 <span class="logo-text">CortexAI</span>
             </div>
             <div class="header-right">
+                <span id="authNavWrap" class="auth-nav-wrap"></span>
                 <button class="top-nav-link" type="button">History</button>
                 <button class="top-nav-link" type="button">Settings</button>
                 <button class="top-nav-link" type="button">Profile</button>
@@ -139,8 +124,8 @@
             </div>
             <div class="prompt-input-wrap" id="promptInputWrap">
                 <button class="prompt-input-action prompt-input-add" id="promptAddBtn" type="button"
-                    aria-label="More actions">
-                    <span aria-hidden="true">+</span>
+                    aria-label="Attach files">
+                    <span aria-hidden="true">&#128206;</span>
                 </button>
                 <textarea id="promptInput" class="prompt-textarea" placeholder="Ask anything..." rows="1"
                     aria-label="Prompt input"></textarea>
@@ -148,37 +133,44 @@
                     <span class="btn-icon">&uarr;</span>
                 </button>
             </div>
+            <input id="attachmentInput" class="attachment-input" type="file" multiple
+                accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.csv,.json,.docx,.pptx,.xlsx" />
+            <div class="attachment-strip hidden" id="attachmentStrip" aria-live="polite">
+                <div class="attachment-list" id="attachmentList"></div>
+                <div class="attachment-hint" id="attachmentHint"></div>
+            </div>
             <div class="prompt-footer">
                 <div class="prompt-footer-left">
                     <div class="composer-footer-features feature-strip" id="singleRoutingControls">
                         <span class="feature-chip-wrap">
                             <button class="feature-chip active" id="routeSmartBtn" type="button" role="switch"
-                                aria-checked="true" aria-label="Auto"
+                                aria-checked="true" aria-label="Smart"
                                 aria-describedby="smartRoutingTooltip">
-                                Auto
+                                <span class="chip-icon" aria-hidden="true">&#10024;</span>
+                                <span class="chip-label">Smart</span>
                             </button>
                             <span class="chip-tooltip" id="smartRoutingTooltip" role="tooltip">
-                                Automatically selects the best model based on quality, speed, and cost.
+                                Gets you the best answer automatically
                             </span>
                         </span>
                         <span class="feature-chip-wrap">
                             <button class="feature-chip" id="routeResearchBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Web" aria-describedby="researchRoutingTooltip">
+                                aria-checked="false" aria-label="With sources" aria-describedby="researchRoutingTooltip">
                                 <span class="chip-icon" aria-hidden="true">&#127760;</span>
-                                <span>Web</span>
+                                <span class="chip-label">With sources</span>
                             </button>
                             <span class="chip-tooltip" id="researchRoutingTooltip" role="tooltip">
-                                Searches the internet and includes citations.
+                                Uses latest information from the web
                             </span>
                         </span>
                         <span class="feature-chip-wrap">
                             <button class="feature-chip" id="routeOptimizeBtn" type="button" role="switch"
-                                aria-checked="false" aria-label="Rewrite" aria-describedby="optimizeRoutingTooltip">
-                                <span class="chip-icon" aria-hidden="true">&#9997;</span>
-                                <span>Rewrite</span>
+                                aria-checked="false" aria-label="Improve" aria-describedby="optimizeRoutingTooltip">
+                                <span class="chip-icon" aria-hidden="true">&#9998;</span>
+                                <span class="chip-label">Improve</span>
                             </button>
                             <span class="chip-tooltip" id="optimizeRoutingTooltip" role="tooltip">
-                                Improves your prompt before sending.
+                                Helps you ask better for better results
                             </span>
                         </span>
                     </div>
@@ -205,8 +197,8 @@
 
     </main>
 
-    <script src="smart-routing-state.js?v=20260305b"></script>
-    <script src="app.js?v=20260305b"></script>
+    <script src="smart-routing-state.js?v=20260322g"></script>
+    <script src="app.js?v=20260322g"></script>
 </body>
 
 </html>

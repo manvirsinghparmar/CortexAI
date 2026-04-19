@@ -20,6 +20,7 @@ from db import (
     create_api_key,
     create_llm_request,
     create_llm_response,
+    create_request_attachment,
     create_routing_attempts,
     create_routing_decision,
     create_session,
@@ -28,6 +29,7 @@ from db import (
     get_failed_routing_attempts_by_request_group,
     get_session_by_id,
     get_or_create_service_user,
+    get_or_create_user_by_cognito,
     get_user_by_api_key,
     save_compare_summary,
     save_message,
@@ -39,6 +41,7 @@ from db import (
 from db.session import SessionLocal
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server import byok_service
+from server.dependencies import AuthResult
 from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
@@ -54,6 +57,15 @@ class ApiKeyPersistenceResolution:
     user_id: UUID
     api_key_id: UUID | None
     decision_path: str
+
+
+@dataclass(frozen=True)
+class RequestAttachmentPersistenceItem:
+    file_id: UUID
+    usage_role: str = "primary"
+    transform_mode: str = "auto"
+    order_index: int = 0
+    resolved_artifact_meta: dict | None = None
 
 
 @contextmanager
@@ -164,10 +176,20 @@ def resolve_api_key_for_request(
 
     When db_session is provided, caller owns transaction boundaries.
     """
+    normalized_api_key = str(api_key or "").strip()
+    if not normalized_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Invalid or missing credentials "
+                "(send cortex_session cookie, X-API-Key, or Authorization: Bearer)"
+            ),
+        )
+
     if db_session is not None:
         return _resolve_api_key_for_request_in_session(
             db_session,
-            api_key=api_key,
+            api_key=normalized_api_key,
             request_id=request_id,
         )
 
@@ -175,7 +197,7 @@ def resolve_api_key_for_request(
         with db_uow() as owned_session:
             return _resolve_api_key_for_request_in_session(
                 owned_session,
-                api_key=api_key,
+                api_key=normalized_api_key,
                 request_id=request_id,
             )
     except HTTPException:
@@ -186,6 +208,79 @@ def resolve_api_key_for_request(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
         )
+
+
+def _resolve_cognito_for_request_in_session(
+    db_session: Session,
+    *,
+    sub: str,
+    email: str | None,
+    issuer: str,
+) -> ApiKeyPersistenceResolution:
+    """Resolve Cognito identity to user_id for persistence (api_key_id is None)."""
+    user_id = get_or_create_user_by_cognito(
+        db_session,
+        sub=sub,
+        email=email,
+        issuer=issuer,
+    )
+    return ApiKeyPersistenceResolution(
+        user_id=user_id,
+        api_key_id=None,
+        decision_path="cognito",
+    )
+
+
+def resolve_identity(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    db_session: Session | None = None,
+) -> ApiKeyPersistenceResolution:
+    """
+    Resolve auth (session cookie, API key, or Cognito) to persistence identity.
+
+    When db_session is provided, caller owns transaction boundaries.
+    """
+    if auth.user_id is not None:
+        return ApiKeyPersistenceResolution(
+            user_id=auth.user_id,
+            api_key_id=None,
+            decision_path="session_cookie",
+        )
+    if auth.api_key is not None:
+        return resolve_api_key_for_request(
+            api_key=auth.api_key,
+            request_id=request_id,
+            db_session=db_session,
+        )
+    if auth.cognito_claims is not None:
+        claims = auth.cognito_claims
+        if db_session is not None:
+            return _resolve_cognito_for_request_in_session(
+                db_session,
+                sub=claims.sub,
+                email=claims.email,
+                issuer=claims.iss,
+            )
+        try:
+            with db_uow() as owned_session:
+                return _resolve_cognito_for_request_in_session(
+                    owned_session,
+                    sub=claims.sub,
+                    email=claims.email,
+                    issuer=claims.iss,
+                )
+        except Exception as exc:
+            logger.exception("Cognito persistence resolution failed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Persistence initialization failed: {exc}",
+            ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )
 
 
 def _extract_cap_value(raw: str | None, *, kind: str) -> int | float | None:
@@ -267,6 +362,18 @@ def _read_api_key_usage_today(db_session: Session, api_key_id: UUID) -> tuple[in
 
 
 def _deny_usage_limit(*, reason: str, current_tokens: int, current_cost: float, scope: str) -> None:
+    logger.warning(
+        "Usage limit exceeded",
+        extra={
+            "extra_fields": {
+                "event": "usage.cap.exceeded",
+                "scope": scope,
+                "current_tokens": int(current_tokens),
+                "current_cost": float(current_cost),
+                "reason": reason,
+            }
+        },
+    )
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={
@@ -308,6 +415,20 @@ def _enforce_usage_caps_in_session(
 
         if usage is not None:
             current_tokens, current_cost = usage
+            logger.info(
+                "Usage cap check evaluated",
+                extra={
+                    "extra_fields": {
+                        "event": "usage.cap.checked",
+                        "scope": "api_key",
+                        "api_key_id": str(api_key_id),
+                        "token_cap": token_cap,
+                        "cost_cap": cost_cap,
+                        "current_tokens": int(current_tokens),
+                        "current_cost": float(current_cost),
+                    }
+                },
+            )
             if token_cap is not None and current_tokens >= token_cap:
                 _deny_usage_limit(
                     reason=f"Daily token limit exceeded ({current_tokens}/{token_cap})",
@@ -330,6 +451,21 @@ def _enforce_usage_caps_in_session(
         user_id,
         token_cap=token_cap,
         cost_cap=cost_cap,
+    )
+    logger.info(
+        "Usage cap check evaluated",
+        extra={
+            "extra_fields": {
+                "event": "usage.cap.checked",
+                "scope": "user",
+                "user_id": str(user_id),
+                "token_cap": token_cap,
+                "cost_cap": cost_cap,
+                "current_tokens": int(result.get("current_tokens") or 0),
+                "current_cost": float(result.get("current_cost") or 0.0),
+                "allowed": bool(result.get("allowed")),
+            }
+        },
     )
     if not result["allowed"]:
         _deny_usage_limit(
@@ -378,6 +514,17 @@ def _enforce_rate_limit_in_session(
         subject_key=subject,
         requests_per_minute=rpm,
     )
+    logger.info(
+        "Rate limit check passed",
+        extra={
+            "extra_fields": {
+                "event": "rate_limit.checked",
+                "subject_type": "api_key" if api_key_id is not None else "user",
+                "subject": subject,
+                "requests_per_minute": int(rpm),
+            }
+        },
+    )
 
 
 def enforce_usage_caps(
@@ -407,16 +554,20 @@ def enforce_usage_caps(
         )
 
 
-def resolve_and_enforce_usage_caps(*, api_key: str, request_id: str) -> ApiKeyPersistenceResolution:
+def resolve_and_enforce_usage_caps(
+    *,
+    auth: AuthResult,
+    request_id: str,
+) -> ApiKeyPersistenceResolution:
     """
-    Resolve key ownership and enforce caps using one DB unit-of-work.
+    Resolve auth (API key or Cognito) and enforce caps using one DB unit-of-work.
     """
     try:
         with db_uow() as db_session:
-            resolution = _resolve_api_key_for_request_in_session(
-                db_session,
-                api_key=api_key,
+            resolution = resolve_identity(
+                auth=auth,
                 request_id=request_id,
+                db_session=db_session,
             )
             _enforce_usage_caps_in_session(
                 db_session,
@@ -428,8 +579,29 @@ def resolve_and_enforce_usage_caps(*, api_key: str, request_id: str) -> ApiKeyPe
                 user_id=resolution.user_id,
                 api_key_id=resolution.api_key_id,
             )
+            logger.info(
+                "API preflight passed",
+                extra={
+                    "extra_fields": {
+                        "event": "api.preflight.success",
+                        "request_id": request_id,
+                        "user_id": str(resolution.user_id),
+                        "api_key_id": str(resolution.api_key_id) if resolution.api_key_id else None,
+                        "decision_path": resolution.decision_path,
+                    }
+                },
+            )
             return resolution
     except HTTPException:
+        logger.warning(
+            "API preflight rejected request",
+            extra={
+                "extra_fields": {
+                    "event": "api.preflight.rejected",
+                    "request_id": request_id,
+                }
+            },
+        )
         raise
     except Exception as exc:
         logger.exception("API preflight failed")
@@ -441,20 +613,20 @@ def resolve_and_enforce_usage_caps(*, api_key: str, request_id: str) -> ApiKeyPe
 
 def get_failed_attempts_by_request_group(
     *,
-    api_key: str,
+    auth: AuthResult,
     request_id: str,
     request_group_id: UUID,
     limit: int = 100,
 ) -> list[dict]:
     """
-    Fetch failed routing attempts for one compare request_group_id scoped to API key owner.
+    Fetch failed routing attempts for one compare request_group_id scoped to auth owner.
     """
     try:
         with db_uow(commit_on_success=False) as db_session:
-            resolution = _resolve_api_key_for_request_in_session(
-                db_session,
-                api_key=api_key,
+            resolution = resolve_identity(
+                auth=auth,
                 request_id=request_id,
+                db_session=db_session,
             )
             return get_failed_routing_attempts_by_request_group(
                 db_session,
@@ -482,11 +654,24 @@ def resolve_runtime_byok_provider_keys(
     """
     try:
         with db_uow(commit_on_success=False) as db_session:
-            return byok_service.resolve_provider_api_keys(
+            resolved = byok_service.resolve_provider_api_keys(
                 db_session,
                 api_key_id=resolution.api_key_id,
                 providers=providers,
             )
+            logger.info(
+                "BYOK provider keys resolved",
+                extra={
+                    "extra_fields": {
+                        "event": "byok.resolve.success",
+                        "user_id": str(resolution.user_id),
+                        "api_key_id": str(resolution.api_key_id) if resolution.api_key_id else None,
+                        "provider_count": len(resolved),
+                        "providers": sorted(list(resolved.keys())),
+                    }
+                },
+            )
+            return resolved
     except Exception:
         logger.exception("BYOK resolution failed")
         return {}
@@ -670,15 +855,69 @@ def build_error_response(
     )
 
 
+def _persist_request_attachments(
+    db_session: Session,
+    *,
+    llm_request_id: UUID,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None,
+) -> None:
+    """Persist request attachment links for one llm_request row."""
+    if not attachments:
+        return
+
+    for idx, item in enumerate(attachments):
+        if isinstance(item, RequestAttachmentPersistenceItem):
+            file_id = item.file_id
+            usage_role = item.usage_role
+            transform_mode = item.transform_mode
+            order_index = int(item.order_index)
+            resolved_artifact_meta = (
+                dict(item.resolved_artifact_meta) if isinstance(item.resolved_artifact_meta, dict) else {}
+            )
+        elif isinstance(item, dict):
+            file_id = item.get("file_id")
+            usage_role = str(item.get("usage_role") or "primary")
+            transform_mode = str(item.get("transform_mode") or "auto")
+            order_index = int(item.get("order_index", idx))
+            resolved_artifact_meta = (
+                dict(item.get("resolved_artifact_meta"))
+                if isinstance(item.get("resolved_artifact_meta"), dict)
+                else {}
+            )
+        else:
+            file_id = getattr(item, "file_id", None)
+            usage_role = str(getattr(item, "usage_role", "primary") or "primary")
+            transform_mode = str(getattr(item, "transform_mode", "auto") or "auto")
+            order_index = int(getattr(item, "order_index", idx))
+            meta_raw = getattr(item, "resolved_artifact_meta", None)
+            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
+
+        if file_id is None:
+            raise ValueError("Attachment item is missing file_id")
+        if not isinstance(file_id, UUID):
+            file_id = UUID(str(file_id))
+
+        create_request_attachment(
+            db_session,
+            llm_request_id=llm_request_id,
+            file_id=file_id,
+            order_index=order_index,
+            usage_role=usage_role,
+            transform_mode=transform_mode,
+            resolved_artifact_meta=resolved_artifact_meta,
+        )
+
+
 def persist_chat_interaction(
     *,
-    api_key: str,
+    api_key: str | None,
     resolution: ApiKeyPersistenceResolution,
     prompt: str,
     response: UnifiedResponse,
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
 ) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
@@ -706,6 +945,11 @@ def persist_chat_interaction(
             api_key_id=resolution.api_key_id,
             store_prompt=True,
             prompt_text_override=stored_user_message,
+        )
+        _persist_request_attachments(
+            db_session,
+            llm_request_id=llm_request_id,
+            attachments=attachments,
         )
         stored_response = privacy_service.sanitize_response_for_storage(response)
         create_llm_response(db_session, llm_request_id, stored_response)
@@ -740,7 +984,7 @@ def persist_chat_interaction(
             estimated_cost=response.estimated_cost,
         )
 
-        if resolution.api_key_id is not None:
+        if resolution.api_key_id is not None and api_key is not None:
             update_api_key_last_used(db_session, api_key)
 
         return str(session_id)
@@ -755,7 +999,7 @@ def _selected_compare_index(responses: Iterable[UnifiedResponse]) -> int:
 
 def persist_compare_interaction(
     *,
-    api_key: str,
+    api_key: str | None,
     resolution: ApiKeyPersistenceResolution,
     prompt: str,
     responses: list[UnifiedResponse],
@@ -763,6 +1007,7 @@ def persist_compare_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
+    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
 ) -> str:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:
@@ -795,6 +1040,11 @@ def persist_compare_interaction(
                 api_key_id=resolution.api_key_id,
                 store_prompt=True,
                 prompt_text_override=stored_user_message,
+            )
+            _persist_request_attachments(
+                db_session,
+                llm_request_id=llm_request_id,
+                attachments=attachments,
             )
             stored_response = privacy_service.sanitize_response_for_storage(response)
             stored_compare_responses.append(stored_response)
@@ -835,7 +1085,7 @@ def persist_compare_interaction(
             estimated_cost=total_cost,
         )
 
-        if resolution.api_key_id is not None:
+        if resolution.api_key_id is not None and api_key is not None:
             update_api_key_last_used(db_session, api_key)
 
         return str(session_id)

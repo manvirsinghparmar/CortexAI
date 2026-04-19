@@ -20,7 +20,7 @@ What This Test Suite Covers
    - Confirms the service is reachable and responds correctly (`/health`)
 
 2. Authentication & Guardrails
-   - Ensures protected endpoints reject requests without API keys
+   - Ensures protected endpoints reject requests without valid credentials
    - Prevents misuse such as insufficient or excessive compare targets
 
 3. Input Validation
@@ -73,6 +73,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -237,6 +238,12 @@ def app(monkeypatch):
     history_route.API_DB_ENABLED = False
 
     from server import dependencies as deps
+    session_user_id = UUID("11111111-1111-1111-1111-111111111111")
+    monkeypatch.setattr(
+        deps,
+        "parse_session",
+        lambda cookie: session_user_id if cookie else None,
+    )
 
     # Clear singleton cache to avoid cross-test leakage
     if hasattr(deps.get_orchestrator, "_instance"):
@@ -263,7 +270,7 @@ def test_health_ok(client):
     assert r.headers["content-type"].startswith("application/json")
 
 
-def test_chat_requires_api_key(client):
+def test_chat_requires_auth(client):
     payload = {
         "prompt": "hello",
         "provider": "openai",
@@ -273,13 +280,74 @@ def test_chat_requires_api_key(client):
     assert r.status_code in (401, 403)
 
 
-def test_compare_requires_api_key(client):
+def test_compare_requires_auth(client):
     payload = {
         "prompt": "hello",
         "targets": [{"provider": "openai"}, {"provider": "gemini"}],
     }
     r = client.post("/v1/compare", json=payload)
     assert r.status_code in (401, 403)
+
+
+def test_chat_rejects_api_key_only_auth(client):
+    payload = {
+        "prompt": "hello",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }
+    r = client.post("/v1/chat", json=payload, headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_compare_rejects_api_key_only_auth(client):
+    payload = {
+        "prompt": "hello",
+        "targets": [{"provider": "openai"}, {"provider": "gemini"}],
+    }
+    r = client.post("/v1/compare", json=payload, headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_chat_with_attachments_requires_db_mode(client):
+    payload = {
+        "prompt": "describe this file",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "attachments": [
+            {"file_id": "11111111-1111-1111-1111-111111111111", "usage_role": "primary", "transform_mode": "auto"}
+        ],
+    }
+    r = client.post(
+        "/v1/chat",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 501
+    assert r.json()["detail"]["code"] == "attachments_require_db"
+
+
+def test_compare_with_attachments_requires_db_mode(client):
+    payload = {
+        "prompt": "compare this file",
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+        ],
+        "attachments": [
+            {"file_id": "22222222-2222-2222-2222-222222222222", "usage_role": "primary", "transform_mode": "auto"}
+        ],
+    }
+    r = client.post(
+        "/v1/compare",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 501
+    assert r.json()["detail"]["code"] == "attachments_require_db"
 
 
 def test_providers_catalog_requires_api_key(client):
@@ -341,6 +409,10 @@ def test_models_catalog_lists_enabled_models_by_default(client):
         "context_limit",
         "tags",
         "enabled",
+        "supports_image_input",
+        "supported_attachment_mime_types",
+        "max_attachment_bytes",
+        "max_attachments_per_request",
     }
     for item in body["models"]:
         assert required_keys.issubset(item.keys())
@@ -359,6 +431,7 @@ def test_models_catalog_filters_by_provider_case_insensitive(client):
     r = client.get(
         f"/v1/models?provider={provider.upper()}",
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
 
@@ -381,10 +454,12 @@ def test_models_catalog_can_include_disabled(client):
     r_enabled = client.get(
         f"/v1/models?provider={provider}",
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     r_all = client.get(
         f"/v1/models?provider={provider}&enabled_only=false",
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
 
     assert r_enabled.status_code == 200
@@ -405,6 +480,7 @@ def test_models_catalog_rejects_unsupported_provider(client):
     r = client.get(
         "/v1/models?provider=not-a-provider",
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 400
     detail = r.json().get("detail", "")
@@ -428,6 +504,7 @@ def test_compare_rejects_too_many_targets(client):
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code in (400, 422)
 
@@ -441,6 +518,7 @@ def test_compare_requires_min_two_targets(client):
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code in (400, 422)
 
@@ -517,6 +595,7 @@ def test_compare_never_returns_500(client):
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code < 500
 
@@ -531,6 +610,7 @@ def test_chat_stream_returns_ndjson_events(client):
         "/v1/chat/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert "application/x-ndjson" in r.headers.get("content-type", "")
@@ -569,6 +649,7 @@ def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
 
@@ -607,6 +688,7 @@ def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, 
         "/v1/chat/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
@@ -677,6 +759,7 @@ def test_compare_normalizes_empty_success_payload_to_provider_error(client, app)
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
 
@@ -702,6 +785,7 @@ def test_compare_stream_returns_ndjson_events(client):
         "/v1/compare/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert "application/x-ndjson" in r.headers.get("content-type", "")
@@ -758,6 +842,7 @@ def test_compare_stream_normalizes_empty_success_payload_to_provider_error(clien
         "/v1/compare/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
@@ -825,6 +910,7 @@ def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(cl
         "/v1/compare/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert observed_kwargs.get("max_tokens") == 2048
@@ -858,6 +944,7 @@ def test_compare_stream_allows_context_with_three_targets(client):
         "/v1/compare/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert "application/x-ndjson" in r.headers.get("content-type", "")
@@ -877,6 +964,7 @@ def test_chat_accepts_auto_routing_without_provider(client, app):
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -895,6 +983,7 @@ def test_chat_rejects_model_without_provider(client):
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 422
 
@@ -910,6 +999,7 @@ def test_chat_clamps_max_tokens_to_server_cap(client, app):
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("max_tokens") == 2048
@@ -928,6 +1018,7 @@ def test_compare_clamps_max_tokens_to_server_cap(client, app):
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_compare_kwargs.get("max_tokens") == 2048
@@ -942,6 +1033,7 @@ def test_chat_stream_auto_routing_includes_selected_target(client, app):
         "/v1/chat/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
@@ -962,6 +1054,7 @@ def test_chat_web_mode_keeps_prompt_clean_and_returns_sources_from_orchestrator(
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     payload_json = r.json()
@@ -984,6 +1077,7 @@ def test_chat_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, 
         "/v1/chat",
         json=first_payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert first_response.status_code == 200
     assert app.state.fake_orchestrator.last_ask_prompt == "Latest AI policy updates"
@@ -1003,6 +1097,7 @@ def test_chat_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, 
         "/v1/chat",
         json=second_payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert second_response.status_code == 200
     assert app.state.fake_orchestrator.last_ask_prompt == "Explain photosynthesis in one sentence."
@@ -1023,6 +1118,7 @@ def test_compare_web_mode_keeps_prompt_clean_and_returns_sources_from_orchestrat
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     payload_json = r.json()
@@ -1043,6 +1139,7 @@ def test_chat_passes_research_mode_off_to_orchestrator_when_web_toggle_off(clien
         "/v1/chat",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
@@ -1059,6 +1156,7 @@ def test_chat_stream_passes_research_mode_off_to_orchestrator_when_web_toggle_of
         "/v1/chat/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
@@ -1077,6 +1175,7 @@ def test_compare_passes_research_mode_to_orchestrator(client, app):
         "/v1/compare",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_compare_kwargs.get("research_mode") == "on"
@@ -1096,6 +1195,7 @@ def test_compare_stream_passes_research_mode_off_to_orchestrator(client, app):
         "/v1/compare/stream",
         json=payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
@@ -1116,6 +1216,7 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
         "/v1/compare/stream",
         json=first_payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert first_response.status_code == 200
     first_events = [json.loads(line) for line in first_response.text.splitlines() if line.strip()]
@@ -1144,6 +1245,7 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
         "/v1/compare/stream",
         json=second_payload,
         headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
     )
     assert second_response.status_code == 200
     second_events = [json.loads(line) for line in second_response.text.splitlines() if line.strip()]
@@ -1156,3 +1258,5 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
     assert second_done.get("response", {}).get("web_source_items") == []
     assert app.state.fake_orchestrator.last_ask_prompt == "Explain photosynthesis in one sentence."
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
+
+

@@ -11,6 +11,7 @@ This diagram covers the smart-routing flow used by the chat path in:
 - `orchestrator/fallback_manager.py`
 
 It includes the route-level entry decision, the smart-router planning phase, and the runtime retry/escalation loop.
+When details conflict, prefer `README.md` + code in `orchestrator/`.
 
 ```mermaid
 flowchart TD
@@ -26,9 +27,9 @@ flowchart TD
     D --> E["Preview first smart candidate<br/>for stream start metadata"]
     D --> F["CortexOrchestrator.ask()<br/>routing_mode = smart / cheap / strong"]
 
-    F --> G["Optimize prompt and build messages"]
-    G --> H{"Research mode enabled<br/>and service configured?"}
-    H -- Yes --> H1["Enrich messages with web research"]
+    F --> G["Optimize prompt and build runtime messages<br/>including current-turn injections"]
+    G --> H{"Research enabled<br/>and service configured?"}
+    H -- Yes --> H1["Research state decides off/auto/on<br/>on=forced fresh retrieval"]
     H -- No --> I["PromptAnalyzer.analyze(prompt, context)"]
     H1 --> I
 
@@ -97,7 +98,7 @@ flowchart TD
         F1["Retry same tier on provider_error, rate_limit,<br/>timeout, or refusal when fallbacks remain"]
         F2["Escalate tier on refusal when same-tier fallbacks are exhausted"]
         F3["Escalate tier on too_short, format_violation, or truncated"]
-        F4["Stop on max attempts or latency budget"]
+        F4["Stop on max attempts; latency budget may allow<br/>one quality-recovery retry when candidates remain"]
     end
 
     AA -. applies .-> FallbackRules
@@ -107,4 +108,9 @@ Notes:
 
 - `cheap` forces tier `T0`; `strong` forces tier `T2`; `smart` delegates tier selection to `TierDecider`.
 - The preview step is used by streaming routes so the client can emit a stable `start` event before the full response is generated.
+- Tiering uses full runtime message estimates (not only base prompt/history) so current-turn web/system injections affect candidate selection.
 - If no valid response passes the validator, the orchestrator still returns the best available non-error response before falling back to the last error response.
+
+---
+
+Last updated: 2026-03-19

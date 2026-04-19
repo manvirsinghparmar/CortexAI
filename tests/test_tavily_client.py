@@ -64,3 +64,15 @@ def test_search_prefers_result_level_published_timestamp_over_fallback(monkeypat
     sources = client.search("latest docs")
     assert len(sources) == 1
     assert sources[0].fetched_at == "2026-03-12T15:30:00+00:00"
+
+
+def test_error_classifier_detects_dns_resolution_failures():
+    exc = RuntimeError("Temporary failure in name resolution while calling Tavily")
+    kind = TavilyResearchClient._classify_error_kind(exc)
+    assert kind == "dns_resolution_failed"
+
+
+def test_error_classifier_detects_auth_forbidden():
+    exc = RuntimeError("403 Forbidden from Tavily API")
+    kind = TavilyResearchClient._classify_error_kind(exc)
+    assert kind == "auth_forbidden"

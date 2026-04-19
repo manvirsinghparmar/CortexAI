@@ -55,17 +55,26 @@ class ClaudeClient(BaseAIClient):
         self.cost_calculator = CostCalculator(model_type="claude", model_name=model_name)
 
     def _convert_messages_to_claude_format(
-        self, messages: list[dict[str, str]]
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         """
         Convert normalized messages into Anthropic Messages API shape.
         """
         system_instruction = None
         claude_messages: list[dict[str, Any]] = []
+        attachments = attachments or []
 
-        for msg in messages:
+        last_user_index = None
+        for idx, msg in enumerate(messages):
+            if str(msg.get("role", "")).strip().lower() == "user":
+                last_user_index = idx
+
+        for idx, msg in enumerate(messages):
             role = str(msg.get("role", "user")).strip().lower()
-            content = str(msg.get("content", ""))
+            content = self._normalize_message_text(msg)
 
             if role == "system":
                 if system_instruction is None:
@@ -75,10 +84,41 @@ class ClaudeClient(BaseAIClient):
             if role not in {"user", "assistant"}:
                 role = "user"
 
+            content_blocks: list[dict[str, Any]] = []
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+
+            if attachments and last_user_index is not None and idx == last_user_index:
+                for attachment in attachments:
+                    mime_type = attachment["mime_type"]
+                    if mime_type.startswith("image/"):
+                        content_blocks.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime_type,
+                                    "data": attachment["data_base64"],
+                                },
+                            }
+                        )
+                    elif mime_type == "application/pdf":
+                        content_blocks.append(
+                            {
+                                "type": "document",
+                                "title": attachment.get("filename") or "file.pdf",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": attachment["data_base64"],
+                                },
+                            }
+                        )
+
             claude_messages.append(
                 {
                     "role": role,
-                    "content": [{"type": "text", "text": content}],
+                    "content": content_blocks or [{"type": "text", "text": ""}],
                 }
             )
 
@@ -104,17 +144,23 @@ class ClaudeClient(BaseAIClient):
         save_full: bool = False,
         **kwargs,
     ) -> UnifiedResponse:
-        request_id = self._generate_request_id()
+        request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
             normalized_messages = self._normalize_input(prompt=prompt, messages=messages)
+            normalized_messages, binary_attachments = self._merge_text_attachments_into_messages(
+                normalized_messages,
+                attachments,
+            )
             system_instruction, claude_messages = self._convert_messages_to_claude_format(
-                normalized_messages
+                normalized_messages,
+                attachments=binary_attachments,
             )
 
             request_payload: dict[str, Any] = {

@@ -6,16 +6,22 @@
 ```bash
 pip install -r requirements.txt
 ```
+`requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows.
 
 2. Configure auth in `.env`:
 ```ini
 API_KEYS=dev-key-1,dev-key-2
 ```
 
-3. Optional DB persistence:
+3. Configure required DB persistence:
 ```ini
 DATABASE_URL=postgresql+psycopg://...
 ```
+
+Notes:
+- `DATABASE_URL` is required at startup.
+- PostgreSQL URLs are required by default (`postgresql://` or `postgresql+psycopg://`).
+- Dev-only override: `ALLOW_NON_POSTGRES_DATABASE_URL=true`.
 
 4. Optional deployment boundary controls:
 ```ini
@@ -31,29 +37,51 @@ python run_server.py --reload
 6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
+- Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 
 ## Endpoints
 
 - `GET /health`
+- `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
+- `POST /v1/files/upload`
+- `GET /v1/files/{file_id}`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
 - `POST /v1/compare/stream`
+- `POST /v1/optimize`
 - `GET /v1/history`
+- `DELETE /v1/history/{entry_id}`
+- `DELETE /v1/history`
 - `GET /v1/whoami`
+- `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
+- `GET /v1/savings/export?format=csv&from=...&to=...&group_by=...`
+- `POST /v1/byok`
+- `GET /v1/byok/status`
+- `DELETE /v1/byok?provider=<provider-id>`
+- `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 
 ## Authentication
 
-Protected endpoints require:
+Protected `/v1/*` endpoints accept any one of:
+- `cortex_session` cookie
+- `Authorization: Bearer <gateway-bearer-token>`
 - `X-API-Key: <key-from-API_KEYS>`
 
-Invalid or missing key returns `401`.
+Invalid or missing credentials return `401`.
 
-## API Key Persistence Policy (DB-enabled routes)
+Session-scoped endpoints (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`) are session-scoped:
+- accepted auth: `cortex_session` cookie or `Authorization: Bearer <gateway-bearer-token>`
+- API-key-only auth is rejected with `403` (`session_auth_required`)
 
-When `DATABASE_URL` is set, chat/compare persistence resolves API key ownership before model invocation.
+## API Key Persistence Policy
+
+In required DB runtime mode, API-key flows can resolve key ownership before model invocation.
+Session-scoped chat/compare/files flows resolve persisted user identity from session/bearer auth.
 
 Env flags:
 - `AUTO_REGISTER_UNMAPPED_API_KEYS=false` (safe default)
@@ -299,11 +327,22 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 Applied in `server/utils.py`:
 - Conversation history trimmed to last 10 messages.
 - Total context chars capped at 20000.
-- `max_tokens` clamped to 1024.
+- `max_tokens` clamped to 2048.
+- Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
 
 Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
+- Middleware sets/returns `X-Request-ID` and emits request lifecycle events (`http.request.start|complete|exception`) for correlation.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
+- Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
+- Tavily emits `research.network.diagnostics` entries (DNS + TCP reachability to Tavily host) plus normalized failure `error_kind` values for EC2 network troubleshooting.
+- Attachment pipeline logs include `upload.*` + `storage.*` events for upload, storage, metadata write, sync/deferred ingestion, and rollback/error paths.
+- Upload route adds `upload.route.*` events with edge/proxy request context (`X-Amz-Cf-Id`, `X-Forwarded-*`, content-length vs payload-size checks) to help isolate CloudFront/WAF/origin issues.
+- Auth failures log `auth.failed` with method/path and auth-header presence flags (while redacting sensitive values).
+- Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.
+- File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
+- Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
+- Logging destinations are configurable for EC2/containers via `LOG_DESTINATION=file|stdout|both`; see `docs/LOGGING.md`.
 
 ## Testing
 
@@ -324,4 +363,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-03-08
+Last updated: 2026-04-11

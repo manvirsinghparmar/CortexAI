@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from server import persistence as persistence_service
-from server.dependencies import get_api_key
+from server.dependencies import get_auth
 from server.schemas.responses import SavingsReportDTO, UsageReportDTO
 from server.usage_reporting import (
     SAVINGS_CSV_COLUMNS,
@@ -21,7 +21,7 @@ from server.usage_reporting import (
 router = APIRouter(prefix="/v1", tags=["Reporting"])
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
-_resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
+_resolve_identity = persistence_service.resolve_identity
 _db_uow = persistence_service.db_uow
 
 
@@ -40,18 +40,18 @@ async def usage_report(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     date_from, date_to = parse_date_range(from_date, to_date)
     grouped = normalize_group_by(group_by)
     with _db_uow(commit_on_success=False) as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         report = build_usage_report(
             db_session,
             user_id=resolution.user_id,
@@ -74,18 +74,18 @@ async def savings_report(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     date_from, date_to = parse_date_range(from_date, to_date)
     grouped = normalize_group_by(group_by)
     with _db_uow(commit_on_success=False) as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         report = build_savings_report(
             db_session,
             user_id=resolution.user_id,
@@ -109,7 +109,7 @@ async def usage_export(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     _require_db_mode()
     if (format or "").strip().lower() != "csv":
@@ -122,11 +122,11 @@ async def usage_export(
     date_from, date_to = parse_date_range(from_date, to_date)
     grouped = normalize_group_by(group_by)
     with _db_uow(commit_on_success=False) as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         report = build_usage_report(
             db_session,
             user_id=resolution.user_id,
@@ -152,7 +152,7 @@ async def savings_export(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     _require_db_mode()
     if (format or "").strip().lower() != "csv":
@@ -165,11 +165,11 @@ async def savings_export(
     date_from, date_to = parse_date_range(from_date, to_date)
     grouped = normalize_group_by(group_by)
     with _db_uow(commit_on_success=False) as db_session:
-        resolution = _resolve_api_key_for_request(
-            api_key=api_key,
-            request_id=req_id,
-            db_session=db_session,
-        )
+        resolution = _resolve_identity(
+                auth=auth,
+                request_id=req_id,
+                db_session=db_session,
+            )
         report = build_savings_report(
             db_session,
             user_id=resolution.user_id,

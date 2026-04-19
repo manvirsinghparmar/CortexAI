@@ -38,12 +38,15 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 python -m venv venv
 venv\Scripts\activate
 ```
+MacOS
+source .venv/bin/activate
 
 2. Install dependencies.
 ```bash
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
+`requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set.
 
 3. Configure `.env`.
 
@@ -57,7 +60,7 @@ GROK_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-Enable DB mode:
+Configure DB (required):
 ```ini
 DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname
 DB_SCHEMA=public
@@ -90,6 +93,32 @@ SMART_CHAT_ALLOWED_PROVIDERS=       # comma-separated, e.g. openai,gemini
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
 REDACT_PII=false          # true|false
+
+# Attachments / object storage (feature-flagged)
+ENABLE_ATTACHMENTS=false
+ATTACHMENTS_OBJECT_STORAGE_BACKEND=s3
+ATTACHMENTS_S3_BUCKET=
+ATTACHMENTS_S3_REGION=us-east-1
+ATTACHMENTS_S3_ENDPOINT_URL=      # set for MinIO/local S3, leave empty for AWS S3
+ATTACHMENTS_S3_ACCESS_KEY_ID=
+ATTACHMENTS_S3_SECRET_ACCESS_KEY=
+ATTACHMENTS_S3_SESSION_TOKEN=
+ATTACHMENTS_S3_USE_SSL=true
+ATTACHMENTS_S3_FORCE_PATH_STYLE=true
+ATTACHMENTS_S3_KEY_PREFIX=attachments
+ATTACHMENTS_MAX_FILE_BYTES=20971520
+ATTACHMENTS_FILE_TTL_HOURS=168
+ATTACHMENTS_ALLOWED_MIME_TYPES=image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+# Structured logging (EC2 / CloudWatch friendly)
+LOG_LEVEL=INFO
+LOG_DESTINATION=both              # file|stdout|both (default: file)
+LOG_CONSOLE_LEVEL=INFO
+LOG_DIR=logs                      # relative paths resolve from repo root
+LOG_FILE_MAX_BYTES=10485760
+LOG_FILE_BACKUP_COUNT=5
+LOG_NOISY_LIBRARIES_LEVEL=WARNING # httpx/urllib3/boto3/botocore logger level
+# Backward compatibility: LOG_TO_CONSOLE=true implies LOG_DESTINATION=both when LOG_DESTINATION is unset
 
 # BYOK encryption
 MASTER_KEY=replace-with-strong-random-secret
@@ -144,18 +173,31 @@ Optional frontend runtime config for separate API host:
 - Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
 - Include it before `app.js` in `frontend/index.html`
 - Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and `apiKey`
+- Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication
 
-All `/v1/*` routes require:
+Most `/v1/*` routes accept either **API key** or a **gateway bearer token**.
+
+Session-scoped routes require signed-in identity auth (not API key):
+- `/v1/chat`
+- `/v1/chat/stream`
+- `/v1/compare`
+- `/v1/compare/stream`
+- `/v1/files/*`
+
+Accepted auth for session-scoped routes:
 ```http
-X-API-Key: <tenant-api-key>
+Authorization: Bearer <gateway-bearer-token>
 ```
+or `cortex_session` cookie.
 
 Optional request correlation:
 ```http
 X-Request-ID: <custom-id>
 ```
+For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
+For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
 Integration debug snapshot:
 ```bash
@@ -175,6 +217,8 @@ Response includes:
 - `GET /health/runtime`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
+- `POST /v1/files/upload`
+- `GET /v1/files/{file_id}`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -192,29 +236,126 @@ Response includes:
 - `GET /v1/byok/status`
 - `DELETE /v1/byok?provider=<provider-id>` (or omit provider to delete all)
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
+- `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
+
+### Cognito (Gmail) sign-in
+
+To enable "Sign in with Google" via Amazon Cognito:
+
+1. **AWS Cognito**: Create a User Pool, add an App client, configure the Cognito domain, and add Google as an identity provider (see [AWS docs](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-social-idp.html)).
+2. **Environment** (see `.env.example`):
+   - `COGNITO_USER_POOL_ID` – User pool ID (e.g. `us-east-1_xxxxxxxxx`)
+   - `COGNITO_CLIENT_ID` – App client ID
+   - `COGNITO_REGION` – AWS region
+   - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
+   - `COGNITO_REDIRECT_URI` – (optional) Callback URL; defaults to current origin + pathname
+3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the bearer token is stored and sent as `Authorization: Bearer <token>` on API requests. Sessions/history are tied to the authenticated user identity.
+
+`/v1/models` now includes attachment capability metadata per model:
+- `supports_image_input`
+- `supported_attachment_mime_types`
+- `max_attachment_bytes`
+- `max_attachments_per_request`
+
+## Attachment Upload Contract (Current)
+
+`POST /v1/files/upload` accepts raw bytes in the request body.
+
+Authentication (session-scoped routes):
+- `cortex_session` cookie, or
+- `Authorization: Bearer <gateway-bearer-token>`
+
+Headers:
+- `X-File-Name: <original-filename>` (optional, defaults to `file`)
+- `X-File-Content-Type: <mime-type>` (optional, falls back to `Content-Type`)
+
+Example:
+```bash
+curl -X POST http://127.0.0.1:8000/v1/files/upload \
+  -H "Authorization: Bearer <gateway-bearer-token>" \
+  -H "X-File-Name: contract.pdf" \
+  -H "X-File-Content-Type: application/pdf" \
+  --data-binary "@contract.pdf"
+```
+
+`GET /v1/files/{file_id}` returns file metadata and processing status for the same authenticated owner.
+Attachment routes reject API-key-only auth with `403` (`session_auth_required`).
+
+Upload status semantics:
+- `ready`: file is immediately usable in chat/compare.
+- `processing`: server accepted file and deferred/ongoing ingestion; client should poll status.
+- `failed`: ingestion failed; `error_code`/`error_message` explain why.
+- Upload API responses now sanitize `error_message` for client safety (no bucket/key/internal storage paths in response text).
+- Frontend upload UX maps failures to safe user-facing messages (network issue, file too large, unsupported type, timeout, generic retry prompt) and does not render raw backend/object-storage error text.
+- Raw upload errors are still logged in frontend developer console for debugging.
+
+MVP ingestion policy:
+- Small files are handled inline.
+- Office docs (`.docx`, `.pptx`, `.xlsx`) may return `processing` when above `ATTACHMENTS_SYNC_INGEST_MAX_BYTES`.
+- Poll `GET /v1/files/{file_id}` until `ready` before sending chat/compare with that `file_id`.
+- Frontend polling budget is 60 seconds; if exceeded, attachment is marked failed in UI and user can remove/retry upload.
+
+Use attachments in chat/compare payloads by passing file references:
+```json
+{
+  "prompt": "Analyze this file",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "attachments": [
+    {
+      "file_id": "11111111-1111-1111-1111-111111111111",
+      "usage_role": "primary",
+      "transform_mode": "auto"
+    }
+  ]
+}
+```
+
+Current guardrail behavior:
+- attachments require `DATABASE_URL` (DB mode)
+- all attachment `file_id` values must belong to the same API key owner
+- model compatibility is validated before orchestration starts
+- same-user deduplication is hash+size based (no cross-user dedup)
+- provider adapter support in this release:
+  - OpenAI: images + PDF
+  - Gemini: images + PDF (inline data)
+  - Claude: images + PDF (base64 document/image blocks)
+  - Grok: images only
+  - DeepSeek: binary attachments unsupported; text-materialized attachments are accepted
+
+Attachment metadata semantics:
+- `uploaded_files.ingestion_meta` is **file-level** metadata (ingestion requirement/state, extraction stats, etc.).
+- `request_attachments.resolved_artifact_meta` is **request-level** metadata (effective transform/materialization used for that specific turn).
 
 ## Routing Modes
 
 For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
+- auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Explicit `provider` + `model`: deterministic target.
 - `routing.smart_mode=true` (or omitted): true smart orchestration path (`routing_mode="smart"` with optional constraints from `SMART_CHAT_*` env vars).
 - `routing.smart_mode=false`: legacy deterministic auto-pick path.
 - `routing.research_mode=true`: orchestrator-managed web research flow with fresh sources for the current turn.
+- API contract note: `routing.research_mode` is boolean (`true|false`) and is mapped to orchestrator modes `on|off`.
 - Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
+- auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
 
 ## Web Research Behavior (Current)
 
+- API contract: `routing.research_mode` accepts `true|false` (mapped to `on|off`).
+- Internal orchestrator modes:
 - `research_mode=off`: hard stop for this turn (no research injection, no reuse).
 - `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
 - `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
 - When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
+- Tavily runtime diagnostics emit `research.network.diagnostics` with DNS + TCP egress health (host/port configurable via `TAVILY_NETWORK_DIAGNOSTICS_*` envs) for EC2 troubleshooting.
+- Tavily failures emit normalized `error_kind` fields (for example `dns_resolution_failed`, `timeout`, `auth_forbidden`, `rate_limited`) without logging raw query text.
 
 ## Session Continuity
 
@@ -358,9 +499,9 @@ Common `detail.code` values:
 import requests
 
 class CortexClient:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, bearer_token: str):
         self.base_url = base_url.rstrip("/")
-        self.headers = {"X-API-Key": api_key}
+        self.headers = {"Authorization": f"Bearer {bearer_token}"}
 
     def chat(self, prompt: str, provider: str | None = None, model: str | None = None):
         payload = {"prompt": prompt}
@@ -449,6 +590,7 @@ It runs:
   - uses GitHub Environment `live-e2e`
   - runs on `windows-latest` and provisions local PostgreSQL in-workflow
   - initializes schema from `db/schema_public_snapshot.sql` + `db/migrations/*.sql`
+  - publishes Playwright JUnit results directly into GitHub Checks + run summary (no artifact download needed for first-pass triage)
 
 Required secrets for `live-e2e` environment:
 - `E2E_API_KEY` (gateway auth key used by E2E suite; not a provider billing key)
@@ -600,6 +742,7 @@ OpenAIProject/
     tables.py
 
   docs/
+    README.md
     CHANGELOG.md
     COMPARE_MODE_GUIDE.md
     DATABASE_INTEGRATION_COMPLETE.md
@@ -681,6 +824,7 @@ OpenAIProject/
       catalog.py
       chat.py
       compare.py
+      files.py
       health.py
       history.py
       optimize.py
@@ -798,4 +942,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-03-15
+Last updated: 2026-04-13

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
-from server.dependencies import get_api_key
+from server.dependencies import get_auth
 from server.schemas.responses import (
     ModelCatalogItemDTO,
     ModelsCatalogResponseDTO,
@@ -54,15 +54,21 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
         context_limit=int(candidate.context_limit),
         tags=list(candidate.tags or []),
         enabled=bool(candidate.enabled),
+        supports_image_input=bool(getattr(candidate, "supports_image_input", False)),
+        supported_attachment_mime_types=list(
+            getattr(candidate, "supported_attachment_mime_types", []) or []
+        ),
+        max_attachment_bytes=getattr(candidate, "max_attachment_bytes", None),
+        max_attachments_per_request=getattr(candidate, "max_attachments_per_request", None),
     )
 
 
 @router.get("/providers", response_model=ProvidersCatalogResponseDTO)
 async def list_providers(
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """List discoverable providers and metadata for API/front-end clients."""
-    _ = api_key
+    _ = auth
     catalog = get_provider_catalog()
     registry = ModelRegistry.from_yaml()
 
@@ -96,10 +102,10 @@ async def list_providers(
 async def list_models(
     provider: str | None = Query(default=None),
     enabled_only: bool = Query(default=True),
-    api_key: str = Depends(get_api_key),
+    auth=Depends(get_auth),
 ):
     """List discoverable models, optionally filtered by provider."""
-    _ = api_key
+    _ = auth
     provider_norm = _validate_provider_or_400(provider)
     registry = ModelRegistry.from_yaml()
 

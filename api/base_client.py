@@ -288,6 +288,45 @@ class BaseAIClient(ABC):
         """
         return int((time.time() - start_time) * 1000)
 
+    @staticmethod
+    def _provider_display_name(provider: str) -> str:
+        """
+        Return a human-friendly provider name for user-facing error copy.
+        """
+        normalized = str(provider or "").strip().lower()
+        provider_names = {
+            "openai": "OpenAI",
+            "gemini": "Gemini",
+            "deepseek": "DeepSeek",
+            "grok": "Grok",
+            "claude": "Claude",
+        }
+        if normalized in provider_names:
+            return provider_names[normalized]
+        if normalized:
+            return normalized.capitalize()
+        return "The model provider"
+
+    def _safe_client_error_message(self, *, code: str, provider: str) -> str:
+        """
+        Build user-safe error copy without leaking raw provider payloads.
+
+        Raw exception text can contain provider JSON, request payload fragments, or
+        other internals that should not be returned to end users.
+        """
+        provider_name = self._provider_display_name(provider)
+        if code == "timeout":
+            return f"{provider_name} took too long to respond. Please try again."
+        if code == "auth":
+            return f"{provider_name} authentication failed. Please verify credentials and try again."
+        if code == "rate_limit":
+            return f"{provider_name} is rate limited right now. Please try again shortly."
+        if code == "bad_request":
+            return f"{provider_name} could not process this request. Please adjust your input and try again."
+        if code == "provider_error":
+            return f"{provider_name} is temporarily unavailable. Please try again."
+        return f"{provider_name} returned an unexpected error. Please try again."
+
     def _normalize_error(
         self, exception: Exception, provider: str | None = None
     ) -> NormalizedError:
@@ -317,7 +356,7 @@ class BaseAIClient(ABC):
         if "timeout" in exc_str or "timed out" in exc_str:
             return NormalizedError(
                 code="timeout",
-                message=f"Request timed out: {exception}",
+                message=self._safe_client_error_message(code="timeout", provider=provider),
                 provider=provider,
                 retryable=True,
                 details={"exception_type": exc_type},
@@ -333,7 +372,7 @@ class BaseAIClient(ABC):
         ):
             return NormalizedError(
                 code="auth",
-                message=f"Authentication failed: {exception}",
+                message=self._safe_client_error_message(code="auth", provider=provider),
                 provider=provider,
                 retryable=False,
                 details={"exception_type": exc_type},
@@ -343,7 +382,7 @@ class BaseAIClient(ABC):
         if "429" in exc_str or "rate limit" in exc_str or "too many requests" in exc_str:
             return NormalizedError(
                 code="rate_limit",
-                message=f"Rate limit exceeded: {exception}",
+                message=self._safe_client_error_message(code="rate_limit", provider=provider),
                 provider=provider,
                 retryable=True,
                 details={"exception_type": exc_type},
@@ -353,7 +392,7 @@ class BaseAIClient(ABC):
         if "400" in exc_str or "bad request" in exc_str or "invalid" in exc_str:
             return NormalizedError(
                 code="bad_request",
-                message=f"Invalid request: {exception}",
+                message=self._safe_client_error_message(code="bad_request", provider=provider),
                 provider=provider,
                 retryable=False,
                 details={"exception_type": exc_type},
@@ -366,7 +405,7 @@ class BaseAIClient(ABC):
         ):
             return NormalizedError(
                 code="provider_error",
-                message=f"Provider error: {exception}",
+                message=self._safe_client_error_message(code="provider_error", provider=provider),
                 provider=provider,
                 retryable=True,
                 details={"exception_type": exc_type},
@@ -375,7 +414,7 @@ class BaseAIClient(ABC):
         # Unknown error
         return NormalizedError(
             code="unknown",
-            message=f"Unexpected error: {exception}",
+            message=self._safe_client_error_message(code="unknown", provider=provider),
             provider=provider,
             retryable=False,
             details={"exception_type": exc_type},

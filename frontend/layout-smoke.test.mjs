@@ -137,6 +137,19 @@ test("compare mode sends session context and preserves prompt history between tu
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
 });
 
+test("third compare slot prefers Claude Haiku defaults before generic fallback", () => {
+    assert.match(appJs, /const COMPARE_THIRD_SLOT_PREFERRED_KEYS = \[/);
+    assert.match(appJs, /"claude:claude-haiku-4-5"/);
+    assert.match(appJs, /"claude:claude-sonnet-4-6"/);
+    assert.match(appJs, /"claude:claude-sonnet-4-5"/);
+    assert.match(appJs, /function appendPreferredCompareModels\(byKey, allowedProviders\) \{/);
+    assert.match(appJs, /function pickCompareFallbackKey\(slotIndex, availableKeys, used\) \{/);
+    assert.match(appJs, /return resolved\.map\(value => String\(value \|\| ""\)\);/);
+    assert.match(appJs, /if \(slotIndex === 2\) \{[\s\S]*key\.startsWith\("claude:"\)/);
+    assert.match(appJs, /el\.compareModel3\.value = pickCompareFallbackKey\(2, availableKeys, used\);/);
+    assert.match(appJs, /const fallback = pickCompareFallbackKey\(index, availableKeys, used\);/);
+});
+
 test("compare history hydration keeps prior user prompts without duplicating per-model assistant turns", () => {
     assert.match(appJs, /function buildConversationHistoryFromEntries\(entries\) \{[\s\S]*const flushCompareTurn = \(\) => \{/);
     assert.match(appJs, /const assistantContext = buildCompareAssistantContext\(activeCompareTurn\.responses\);/);
@@ -159,9 +172,9 @@ test("history threads are grouped by shared session id and can surface mixed-mod
 });
 
 test("header keeps only slim nav links without subtitle block", () => {
-    assert.match(html, /<button class="top-nav-link" type="button">History<\/button>/);
-    assert.match(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
-    assert.match(html, /<button class="top-nav-link" type="button">Profile<\/button>/);
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">History<\/button>/);
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Profile<\/button>/);
     assert.doesNotMatch(html, /header-intro-sub/);
 });
 
@@ -214,6 +227,15 @@ test("response cards provide copy, like, and dislike actions", () => {
     assert.match(appJs, /function handleCopyAction\(button\)/);
     assert.match(appJs, /function handleReactionAction\(button, action\)/);
     assert.match(appJs, /el\.resultsGrid\.addEventListener\("click", event =>/);
+});
+
+test("model errors are sanitized before rendering on response cards", () => {
+    assert.match(appJs, /function hasUnsafeModelErrorPayload\(rawMessage\)/);
+    assert.match(appJs, /function fallbackModelErrorMessage\(error = \{\}\)/);
+    assert.match(appJs, /function getModelErrorDisplayText\(resp\)/);
+    assert.match(appJs, /const text = hasError \? getModelErrorDisplayText\(resp\) : \(resp\.text \|\| "\(empty response\)"\);/);
+    assert.match(appJs, /const text = hasError[\s\S]*\? getModelErrorDisplayText\(resp\)/);
+    assert.doesNotMatch(appJs, /Error: \$\{resp\.error\.message\}/);
 });
 
 test("composer shows explicit stop control during streaming", () => {
@@ -386,6 +408,12 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
     assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
     assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
+    assert.match(appJs, /const findNextNonEmptyLineIndex = \(startIndex\) => \{/);
+    assert.match(
+        appJs,
+        /if \(!current\) \{[\s\S]*const nextIndex = findNextNonEmptyLineIndex\(index \+ 1\);[\s\S]*index = nextIndex;[\s\S]*continue;[\s\S]*\}/,
+    );
+    assert.match(appJs, /const startAttr = startNumber > 1 \? ` start="\$\{startNumber\}"` : "";/);
     assert.match(appJs, /const responseHtml = hasError \? escHtml\(text\) : renderMarkdownToHtml\(text\);/);
     assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
@@ -395,7 +423,7 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
 test("streaming still appends raw chunks before final markdown rendering", () => {
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
     assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
-    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? `Error: \$\{resp\.error\.message\}` : "\(empty response\)"\);/);
+    assert.match(appJs, /const text = hasError[\s\S]*\? getModelErrorDisplayText\(resp\)[\s\S]*: \(explicitText\.trim\(\) \|\| "\(empty response\)"\);/);
 });
 
 test("markdown table css adds overflow wrapper, cell wrapping, and stacked layout", () => {

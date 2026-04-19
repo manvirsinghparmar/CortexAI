@@ -108,7 +108,14 @@ const FALLBACK_MODEL_CATALOG = FALLBACK_PROVIDER_CATALOG.map(spec => ({
     provider: spec.provider,
     model: spec.default_model,
     enabled: true,
-}));
+})).concat([
+    { provider: "claude", model: "claude-haiku-4-5", enabled: true },
+]);
+const COMPARE_THIRD_SLOT_PREFERRED_KEYS = [
+    "claude:claude-haiku-4-5",
+    "claude:claude-sonnet-4-6",
+    "claude:claude-sonnet-4-5",
+];
 
 const PROVIDER_FAVICON_DOMAIN_BY_ID = {
     openai: "openai.com",
@@ -352,6 +359,29 @@ function resolveModelAttachmentCapabilities(row, providerRaw) {
     };
 }
 
+function appendPreferredCompareModels(byKey, allowedProviders) {
+    if (!byKey || typeof byKey.set !== "function") return;
+    if (!(allowedProviders instanceof Set) || !allowedProviders.has("claude")) return;
+    const capabilities = fallbackAttachmentCapabilities("claude");
+    COMPARE_THIRD_SLOT_PREFERRED_KEYS.forEach(key => {
+        const parsed = parseKey(key);
+        const provider = toProviderId(parsed.provider);
+        const model = String(parsed.model || "").trim();
+        if (provider !== "claude" || !model) return;
+        const normalizedKey = modelKeyOf(provider, model);
+        if (byKey.has(normalizedKey)) return;
+        byKey.set(normalizedKey, {
+            provider,
+            model,
+            enabled: true,
+            supports_image_input: capabilities.supports_image_input,
+            supported_attachment_mime_types: capabilities.supported_attachment_mime_types,
+            max_attachment_bytes: capabilities.max_attachment_bytes,
+            max_attachments_per_request: capabilities.max_attachments_per_request,
+        });
+    });
+}
+
 function applyCatalogData(nextProviders, nextModels) {
     const providerRows = Array.isArray(nextProviders) ? nextProviders : [];
     const modelRows = Array.isArray(nextModels) ? nextModels : [];
@@ -434,6 +464,7 @@ function applyCatalogData(nextProviders, nextModels) {
             });
         }
     });
+    appendPreferredCompareModels(byKey, allowedProviders);
 
     modelCatalog = [...byKey.values()];
     if (modelCatalog.length === 0) {
@@ -1351,7 +1382,7 @@ function reconcileCompareSelections(selects) {
             selectEl.value = nextValue;
         }
     });
-    return selects.map(sel => String(sel.value || ""));
+    return resolved.map(value => String(value || ""));
 }
 
 function canAddAnotherCompareSlot() {
@@ -1733,8 +1764,15 @@ if (el.compareAddModelBtn) {
             return;
         }
         compareSlotCount = 3;
-        // Let the sync/reconcile pass choose the next available unique model.
-        el.compareModel3.value = "";
+        // Prefer Claude Haiku (cost-aware) for slot 3 before generic unique fallback.
+        const slotOne = String(el.compareModel1.value || "");
+        const slotTwo = String(el.compareModel2.value || "");
+        const used = new Set([slotOne, slotTwo].filter(Boolean));
+        const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
+        const availableKeys = getSelectableModels()
+            .filter(item => isModelCompatibleWithAttachments(item, attachmentDescriptors))
+            .map(item => modelKeyOf(item.provider, item.model));
+        el.compareModel3.value = pickCompareFallbackKey(2, availableKeys, used);
         updateCompareAddButton();
         syncCompareDropdowns();
     });
@@ -3711,7 +3749,9 @@ function finalizeStreamCard(index, resp) {
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
     const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
-    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = hasError
+        ? getModelErrorDisplayText(resp)
+        : (explicitText.trim() || "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -3865,11 +3905,90 @@ function showResults(responses, isMulti, compareData) {
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 96 });
 }
 
+function providerDisplayNameForError(providerRaw) {
+    const provider = toProviderId(providerRaw);
+    const fromCatalog = String(providerLabelById[provider] || "").trim();
+    if (fromCatalog) return fromCatalog;
+
+    const fallbackNames = {
+        openai: "OpenAI",
+        gemini: "Gemini",
+        deepseek: "DeepSeek",
+        grok: "Grok",
+        claude: "Claude",
+    };
+    if (fallbackNames[provider]) return fallbackNames[provider];
+    if (provider) return `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
+    return "This model";
+}
+
+function hasUnsafeModelErrorPayload(rawMessage) {
+    const text = String(rawMessage || "");
+    if (!text) return false;
+    if (text.length > 220) return true;
+    const lowered = text.toLowerCase();
+    return (
+        text.includes("{")
+        || text.includes("}")
+        || text.includes("[")
+        || text.includes("]")
+        || text.includes("\n")
+        || text.includes("\r")
+        || /['"]error['"]\s*:/.test(text)
+        || lowered.includes("traceback")
+        || lowered.includes("stack trace")
+        || lowered.includes("exception:")
+        || lowered.includes("request body")
+        || lowered.includes("<html")
+    );
+}
+
+function normalizeModelErrorMessage(rawMessage) {
+    let text = String(rawMessage || "").trim();
+    if (!text) return "";
+    text = text.replace(/^error:\s*/i, "").replace(/\s+/g, " ").trim();
+    if (!text || hasUnsafeModelErrorPayload(text)) return "";
+    return text;
+}
+
+function fallbackModelErrorMessage(error = {}) {
+    const code = String(error?.code || "").trim().toLowerCase();
+    const providerName = providerDisplayNameForError(error?.provider);
+    if (code === "timeout") {
+        return `${providerName} took too long to respond. Please try again.`;
+    }
+    if (code === "auth") {
+        return `${providerName} authentication failed. Please verify credentials and try again.`;
+    }
+    if (code === "rate_limit") {
+        return `${providerName} is rate limited right now. Please try again shortly.`;
+    }
+    if (code === "bad_request") {
+        return `${providerName} could not process this request. Please adjust your input and try again.`;
+    }
+    if (code === "provider_error") {
+        return `${providerName} is temporarily unavailable. Please try again.`;
+    }
+    if (providerName === "This model") {
+        return "This model is temporarily unavailable. Please try again.";
+    }
+    return `${providerName} is temporarily unavailable. Please try again.`;
+}
+
+function getModelErrorDisplayText(resp) {
+    const error = (resp && typeof resp === "object" && resp.error && typeof resp.error === "object")
+        ? resp.error
+        : {};
+    const normalizedMessage = normalizeModelErrorMessage(error.message || "");
+    const safeMessage = normalizedMessage || fallbackModelErrorMessage(error);
+    return `Error: ${safeMessage}`;
+}
+
 
 function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const hasError = !!resp.error;
-    const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = hasError ? getModelErrorDisplayText(resp) : (resp.text || "(empty response)");
     const { summary } = getProviderPresentation(resp.provider, resp.model);
     const webSources = normalizeWebSources(resp.web_source_items || []);
     const providerSummaryHtml = showProvider
@@ -4050,6 +4169,24 @@ function setLoading(loading) {
     updateSendButtonState();
 }
 
+function pickCompareFallbackKey(slotIndex, availableKeys, used) {
+    if (slotIndex === 2) {
+        const preferredClaudeFamily = COMPARE_THIRD_SLOT_PREFERRED_KEYS.find(
+            key => availableKeys.includes(key) && !used.has(key)
+        );
+        if (preferredClaudeFamily) {
+            return preferredClaudeFamily;
+        }
+        const preferredClaude = availableKeys.find(
+            key => key.startsWith("claude:") && !used.has(key)
+        );
+        if (preferredClaude) {
+            return preferredClaude;
+        }
+    }
+    return availableKeys.find(key => !used.has(key)) || "";
+}
+
 function resolveCompareSelections(previousValues, slotCount = 3) {
     const rawPrev = Array.isArray(previousValues) ? previousValues : [];
     const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
@@ -4066,7 +4203,7 @@ function resolveCompareSelections(previousValues, slotCount = 3) {
             used.add(preferred);
             continue;
         }
-        const fallback = availableKeys.find(key => !used.has(key)) || "";
+        const fallback = pickCompareFallbackKey(index, availableKeys, used);
         resolved.push(fallback);
         if (fallback) {
             used.add(fallback);
@@ -4327,6 +4464,14 @@ function renderMarkdownToHtml(markdownText) {
         if (!paragraphText) return;
         htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
     };
+    const findNextNonEmptyLineIndex = (startIndex) => {
+        let cursor = startIndex;
+        while (cursor < lines.length) {
+            if (String(lines[cursor] || "").trim()) return cursor;
+            cursor += 1;
+        }
+        return -1;
+    };
 
     let index = 0;
     while (index < lines.length) {
@@ -4383,13 +4528,31 @@ function renderMarkdownToHtml(markdownText) {
         if (/^\d+\.\s+/.test(trimmed)) {
             flushParagraph();
             const items = [];
+            let startNumber = 1;
             while (index < lines.length) {
                 const current = String(lines[index] || "").trim();
-                if (!/^\d+\.\s+/.test(current)) break;
-                items.push(current.replace(/^\d+\.\s+/, ""));
+                if (!current) {
+                    const nextIndex = findNextNonEmptyLineIndex(index + 1);
+                    if (nextIndex === -1) break;
+                    const nextLine = String(lines[nextIndex] || "").trim();
+                    if (!/^\d+\.\s+/.test(nextLine)) break;
+                    index = nextIndex;
+                    continue;
+                }
+
+                const itemMatch = /^(\d+)\.\s+(.*)$/.exec(current);
+                if (!itemMatch) break;
+                if (items.length === 0) {
+                    const parsedStart = Number(itemMatch[1]);
+                    if (Number.isFinite(parsedStart) && parsedStart > 0) {
+                        startNumber = parsedStart;
+                    }
+                }
+                items.push(itemMatch[2]);
                 index += 1;
             }
-            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            const startAttr = startNumber > 1 ? ` start="${startNumber}"` : "";
+            htmlParts.push(`<ol${startAttr}>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
             continue;
         }
 

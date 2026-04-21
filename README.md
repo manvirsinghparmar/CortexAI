@@ -172,12 +172,12 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 Optional frontend runtime config for separate API host:
 - Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
 - Include it before `app.js` in `frontend/index.html`
-- Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and `apiKey`
+- Set `window.CORTEX_RUNTIME_CONFIG.apiBase`
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication
 
-Most `/v1/*` routes accept either **API key** or a **gateway bearer token**.
+Most `/v1/*` routes accept API key, gateway bearer token, or session cookie auth.
 
 Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/chat`
@@ -185,12 +185,19 @@ Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/compare`
 - `/v1/compare/stream`
 - `/v1/files/*`
+- `/v1/providers`
+- `/v1/models`
+- `/v1/optimize`
+- `/v1/history`
+- `/v1/history/{entry_id}`
 
 Accepted auth for session-scoped routes:
 ```http
 Authorization: Bearer <gateway-bearer-token>
 ```
 or `cortex_session` cookie.
+
+API-key-only auth on session-scoped routes is rejected with `403` (`session_auth_required`).
 
 Optional request correlation:
 ```http

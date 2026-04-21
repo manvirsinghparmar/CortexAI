@@ -74,7 +74,14 @@ Protected `/v1/*` endpoints accept any one of:
 
 Invalid or missing credentials return `401`.
 
-Session-scoped endpoints (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`) are session-scoped:
+Session-scoped endpoints are session-scoped:
+- `/v1/chat*`
+- `/v1/compare*`
+- `/v1/files/*`
+- `/v1/providers`
+- `/v1/models`
+- `/v1/optimize`
+- `/v1/history*`
 - accepted auth: `cortex_session` cookie or `Authorization: Bearer <gateway-bearer-token>`
 - API-key-only auth is rejected with `403` (`session_auth_required`)
 

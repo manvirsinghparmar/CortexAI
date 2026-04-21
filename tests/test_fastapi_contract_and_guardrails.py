@@ -540,6 +540,21 @@ def test_error_normalization(exc, expected_code, expected_retryable):
     assert err.retryable == expected_retryable
 
 
+def test_error_normalization_sanitizes_raw_provider_payload_text():
+    dummy = DummyClient()
+    raw_provider_exception = Exception(
+        "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently overloaded'}}"
+    )
+
+    err: NormalizedError = dummy._normalize_error(raw_provider_exception, provider="gemini")  # type: ignore
+
+    assert err.code == "provider_error"
+    assert "temporarily unavailable" in err.message.lower()
+    assert "{" not in err.message
+    assert "}" not in err.message
+    assert "overloaded" not in err.message.lower()
+
+
 def test_compare_dto_mapping_smoke():
     """
     Validates CompareResponseDTO mapping works against a MultiUnifiedResponse-like object.

@@ -342,6 +342,7 @@ Security/logging:
 - Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.
 - File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
 - Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
+- Provider/model completion errors are normalized to user-safe text; raw provider JSON payload fragments are not returned in API error message fields rendered by chat/compare cards.
 - Logging destinations are configurable for EC2/containers via `LOG_DESTINATION=file|stdout|both`; see `docs/LOGGING.md`.
 
 ## Testing
@@ -363,4 +364,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-04-11
+Last updated: 2026-04-18

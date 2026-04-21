@@ -343,6 +343,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+- Frontend compare UX keeps selections unique and, when a third model slot is added, prefers `claude-haiku-4-5` (then Sonnet variants) with Claude fallback even if discovery omits explicit Haiku rows.
 
 ## Web Research Behavior (Current)
 
@@ -389,6 +390,7 @@ Notes:
 - Chat responses now include `session_id`.
 - Chat `response_done` payloads include `web_source_items` for rendered source chips.
 - Chat `start` and `done` stream events include the active `session_id`.
+- Frontend markdown rendering keeps numbered lists in a single ordered list even when blank lines separate numbered items (no repeated `1.` blocks).
 
 `/v1/compare/stream` events:
 - `start`
@@ -491,6 +493,7 @@ Common `detail.code` values:
 - OpenAI client defaults to `max_tokens=2048` when caller omits output cap.
 - If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
 - Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
+- Provider/model error messages are sanitized before returning to clients (raw provider JSON/stack payloads are not surfaced in response cards or stream text).
 - This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
 
 ## Minimal Python SDK Snippet

@@ -254,6 +254,15 @@ function createRuntime({ providersPayload, modelsPayload }) {
         setTimeout,
         clearTimeout,
         localStorage,
+        location: {
+            hash: "",
+            pathname: "/",
+            search: "",
+            href: "http://localhost/",
+        },
+        history: {
+            replaceState() {},
+        },
         crypto: {
             randomUUID: () => "11111111-1111-4111-8111-111111111111",
         },
@@ -420,6 +429,102 @@ test("compare selectors enforce unique model choices with disabled taken options
 
     const selected = [compareModel1.value, compareModel2.value, compareModel3.value].map(value => String(value || ""));
     assert.equal(new Set(selected).size, selected.length);
+});
+
+test("third compare slot defaults to Claude Haiku when available", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "claude", label: "Claude", default_model: "claude-sonnet-4-6", ui: { display_name: "Claude" } },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "claude", model: "claude-haiku-4-5", enabled: true },
+            { provider: "claude", model: "claude-sonnet-4-6", enabled: true },
+            { provider: "claude", model: "claude-opus-4-5", enabled: true },
+            { provider: "claude", model: "claude-opus-4-6", enabled: true },
+        ],
+        total: 6,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context, elements } = createRuntime({ providersPayload, modelsPayload });
+
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const btnCompareMode = elements.get("btnCompareMode");
+    const compareModel1 = elements.get("compareModel1");
+    const compareModel2 = elements.get("compareModel2");
+    const compareModel3 = elements.get("compareModel3");
+    const compareAddModelBtn = elements.get("compareAddModelBtn");
+
+    btnCompareMode.dispatchEvent("click");
+    compareAddModelBtn.dispatchEvent("click");
+
+    assert.equal(String(compareModel3.value || ""), "claude:claude-haiku-4-5");
+
+    const selected = [compareModel1.value, compareModel2.value, compareModel3.value].map(value => String(value || ""));
+    assert.equal(new Set(selected).size, selected.length);
+});
+
+test("third compare slot still defaults to Claude Haiku when catalog omits explicit haiku rows", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "claude", label: "Claude", default_model: "claude-sonnet-4-6", ui: { display_name: "Claude" } },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "claude", model: "claude-sonnet-4-6", enabled: true },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context, elements } = createRuntime({ providersPayload, modelsPayload });
+
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const btnCompareMode = elements.get("btnCompareMode");
+    const compareModel3 = elements.get("compareModel3");
+    const compareAddModelBtn = elements.get("compareAddModelBtn");
+
+    btnCompareMode.dispatchEvent("click");
+    compareAddModelBtn.dispatchEvent("click");
+
+    assert.equal(String(compareModel3.value || ""), "claude:claude-haiku-4-5");
 });
 
 test("upload errors are mapped to safe user-facing messages", async () => {

@@ -170,10 +170,18 @@ def fastapi_client(monkeypatch):
     history_route.API_DB_ENABLED = False
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
+    session_user_id = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(
+        deps,
+        "parse_session",
+        lambda cookie: session_user_id if cookie else None,
+    )
 
     fake_orch = FakeOrchestrator()
     app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orch
-    return TestClient(app), fake_orch
+    client = TestClient(app)
+    client.cookies.set("cortex_session", "test-session-cookie")
+    return client, fake_orch
 
 
 def _sqlite_repo_fixture(monkeypatch):
@@ -552,10 +560,17 @@ def db_mode_fastapi_client(monkeypatch):
     app = create_app()
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
+    session_user_id = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(
+        deps,
+        "parse_session",
+        lambda cookie: session_user_id if cookie else None,
+    )
 
     fake_orch = DBModeCompareOrchestrator()
     app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orch
     client = TestClient(app)
+    client.cookies.set("cortex_session", "test-session-cookie")
 
     try:
         yield client, fake_orch

@@ -2,16 +2,25 @@
 
 import asyncio
 import os
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from server.dependencies import get_auth, get_orchestrator
+from server.dependencies import AuthResult, get_auth, get_orchestrator
+from server.routes.session_auth import SessionScopedAuthGuard
 from orchestrator.core import CortexOrchestrator
+from utils.logger import get_logger
 from utils.prompt_optimizer import PromptOptimizer
 
 router = APIRouter(prefix="/v1", tags=["Optimize"])
+logger = get_logger(__name__)
+_SESSION_AUTH_GUARD = SessionScopedAuthGuard(
+    route_label="Optimize",
+    rejection_event="optimize.route.rejected.auth_mode",
+    logger=logger,
+)
 
 # Singleton optimizer (created once, reused across requests)
 _optimizer: Optional[PromptOptimizer] = None
@@ -41,9 +50,10 @@ class OptimizeResponse(BaseModel):
 
 @router.post("/optimize", response_model=OptimizeResponse)
 async def optimize_prompt(
+    http_request: Request,
     request: OptimizeRequest,
     orchestrator: CortexOrchestrator = Depends(get_orchestrator),
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """
     Optimize a prompt using the configured AI provider.
@@ -52,6 +62,8 @@ async def optimize_prompt(
     with was_optimized=false.  The UI toggle still calls this endpoint — the
     server flag acts as a server-side safety gate.
     """
+    req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     server_enabled = os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true"
 
     if not server_enabled:

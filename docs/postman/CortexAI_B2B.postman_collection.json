@@ -159,8 +159,8 @@
             "method": "GET",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/providers"
@@ -188,8 +188,8 @@
             "method": "GET",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true"
@@ -519,8 +519,8 @@
             "method": "GET",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/history?limit=20"
@@ -550,8 +550,8 @@
             "method": "DELETE",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/history/{{history_entry_id}}"
@@ -576,8 +576,8 @@
             "method": "DELETE",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               }
             ],
             "url": "{{base_url}}/v1/history"
@@ -722,8 +722,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",
@@ -837,8 +837,8 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-API-Key",
-                "value": "{{api_key}}"
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
               },
               {
                 "key": "Content-Type",

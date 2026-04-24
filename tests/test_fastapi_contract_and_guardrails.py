@@ -391,18 +391,30 @@ def test_compare_with_attachments_requires_db_mode(client):
     assert r.json()["detail"]["code"] == "attachments_require_db"
 
 
-def test_providers_catalog_requires_api_key(client):
+def test_providers_catalog_requires_auth(client):
     r = client.get("/v1/providers")
     assert r.status_code in (401, 403)
 
 
-def test_models_catalog_requires_api_key(client):
+def test_models_catalog_requires_auth(client):
     r = client.get("/v1/models")
     assert r.status_code in (401, 403)
 
 
-def test_providers_catalog_returns_catalog_and_model_counts(client):
+def test_providers_catalog_rejects_api_key_only_auth(client):
     r = client.get("/v1/providers", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_models_catalog_rejects_api_key_only_auth(client):
+    r = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_providers_catalog_returns_catalog_and_model_counts(client):
+    r = client.get("/v1/providers", cookies={"cortex_session": "test-session-cookie"})
     assert r.status_code == 200
 
     body = r.json()
@@ -431,7 +443,7 @@ def test_providers_catalog_returns_catalog_and_model_counts(client):
 
 
 def test_models_catalog_lists_enabled_models_by_default(client):
-    r = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    r = client.get("/v1/models", cookies={"cortex_session": "test-session-cookie"})
     assert r.status_code == 200
 
     body = r.json()
@@ -471,7 +483,6 @@ def test_models_catalog_filters_by_provider_case_insensitive(client):
     provider = get_provider_ids()[0]
     r = client.get(
         f"/v1/models?provider={provider.upper()}",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
@@ -494,12 +505,10 @@ def test_models_catalog_can_include_disabled(client):
     provider = get_provider_ids()[0]
     r_enabled = client.get(
         f"/v1/models?provider={provider}",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     r_all = client.get(
         f"/v1/models?provider={provider}&enabled_only=false",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
 
@@ -520,7 +529,6 @@ def test_models_catalog_can_include_disabled(client):
 def test_models_catalog_rejects_unsupported_provider(client):
     r = client.get(
         "/v1/models?provider=not-a-provider",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 400
@@ -528,6 +536,27 @@ def test_models_catalog_rejects_unsupported_provider(client):
     assert "Unsupported provider 'not-a-provider'" in detail
     for provider in get_provider_ids():
         assert provider in detail
+
+
+def test_optimize_rejects_api_key_only_auth(client):
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_optimize_accepts_session_cookie_auth(client):
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["original_prompt"] == "make this prompt better"
 
 
 def test_compare_rejects_too_many_targets(client):

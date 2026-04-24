@@ -8,9 +8,17 @@ from pydantic import BaseModel, Field
 
 from db import clear_llm_history, delete_llm_history_entry, get_llm_history_entries
 from server import persistence as persistence_service
-from server.dependencies import get_auth
+from server.dependencies import AuthResult, get_auth
+from server.routes.session_auth import SessionScopedAuthGuard
+from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["History"])
+logger = get_logger(__name__)
+_SESSION_AUTH_GUARD = SessionScopedAuthGuard(
+    route_label="History",
+    rejection_event="history.route.rejected.auth_mode",
+    logger=logger,
+)
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
@@ -47,11 +55,12 @@ async def list_history(
     request: Request,
     limit: int = 100,
     session_id: str | None = None,
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Return recent chat history entries (newest first)."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow(commit_on_success=False) as db_session:
         resolution = _resolve_identity(
                 auth=auth,
@@ -70,11 +79,12 @@ async def list_history(
 async def delete_entry(
     request: Request,
     entry_id: int,
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Delete a single history entry by ID."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
                 auth=auth,
@@ -90,11 +100,12 @@ async def delete_entry(
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_history(
     request: Request,
-    auth=Depends(get_auth),
+    auth: AuthResult = Depends(get_auth),
 ):
     """Delete all history entries."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
                 auth=auth,

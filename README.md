@@ -171,6 +171,8 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 
 Optional frontend runtime config for separate API host:
 - Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
+- Include it before `app.js` in `frontend/index.html`
+- Set `window.CORTEX_RUNTIME_CONFIG.apiBase`
 - `frontend/index.html` already loads `runtime-config.js` before `app.js`; keep that order if you customize the page
 - Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and (optionally) `apiKey`
 - Optional local-only helper values:
@@ -180,6 +182,7 @@ Optional frontend runtime config for separate API host:
 
 ## Authentication
 
+Most `/v1/*` routes accept API key, gateway bearer token, or session cookie auth.
 Most `/v1/*` routes accept API key, bearer token, or session cookie auth (route-dependent).
 
 Session-scoped routes require signed-in identity auth (not API key):
@@ -188,12 +191,19 @@ Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/compare`
 - `/v1/compare/stream`
 - `/v1/files/*`
+- `/v1/providers`
+- `/v1/models`
+- `/v1/optimize`
+- `/v1/history`
+- `/v1/history/{entry_id}`
 
 Accepted auth for session-scoped routes:
 ```http
 Authorization: Bearer <gateway-bearer-token>
 ```
 or `cortex_session` cookie.
+
+API-key-only auth on session-scoped routes is rejected with `403` (`session_auth_required`).
 
 Local development helper:
 - `POST /v1/auth/dev-login` can mint a local `cortex_session` cookie when `ENABLE_DEV_SESSION_LOGIN=true`.

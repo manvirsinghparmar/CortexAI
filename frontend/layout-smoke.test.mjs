@@ -11,7 +11,7 @@ const styleCssPath = path.join(process.cwd(), "frontend", "style.css");
 const styleCss = fs.readFileSync(styleCssPath, "utf8");
 
 test("runtime config script loads before app bootstrap", () => {
-    const runtimeConfigScriptIndex = html.indexOf('src="runtime-config.js"');
+    const runtimeConfigScriptIndex = html.indexOf('src="runtime-config.js');
     const appScriptIndex = html.indexOf('src="app.js');
 
     assert.notEqual(runtimeConfigScriptIndex, -1);

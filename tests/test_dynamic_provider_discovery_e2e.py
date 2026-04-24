@@ -72,6 +72,14 @@ def discovery_client(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
     app = create_app()
+    from server import dependencies as deps
+
+    session_user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    monkeypatch.setattr(
+        deps,
+        "parse_session",
+        lambda cookie: session_user_id if cookie else None,
+    )
 
     temp_dir = Path("tests/.tmp_provider_discovery") / uuid.uuid4().hex
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -98,8 +106,9 @@ def discovery_client(monkeypatch):
 
 def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     client, provider_id = discovery_client
+    session_cookie = {"cortex_session": "test-session-cookie"}
 
-    providers_resp = client.get("/v1/providers", headers={"X-API-Key": "dev-key-1"})
+    providers_resp = client.get("/v1/providers", cookies=session_cookie)
     assert providers_resp.status_code == 200
     providers_payload = providers_resp.json()
     provider_ids = {item["provider"] for item in providers_payload["providers"]}
@@ -110,7 +119,7 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     assert zai_provider["default_model"] == "zai-chat"
     assert zai_provider["enabled_model_count"] >= 1
 
-    models_resp = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    models_resp = client.get("/v1/models", cookies=session_cookie)
     assert models_resp.status_code == 200
     models_payload = models_resp.json()
     model_pairs = {(item["provider"], item["model"]) for item in models_payload["models"]}
@@ -118,7 +127,7 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
 
     filtered_resp = client.get(
         f"/v1/models?provider={provider_id}",
-        headers={"X-API-Key": "dev-key-1"},
+        cookies=session_cookie,
     )
     assert filtered_resp.status_code == 200
     filtered_payload = filtered_resp.json()

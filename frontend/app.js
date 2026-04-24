@@ -7,15 +7,12 @@ const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
     RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
-const API_KEY = String(
-    RUNTIME_CONFIG.apiKey || window.localStorage?.getItem("cortex_api_key") || "dev-key-1"
-);
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
 function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
 function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
-function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return { "X-API-Key": API_KEY }; }
+function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
 function handleCognitoCallback() {
@@ -3055,6 +3052,7 @@ async function doCompare(prompt, {
 async function callAPI(path, body, options = {}) {
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
         signal: options?.signal,
@@ -4183,6 +4181,7 @@ function refreshModelSelectors({ preserveSingle = true, preserveCompare = true }
 async function fetchCatalogJson(path) {
     const resp = await fetch(`${API_BASE}${path}`, {
         method: "GET",
+        credentials: "include",
         headers: getAuthHeaders(),
     });
     if (!resp.ok) {
@@ -4749,6 +4748,7 @@ historyEl.clearAllBtn.addEventListener("click", async () => {
     if (!confirm("Delete all history?")) return;
     await fetch(`${API_BASE}/v1/history`, {
         method: "DELETE",
+        credentials: "include",
         headers: getAuthHeaders(),
     });
     conversationHistory = [];
@@ -4767,6 +4767,7 @@ loadHistory({ restoreActiveTranscript: true });
 async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
         const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
+            credentials: "include",
             headers: getAuthHeaders(),
         });
         if (!resp.ok) return;
@@ -4974,6 +4975,7 @@ function renderHistory(data, filter = "") {
             for (const entry of thread.entries) {
                 await fetch(`${API_BASE}/v1/history/${entry.id}`, {
                     method: "DELETE",
+                    credentials: "include",
                     headers: getAuthHeaders(),
                 });
             }

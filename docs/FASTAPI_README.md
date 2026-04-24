@@ -78,6 +78,12 @@ Session-scoped endpoints (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`) are sessio
 - accepted auth: `cortex_session` cookie or `Authorization: Bearer <gateway-bearer-token>`
 - API-key-only auth is rejected with `403` (`session_auth_required`)
 
+Local-only session bootstrap helper:
+- `POST /v1/auth/dev-login`
+- disabled by default (`ENABLE_DEV_SESSION_LOGIN=false`)
+- blocked when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`
+- optional shared secret: `DEV_SESSION_LOGIN_TOKEN` via header `X-Dev-Login-Token`
+
 ## API Key Persistence Policy
 
 In required DB runtime mode, API-key flows can resolve key ownership before model invocation.

@@ -208,6 +208,33 @@ function createRuntime({ providersPayload, modelsPayload }) {
     async function fetch(url) {
         const text = String(url || "");
         fetchCalls.push(text);
+        if (text.includes("/v1/auth/cognito-config")) {
+            return {
+                ok: true,
+                status: 200,
+                async json() {
+                    return {};
+                },
+            };
+        }
+        if (text.includes("/v1/auth/me")) {
+            return {
+                ok: false,
+                status: 401,
+                async json() {
+                    return { detail: "Not authenticated" };
+                },
+            };
+        }
+        if (text.includes("/v1/auth/dev-login")) {
+            return {
+                ok: true,
+                status: 200,
+                async json() {
+                    return { ok: true };
+                },
+            };
+        }
         if (text.includes("/v1/providers")) {
             return {
                 ok: true,
@@ -351,6 +378,7 @@ test("dynamic discovery updates frontend selectors with new provider/models", as
 
     assert.ok(fetchCalls.some(url => url.includes("/v1/providers")));
     assert.ok(fetchCalls.some(url => url.includes("/v1/models?enabled_only=true")));
+    assert.ok(fetchCalls.some(url => url.includes("/v1/auth/dev-login")));
 
     const singleModel = elements.get("singleModel");
     const values = optionValues(singleModel);

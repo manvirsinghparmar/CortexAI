@@ -171,13 +171,16 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 
 Optional frontend runtime config for separate API host:
 - Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
-- Include it before `app.js` in `frontend/index.html`
-- Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and `apiKey`
+- `frontend/index.html` already loads `runtime-config.js` before `app.js`; keep that order if you customize the page
+- Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and (optionally) `apiKey`
+- Optional local-only helper values:
+  - `window.CORTEX_RUNTIME_CONFIG.enableDevSessionLogin = true`
+  - `window.CORTEX_RUNTIME_CONFIG.devSessionLoginToken = "<token>"` (if backend expects one)
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication
 
-Most `/v1/*` routes accept either **API key** or a **gateway bearer token**.
+Most `/v1/*` routes accept API key, bearer token, or session cookie auth (route-dependent).
 
 Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/chat`
@@ -191,6 +194,11 @@ Accepted auth for session-scoped routes:
 Authorization: Bearer <gateway-bearer-token>
 ```
 or `cortex_session` cookie.
+
+Local development helper:
+- `POST /v1/auth/dev-login` can mint a local `cortex_session` cookie when `ENABLE_DEV_SESSION_LOGIN=true`.
+- It is disabled by default and rejected when runtime env is production-like (`APP_ENV/ENVIRONMENT/ENV` = `prod|production`).
+- Optional token guard: set `DEV_SESSION_LOGIN_TOKEN`, then send it as `X-Dev-Login-Token`.
 
 Optional request correlation:
 ```http
@@ -237,6 +245,7 @@ Response includes:
 - `DELETE /v1/byok?provider=<provider-id>` (or omit provider to delete all)
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 - `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
+- `POST /v1/auth/dev-login` (local-development helper; gated by env flags)
 
 ### Cognito (Gmail) sign-in
 

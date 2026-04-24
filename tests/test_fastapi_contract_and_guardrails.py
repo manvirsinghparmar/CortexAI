@@ -310,6 +310,47 @@ def test_compare_rejects_api_key_only_auth(client):
     assert r.json()["detail"]["code"] == "session_auth_required"
 
 
+def test_dev_login_is_disabled_by_default(client):
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 404
+
+
+def test_dev_login_sets_session_cookie_when_enabled(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["email"] == "cli@cortexai.local"
+    assert "cortex_session=" in (r.headers.get("set-cookie") or "")
+
+    # TestClient persists cookies between requests, so /me should resolve.
+    me = client.get("/v1/auth/me")
+    assert me.status_code == 200
+
+
+def test_dev_login_token_guard_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    monkeypatch.setenv("DEV_SESSION_LOGIN_TOKEN", "local-dev-token")
+
+    unauthorized = client.post("/v1/auth/dev-login")
+    assert unauthorized.status_code == 401
+
+    authorized = client.post(
+        "/v1/auth/dev-login",
+        headers={"X-Dev-Login-Token": "local-dev-token"},
+    )
+    assert authorized.status_code == 200
+
+
+def test_dev_login_rejected_in_production_runtime(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    monkeypatch.setenv("APP_ENV", "production")
+
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 403
+
+
 def test_chat_with_attachments_requires_db_mode(client):
     payload = {
         "prompt": "describe this file",

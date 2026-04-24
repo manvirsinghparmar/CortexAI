@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
 from server.dependencies import AuthResult, get_auth
+from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.responses import (
     ModelCatalogItemDTO,
     ModelsCatalogResponseDTO,
@@ -18,6 +19,11 @@ from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["Catalog"])
 logger = get_logger(__name__)
+_SESSION_AUTH_GUARD = SessionScopedAuthGuard(
+    route_label="Catalog",
+    rejection_event="catalog.route.rejected.auth_mode",
+    logger=logger,
+)
 
 
 def _utc_now_iso() -> str:
@@ -66,44 +72,6 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
     )
 
 
-def _auth_mode(auth: AuthResult) -> str:
-    if auth.user_id is not None:
-        return "session_cookie"
-    if auth.is_cognito:
-        return "cognito"
-    if auth.api_key_or_none():
-        return "api_key"
-    return "unknown"
-
-
-def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
-    """
-    Catalog routes are session-scoped to user identity and must not use API-key auth.
-    """
-    if auth.user_id is not None or auth.is_cognito:
-        return
-    logger.warning(
-        "Catalog route rejected non-session auth",
-        extra={
-            "extra_fields": {
-                "event": "catalog.route.rejected.auth_mode",
-                "request_id": request_id,
-                "auth_mode": _auth_mode(auth),
-            }
-        },
-    )
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": "session_auth_required",
-            "message": (
-                "Catalog routes require session-based auth "
-                "(cortex_session cookie or Authorization: Bearer)."
-            ),
-        },
-    )
-
-
 @router.get("/providers", response_model=ProvidersCatalogResponseDTO)
 async def list_providers(
     request: Request,
@@ -111,7 +79,7 @@ async def list_providers(
 ):
     """List discoverable providers and metadata for API/front-end clients."""
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=req_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     catalog = get_provider_catalog()
     registry = ModelRegistry.from_yaml()
 
@@ -150,7 +118,7 @@ async def list_models(
 ):
     """List discoverable models, optionally filtered by provider."""
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=req_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     provider_norm = _validate_provider_or_400(provider)
     registry = ModelRegistry.from_yaml()
 

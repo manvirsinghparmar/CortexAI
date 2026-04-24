@@ -9,10 +9,16 @@ from pydantic import BaseModel, Field
 from db import clear_llm_history, delete_llm_history_entry, get_llm_history_entries
 from server import persistence as persistence_service
 from server.dependencies import AuthResult, get_auth
+from server.routes.session_auth import SessionScopedAuthGuard
 from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["History"])
 logger = get_logger(__name__)
+_SESSION_AUTH_GUARD = SessionScopedAuthGuard(
+    route_label="History",
+    rejection_event="history.route.rejected.auth_mode",
+    logger=logger,
+)
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
@@ -26,44 +32,6 @@ def _require_db_mode() -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="History endpoints require DATABASE_URL (DB mode).",
-    )
-
-
-def _auth_mode(auth: AuthResult) -> str:
-    if auth.user_id is not None:
-        return "session_cookie"
-    if auth.is_cognito:
-        return "cognito"
-    if auth.api_key_or_none():
-        return "api_key"
-    return "unknown"
-
-
-def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
-    """
-    History routes are session-scoped to user identity and must not use API-key auth.
-    """
-    if auth.user_id is not None or auth.is_cognito:
-        return
-    logger.warning(
-        "History route rejected non-session auth",
-        extra={
-            "extra_fields": {
-                "event": "history.route.rejected.auth_mode",
-                "request_id": request_id,
-                "auth_mode": _auth_mode(auth),
-            }
-        },
-    )
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": "session_auth_required",
-            "message": (
-                "History routes require session-based auth "
-                "(cortex_session cookie or Authorization: Bearer)."
-            ),
-        },
     )
 
 
@@ -92,7 +60,7 @@ async def list_history(
     """Return recent chat history entries (newest first)."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=req_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow(commit_on_success=False) as db_session:
         resolution = _resolve_identity(
                 auth=auth,
@@ -116,7 +84,7 @@ async def delete_entry(
     """Delete a single history entry by ID."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=req_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
                 auth=auth,
@@ -137,7 +105,7 @@ async def clear_history(
     """Delete all history entries."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=req_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
                 auth=auth,

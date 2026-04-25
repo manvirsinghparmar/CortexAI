@@ -7,6 +7,7 @@ import os
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from server.frontend_runtime_config import render_frontend_runtime_config_js
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
 from server.routes import admin, auth as auth_routes, byok, catalog, chat, compare, files, health, history, optimize, reporting, whoami
@@ -198,6 +199,10 @@ def create_app() -> FastAPI:
     app.include_router(whoami.router)
     app.include_router(catalog.router)
     app.include_router(files.router)
+
+    @app.get("/runtime-config.js", include_in_schema=False)
+    async def frontend_runtime_config(request: Request):
+        return render_frontend_runtime_config_js(request)
 
     # Optional static frontend mount for monolith mode.
     serve_frontend = _env_bool("SERVE_FRONTEND", default=True)

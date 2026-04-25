@@ -27,6 +27,12 @@ Notes:
 ```ini
 SERVE_FRONTEND=false
 FRONTEND_DIR=frontend
+# Optional frontend runtime-config override for cross-origin API calls
+# FRONTEND_RUNTIME_API_BASE=https://kudlo.triobrain.com
+# Optional explicit browser flag override (otherwise inherits ENABLE_DEV_SESSION_LOGIN)
+# FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
+# Optional browser-visible dev-login token (local only)
+# FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=
 ```
 
 5. Start server:
@@ -43,6 +49,7 @@ python run_server.py --reload
 
 - `GET /health`
 - `GET /health/runtime`
+- `GET /runtime-config.js`
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
@@ -90,6 +97,16 @@ Local-only session bootstrap helper:
 - disabled by default (`ENABLE_DEV_SESSION_LOGIN=false`)
 - blocked when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`
 - optional shared secret: `DEV_SESSION_LOGIN_TOKEN` via header `X-Dev-Login-Token`
+
+## Frontend Runtime Config
+
+When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
+- `apiBase` defaults to current request origin.
+- Override API base with `FRONTEND_RUNTIME_API_BASE` (useful for split-origin deployments).
+- `enableDevSessionLogin` defaults from `ENABLE_DEV_SESSION_LOGIN`.
+- Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
+- In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
+- Response is sent with no-cache headers so config changes apply immediately.
 
 ## API Key Persistence Policy
 

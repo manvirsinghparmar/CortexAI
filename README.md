@@ -130,6 +130,10 @@ BASELINE_MODEL_ID=openai:gpt-4o-mini
 # Component boundary controls
 SERVE_FRONTEND=true      # false => API-only runtime (no static frontend mount)
 FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true
+# Frontend runtime config served by GET /runtime-config.js
+FRONTEND_RUNTIME_API_BASE=                           # optional; defaults to request origin
+FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false      # optional browser override
+FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible local token
 ```
 
 ## Pricing Configuration
@@ -169,15 +173,15 @@ Frontend only (serve static UI separately):
 python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 ```
 
-Optional frontend runtime config for separate API host:
-- Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
-- Include it before `app.js` in `frontend/index.html`
-- Set `window.CORTEX_RUNTIME_CONFIG.apiBase`
-- `frontend/index.html` already loads `runtime-config.js` before `app.js`; keep that order if you customize the page
-- Set `window.CORTEX_RUNTIME_CONFIG.apiBase` and (optionally) `apiKey`
-- Optional local-only helper values:
-  - `window.CORTEX_RUNTIME_CONFIG.enableDevSessionLogin = true`
-  - `window.CORTEX_RUNTIME_CONFIG.devSessionLoginToken = "<token>"` (if backend expects one)
+Frontend runtime config (`/runtime-config.js`):
+- In monolith mode (`SERVE_FRONTEND=true`), FastAPI serves `/runtime-config.js` dynamically with `Cache-Control: no-store`.
+- `apiBase` defaults to current request origin. Override with `FRONTEND_RUNTIME_API_BASE` when API is on another origin.
+- Browser dev-session bootstrap flag:
+  - defaults from `ENABLE_DEV_SESSION_LOGIN`
+  - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
+  - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
+- Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
+- For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication

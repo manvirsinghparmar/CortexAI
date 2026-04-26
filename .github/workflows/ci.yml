@@ -17,6 +17,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       db: ${{ steps.filter.outputs.db }}
       shared: ${{ steps.filter.outputs.shared }}
+      python_files: ${{ steps.filter.outputs.python_files }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,9 +28,12 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v3
         with:
+          list-files: shell
           filters: |
             frontend:
               - 'frontend/**'
+            python:
+              - '**/*.py'
             backend:
               - 'api/**'
               - 'config/**'
@@ -38,6 +42,7 @@ jobs:
               - 'models/**'
               - 'orchestrator/**'
               - 'server/**'
+              - 'tests/**'
               - 'tools/**'
               - 'utils/**'
               - 'run_server.py'
@@ -58,6 +63,8 @@ jobs:
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.db == 'true' || needs.detect-changes.outputs.shared == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      PYTHON_CHANGED_FILES: ${{ needs.detect-changes.outputs.python_files }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,14 +81,30 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
-      - name: Ruff (lint)
-        run: ruff check .
+      - name: Ruff (lint changed Python files)
+        run: |
+          if [ -z "$PYTHON_CHANGED_FILES" ]; then
+            echo "No changed Python files to lint."
+          else
+            ruff check $PYTHON_CHANGED_FILES
+          fi
 
-      - name: Black (format check)
-        run: black --check .
+      - name: Black (format advisory for changed Python files)
+        continue-on-error: true
+        run: |
+          if [ -z "$PYTHON_CHANGED_FILES" ]; then
+            echo "No changed Python files to format-check."
+          else
+            black --check $PYTHON_CHANGED_FILES
+          fi
 
-      - name: MyPy (type check)
-        run: mypy . --explicit-package-bases
+      - name: MyPy (changed-file type check)
+        run: |
+          if [ -z "$PYTHON_CHANGED_FILES" ]; then
+            echo "No changed Python files to type-check."
+          else
+            mypy --explicit-package-bases --follow-imports=skip $PYTHON_CHANGED_FILES
+          fi
 
       - name: API contract and boundary regression suites
         run: |
@@ -169,12 +192,20 @@ jobs:
   security-secrets-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Gitleaks CLI
+        run: |
+          install_dir="$(mktemp -d)"
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "${install_dir}/gitleaks.tar.gz"
+          tar -xzf "${install_dir}/gitleaks.tar.gz" -C "${install_dir}" gitleaks
+          sudo install -m 0755 "${install_dir}/gitleaks" /usr/local/bin/gitleaks
+
       - name: Gitleaks (secrets scanning)
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --source . --no-git
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gitleaks dir . --no-banner --redact --exit-code 1

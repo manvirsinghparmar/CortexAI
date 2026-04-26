@@ -15,7 +15,7 @@ function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN
 function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
-function handleCognitoCallback() { const hash = window.location.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, window.location.pathname + (window.location.search || "")); } }
+function handleCognitoCallback() { const locationObj = window.location || null; if (!locationObj) return; const hash = locationObj.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || "")); } }
 async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
 function buildCognitoLoginUrl() {
         if (!cognitoConfig.enabled || !cognitoConfig.domain || !cognitoConfig.clientId) return "";

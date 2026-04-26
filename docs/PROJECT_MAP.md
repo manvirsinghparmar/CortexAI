@@ -56,6 +56,10 @@ This map is the quick "where do I change X?" reference for the current API-first
 ## CI and Workflows
 
 - Main CI: `.github/workflows/ci.yml`
+  - Detects frontend/backend/shared path changes.
+  - Runs blocking Ruff/MyPy checks against changed Python files with pinned dev tools.
+  - Runs Black as an advisory changed-file format check until a repo-wide baseline is applied.
+  - Runs Gitleaks as a pinned CLI directory scan of the checked-out tree.
 - Targeted backend regression pack: `.github/workflows/incident-regression-38.yml`
 - Live browser E2E: `.github/workflows/live-e2e.yml`
 

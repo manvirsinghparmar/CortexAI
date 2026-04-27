@@ -54,6 +54,9 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
   - `python scripts/release_gate.py`
 - Pricing/registry consistency:
   - `python -m pytest tests/test_registry_pricing_alignment.py -q`
+- CI changed-file quality gates:
+  - Ruff/MyPy run on changed Python files; Black is advisory until a formatting baseline lands.
+  - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
 - Frontend local checks (when UI touched):
   - `node --test frontend/layout-smoke.test.mjs`
   - `node --test frontend/provider-discovery.e2e.test.mjs`

@@ -71,8 +71,8 @@ AUTO_REGISTER_UNMAPPED_API_KEYS=true
 
 ```ini
 # Governance
-DAILY_TOKEN_CAP=
-DAILY_COST_CAP=
+# DAILY_TOKEN_CAP=100000       # optional max tokens per day
+# DAILY_COST_CAP=25.00         # optional max daily spend in USD
 DAILY_CAP_SCOPE=api_key   # api_key|user
 REQUESTS_PER_MINUTE=60
 REPORT_MAX_RANGE_DAYS=366 # reporting/export date-range guard (<=0 disables)
@@ -602,9 +602,11 @@ It runs:
 
 - `.github/workflows/ci.yml`:
   - path-aware frontend/backend quality checks
+  - changed-file Python Ruff/MyPy gates with pinned dev tool versions
+  - Black format check is advisory until the repository has a formatting baseline
   - frontend artifact build
   - API image build metadata export
-  - secrets scanning (gitleaks)
+  - pinned Gitleaks CLI directory scan of the checked-out tree
 - `.github/workflows/incident-regression-38.yml`:
   - targeted backend regression pack for routing/guardrail mismatches (38 tests)
   - no live provider keys required

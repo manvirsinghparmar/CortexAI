@@ -180,7 +180,7 @@ test("history threads are grouped by shared session id and can surface mixed-mod
     assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
-test("header keeps only slim nav links without subtitle block", () => {
+test("header removes static History/Settings/Profile buttons", () => {
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">History<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Profile<\/button>/);

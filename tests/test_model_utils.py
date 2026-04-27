@@ -76,11 +76,11 @@ class TestModelUtilsUnit:
         self, mock_stdout, mock_list_available
     ):
         api_keys = {
-            "openai": "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",
-            "gemini": "AIzaSyCQJbeUcPWFAKPp_mdkm-o5aUdmUO4mR2k",
-            "deepseek": "sk-486b946ae8234a49b8bc43be9e38745d",
-            "grok": "xai-ryo2QIzvpX3DSZbo1rJgzLp2l3wPxwxqNPmucL2D2zEqv999B19X1jpfxDvb1TD8CV3NMokLKFE2lkXg",
-            "claude": "sk-ant-tenant-claude-key",
+            "openai": "test-openai-api-key",
+            "gemini": "test-gemini-api-key",
+            "deepseek": "test-deepseek-api-key",
+            "grok": "test-grok-api-key",
+            "claude": "test-claude-api-key",
         }
         current_models = {
             "openai": "gpt-4o",
@@ -98,7 +98,9 @@ class TestModelUtilsUnit:
 
     @patch("utils.model_utils.ModelUtils.list_available_models")
     @patch("sys.stdout", new_callable=StringIO)
-    def test_list_all_available_models_skips_missing_api_keys(self, mock_stdout, mock_list_available):
+    def test_list_all_available_models_skips_missing_api_keys(
+        self, mock_stdout, mock_list_available
+    ):
         ModelUtils.list_all_available_models(
             api_keys={"openai": "key-openai", "gemini": ""},
             providers=["openai", "gemini"],

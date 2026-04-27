@@ -11,10 +11,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from server import files_service
 from server.dependencies import AuthResult, get_auth
+from server.routes.session_auth import SessionScopedAuthGuard, auth_mode as session_auth_mode
 from server.schemas.responses import FileUploadResponseDTO, FileStatusResponseDTO
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+_SESSION_AUTH_GUARD = SessionScopedAuthGuard(
+    route_label="Attachment",
+    rejection_event="upload.route.rejected.auth_mode",
+    logger=logger,
+    log_message="Attachment route rejected non-session auth",
+)
 
 router = APIRouter(prefix="/v1/files", tags=["Files"])
 
@@ -70,44 +77,6 @@ def _safe_int(value: str | None) -> int | None:
         return None
 
 
-def _auth_mode(auth: AuthResult) -> str:
-    if auth.user_id is not None:
-        return "session_cookie"
-    if auth.is_cognito:
-        return "cognito"
-    if auth.api_key_or_none():
-        return "api_key"
-    return "unknown"
-
-
-def _require_session_scoped_auth(*, auth: AuthResult, request_id: str) -> None:
-    """
-    Attachments are session-scoped to user identity and must not use API-key auth.
-    """
-    if auth.user_id is not None or auth.is_cognito:
-        return
-    logger.warning(
-        "Attachment route rejected non-session auth",
-        extra={
-            "extra_fields": {
-                "event": "upload.route.rejected.auth_mode",
-                "request_id": request_id,
-                "auth_mode": _auth_mode(auth),
-            }
-        },
-    )
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": "session_auth_required",
-            "message": (
-                "Attachment routes require session-based auth "
-                "(cortex_session cookie or Authorization: Bearer)."
-            ),
-        },
-    )
-
-
 def _edge_context_fields(request: Request, *, request_id: str, auth: AuthResult) -> dict[str, Any]:
     x_forwarded_for = _header_value(request, "X-Forwarded-For") or ""
     forwarded_chain = [part.strip() for part in x_forwarded_for.split(",") if part.strip()]
@@ -140,7 +109,7 @@ def _edge_context_fields(request: Request, *, request_id: str, auth: AuthResult)
         "has_cookie_header": bool(_header_value(request, "Cookie")),
         "has_authorization_header": bool(_header_value(request, "Authorization")),
         "has_x_api_key_header": bool(_header_value(request, "X-API-Key")),
-        "auth_mode": _auth_mode(auth),
+        "auth_mode": session_auth_mode(auth),
         "api_key_hash": _hash_for_logs(auth.api_key_or_none()),
         "edge_headers": edge_headers,
     }
@@ -159,7 +128,7 @@ async def upload_file(
     - X-File-Content-Type: file MIME type (optional; falls back to Content-Type)
     """
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=request_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
     filename = _header_value(request, "X-File-Name") or "file"
     mime_type = (
         _header_value(request, "X-File-Content-Type")
@@ -284,7 +253,7 @@ async def get_file_status(
 ):
     """Get one uploaded file metadata row scoped to authenticated user identity."""
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
-    _require_session_scoped_auth(auth=auth, request_id=request_id)
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
     result = files_service.get_user_file(
         auth=auth,
         request_id=request_id,

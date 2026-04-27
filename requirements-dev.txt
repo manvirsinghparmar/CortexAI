@@ -2,11 +2,11 @@
 -r requirements.txt
 
 # Linting & formatting
-ruff
-black
+ruff==0.15.12
+black==26.3.1
 
 # Typing
-mypy
+mypy==1.20.2
 types-requests
 
 # Testing
@@ -14,8 +14,8 @@ pytest
 pytest-cov
 
 # Security scanning
-pip-audit
-bandit
+pip-audit==2.10.0
+bandit==1.9.4
 
 # Git hooks (optional but recommended)
 pre-commit

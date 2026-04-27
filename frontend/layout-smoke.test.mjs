@@ -10,6 +10,15 @@ const appJs = fs.readFileSync(appJsPath, "utf8");
 const styleCssPath = path.join(process.cwd(), "frontend", "style.css");
 const styleCss = fs.readFileSync(styleCssPath, "utf8");
 
+test("runtime config script loads before app bootstrap", () => {
+    const runtimeConfigScriptIndex = html.indexOf('src="runtime-config.js');
+    const appScriptIndex = html.indexOf('src="app.js');
+
+    assert.notEqual(runtimeConfigScriptIndex, -1);
+    assert.notEqual(appScriptIndex, -1);
+    assert.ok(runtimeConfigScriptIndex < appScriptIndex);
+});
+
 test("dedicated smart routing card is removed", () => {
     assert.doesNotMatch(html, /routing-card/);
     assert.doesNotMatch(html, /singleRoutingSubtitle/);
@@ -171,7 +180,7 @@ test("history threads are grouped by shared session id and can surface mixed-mod
     assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
-test("header keeps only slim nav links without subtitle block", () => {
+test("header removes static History/Settings/Profile buttons", () => {
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">History<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Profile<\/button>/);

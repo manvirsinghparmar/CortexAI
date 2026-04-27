@@ -19,7 +19,9 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 
 - `DATABASE_URL` is required for startup and should point to PostgreSQL.
 - Most `/v1/*` endpoints accept API key, Cognito bearer, or session cookie auth.
-- Session-scoped routes (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`) reject API-key-only auth.
+- Session-scoped routes (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`, `/v1/providers`, `/v1/models`, `/v1/optimize`, `/v1/history*`) reject API-key-only auth.
+- Local dev can mint session cookies via `POST /v1/auth/dev-login` only when `ENABLE_DEV_SESSION_LOGIN=true` (blocked in production-like envs).
+- In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
 - Ask and Compare support shared session continuity via `session_id`.
 - Conversation-history guardrails are active (trim and payload cap).
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
@@ -52,6 +54,9 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
   - `python scripts/release_gate.py`
 - Pricing/registry consistency:
   - `python -m pytest tests/test_registry_pricing_alignment.py -q`
+- CI changed-file quality gates:
+  - Ruff/MyPy run on changed Python files; Black is advisory until a formatting baseline lands.
+  - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
 - Frontend local checks (when UI touched):
   - `node --test frontend/layout-smoke.test.mjs`
   - `node --test frontend/provider-discovery.e2e.test.mjs`

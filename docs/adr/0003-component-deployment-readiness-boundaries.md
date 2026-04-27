@@ -24,7 +24,7 @@ We define deployment-readiness boundaries as:
 
 2. Frontend must run as a standalone static component.
    - `scripts/serve_frontend.py` provides independent local/static serving.
-   - Frontend runtime config can override API base/key using `window.CORTEX_RUNTIME_CONFIG` or `localStorage`.
+   - Frontend runtime config can override API base and local dev bootstrap flags using `window.CORTEX_RUNTIME_CONFIG` or `localStorage`.
 
 3. Build artifacts are split by component.
    - `scripts/build_frontend_artifact.py` generates static artifact output + zip.

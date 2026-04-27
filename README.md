@@ -130,6 +130,10 @@ BASELINE_MODEL_ID=openai:gpt-4o-mini
 # Component boundary controls
 SERVE_FRONTEND=true      # false => API-only runtime (no static frontend mount)
 FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true
+# Frontend runtime config served by GET /runtime-config.js
+FRONTEND_RUNTIME_API_BASE=                           # optional; defaults to request origin
+FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false      # optional browser override
+FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible local token
 ```
 
 ## Pricing Configuration
@@ -169,15 +173,21 @@ Frontend only (serve static UI separately):
 python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 ```
 
-Optional frontend runtime config for separate API host:
-- Copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js`
-- Include it before `app.js` in `frontend/index.html`
-- Set `window.CORTEX_RUNTIME_CONFIG.apiBase`
+Frontend runtime config (`/runtime-config.js`):
+- In monolith mode (`SERVE_FRONTEND=true`), FastAPI serves `/runtime-config.js` dynamically with `Cache-Control: no-store`.
+- `apiBase` defaults to current request origin. Override with `FRONTEND_RUNTIME_API_BASE` when API is on another origin.
+- Browser dev-session bootstrap flag:
+  - defaults from `ENABLE_DEV_SESSION_LOGIN`
+  - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
+  - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
+- Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
+- For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 
 ## Authentication
 
 Most `/v1/*` routes accept API key, gateway bearer token, or session cookie auth.
+Most `/v1/*` routes accept API key, bearer token, or session cookie auth (route-dependent).
 
 Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/chat`
@@ -198,6 +208,11 @@ Authorization: Bearer <gateway-bearer-token>
 or `cortex_session` cookie.
 
 API-key-only auth on session-scoped routes is rejected with `403` (`session_auth_required`).
+
+Local development helper:
+- `POST /v1/auth/dev-login` can mint a local `cortex_session` cookie when `ENABLE_DEV_SESSION_LOGIN=true`.
+- It is disabled by default and rejected when runtime env is production-like (`APP_ENV/ENVIRONMENT/ENV` = `prod|production`).
+- Optional token guard: set `DEV_SESSION_LOGIN_TOKEN`, then send it as `X-Dev-Login-Token`.
 
 Optional request correlation:
 ```http
@@ -244,6 +259,7 @@ Response includes:
 - `DELETE /v1/byok?provider=<provider-id>` (or omit provider to delete all)
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 - `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
+- `POST /v1/auth/dev-login` (local-development helper; gated by env flags)
 
 ### Cognito (Gmail) sign-in
 

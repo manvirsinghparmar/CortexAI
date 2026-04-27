@@ -18,6 +18,10 @@
       "value": ""
     },
     {
+      "key": "dev_login_token",
+      "value": ""
+    },
+    {
       "key": "chat_provider",
       "value": "openai"
     },
@@ -143,6 +147,38 @@
                   "});",
                   "if (body.user_id) { pm.collectionVariables.set('user_id', body.user_id); }",
                   "if (body.api_key_id) { pm.collectionVariables.set('api_key_id', body.api_key_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/auth/dev-login (local-only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Dev-Login-Token",
+                "value": "{{dev_login_token}}",
+                "disabled": true
+              }
+            ],
+            "url": "{{base_url}}/v1/auth/dev-login",
+            "description": "Local-development helper. Enabled only when ENABLE_DEV_SESSION_LOGIN=true and blocked in production-like envs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200/401/403/404 based on env guards', function () {",
+                  "  pm.expect([200, 401, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var setCookie = pm.response.headers.get('Set-Cookie') || '';",
+                  "  pm.test('sets cortex_session cookie', function () { pm.expect(setCookie).to.include('cortex_session='); });",
+                  "}"
                 ]
               }
             }

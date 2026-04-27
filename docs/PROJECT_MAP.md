@@ -6,6 +6,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 - API server: `run_server.py`
 - Main FastAPI app wiring: `server/app.py`
+- Frontend runtime config renderer: `server/frontend_runtime_config.py` (`GET /runtime-config.js`)
 - Browser E2E harness bootstrap: `e2e/server/run_e2e_server.py`
 
 ## API Contracts
@@ -49,7 +50,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Frontend and Browser Tests
 
-- Static frontend: `frontend/`
+- Static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
 - Playwright E2E suite: `e2e/specs/`
 - Playwright config: `e2e/playwright.config.mjs`
 
@@ -93,4 +94,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-04-13
+Last updated: 2026-04-24

@@ -385,9 +385,25 @@ test("composer remains interactive when submit button is disabled", () => {
     assert.match(styleCss, /\.prompt-card \{[\s\S]*z-index:\s*320;/);
 });
 
-test("model picker options can render capability badges", () => {
-    assert.match(appJs, /model-picker-option-badge/);
-    assert.match(styleCss, /\.model-picker-option-badge \{/);
+test("model picker options show internal model names without capability badges", () => {
+    assert.match(appJs, /model-picker-option-secondary/);
+    assert.match(styleCss, /\.model-picker-option-secondary \{/);
+    assert.doesNotMatch(appJs, /model-picker-option-badge/);
+    assert.doesNotMatch(styleCss, /\.model-picker-option-badge \{/);
+    assert.doesNotMatch(appJs, /Vision/);
+});
+
+test("compare model picker dropdowns use wide clamped smart positioning", () => {
+    assert.match(appJs, /const COMPARE_MODEL_PICKER_DESKTOP_WIDTH = 400;/);
+    assert.match(appJs, /const MODEL_PICKER_VIEWPORT_PADDING = 16;/);
+    assert.match(appJs, /function getCompareModelPickerAlignment\(selectEl\) \{/);
+    assert.match(appJs, /function positionCompareModelPickerMenu\(picker, buttonRect, viewportWidth\) \{/);
+    assert.match(appJs, /wrapper\.classList\.add\("compare-model-picker"\);/);
+    assert.match(
+        styleCss,
+        /\.model-picker\.compare-model-picker \.model-picker-menu \{[\s\S]*width:\s*min\(400px,\s*calc\(100vw - 32px\)\);/,
+    );
+    assert.match(styleCss, /\.model-picker-option-label \{[\s\S]*white-space:\s*normal;/);
 });
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {

@@ -820,7 +820,7 @@ body {
     top: calc(100% + 6px);
     left: 0;
     width: 100%;
-    max-width: min(320px, calc(100vw - 16px));
+    max-width: calc(100vw - 32px);
     max-height: 260px;
     overflow: auto;
     padding: 6px;
@@ -830,6 +830,11 @@ body {
     box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
     z-index: 260;
     display: none;
+}
+
+.model-picker.compare-model-picker .model-picker-menu {
+    width: min(400px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
 }
 
 .model-picker.open-up .model-picker-menu {
@@ -846,7 +851,7 @@ body {
     border: none;
     background: transparent;
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0;
     min-height: 34px;
     padding: 8px 10px;
@@ -880,25 +885,38 @@ body {
     font-weight: 600;
 }
 
+.model-picker-option-text {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
 .model-picker-option-label {
     display: block;
     flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+    line-height: 1.25;
 }
 
-.model-picker-option-badge {
-    margin-left: 8px;
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: rgba(30, 58, 138, .1);
-    color: #1E3A8A;
-    font-size: .66rem;
-    font-weight: 600;
-    letter-spacing: .01em;
-    flex: 0 0 auto;
+.model-picker-option-secondary {
+    display: block;
+    min-width: 0;
+    color: #64748B;
+    font-size: .69rem;
+    font-weight: 500;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+.model-picker-option.is-active .model-picker-option-secondary {
+    color: #475569;
 }
 
 .model-picker-provider-icon,

@@ -350,6 +350,7 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 - Web research is orchestrator-managed.
 - When `routing.research_mode=true`, Ask performs a fresh research pass for the current turn.
 - When `routing.research_mode=true`, Compare performs one shared research pass for the compare turn.
+- Injected sources are primary evidence for current/source-dependent facts; models may still use non-conflicting baseline knowledge for background context.
 - Response payloads expose normalized source metadata through `web_source_items`.
 
 ## Guardrails

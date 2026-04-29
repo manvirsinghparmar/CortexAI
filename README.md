@@ -374,6 +374,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `research_mode=off`: hard stop for this turn (no research injection, no reuse).
 - `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
 - `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
+- When sources are injected, they are treated as primary evidence for current/source-dependent factual claims; non-conflicting model background knowledge can still be used for explanation/context.
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
 - When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).

@@ -829,6 +829,8 @@ const pendingWebSourcesByCard = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
 let modelPickerOutsideHandlersAttached = false;
+const MODEL_PICKER_VIEWPORT_PADDING = 16;
+const COMPARE_MODEL_PICKER_DESKTOP_WIDTH = 400;
 let attachmentItems = [];
 let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
@@ -1042,18 +1044,79 @@ function closeAllModelPickers(exceptSelectId = "") {
     });
 }
 
+function isCompareModelSelect(selectEl) {
+    return !!selectEl?.classList?.contains?.("compare-model-select");
+}
+
+function clampNumber(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function removeInlineStyleProperty(el, propertyName) {
+    if (!el?.style) return;
+    if (typeof el.style.removeProperty === "function") {
+        el.style.removeProperty(propertyName);
+        return;
+    }
+    el.style[propertyName] = "";
+}
+
+function getCompareModelPickerAlignment(selectEl) {
+    const activeSelects = [el.compareModel1, el.compareModel2];
+    if (compareSlotCount === 3) {
+        activeSelects.push(el.compareModel3);
+    }
+
+    const slotIndex = activeSelects.indexOf(selectEl);
+    if (slotIndex <= 0) return "left";
+    if (slotIndex === activeSelects.length - 1) return "right";
+    return "center";
+}
+
+function positionCompareModelPickerMenu(picker, buttonRect, viewportWidth) {
+    const wrapperRect = picker.wrapperEl?.getBoundingClientRect?.() || buttonRect;
+    if (!wrapperRect) return;
+
+    const safeViewportWidth = viewportWidth || document?.documentElement?.clientWidth || 0;
+    if (!safeViewportWidth) return;
+
+    const maxSafeWidth = Math.max(120, safeViewportWidth - (MODEL_PICKER_VIEWPORT_PADDING * 2));
+    const buttonWidth = buttonRect.width || Math.max(0, buttonRect.right - buttonRect.left);
+    const menuWidth = Math.min(
+        maxSafeWidth,
+        Math.max(buttonWidth, COMPARE_MODEL_PICKER_DESKTOP_WIDTH)
+    );
+    const alignment = getCompareModelPickerAlignment(picker.selectEl);
+    const alignedLeft = alignment === "right"
+        ? buttonRect.right - menuWidth
+        : alignment === "center"
+            ? buttonRect.left + (buttonWidth / 2) - (menuWidth / 2)
+            : buttonRect.left;
+    const maxLeft = safeViewportWidth - menuWidth - MODEL_PICKER_VIEWPORT_PADDING;
+    const clampedLeft = clampNumber(
+        alignedLeft,
+        MODEL_PICKER_VIEWPORT_PADDING,
+        Math.max(MODEL_PICKER_VIEWPORT_PADDING, maxLeft)
+    );
+
+    picker.menuEl.style.width = `${menuWidth}px`;
+    picker.menuEl.style.left = `${Math.round(clampedLeft - wrapperRect.left)}px`;
+    picker.menuEl.style.maxWidth = `calc(100vw - ${MODEL_PICKER_VIEWPORT_PADDING * 2}px)`;
+}
+
 function positionModelPickerMenu(selectEl) {
     const picker = getModelPicker(selectEl);
     if (!picker) return;
 
     const buttonRect = picker.buttonEl?.getBoundingClientRect?.();
     const viewportHeight = window?.innerHeight || document?.documentElement?.clientHeight || 0;
+    const viewportWidth = window?.innerWidth || document?.documentElement?.clientWidth || 0;
     if (!buttonRect || !viewportHeight) return;
 
-    const edgePadding = 8;
     const desiredMaxHeight = 260;
-    const spaceAbove = Math.max(0, buttonRect.top - edgePadding);
-    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - edgePadding);
+    const verticalPadding = 8;
+    const spaceAbove = Math.max(0, buttonRect.top - verticalPadding);
+    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - verticalPadding);
     const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
     const available = openUp ? spaceAbove : spaceBelow;
     const nextMaxHeight = Math.max(0, Math.min(desiredMaxHeight, available - 6));
@@ -1062,7 +1125,15 @@ function positionModelPickerMenu(selectEl) {
     if (nextMaxHeight > 0) {
         picker.menuEl.style.maxHeight = `${nextMaxHeight}px`;
     } else {
-        picker.menuEl.style.removeProperty("max-height");
+        removeInlineStyleProperty(picker.menuEl, "max-height");
+    }
+
+    if (isCompareModelSelect(selectEl)) {
+        positionCompareModelPickerMenu(picker, buttonRect, viewportWidth);
+    } else {
+        removeInlineStyleProperty(picker.menuEl, "left");
+        removeInlineStyleProperty(picker.menuEl, "width");
+        removeInlineStyleProperty(picker.menuEl, "max-width");
     }
 }
 
@@ -1116,13 +1187,13 @@ function renderModelPickerOptions(selectEl) {
             ? getModelDisplayMetadata(providerId, model)
             : {
                 shortLabel: String(option?.textContent || "Select a model"),
+                fullModel: "",
                 title: String(option?.textContent || "Select a model"),
                 ariaLabel: String(option?.textContent || "Select a model"),
             };
         const label = meta.shortLabel;
+        const secondaryLabel = value && meta.fullModel ? meta.fullModel : "";
         const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
-        const catalogItem = getModelCatalogItemByKey(value);
-        const capabilityBadge = catalogItem?.supports_image_input ? "Vision" : "";
 
         return `<button type="button"
                 class="model-picker-option${isActive ? " is-active" : ""}${isDisabled ? " is-disabled" : ""}"
@@ -1134,8 +1205,10 @@ function renderModelPickerOptions(selectEl) {
                 title="${escHtml(meta.title)}"
                 ${isDisabled ? "disabled" : ""}>
                 ${glyph}
-                <span class="model-picker-option-label">${escHtml(label)}</span>
-                ${capabilityBadge ? `<span class="model-picker-option-badge">${escHtml(capabilityBadge)}</span>` : ""}
+                <span class="model-picker-option-text">
+                    <span class="model-picker-option-label">${escHtml(label)}</span>
+                    ${secondaryLabel ? `<span class="model-picker-option-secondary">${escHtml(secondaryLabel)}</span>` : ""}
+                </span>
             </button>`;
     }).join("");
 
@@ -1216,6 +1289,9 @@ function ensureModelPicker(selectEl) {
     const wrapper = document.createElement("div");
     wrapper.className = "model-picker";
     wrapper.setAttribute("data-select-id", selectEl.id);
+    if (isCompareModelSelect(selectEl)) {
+        wrapper.classList.add("compare-model-picker");
+    }
 
     const button = document.createElement("button");
     button.type = "button";

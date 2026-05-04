@@ -124,7 +124,7 @@ async function renderAuthUI() {
     } else {
         const url = buildCognitoLoginUrl();
         if (!url) { wrap.innerHTML = ""; return; }
-        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in with Google</button>";
+        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in</button>";
         wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
     }
 }

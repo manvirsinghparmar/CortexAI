@@ -24,6 +24,8 @@ _PLAIN_SYSTEM_INSTRUCTION = (
 _JSON_SYSTEM_INSTRUCTION = (
     "You are a prompt optimization expert. "
     "Rewrite the user prompt to be clearer and more specific while preserving intent exactly. "
+    "Do not answer the prompt. Do not add factual claims, conclusions, dates, names, or background information "
+    "unless they are already present in the original prompt. "
     "Return strictly valid JSON with this schema: "
     '{"optimized_prompt": "string", "steps": ["string"], "explanations": ["string"], "metrics": {"key": number}}. '
     "Do not add markdown fences, commentary, or extra keys."
@@ -177,13 +179,41 @@ class PromptOptimizer:
         if not self._is_valid_output(parsed):
             raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
 
+        optimized_prompt = parsed["optimized_prompt"].strip() or original_prompt
+        if self._looks_like_answer_instead_of_prompt(original_prompt, optimized_prompt):
+            raise ValueError("Optimizer response appears to answer the prompt instead of rewriting it")
+
         result: dict[str, Any] = {
-            "optimized_prompt": parsed["optimized_prompt"].strip() or original_prompt,
+            "optimized_prompt": optimized_prompt,
             "steps": parsed.get("steps", []),
             "explanations": parsed.get("explanations", []),
             "metrics": parsed.get("metrics", {}),
         }
         return result
+
+    @staticmethod
+    def _looks_like_answer_instead_of_prompt(original_prompt: str, optimized_prompt: str) -> bool:
+        original = " ".join(str(original_prompt or "").split())
+        optimized = str(optimized_prompt or "").strip()
+        if not original or not optimized:
+            return False
+
+        original_len = max(len(original), 1)
+        optimized_len = len(optimized)
+        paragraph_count = len([part for part in optimized.splitlines() if part.strip()])
+        has_markdown_structure = any(marker in optimized for marker in ("**", "##", "\n-", "\n*"))
+        has_many_sentences = sum(optimized.count(token) for token in (".", "!", "?")) >= 4
+
+        if original_len <= 120 and optimized_len > max(500, original_len * 8):
+            return True
+        if original_len <= 120 and paragraph_count >= 3:
+            return True
+        if original_len <= 120 and has_markdown_structure and optimized_len > original_len * 4:
+            return True
+        if original_len <= 80 and has_many_sentences and optimized_len > original_len * 5:
+            return True
+
+        return False
 
     def _build_user_message(self, prompt: str, settings: dict[str, Any] | None) -> str:
         if not settings:

@@ -587,6 +587,13 @@ function normalizeAttachmentCardStatus(statusRaw) {
     return "ready";
 }
 
+function getAttachmentCardStatusLabel(statusRaw) {
+    const status = normalizeAttachmentCardStatus(statusRaw);
+    if (status === "uploading") return "Processing";
+    if (status === "failed") return "Needs attention";
+    return "Ready for analysis";
+}
+
 function getAttachmentCardTypeLabel(mimeTypeRaw, filenameRaw = "") {
     const mimeType = normalizeAttachmentMimeType(mimeTypeRaw, filenameRaw);
     if (!mimeType) return "FILE";
@@ -601,6 +608,15 @@ function getAttachmentCardTypeLabel(mimeTypeRaw, filenameRaw = "") {
     return "FILE";
 }
 
+function normalizeAttachmentPreviewUrl(urlRaw, mimeTypeRaw) {
+    const mimeType = normalizeAttachmentMimeType(mimeTypeRaw);
+    if (!mimeType.startsWith("image/")) return "";
+    const raw = String(urlRaw || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("blob:") || raw.startsWith("data:image/")) return raw;
+    return "";
+}
+
 function normalizeUserTurnAttachmentItems(items) {
     if (!Array.isArray(items)) return [];
 
@@ -609,13 +625,18 @@ function normalizeUserTurnAttachmentItems(items) {
 
     items.forEach((item, index) => {
         if (!item) return;
-        const fileName = normalizeAttachmentFileName(item?.file_name || item?.filename || item?.original_filename || `file-${index + 1}`);
-        const mimeType = normalizeAttachmentMimeType(item?.file_type || item?.mime_type, fileName);
-        const fileSize = Number(item?.file_size ?? item?.size_bytes) || 0;
-        const fileId = String(item?.file_id || "").trim();
-        const status = normalizeAttachmentCardStatus(item?.status);
+        const source = item?.payload && typeof item.payload === "object" ? item.payload : item;
+        const fileName = normalizeAttachmentFileName(source?.file_name || source?.filename || source?.original_filename || `file-${index + 1}`);
+        const mimeType = normalizeAttachmentMimeType(source?.file_type || source?.mime_type, fileName);
+        const fileSize = Number(source?.file_size ?? source?.size_bytes) || 0;
+        const fileId = String(source?.file_id || "").trim();
+        const status = normalizeAttachmentCardStatus(source?.status);
+        const previewUrl = normalizeAttachmentPreviewUrl(
+            source?.preview_url || source?.thumbnail_url || source?.object_url,
+            mimeType
+        );
 
-        const dedupeKey = [fileId, fileName, mimeType, fileSize].join("|").toLowerCase();
+        const dedupeKey = [fileId, fileName, mimeType, fileSize, previewUrl].join("|").toLowerCase();
         if (seen.has(dedupeKey)) return;
         seen.add(dedupeKey);
 
@@ -627,6 +648,7 @@ function normalizeUserTurnAttachmentItems(items) {
                 file_type: mimeType,
                 file_id: fileId,
                 status,
+                preview_url: previewUrl,
             },
         });
     });
@@ -641,20 +663,25 @@ function buildUserAttachmentCards(attachments) {
     const cardsHtml = messageItems.map(item => {
         const payload = item?.payload || {};
         const status = normalizeAttachmentCardStatus(payload.status);
-        const statusLabel = status === "uploading"
-            ? "Uploading..."
-            : (status === "failed" ? "Failed" : "Ready");
+        const statusLabel = getAttachmentCardStatusLabel(status);
         const fileName = normalizeAttachmentFileName(payload.file_name);
         const sizeText = formatBytes(payload.file_size);
         const typeLabel = getAttachmentCardTypeLabel(payload.file_type, fileName);
+        const mimeType = normalizeAttachmentMimeType(payload.file_type, fileName);
+        const previewUrl = normalizeAttachmentPreviewUrl(payload.preview_url, mimeType);
+        const thumbClass = previewUrl ? "user-file-thumb has-preview" : (mimeType.startsWith("image/") ? "user-file-thumb is-image" : "user-file-thumb");
+        const thumbnailHtml = previewUrl
+            ? `<img class="user-file-thumb-img" src="${escHtml(previewUrl)}" alt="" loading="lazy">`
+            : escHtml(typeLabel);
+        const statusAriaLabel = `File status: ${statusLabel}`;
 
         return `<article class="user-file-card is-${escHtml(status)}" data-file-id="${escHtml(String(payload.file_id || ""))}">
-            <span class="user-file-icon" aria-hidden="true">${escHtml(typeLabel)}</span>
+            <span class="${thumbClass}" aria-hidden="true">${thumbnailHtml}</span>
             <span class="user-file-main">
-                <span class="user-file-name">${escHtml(fileName)}</span>
+                <span class="user-file-name" title="${escHtml(fileName)}">${escHtml(fileName)}</span>
                 <span class="user-file-meta">${escHtml(`${sizeText} | ${typeLabel}`)}</span>
+                <span class="user-file-status" aria-label="${escHtml(statusAriaLabel)}">${escHtml(statusLabel)}</span>
             </span>
-            <span class="user-file-status">${escHtml(statusLabel)}</span>
         </article>`;
     }).join("");
 
@@ -834,6 +861,7 @@ const COMPARE_MODEL_PICKER_DESKTOP_WIDTH = 400;
 let attachmentItems = [];
 let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
+const attachmentPreviewUrls = new Set();
 const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
@@ -877,6 +905,9 @@ const el = {
     compareModel1: $("compareModel1"),
     compareModel2: $("compareModel2"),
     compareModel3: $("compareModel3"),
+    compareRemoveModel1: $("compareRemoveModel1"),
+    compareRemoveModel2: $("compareRemoveModel2"),
+    compareRemoveModel3: $("compareRemoveModel3"),
     promptCard: $("promptCard"),
     promptInputWrap: $("promptInputWrap"),
     promptAddBtn: $("promptAddBtn"),
@@ -1487,6 +1518,58 @@ function getActiveCompareSelects() {
     return s;
 }
 
+function getCompareRemoveButtons() {
+    return [el.compareRemoveModel1, el.compareRemoveModel2, el.compareRemoveModel3].filter(Boolean);
+}
+
+function getCompareRemoveLabel(selectEl) {
+    const { provider, model } = parseKey(String(selectEl?.value || ""));
+    const meta = getModelDisplayMetadata(provider, model);
+    return meta.shortLabel || meta.fullModel || "model";
+}
+
+function removeCompareSlot(slotIndexRaw) {
+    const slotIndex = Number(slotIndexRaw);
+    const selects = getActiveCompareSelects();
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= selects.length) return;
+    if (selects.length <= 2) {
+        updateCompareAddButton();
+        return;
+    }
+
+    const remainingValues = selects
+        .map(selectEl => String(selectEl.value || ""))
+        .filter((_, index) => index !== slotIndex);
+
+    compareSlotCount = Math.max(2, remainingValues.length);
+    el.compareModel1.value = remainingValues[0] || "";
+    el.compareModel2.value = remainingValues[1] || "";
+    el.compareModel3.value = remainingValues[2] || "";
+    syncCompareDropdowns();
+}
+
+function shouldAnimateCompareRemoval(slotEl) {
+    if (!slotEl || !slotEl.classList || typeof window === "undefined" || typeof window.setTimeout !== "function") {
+        return false;
+    }
+    const prefersReducedMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return !prefersReducedMotion;
+}
+
+function animateCompareRemoval(button, slotIndex) {
+    const slotEl = button?.closest?.(".toolbar-compare-slot");
+    if (!shouldAnimateCompareRemoval(slotEl)) return false;
+
+    button.disabled = true;
+    slotEl.classList.add("is-removing");
+    window.setTimeout(() => {
+        slotEl.classList.remove("is-removing");
+        removeCompareSlot(slotIndex);
+    }, 160);
+    return true;
+}
+
 function reconcileCompareSelections(selects) {
     if (!Array.isArray(selects) || selects.length === 0) return [];
     // Safety pass: if programmatic updates introduced duplicates, normalize to unique values.
@@ -1530,15 +1613,43 @@ function updateCompareAddButton() {
         el.compareModel3Wrap.classList.toggle("hidden", !showThird);
     }
     if (el.compareAddModelBtn) {
-        el.compareAddModelBtn.textContent = showThird ? "- Remove Model" : "+ Add Model";
+        el.compareAddModelBtn.textContent = "+ Add Model";
         el.compareAddModelBtn.setAttribute("aria-expanded", showThird ? "true" : "false");
         const canAdd = canAddAnotherCompareSlot();
         const compareModeActive = currentMode === "compare";
-        el.compareAddModelBtn.disabled = showThird
-            ? !compareModeActive
-            : (!compareModeActive || !canAdd);
+        el.compareAddModelBtn.classList.toggle("hidden", showThird);
+        el.compareAddModelBtn.disabled = !compareModeActive || showThird || !canAdd;
+        el.compareAddModelBtn.title = canAdd ? "Add another model to compare" : "No additional compatible models available";
     }
+    updateCompareRemoveButtons();
     syncAllModelPickers();
+}
+
+function updateCompareRemoveButtons() {
+    const activeSelects = getActiveCompareSelects();
+    const activeCount = activeSelects.length;
+    const canRemove = currentMode === "compare" && activeCount > 2;
+    const floorMessage = "At least 2 models required";
+
+    getCompareRemoveButtons().forEach((button, index) => {
+        const selectEl = activeSelects[index] || null;
+        const isVisible = Boolean(selectEl) && canRemove;
+        button.classList.toggle("hidden", !isVisible);
+        if (!isVisible) {
+            button.disabled = true;
+            button.setAttribute("aria-label", floorMessage);
+            button.title = floorMessage;
+            return;
+        }
+
+        const label = getCompareRemoveLabel(selectEl);
+        const ariaLabel = canRemove
+            ? `Remove ${label} from comparison`
+            : floorMessage;
+        button.disabled = !canRemove;
+        button.setAttribute("aria-label", ariaLabel);
+        button.title = canRemove ? ariaLabel : floorMessage;
+    });
 }
 
 function parseKey(key) {
@@ -1868,12 +1979,6 @@ function isSingleManualModePendingSelection() {
 
 if (el.compareAddModelBtn) {
     el.compareAddModelBtn.addEventListener("click", () => {
-        if (compareSlotCount === 3) {
-            compareSlotCount = 2;
-            updateCompareAddButton();
-            syncCompareDropdowns();
-            return;
-        }
         if (!canAddAnotherCompareSlot()) {
             updateCompareAddButton();
             return;
@@ -1889,6 +1994,18 @@ if (el.compareAddModelBtn) {
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    PROMPT OPTIMIZATION TOGGLE
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+getCompareRemoveButtons().forEach(button => {
+    button.addEventListener("click", () => {
+        if (button.disabled) {
+            updateCompareAddButton();
+            return;
+        }
+        const slotIndex = Number(button.getAttribute("data-compare-slot"));
+        if (animateCompareRemoval(button, slotIndex)) return;
+        removeCompareSlot(slotIndex);
+    });
+});
 
 el.routeOptimizeBtn.addEventListener("click", () => {
     optimizeEnabled = !optimizeEnabled;
@@ -2269,6 +2386,30 @@ function toSafeHeaderFileName(nameRaw) {
         .trim() || "file";
 }
 
+function createAttachmentPreviewUrl(file, mimeTypeRaw) {
+    const mimeType = normalizeAttachmentMimeType(mimeTypeRaw, file?.name);
+    if (!mimeType.startsWith("image/")) return "";
+    if (!file || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") return "";
+    try {
+        const url = URL.createObjectURL(file);
+        attachmentPreviewUrls.add(url);
+        return url;
+    } catch {
+        return "";
+    }
+}
+
+function revokeAttachmentPreviewUrl(urlRaw) {
+    const url = String(urlRaw || "").trim();
+    if (!url || !attachmentPreviewUrls.has(url) || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+    URL.revokeObjectURL(url);
+    attachmentPreviewUrls.delete(url);
+}
+
+function revokeAllAttachmentPreviewUrls() {
+    Array.from(attachmentPreviewUrls).forEach(url => revokeAttachmentPreviewUrl(url));
+}
+
 function enqueueSelectedFiles(fileList) {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
@@ -2307,6 +2448,7 @@ function enqueueSelectedFiles(fileList) {
             continue;
         }
 
+        const previewUrl = createAttachmentPreviewUrl(file, mimeType);
         attachmentItems.push({
             local_id: nextAttachmentLocalId(),
             filename,
@@ -2316,6 +2458,7 @@ function enqueueSelectedFiles(fileList) {
             file_id: "",
             error_message: "",
             file_blob: file || null,
+            preview_url: previewUrl,
         });
     }
 
@@ -2456,6 +2599,8 @@ async function processAttachmentUploadQueue() {
 }
 
 function removeAttachment(localId) {
+    const current = getAttachmentItemByLocalId(localId);
+    revokeAttachmentPreviewUrl(current?.preview_url);
     attachmentItems = attachmentItems.filter(item => String(item?.local_id || "") !== String(localId || ""));
     refreshAttachmentUi({ refreshModels: true });
 }
@@ -2541,6 +2686,7 @@ function buildRequestAttachmentPayload() {
             file_size: Number(item.size_bytes) || 0,
             file_type: normalizeAttachmentMimeType(item.mime_type, item.filename),
             status: normalizeAttachmentCardStatus(item.status),
+            preview_url: String(item.preview_url || ""),
         }))
     );
     const compatibilityDescriptors = readyItems
@@ -4060,6 +4206,7 @@ el.clearBtn.addEventListener("click", () => { clearResults(); });
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
+    revokeAllAttachmentPreviewUrls();
     pendingWebSourcesByCard.clear();
     hasReceivedFirstStreamResponse = false;
     setComposerDocked(true);
@@ -4288,6 +4435,19 @@ async function loadDynamicProviderModelCatalog() {
     }
 }
 
+async function initializeAuthAndCatalog() {
+    try {
+        await initCognitoAuth();
+    } catch (error) {
+        console.warn("Auth bootstrap unavailable, continuing with existing session state.", error);
+    }
+
+    await Promise.all([
+        Promise.resolve().then(() => renderAuthUI()),
+        loadDynamicProviderModelCatalog(),
+    ]);
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    INIT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -4314,8 +4474,7 @@ async function loadDynamicProviderModelCatalog() {
     setMode("single");
     refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
-    void initCognitoAuth().then(function () { return renderAuthUI(); });
-    void loadDynamicProviderModelCatalog();
+    void initializeAuthAndCatalog();
 })();
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

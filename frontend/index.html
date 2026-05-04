@@ -107,15 +107,30 @@
                 </div>
                 <div class="toolbar-compare-group hidden" id="compareModelWrap" aria-label="Compare model selectors">
                     <span class="toolbar-compare-label">Compare:</span>
-                    <label class="sr-only" for="compareModel1">Compare model 1</label>
-                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel1"></select>
+                    <span class="toolbar-compare-slot" id="compareModel1Wrap">
+                        <label class="sr-only" for="compareModel1">Compare model 1</label>
+                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel1"></select>
+                        <button class="compare-remove-model-btn" id="compareRemoveModel1" type="button"
+                            data-compare-slot="0" aria-label="Remove model 1 from comparison"
+                            title="Remove model from comparison">&times;</button>
+                    </span>
                     <span class="toolbar-compare-sep">vs</span>
-                    <label class="sr-only" for="compareModel2">Compare model 2</label>
-                    <select class="model-select toolbar-model-select compare-model-select" id="compareModel2"></select>
+                    <span class="toolbar-compare-slot" id="compareModel2Wrap">
+                        <label class="sr-only" for="compareModel2">Compare model 2</label>
+                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel2"></select>
+                        <button class="compare-remove-model-btn" id="compareRemoveModel2" type="button"
+                            data-compare-slot="1" aria-label="Remove model 2 from comparison"
+                            title="Remove model from comparison">&times;</button>
+                    </span>
                     <span class="toolbar-compare-third hidden" id="compareModel3Wrap">
                         <span class="toolbar-compare-sep">vs</span>
-                        <label class="sr-only" for="compareModel3">Compare model 3</label>
-                        <select class="model-select toolbar-model-select compare-model-select" id="compareModel3"></select>
+                        <span class="toolbar-compare-slot" id="compareModel3Slot">
+                            <label class="sr-only" for="compareModel3">Compare model 3</label>
+                            <select class="model-select toolbar-model-select compare-model-select" id="compareModel3"></select>
+                            <button class="compare-remove-model-btn" id="compareRemoveModel3" type="button"
+                                data-compare-slot="2" aria-label="Remove model 3 from comparison"
+                                title="Remove model from comparison">&times;</button>
+                        </span>
                     </span>
                     <button class="toolbar-add-model-btn" id="compareAddModelBtn" type="button" aria-expanded="false">
                         + Add Model

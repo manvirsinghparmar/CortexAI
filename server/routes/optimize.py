@@ -8,9 +8,8 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from server.dependencies import AuthResult, get_auth, get_orchestrator
+from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
-from orchestrator.core import CortexOrchestrator
 from utils.logger import get_logger
 from utils.prompt_optimizer import PromptOptimizer
 
@@ -52,7 +51,6 @@ class OptimizeResponse(BaseModel):
 async def optimize_prompt(
     http_request: Request,
     request: OptimizeRequest,
-    orchestrator: CortexOrchestrator = Depends(get_orchestrator),
     auth: AuthResult = Depends(get_auth),
 ):
     """
@@ -75,11 +73,9 @@ async def optimize_prompt(
         )
 
     optimizer = _get_optimizer()
-    optimized, was_optimized = await asyncio.to_thread(
-        optimizer.optimize,
-        request.prompt,
-        orchestrator,
-    )
+    result = await asyncio.to_thread(optimizer.optimize_prompt, {"prompt": request.prompt})
+    optimized = str(result.get("optimized_prompt") or request.prompt)
+    was_optimized = not result.get("error") and optimized.strip() != request.prompt.strip()
 
     return OptimizeResponse(
         original_prompt=request.prompt,

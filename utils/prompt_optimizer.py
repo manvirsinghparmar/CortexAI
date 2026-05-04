@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 from config.provider_catalog import (
     get_provider_api_key_envs,

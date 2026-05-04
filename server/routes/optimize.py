@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from typing import Optional
 
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
@@ -22,7 +21,7 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
 )
 
 # Singleton optimizer (created once, reused across requests)
-_optimizer: Optional[PromptOptimizer] = None
+_optimizer: PromptOptimizer | None = None
 
 
 def _get_optimizer() -> PromptOptimizer:

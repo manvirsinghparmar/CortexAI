@@ -32,11 +32,13 @@ def build_injected_text(sources: list[SourceDoc]) -> str:
 
     lines = [
         "=" * 80,
-        "SYSTEM OVERRIDE - MANDATORY INSTRUCTIONS:",
+        "WEB RESEARCH CONTEXT FOR THIS TURN:",
         "=" * 80,
         "CortexAI performed web research and provided sources below.",
         "Do NOT claim lack of internet access or knowledge cutoff.",
-        "Use ONLY these sources for factual claims from this turn.",
+        "Treat these sources as primary evidence for current or source-dependent factual claims.",
+        "You may use model knowledge for stable background context when it does not conflict.",
+        "If sourced evidence and model memory conflict, prefer the sourced evidence and note uncertainty.",
         "Cite using format [1][2][3] with consecutive brackets and no commas.",
         "If multiple sources support the same fact, cite all supporting sources.",
         "If the sources are partial, provide the best sourced summary first.",
@@ -60,7 +62,7 @@ def build_injected_text(sources: list[SourceDoc]) -> str:
 
     lines.append("=" * 80)
     lines.append(
-        "REMINDER: Answer using only the information above and cite sources as [1][2][3]."
+        "REMINDER: Prioritize sourced facts above and cite as [1][2][3]; add only non-conflicting background context."
     )
     lines.append("=" * 80)
 

@@ -348,6 +348,44 @@ class TestProviderContractCompliance:
         assert "input_image" in content_types
 
     @patch("openai.OpenAI")
+    def test_openai_responses_attachment_history_uses_assistant_output_text(self, mock_openai):
+        mock_response = Mock()
+        mock_response.output_text = "Image analyzed with history"
+        mock_response.usage = Mock(input_tokens=18, output_tokens=9, total_tokens=27)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
+        response = client.get_completion(
+            messages=[
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Earlier question"},
+                {"role": "assistant", "content": "Earlier answer"},
+                {"role": "user", "content": "What changed in this image?"},
+            ],
+            attachments=[
+                {
+                    "file_id": "f1",
+                    "filename": "diagram.png",
+                    "mime_type": "image/png",
+                    "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+                }
+            ],
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assistant_message = next(item for item in payload["input"] if item["role"] == "assistant")
+        assert assistant_message["content"] == [{"type": "output_text", "text": "Earlier answer"}]
+
+        last_user_message = payload["input"][-1]
+        assert last_user_message["role"] == "user"
+        content_types = [item["type"] for item in last_user_message["content"]]
+        assert "input_text" in content_types
+        assert "input_image" in content_types
+
+    @patch("openai.OpenAI")
     def test_deepseek_returns_unified_response(self, mock_openai):
         """Test that DeepSeek client returns UnifiedResponse."""
         # Mock successful response

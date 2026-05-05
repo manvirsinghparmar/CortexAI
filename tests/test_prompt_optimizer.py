@@ -184,6 +184,27 @@ class TestResponseParsing:
 
         assert "optimized_prompt" in str(exc_info.value)
 
+    def test_parse_rejects_answer_instead_of_rewrite_for_short_prompt(self):
+        """Short prompts should not be replaced by a full factual answer."""
+        optimizer = PromptOptimizer(client=Mock())
+        response_text = json.dumps(
+            {
+                "optimized_prompt": (
+                    "The operation that resulted in the death of Osama bin Laden, codenamed "
+                    "\"Operation Neptune Spear,\" took place on May 2, 2011.\n\n"
+                    "**Location:** The operation was conducted at a fortified compound in "
+                    "Bilal Town, Abbottabad, Pakistan.\n\n"
+                    "**Operation Details:** The SEALs entered the compound and completed "
+                    "the raid in approximately 40 minutes."
+                )
+            }
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            optimizer._parse_ai_response(response_text, "how osama was killed")
+
+        assert "appears to answer" in str(exc_info.value)
+
 
 class TestOptimizationFlow:
     """Test the complete optimization flow with mocked OpenAI."""
@@ -300,6 +321,38 @@ class TestOptimizationFlow:
         assert "error" in result
         assert "optimized_prompt" in result  # Should return original as fallback
         assert result["optimized_prompt"] == "write code for sorting"
+
+    def test_answer_like_optimizer_output_falls_back_to_original(self):
+        """A valid JSON wrapper is still rejected if the content is a full answer."""
+        mock_client = Mock()
+        mock_response = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps(
+                {
+                    "optimized_prompt": (
+                        "The operation that killed Osama bin Laden happened on May 2, 2011.\n\n"
+                        "**Location:** Abbottabad, Pakistan.\n\n"
+                        "**Forces:** U.S. Navy SEALs carried out the raid after years of "
+                        "intelligence work."
+                    )
+                }
+            ),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=500,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = mock_response
+
+        optimizer = PromptOptimizer(provider="openai", max_retries=1, client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": "how osama was killed"})
+
+        assert result["optimized_prompt"] == "how osama was killed"
+        assert result["error"]["code"] == "optimization_failed"
 
 
 class TestSelfCorrection:

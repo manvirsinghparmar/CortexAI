@@ -3,6 +3,13 @@ import logging
 import orchestrator.core as core_module
 
 
+def _disable_research_init(monkeypatch):
+    def _raise_not_configured():
+        raise ValueError("TAVILY_API_KEY not set in environment")
+
+    monkeypatch.setattr(core_module, "create_research_service_from_env", _raise_not_configured)
+
+
 def test_research_init_missing_dependency_logs_error(monkeypatch, caplog):
     def _raise_missing_dependency():
         raise ModuleNotFoundError("Optional dependency 'tavily' is not installed")
@@ -50,3 +57,35 @@ def test_research_init_not_configured_logs_warning(monkeypatch, caplog):
     )
     assert record is not None
     assert record.levelname == "WARNING"
+
+
+def test_prompt_optimizer_not_auto_initialized_from_route_flag(monkeypatch):
+    class FailingPromptOptimizer:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("orchestrator prompt optimizer should not initialize by default")
+
+    _disable_research_init(monkeypatch)
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.delenv("ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION", raising=False)
+    monkeypatch.setattr(core_module, "PromptOptimizer", FailingPromptOptimizer)
+
+    orchestrator = core_module.CortexOrchestrator()
+
+    assert orchestrator._prompt_optimizer is None
+
+
+def test_prompt_optimizer_auto_initializes_only_with_orchestrator_flag(monkeypatch):
+    class FakePromptOptimizer:
+        def __init__(self, *, provider):
+            self.provider = provider
+
+    _disable_research_init(monkeypatch)
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "false")
+    monkeypatch.setenv("ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_PROVIDER", "openai")
+    monkeypatch.setattr(core_module, "PromptOptimizer", FakePromptOptimizer)
+
+    orchestrator = core_module.CortexOrchestrator()
+
+    assert isinstance(orchestrator._prompt_optimizer, FakePromptOptimizer)
+    assert orchestrator._prompt_optimizer.provider == "openai"

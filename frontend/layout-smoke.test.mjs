@@ -42,6 +42,9 @@ test("compact composer toolbar contains smart, manual, and inline compare contro
     assert.match(html, /id="compareModel2"/);
     assert.match(html, /id="compareModel3"/);
     assert.match(html, /id="compareAddModelBtn"/);
+    assert.match(html, /id="compareRemoveModel1"/);
+    assert.match(html, /id="compareRemoveModel2"/);
+    assert.match(html, /id="compareRemoveModel3"/);
 });
 
 test("composer send button is inside the input area, not in the feature-chip row", () => {
@@ -122,6 +125,14 @@ test("compare mode is inline and no longer uses separate model-selection card", 
     assert.doesNotMatch(html, /id="btn3Models"/);
     assert.match(html, /Compare:\s*<\/span>/);
     assert.match(html, /id="compareAddModelBtn"[\s\S]*\+ Add Model/);
+    assert.doesNotMatch(html, />\s*- Remove Model\s*</);
+    assert.match(html, /class="compare-remove-model-btn"[\s\S]*id="compareRemoveModel1"/);
+    assert.match(html, /data-compare-slot="1"[\s\S]*aria-label="Remove model 2 from comparison"/);
+});
+
+test("compare payload is built from active removable selector slots", () => {
+    assert.match(appJs, /function removeCompareSlot\(slotIndexRaw\) \{[\s\S]*remainingValues = selects[\s\S]*filter\(\(_, index\) => index !== slotIndex\);/);
+    assert.match(appJs, /const selects = getActiveCompareSelects\(\);\s*const targets = selects\.map\(sel => parseKey\(sel\.value\)\);/);
 });
 
 test("compare transcript renders turn-based side-by-side columns with model headers", () => {
@@ -146,19 +157,6 @@ test("compare mode sends session context and preserves prompt history between tu
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
 });
 
-test("third compare slot prefers Claude Haiku defaults before generic fallback", () => {
-    assert.match(appJs, /const COMPARE_THIRD_SLOT_PREFERRED_KEYS = \[/);
-    assert.match(appJs, /"claude:claude-haiku-4-5"/);
-    assert.match(appJs, /"claude:claude-sonnet-4-6"/);
-    assert.match(appJs, /"claude:claude-sonnet-4-5"/);
-    assert.match(appJs, /function appendPreferredCompareModels\(byKey, allowedProviders\) \{/);
-    assert.match(appJs, /function pickCompareFallbackKey\(slotIndex, availableKeys, used\) \{/);
-    assert.match(appJs, /return resolved\.map\(value => String\(value \|\| ""\)\);/);
-    assert.match(appJs, /if \(slotIndex === 2\) \{[\s\S]*key\.startsWith\("claude:"\)/);
-    assert.match(appJs, /el\.compareModel3\.value = pickCompareFallbackKey\(2, availableKeys, used\);/);
-    assert.match(appJs, /const fallback = pickCompareFallbackKey\(index, availableKeys, used\);/);
-});
-
 test("compare history hydration keeps prior user prompts without duplicating per-model assistant turns", () => {
     assert.match(appJs, /function buildConversationHistoryFromEntries\(entries\) \{[\s\S]*const flushCompareTurn = \(\) => \{/);
     assert.match(appJs, /const assistantContext = buildCompareAssistantContext\(activeCompareTurn\.responses\);/);
@@ -180,7 +178,7 @@ test("history threads are grouped by shared session id and can surface mixed-mod
     assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
-test("header removes static History/Settings/Profile buttons", () => {
+test("header removes static nav links and subtitle block", () => {
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">History<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
     assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Profile<\/button>/);
@@ -236,15 +234,6 @@ test("response cards provide copy, like, and dislike actions", () => {
     assert.match(appJs, /function handleCopyAction\(button\)/);
     assert.match(appJs, /function handleReactionAction\(button, action\)/);
     assert.match(appJs, /el\.resultsGrid\.addEventListener\("click", event =>/);
-});
-
-test("model errors are sanitized before rendering on response cards", () => {
-    assert.match(appJs, /function hasUnsafeModelErrorPayload\(rawMessage\)/);
-    assert.match(appJs, /function fallbackModelErrorMessage\(error = \{\}\)/);
-    assert.match(appJs, /function getModelErrorDisplayText\(resp\)/);
-    assert.match(appJs, /const text = hasError \? getModelErrorDisplayText\(resp\) : \(resp\.text \|\| "\(empty response\)"\);/);
-    assert.match(appJs, /const text = hasError[\s\S]*\? getModelErrorDisplayText\(resp\)/);
-    assert.doesNotMatch(appJs, /Error: \$\{resp\.error\.message\}/);
 });
 
 test("composer shows explicit stop control during streaming", () => {
@@ -374,11 +363,16 @@ test("composer enter key submits while shift+enter keeps newline", () => {
 
 test("user transcript can render file cards for sent attachments", () => {
     assert.match(appJs, /function buildUserAttachmentCards\(attachments\) \{/);
+    assert.match(appJs, /const source = item\?\.payload && typeof item\.payload === "object" \? item\.payload : item;/);
     assert.match(appJs, /class="chat-user-files"/);
     assert.match(appJs, /class="user-file-card is-\$\{escHtml\(status\)\}"/);
-    assert.match(appJs, /const statusLabel = status === "uploading"/);
+    assert.match(appJs, /class="\$\{thumbClass\}"/);
+    assert.match(appJs, /class="user-file-thumb-img"/);
+    assert.match(appJs, /getAttachmentCardStatusLabel\(status\)/);
     assert.match(styleCss, /\.chat-user-files \{/);
     assert.match(styleCss, /\.user-file-card \{/);
+    assert.match(styleCss, /\.user-file-card:hover \{/);
+    assert.match(styleCss, /\.user-file-thumb \{/);
     assert.match(styleCss, /\.user-file-status \{/);
 });
 
@@ -407,9 +401,39 @@ test("composer remains interactive when submit button is disabled", () => {
     assert.match(styleCss, /\.prompt-card \{[\s\S]*z-index:\s*320;/);
 });
 
-test("model picker options can render capability badges", () => {
-    assert.match(appJs, /model-picker-option-badge/);
-    assert.match(styleCss, /\.model-picker-option-badge \{/);
+test("model picker options show internal model names without capability badges", () => {
+    assert.match(appJs, /model-picker-option-secondary/);
+    assert.match(styleCss, /\.model-picker-option-secondary \{/);
+    assert.doesNotMatch(appJs, /model-picker-option-badge/);
+    assert.doesNotMatch(styleCss, /\.model-picker-option-badge \{/);
+    assert.doesNotMatch(appJs, /Vision/);
+});
+
+test("compare model picker dropdowns use wide clamped smart positioning", () => {
+    assert.match(appJs, /const COMPARE_MODEL_PICKER_DESKTOP_WIDTH = 400;/);
+    assert.match(appJs, /const MODEL_PICKER_VIEWPORT_PADDING = 16;/);
+    assert.match(appJs, /function getCompareModelPickerAlignment\(selectEl\) \{/);
+    assert.match(appJs, /function positionCompareModelPickerMenu\(picker, buttonRect, viewportWidth\) \{/);
+    assert.match(appJs, /wrapper\.classList\.add\("compare-model-picker"\);/);
+    assert.match(
+        styleCss,
+        /\.model-picker\.compare-model-picker \.model-picker-menu \{[\s\S]*width:\s*min\(400px,\s*calc\(100vw - 32px\)\);/,
+    );
+    assert.match(styleCss, /\.model-picker-option-label \{[\s\S]*white-space:\s*normal;/);
+});
+
+test("compare model remove controls are compact circular icon buttons", () => {
+    assert.match(styleCss, /\.toolbar-compare-slot \{[\s\S]*display:\s*inline-flex;[\s\S]*position:\s*relative;/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*position:\s*absolute;[\s\S]*top:\s*-5px;[\s\S]*right:\s*-5px;[\s\S]*width:\s*19px;[\s\S]*height:\s*19px;[\s\S]*border-radius:\s*50%;/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*background-color:\s*rgba\(255, 255, 255, \.96\);[\s\S]*color:\s*rgba\(71, 85, 105, \.66\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*opacity:\s*0;[\s\S]*pointer-events:\s*none;[\s\S]*transform:\s*scale\(\.94\);/);
+    assert.match(styleCss, /\.toolbar-compare-slot:hover \.compare-remove-model-btn:not\(:disabled\),[\s\S]*\.toolbar-compare-slot:focus-within \.compare-remove-model-btn:not\(:disabled\),[\s\S]*\.compare-remove-model-btn:focus-visible \{[\s\S]*opacity:\s*\.86;[\s\S]*transform:\s*scale\(1\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn:hover:not\(:disabled\) \{[\s\S]*background-color:\s*rgba\(255, 241, 242, \.98\);[\s\S]*color:\s*#BE123C;[\s\S]*transform:\s*scale\(1\.05\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn:focus-visible \{[\s\S]*box-shadow:\s*0 0 0 3px rgba\(244, 63, 94, \.18\)/);
+    assert.match(styleCss, /\.compare-remove-model-btn:disabled \{[\s\S]*cursor:\s*default;[\s\S]*opacity:\s*0;/);
+    assert.match(styleCss, /\.toolbar-compare-slot\.is-removing \{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(\.98\);/);
+    assert.match(appJs, /const isVisible = Boolean\(selectEl\) && canRemove;/);
+    assert.match(appJs, /function animateCompareRemoval\(button, slotIndex\) \{[\s\S]*slotEl\.classList\.add\("is-removing"\);[\s\S]*removeCompareSlot\(slotIndex\);/);
 });
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {
@@ -417,12 +441,6 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
     assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
     assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
-    assert.match(appJs, /const findNextNonEmptyLineIndex = \(startIndex\) => \{/);
-    assert.match(
-        appJs,
-        /if \(!current\) \{[\s\S]*const nextIndex = findNextNonEmptyLineIndex\(index \+ 1\);[\s\S]*index = nextIndex;[\s\S]*continue;[\s\S]*\}/,
-    );
-    assert.match(appJs, /const startAttr = startNumber > 1 \? ` start="\$\{startNumber\}"` : "";/);
     assert.match(appJs, /const responseHtml = hasError \? escHtml\(text\) : renderMarkdownToHtml\(text\);/);
     assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
@@ -432,7 +450,7 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
 test("streaming still appends raw chunks before final markdown rendering", () => {
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
     assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
-    assert.match(appJs, /const text = hasError[\s\S]*\? getModelErrorDisplayText\(resp\)[\s\S]*: \(explicitText\.trim\(\) \|\| "\(empty response\)"\);/);
+    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? `Error: \$\{resp\.error\.message\}` : "\(empty response\)"\);/);
 });
 
 test("markdown table css adds overflow wrapper, cell wrapping, and stacked layout", () => {

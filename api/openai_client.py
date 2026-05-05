@@ -387,6 +387,10 @@ class OpenAIClient(BaseAIClient):
                 idx = i
         return idx
 
+    @staticmethod
+    def _responses_text_content_type(role: str) -> str:
+        return "output_text" if role == "assistant" else "input_text"
+
     @classmethod
     def _build_chat_completions_messages(
         cls,
@@ -431,9 +435,10 @@ class OpenAIClient(BaseAIClient):
         for idx, message in enumerate(normalized_messages):
             role = str(message.get("role") or "user").strip().lower()
             text = cls._normalize_message_text(message)
+            text_content_type = cls._responses_text_content_type(role)
             content_items: list[dict[str, Any]] = []
             if text:
-                content_items.append({"type": "input_text", "text": text})
+                content_items.append({"type": text_content_type, "text": text})
 
             if attachments and last_user_idx is not None and idx == last_user_idx:
                 for attachment in attachments:
@@ -451,7 +456,7 @@ class OpenAIClient(BaseAIClient):
                         )
 
             if not content_items:
-                content_items.append({"type": "input_text", "text": ""})
+                content_items.append({"type": text_content_type, "text": ""})
 
             out.append({"role": role, "content": content_items})
 

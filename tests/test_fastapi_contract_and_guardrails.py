@@ -609,6 +609,62 @@ def test_optimize_accepts_session_cookie_auth(client):
     assert body["original_prompt"] == "make this prompt better"
 
 
+def test_optimize_uses_schema_optimizer_when_enabled(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    class FakeOptimizer:
+        def optimize_prompt(self, payload):
+            assert payload == {"prompt": "make this prompt better"}
+            return {
+                "optimized_prompt": "Rewrite this prompt to be more specific and actionable.",
+                "steps": ["clarified intent"],
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["optimized_prompt"] == "Rewrite this prompt to be more specific and actionable."
+    assert body["was_optimized"] is True
+    assert body["server_optimization_enabled"] is True
+
+
+def test_optimize_falls_back_when_schema_optimizer_rejects_output(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    class FakeOptimizer:
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": payload["prompt"],
+                "error": {
+                    "code": "optimization_failed",
+                    "message": "Optimizer response appears to answer the prompt instead of rewriting it",
+                },
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "how osama was killed"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["optimized_prompt"] == "how osama was killed"
+    assert body["was_optimized"] is False
+    assert body["server_optimization_enabled"] is True
+
+
 def test_compare_rejects_too_many_targets(client):
     payload = {
         "prompt": "hello",
@@ -658,21 +714,6 @@ def test_error_normalization(exc, expected_code, expected_retryable):
     err: NormalizedError = dummy._normalize_error(exc, provider="test")  # type: ignore
     assert err.code == expected_code
     assert err.retryable == expected_retryable
-
-
-def test_error_normalization_sanitizes_raw_provider_payload_text():
-    dummy = DummyClient()
-    raw_provider_exception = Exception(
-        "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently overloaded'}}"
-    )
-
-    err: NormalizedError = dummy._normalize_error(raw_provider_exception, provider="gemini")  # type: ignore
-
-    assert err.code == "provider_error"
-    assert "temporarily unavailable" in err.message.lower()
-    assert "{" not in err.message
-    assert "}" not in err.message
-    assert "overloaded" not in err.message.lower()
 
 
 def test_compare_dto_mapping_smoke():

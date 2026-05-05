@@ -90,6 +90,13 @@ SMART_CHAT_MIN_CONTEXT_LIMIT=
 SMART_CHAT_PREFERRED_PROVIDER=      # openai|gemini|deepseek|grok|claude
 SMART_CHAT_ALLOWED_PROVIDERS=       # comma-separated, e.g. openai,gemini
 
+# Prompt optimization (optional)
+ENABLE_PROMPT_OPTIMIZATION=false       # enables explicit POST /v1/optimize
+ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false  # opt-in auto-rewrite inside chat/compare
+PROMPT_OPTIMIZER_PROVIDER=gemini    # openai|gemini|deepseek|grok|claude
+PROMPT_OPTIMIZER_MODEL=             # optional; must belong to PROMPT_OPTIMIZER_PROVIDER
+PROMPT_OPTIMIZER_MAX_RETRIES=3
+
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
 REDACT_PII=false          # true|false
@@ -180,6 +187,7 @@ Frontend runtime config (`/runtime-config.js`):
   - defaults from `ENABLE_DEV_SESSION_LOGIN`
   - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
   - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
+- The frontend completes Cognito/local dev-session bootstrap before fetching `/v1/providers` and `/v1/models`, so session-scoped catalog discovery can populate Ask and Compare model dropdowns.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
@@ -310,6 +318,7 @@ Upload status semantics:
 - `failed`: ingestion failed; `error_code`/`error_message` explain why.
 - Upload API responses now sanitize `error_message` for client safety (no bucket/key/internal storage paths in response text).
 - Frontend upload UX maps failures to safe user-facing messages (network issue, file too large, unsupported type, timeout, generic retry prompt) and does not render raw backend/object-storage error text.
+- Sent chat/compare turns render each uploaded attachment as a flat file card using stored metadata: original filename as the primary label, size/type detail, optional image thumbnail preview, and inline readiness text such as `Ready for analysis`.
 - Raw upload errors are still logged in frontend developer console for debugging.
 
 MVP ingestion policy:
@@ -361,11 +370,20 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 - API contract note: `routing.research_mode` is boolean (`true|false`) and is mapped to orchestrator modes `on|off`.
 - Smart routing tiering now considers full runtime message payload (including research/system injection), not just base prompt/history estimates.
 
+Prompt optimization (`/v1/optimize`):
+- disabled by default unless `ENABLE_PROMPT_OPTIMIZATION=true`
+- this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
+- optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
+- uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
+- optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt instead of rewriting it
+- if optimization is disabled or rejected, the API returns the original prompt with `was_optimized=false`
+
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+- Frontend Compare selectors support per-model removal with compact circular controls attached to each selector; remove controls show only when three models are active, fade in on selector hover/focus, and request payloads include only active selected models.
 
 ## Web Research Behavior (Current)
 

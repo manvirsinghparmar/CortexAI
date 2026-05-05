@@ -42,6 +42,9 @@ test("compact composer toolbar contains smart, manual, and inline compare contro
     assert.match(html, /id="compareModel2"/);
     assert.match(html, /id="compareModel3"/);
     assert.match(html, /id="compareAddModelBtn"/);
+    assert.match(html, /id="compareRemoveModel1"/);
+    assert.match(html, /id="compareRemoveModel2"/);
+    assert.match(html, /id="compareRemoveModel3"/);
 });
 
 test("composer send button is inside the input area, not in the feature-chip row", () => {
@@ -122,6 +125,14 @@ test("compare mode is inline and no longer uses separate model-selection card", 
     assert.doesNotMatch(html, /id="btn3Models"/);
     assert.match(html, /Compare:\s*<\/span>/);
     assert.match(html, /id="compareAddModelBtn"[\s\S]*\+ Add Model/);
+    assert.doesNotMatch(html, />\s*- Remove Model\s*</);
+    assert.match(html, /class="compare-remove-model-btn"[\s\S]*id="compareRemoveModel1"/);
+    assert.match(html, /data-compare-slot="1"[\s\S]*aria-label="Remove model 2 from comparison"/);
+});
+
+test("compare payload is built from active removable selector slots", () => {
+    assert.match(appJs, /function removeCompareSlot\(slotIndexRaw\) \{[\s\S]*remainingValues = selects[\s\S]*filter\(\(_, index\) => index !== slotIndex\);/);
+    assert.match(appJs, /const selects = getActiveCompareSelects\(\);\s*const targets = selects\.map\(sel => parseKey\(sel\.value\)\);/);
 });
 
 test("compare transcript renders turn-based side-by-side columns with model headers", () => {
@@ -167,10 +178,10 @@ test("history threads are grouped by shared session id and can surface mixed-mod
     assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
-test("header keeps only slim nav links without subtitle block", () => {
-    assert.match(html, /<button class="top-nav-link" type="button">History<\/button>/);
-    assert.match(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
-    assert.match(html, /<button class="top-nav-link" type="button">Profile<\/button>/);
+test("header removes static nav links and subtitle block", () => {
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">History<\/button>/);
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Settings<\/button>/);
+    assert.doesNotMatch(html, /<button class="top-nav-link" type="button">Profile<\/button>/);
     assert.doesNotMatch(html, /header-intro-sub/);
 });
 
@@ -352,11 +363,16 @@ test("composer enter key submits while shift+enter keeps newline", () => {
 
 test("user transcript can render file cards for sent attachments", () => {
     assert.match(appJs, /function buildUserAttachmentCards\(attachments\) \{/);
+    assert.match(appJs, /const source = item\?\.payload && typeof item\.payload === "object" \? item\.payload : item;/);
     assert.match(appJs, /class="chat-user-files"/);
     assert.match(appJs, /class="user-file-card is-\$\{escHtml\(status\)\}"/);
-    assert.match(appJs, /const statusLabel = status === "uploading"/);
+    assert.match(appJs, /class="\$\{thumbClass\}"/);
+    assert.match(appJs, /class="user-file-thumb-img"/);
+    assert.match(appJs, /getAttachmentCardStatusLabel\(status\)/);
     assert.match(styleCss, /\.chat-user-files \{/);
     assert.match(styleCss, /\.user-file-card \{/);
+    assert.match(styleCss, /\.user-file-card:hover \{/);
+    assert.match(styleCss, /\.user-file-thumb \{/);
     assert.match(styleCss, /\.user-file-status \{/);
 });
 
@@ -404,6 +420,20 @@ test("compare model picker dropdowns use wide clamped smart positioning", () => 
         /\.model-picker\.compare-model-picker \.model-picker-menu \{[\s\S]*width:\s*min\(400px,\s*calc\(100vw - 32px\)\);/,
     );
     assert.match(styleCss, /\.model-picker-option-label \{[\s\S]*white-space:\s*normal;/);
+});
+
+test("compare model remove controls are compact circular icon buttons", () => {
+    assert.match(styleCss, /\.toolbar-compare-slot \{[\s\S]*display:\s*inline-flex;[\s\S]*position:\s*relative;/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*position:\s*absolute;[\s\S]*top:\s*-5px;[\s\S]*right:\s*-5px;[\s\S]*width:\s*19px;[\s\S]*height:\s*19px;[\s\S]*border-radius:\s*50%;/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*background-color:\s*rgba\(255, 255, 255, \.96\);[\s\S]*color:\s*rgba\(71, 85, 105, \.66\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn \{[\s\S]*opacity:\s*0;[\s\S]*pointer-events:\s*none;[\s\S]*transform:\s*scale\(\.94\);/);
+    assert.match(styleCss, /\.toolbar-compare-slot:hover \.compare-remove-model-btn:not\(:disabled\),[\s\S]*\.toolbar-compare-slot:focus-within \.compare-remove-model-btn:not\(:disabled\),[\s\S]*\.compare-remove-model-btn:focus-visible \{[\s\S]*opacity:\s*\.86;[\s\S]*transform:\s*scale\(1\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn:hover:not\(:disabled\) \{[\s\S]*background-color:\s*rgba\(255, 241, 242, \.98\);[\s\S]*color:\s*#BE123C;[\s\S]*transform:\s*scale\(1\.05\);/);
+    assert.match(styleCss, /\.compare-remove-model-btn:focus-visible \{[\s\S]*box-shadow:\s*0 0 0 3px rgba\(244, 63, 94, \.18\)/);
+    assert.match(styleCss, /\.compare-remove-model-btn:disabled \{[\s\S]*cursor:\s*default;[\s\S]*opacity:\s*0;/);
+    assert.match(styleCss, /\.toolbar-compare-slot\.is-removing \{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(\.98\);/);
+    assert.match(appJs, /const isVisible = Boolean\(selectEl\) && canRemove;/);
+    assert.match(appJs, /function animateCompareRemoval\(button, slotIndex\) \{[\s\S]*slotEl\.classList\.add\("is-removing"\);[\s\S]*removeCompareSlot\(slotIndex\);/);
 });
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {

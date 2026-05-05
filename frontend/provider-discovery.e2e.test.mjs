@@ -124,7 +124,7 @@ class FakeElement {
     scrollIntoView() {}
 }
 
-function createRuntime({ providersPayload, modelsPayload }) {
+function createRuntime({ providersPayload, modelsPayload, requireDevSessionForCatalog = false }) {
     const elementIds = [
         "mainHeader",
         "btnSingleMode",
@@ -140,6 +140,9 @@ function createRuntime({ providersPayload, modelsPayload }) {
         "compareModel1",
         "compareModel2",
         "compareModel3",
+        "compareRemoveModel1",
+        "compareRemoveModel2",
+        "compareRemoveModel3",
         "promptCard",
         "promptInput",
         "submitBtn",
@@ -168,16 +171,22 @@ function createRuntime({ providersPayload, modelsPayload }) {
 
     const elements = new Map();
     elementIds.forEach(id => {
-        const tagName = id.toLowerCase().includes("model") && !id.includes("Wrap")
-            ? "select"
-            : id === "promptInput"
-                ? "textarea"
-                : "div";
+        const lowerId = id.toLowerCase();
+        const tagName = lowerId.endsWith("btn") || lowerId.startsWith("compareremovemodel")
+            ? "button"
+            : lowerId.includes("model") && !id.includes("Wrap") && !id.includes("Slot")
+                ? "select"
+                : id === "promptInput"
+                    ? "textarea"
+                    : "div";
         elements.set(id, new FakeElement(id, tagName));
     });
 
     const smartChipWrap = new FakeElement("routeSmartChipWrap", "span");
     elements.get("routeSmartBtn")._closest = smartChipWrap;
+    elements.get("compareRemoveModel1").setAttribute("data-compare-slot", "0");
+    elements.get("compareRemoveModel2").setAttribute("data-compare-slot", "1");
+    elements.get("compareRemoveModel3").setAttribute("data-compare-slot", "2");
 
     const document = {
         getElementById(id) {
@@ -205,6 +214,7 @@ function createRuntime({ providersPayload, modelsPayload }) {
     };
 
     const fetchCalls = [];
+    let devSessionReady = false;
     async function fetch(url) {
         const text = String(url || "");
         fetchCalls.push(text);
@@ -218,6 +228,15 @@ function createRuntime({ providersPayload, modelsPayload }) {
             };
         }
         if (text.includes("/v1/auth/me")) {
+            if (devSessionReady) {
+                return {
+                    ok: true,
+                    status: 200,
+                    async json() {
+                        return { authenticated: true };
+                    },
+                };
+            }
             return {
                 ok: false,
                 status: 401,
@@ -227,6 +246,7 @@ function createRuntime({ providersPayload, modelsPayload }) {
             };
         }
         if (text.includes("/v1/auth/dev-login")) {
+            devSessionReady = true;
             return {
                 ok: true,
                 status: 200,
@@ -236,6 +256,15 @@ function createRuntime({ providersPayload, modelsPayload }) {
             };
         }
         if (text.includes("/v1/providers")) {
+            if (requireDevSessionForCatalog && !devSessionReady) {
+                return {
+                    ok: false,
+                    status: 403,
+                    async json() {
+                        return { detail: "session_auth_required" };
+                    },
+                };
+            }
             return {
                 ok: true,
                 status: 200,
@@ -245,6 +274,15 @@ function createRuntime({ providersPayload, modelsPayload }) {
             };
         }
         if (text.includes("/v1/models?enabled_only=true")) {
+            if (requireDevSessionForCatalog && !devSessionReady) {
+                return {
+                    ok: false,
+                    status: 403,
+                    async json() {
+                        return { detail: "session_auth_required" };
+                    },
+                };
+            }
             return {
                 ok: true,
                 status: 200,
@@ -331,6 +369,50 @@ function isOptionDisabled(selectEl, value) {
     );
 }
 
+async function createCompareRemovalRuntime() {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+            { provider: "zai", label: "Z.AI", default_model: "zai-chat", ui: { display_name: "Z.AI" } },
+            { provider: "claude", label: "Claude", default_model: "claude-sonnet-4-5", ui: { display_name: "Claude" } },
+        ],
+        total: 4,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+            { provider: "zai", model: "zai-chat", enabled: true },
+            { provider: "claude", model: "claude-sonnet-4-5", enabled: true },
+        ],
+        total: 4,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const runtime = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(runtime.context);
+    vm.runInContext(source, runtime.context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    runtime.elements.get("btnCompareMode").dispatchEvent("click");
+    runtime.elements.get("compareAddModelBtn").dispatchEvent("click");
+    return runtime;
+}
+
+function activeCompareValues(context) {
+    return Array.from(context.getActiveCompareSelects(), selectEl => String(selectEl.value || ""));
+}
+
 test("dynamic discovery updates frontend selectors with new provider/models", async () => {
     const appJsPath = path.join(process.cwd(), "frontend", "app.js");
     const source = fs.readFileSync(appJsPath, "utf8");
@@ -392,6 +474,56 @@ test("dynamic discovery updates frontend selectors with new provider/models", as
     assert.equal(zaiOption?.getAttribute("title"), "Z.AI Chat\nzai-chat");
 });
 
+test("catalog discovery waits for local dev session before loading compare models", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "openai", model: "gpt-5.4", enabled: true },
+            { provider: "gemini", model: "gemini-2.5-pro", enabled: true },
+        ],
+        total: 3,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context, elements, fetchCalls } = createRuntime({
+        providersPayload,
+        modelsPayload,
+        requireDevSessionForCatalog: true,
+    });
+
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const devLoginIndex = fetchCalls.findIndex(url => url.includes("/v1/auth/dev-login"));
+    const providersIndex = fetchCalls.findIndex(url => url.includes("/v1/providers"));
+    const modelsIndex = fetchCalls.findIndex(url => url.includes("/v1/models?enabled_only=true"));
+    assert.ok(devLoginIndex >= 0);
+    assert.ok(providersIndex > devLoginIndex);
+    assert.ok(modelsIndex > devLoginIndex);
+
+    const compareValues = optionValues(elements.get("compareModel1"));
+    assert.ok(compareValues.includes("openai:gpt-4o"));
+    assert.ok(compareValues.includes("openai:gpt-5.4"));
+    assert.ok(compareValues.includes("gemini:gemini-2.5-pro"));
+});
+
 test("compare selectors enforce unique model choices with disabled taken options", async () => {
     const appJsPath = path.join(process.cwd(), "frontend", "app.js");
     const source = fs.readFileSync(appJsPath, "utf8");
@@ -448,6 +580,139 @@ test("compare selectors enforce unique model choices with disabled taken options
 
     const selected = [compareModel1.value, compareModel2.value, compareModel3.value].map(value => String(value || ""));
     assert.equal(new Set(selected).size, selected.length);
+});
+
+test("user can remove the first compare model slot", async () => {
+    const { context, elements } = await createCompareRemovalRuntime();
+    const before = activeCompareValues(context);
+    assert.equal(before.length, 3);
+    assert.equal(elements.get("compareRemoveModel1").classList.contains("hidden"), false);
+    assert.equal(elements.get("compareRemoveModel2").classList.contains("hidden"), false);
+    assert.equal(elements.get("compareRemoveModel3").classList.contains("hidden"), false);
+
+    elements.get("compareRemoveModel1").dispatchEvent("click");
+
+    assert.deepEqual(activeCompareValues(context), [before[1], before[2]]);
+    assert.equal(elements.get("compareModel3Wrap").classList.contains("hidden"), true);
+    assert.equal(elements.get("compareRemoveModel1").classList.contains("hidden"), true);
+    assert.equal(elements.get("compareRemoveModel2").classList.contains("hidden"), true);
+});
+
+test("user can remove the second compare model slot", async () => {
+    const { context, elements } = await createCompareRemovalRuntime();
+    const before = activeCompareValues(context);
+    assert.equal(before.length, 3);
+
+    elements.get("compareRemoveModel2").dispatchEvent("click");
+
+    assert.deepEqual(activeCompareValues(context), [before[0], before[2]]);
+    assert.equal(elements.get("compareModel3Wrap").classList.contains("hidden"), true);
+});
+
+test("user can remove the third compare model slot", async () => {
+    const { context, elements } = await createCompareRemovalRuntime();
+    const before = activeCompareValues(context);
+    assert.equal(before.length, 3);
+
+    elements.get("compareRemoveModel3").dispatchEvent("click");
+
+    assert.deepEqual(activeCompareValues(context), [before[0], before[1]]);
+    assert.equal(elements.get("compareModel3Wrap").classList.contains("hidden"), true);
+});
+
+test("compare model removal cannot go below two active models", async () => {
+    const { context, elements } = await createCompareRemovalRuntime();
+
+    elements.get("compareRemoveModel3").dispatchEvent("click");
+    const twoModelState = activeCompareValues(context);
+    assert.equal(twoModelState.length, 2);
+    assert.equal(elements.get("compareRemoveModel1").classList.contains("hidden"), true);
+    assert.equal(elements.get("compareRemoveModel2").classList.contains("hidden"), true);
+
+    elements.get("compareRemoveModel1").dispatchEvent("click");
+    elements.get("compareRemoveModel2").dispatchEvent("click");
+
+    assert.deepEqual(activeCompareValues(context), twoModelState);
+});
+
+test("compare request target construction excludes removed model slots", async () => {
+    const { context, elements } = await createCompareRemovalRuntime();
+    const before = activeCompareValues(context);
+    assert.equal(before.length, 3);
+
+    elements.get("compareRemoveModel2").dispatchEvent("click");
+
+    const targets = Array.from(context.getActiveCompareSelects(), selectEl => context.parseKey(selectEl.value));
+    assert.deepEqual(
+        targets.map(target => `${target.provider}:${target.model}`),
+        [before[0], before[2]],
+    );
+});
+
+test("user attachment file cards preserve uploaded file metadata", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+        ],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [{ provider: "openai", model: "gpt-4o", enabled: true }],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context } = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(typeof context.normalizeUserTurnAttachmentItems, "function");
+    assert.equal(typeof context.buildUserAttachmentCards, "function");
+
+    const normalized = context.normalizeUserTurnAttachmentItems([{
+        type: "file",
+        payload: {
+            file_id: "file_123",
+            file_name: "quarterly-plan.pdf",
+            file_size: 15360,
+            file_type: "application/pdf",
+            status: "ready",
+        },
+    }]);
+
+    assert.equal(normalized[0]?.payload?.file_name, "quarterly-plan.pdf");
+    assert.equal(normalized[0]?.payload?.file_type, "application/pdf");
+    assert.equal(normalized[0]?.payload?.status, "ready");
+
+    const cardHtml = context.buildUserAttachmentCards(normalized);
+    assert.match(cardHtml, /quarterly-plan\.pdf/);
+    assert.match(cardHtml, /Ready for analysis/);
+    assert.match(cardHtml, /15\.0 KB/);
+    assert.match(cardHtml, /PDF/);
+    assert.match(cardHtml, /class="user-file-thumb"/);
+    assert.doesNotMatch(cardHtml, /user-file-status-dot/);
+    assert.doesNotMatch(cardHtml, />file-1</);
+
+    const imageCardHtml = context.buildUserAttachmentCards([{
+        file_id: "file_456",
+        file_name: "scene.png",
+        file_size: 4096,
+        file_type: "image/png",
+        status: "ready",
+        preview_url: "blob:http://localhost/scene",
+    }]);
+    assert.match(imageCardHtml, /class="user-file-thumb-img"/);
+    assert.match(imageCardHtml, /blob:http:\/\/localhost\/scene/);
 });
 
 test("upload errors are mapped to safe user-facing messages", async () => {

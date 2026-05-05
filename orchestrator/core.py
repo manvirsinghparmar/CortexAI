@@ -60,6 +60,11 @@ from utils.prompt_optimizer import PromptOptimizer
 from utils.token_tracker import TokenTracker
 
 logger = get_logger(__name__)
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return str(os.getenv(name, default) or "").strip().lower() in _TRUE_ENV_VALUES
 
 
 class CortexOrchestrator:
@@ -83,9 +88,10 @@ class CortexOrchestrator:
             os.getenv("ENABLE_FABRICATION_CHECK", "true").lower() == "true"
         )
 
-        # Initialize prompt optimizer (optional - controlled by env var)
+        # /v1/optimize is the default UI optimization path. Orchestrator-level
+        # auto-optimization is opt-in so chat/compare do not rewrite twice.
         self._prompt_optimizer = None
-        if os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true":
+        if _env_flag("ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION", "false"):
             try:
                 provider = os.getenv("PROMPT_OPTIMIZER_PROVIDER", "gemini")
                 self._prompt_optimizer = PromptOptimizer(provider=provider)

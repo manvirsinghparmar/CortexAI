@@ -1,5 +1,6 @@
 """Auth-related endpoints (Cognito config + cookie login + code callback)."""
-"""https://us-east-1duh9ar9jk.auth.us-east-1.amazoncognito.com/login?client_id=5i9cjes5hpui0okrfi656jk3ss&response_type=code&scope=email+openid&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fauth"""
+
+import hmac
 import os
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from db import get_or_create_user_by_cognito
+from db import get_or_create_cli_user, get_or_create_user_by_cognito
 from db.tables import get_table
 from server.cognito import (
     exchange_code_for_tokens,
@@ -25,6 +26,58 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/v1/auth", tags=["Auth"])
+PRODUCTION_ENV_VALUES = {"prod", "production"}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_environment() -> str:
+    for key in ("APP_ENV", "ENVIRONMENT", "ENV"):
+        value = str(os.getenv(key, "") or "").strip().lower()
+        if value:
+            return value
+    return ""
+
+
+def _dev_login_enabled() -> bool:
+    return _env_bool("ENABLE_DEV_SESSION_LOGIN", default=False)
+
+
+def _ensure_dev_login_allowed(request: Request) -> None:
+    if not _dev_login_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    runtime_env = _runtime_environment()
+    if runtime_env in PRODUCTION_ENV_VALUES:
+        logger.warning(
+            "Dev session login blocked in production runtime",
+            extra={
+                "extra_fields": {
+                    "event": "auth.dev_login.blocked.production",
+                    "runtime_env": runtime_env,
+                    "path": str(request.url.path),
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Dev session login is disabled in production environments",
+        )
+
+    expected_token = str(os.getenv("DEV_SESSION_LOGIN_TOKEN", "") or "").strip()
+    if not expected_token:
+        return
+    provided = str(request.headers.get("X-Dev-Login-Token") or "")
+    if not hmac.compare_digest(provided, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid dev login token",
+        )
 
 
 @router.get("/cognito-config")
@@ -82,24 +135,8 @@ async def handle_oauth_callback(
             email=claims.email,
             issuer=claims.iss,
         )
-    print(f"user_id: {user_id}")
-    
+
     cookie_val = sign_session(user_id)
-    print(f"cookie_val: {cookie_val}")
-    """response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=cookie_val,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        path="/",
-    )
-    logger.info(
-        "User logged in via code callback",
-        extra={"extra_fields": {"user_id": str(user_id)}},
-    )
-    success_url = (os.getenv("COGNITO_SUCCESS_REDIRECT_URI") or "").strip() or "/index.html"
-    return RedirectResponse(url=success_url, status_code=status.HTTP_302_FOUND)"""
     success_url = (os.getenv("COGNITO_SUCCESS_REDIRECT_URI") or "").strip() or "/index.html"
     redir = RedirectResponse(url=success_url, status_code=status.HTTP_302_FOUND)
     redir.set_cookie(
@@ -111,6 +148,50 @@ async def handle_oauth_callback(
         path="/",
     )
     return redir
+
+
+@router.post("/dev-login")
+async def dev_login(request: Request, response: Response) -> dict:
+    """
+    Local-development helper: create a deterministic dev user and set session cookie.
+    Disabled by default and blocked in production-like runtimes.
+    """
+    _ensure_dev_login_allowed(request)
+
+    with db_uow() as session:
+        user_id: UUID = get_or_create_cli_user(session)
+        users = get_table("users")
+        row = session.execute(
+            select(users.c.email, users.c.display_name).where(users.c.id == user_id)
+        ).first()
+        email = row[0] if row else "cli@cortexai.local"
+        display_name = row[1] if row else "CLI User"
+
+    cookie_val = sign_session(user_id)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=cookie_val,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        path="/",
+    )
+    logger.info(
+        "Dev session login completed",
+        extra={
+            "extra_fields": {
+                "event": "auth.dev_login.success",
+                "user_id": str(user_id),
+                "email": email,
+            }
+        },
+    )
+    return {
+        "ok": True,
+        "user_id": str(user_id),
+        "email": email,
+        "display_name": display_name,
+    }
 
 
 @router.get("/callback")

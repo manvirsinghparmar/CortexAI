@@ -227,6 +227,13 @@ def app(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "false")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("FRONTEND_RUNTIME_API_BASE", raising=False)
+    monkeypatch.delenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", raising=False)
+    monkeypatch.delenv("FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN", raising=False)
     app = create_app()
 
     # Keep these tests DB-agnostic and deterministic.
@@ -258,6 +265,15 @@ def app(monkeypatch):
 @pytest.fixture()
 def client(app):
     return TestClient(app)
+
+
+def _parse_runtime_config_payload(js_text: str) -> dict[str, Any]:
+    prefix = "window.CORTEX_RUNTIME_CONFIG = "
+    assert js_text.startswith(prefix)
+    payload_text = js_text[len(prefix):].strip()
+    if payload_text.endswith(";"):
+        payload_text = payload_text[:-1]
+    return json.loads(payload_text)
 
 
 # -------------------------------------------------------------------
@@ -310,6 +326,81 @@ def test_compare_rejects_api_key_only_auth(client):
     assert r.json()["detail"]["code"] == "session_auth_required"
 
 
+def test_dev_login_is_disabled_by_default(client):
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 404
+
+
+def test_dev_login_sets_session_cookie_when_enabled(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["email"] == "cli@cortexai.local"
+    assert "cortex_session=" in (r.headers.get("set-cookie") or "")
+
+    # TestClient persists cookies between requests, so /me should resolve.
+    me = client.get("/v1/auth/me")
+    assert me.status_code == 200
+
+
+def test_dev_login_token_guard_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    monkeypatch.setenv("DEV_SESSION_LOGIN_TOKEN", "local-dev-token")
+
+    unauthorized = client.post("/v1/auth/dev-login")
+    assert unauthorized.status_code == 401
+
+    authorized = client.post(
+        "/v1/auth/dev-login",
+        headers={"X-Dev-Login-Token": "local-dev-token"},
+    )
+    assert authorized.status_code == 200
+
+
+def test_dev_login_rejected_in_production_runtime(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "true")
+    monkeypatch.setenv("APP_ENV", "production")
+
+    r = client.post("/v1/auth/dev-login")
+    assert r.status_code == 403
+
+
+def test_runtime_config_js_defaults_to_request_origin(client):
+    r = client.get("/runtime-config.js")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/javascript")
+    assert "no-store" in (r.headers.get("cache-control") or "")
+    payload = _parse_runtime_config_payload(r.text)
+    assert payload["apiBase"] == "http://testserver"
+    assert payload["enableDevSessionLogin"] is False
+
+
+def test_runtime_config_js_honors_frontend_env_overrides(client, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("FRONTEND_RUNTIME_API_BASE", "https://kudlo.triobrain.com/")
+    monkeypatch.setenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", "true")
+    monkeypatch.setenv("FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN", "local-token")
+
+    r = client.get("/runtime-config.js")
+    assert r.status_code == 200
+    payload = _parse_runtime_config_payload(r.text)
+    assert payload["apiBase"] == "https://kudlo.triobrain.com"
+    assert payload["enableDevSessionLogin"] is True
+    assert payload["devSessionLoginToken"] == "local-token"
+
+
+def test_runtime_config_js_disables_dev_session_login_in_production(client, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", "true")
+
+    r = client.get("/runtime-config.js")
+    assert r.status_code == 200
+    payload = _parse_runtime_config_payload(r.text)
+    assert payload["enableDevSessionLogin"] is False
+
+
 def test_chat_with_attachments_requires_db_mode(client):
     payload = {
         "prompt": "describe this file",
@@ -350,18 +441,30 @@ def test_compare_with_attachments_requires_db_mode(client):
     assert r.json()["detail"]["code"] == "attachments_require_db"
 
 
-def test_providers_catalog_requires_api_key(client):
+def test_providers_catalog_requires_auth(client):
     r = client.get("/v1/providers")
     assert r.status_code in (401, 403)
 
 
-def test_models_catalog_requires_api_key(client):
+def test_models_catalog_requires_auth(client):
     r = client.get("/v1/models")
     assert r.status_code in (401, 403)
 
 
-def test_providers_catalog_returns_catalog_and_model_counts(client):
+def test_providers_catalog_rejects_api_key_only_auth(client):
     r = client.get("/v1/providers", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_models_catalog_rejects_api_key_only_auth(client):
+    r = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_providers_catalog_returns_catalog_and_model_counts(client):
+    r = client.get("/v1/providers", cookies={"cortex_session": "test-session-cookie"})
     assert r.status_code == 200
 
     body = r.json()
@@ -390,7 +493,7 @@ def test_providers_catalog_returns_catalog_and_model_counts(client):
 
 
 def test_models_catalog_lists_enabled_models_by_default(client):
-    r = client.get("/v1/models", headers={"X-API-Key": "dev-key-1"})
+    r = client.get("/v1/models", cookies={"cortex_session": "test-session-cookie"})
     assert r.status_code == 200
 
     body = r.json()
@@ -430,7 +533,6 @@ def test_models_catalog_filters_by_provider_case_insensitive(client):
     provider = get_provider_ids()[0]
     r = client.get(
         f"/v1/models?provider={provider.upper()}",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
@@ -453,12 +555,10 @@ def test_models_catalog_can_include_disabled(client):
     provider = get_provider_ids()[0]
     r_enabled = client.get(
         f"/v1/models?provider={provider}",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     r_all = client.get(
         f"/v1/models?provider={provider}&enabled_only=false",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
 
@@ -479,7 +579,6 @@ def test_models_catalog_can_include_disabled(client):
 def test_models_catalog_rejects_unsupported_provider(client):
     r = client.get(
         "/v1/models?provider=not-a-provider",
-        headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 400
@@ -487,6 +586,27 @@ def test_models_catalog_rejects_unsupported_provider(client):
     assert "Unsupported provider 'not-a-provider'" in detail
     for provider in get_provider_ids():
         assert provider in detail
+
+
+def test_optimize_rejects_api_key_only_auth(client):
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_optimize_accepts_session_cookie_auth(client):
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["original_prompt"] == "make this prompt better"
 
 
 def test_compare_rejects_too_many_targets(client):

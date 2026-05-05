@@ -7,19 +7,89 @@ const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
     RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
-const API_KEY = String(
-    RUNTIME_CONFIG.apiKey || window.localStorage?.getItem("cortex_api_key") || "dev-key-1"
-);
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
 function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
 function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
-function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return { "X-API-Key": API_KEY }; }
+function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
-function handleCognitoCallback() { const hash = window.location.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, window.location.pathname + (window.location.search || "")); } }
+function handleCognitoCallback() { const locationObj = window.location || null; if (!locationObj) return; const hash = locationObj.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || "")); } }
 async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
+function handleCognitoCallback() {
+    const locationObj = (typeof window !== "undefined" && window.location) ? window.location : null;
+    if (!locationObj) return;
+    const hash = locationObj.hash || "";
+    const m = hash.match(/id_token=([^&]+)/);
+    if (m) {
+        setStoredIdToken(m[1]);
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || ""));
+        }
+    }
+}
+function normalizeRuntimeBoolean(value, fallback) {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value === "boolean") return value;
+    const text = String(value).trim().toLowerCase();
+    if (!text) return fallback;
+    if (text === "1" || text === "true" || text === "yes" || text === "on") return true;
+    if (text === "0" || text === "false" || text === "no" || text === "off") return false;
+    return fallback;
+}
+function extractHostname(urlLike) {
+    try { return String(new URL(String(urlLike || "")).hostname || "").toLowerCase(); } catch (_) { return ""; }
+}
+function windowHostname() {
+    try { return String(window.location && window.location.hostname || "").toLowerCase(); } catch (_) { return ""; }
+}
+function isLocalHostname(host) {
+    const value = String(host || "").trim().toLowerCase();
+    return value === "localhost" || value === "127.0.0.1" || value === "::1" || value.endsWith(".local");
+}
+function shouldAttemptDevSessionBootstrap() {
+    const enabled = normalizeRuntimeBoolean(RUNTIME_CONFIG.enableDevSessionLogin, true);
+    if (!enabled) return false;
+    const pageHost = windowHostname();
+    const apiHost = extractHostname(API_BASE);
+    return isLocalHostname(pageHost) || isLocalHostname(apiHost);
+}
+async function ensureLocalDevSession() {
+    if (cognitoConfig && cognitoConfig.enabled) return false;
+    if (!shouldAttemptDevSessionBootstrap()) return false;
+
+    try {
+        const meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
+        if (meResp.ok) return true;
+        if (meResp.status !== 401 && meResp.status !== 403) return false;
+    } catch (_) {
+        return false;
+    }
+
+    const headers = {};
+    const devLoginToken = String(RUNTIME_CONFIG.devSessionLoginToken || "").trim();
+    if (devLoginToken) headers["X-Dev-Login-Token"] = devLoginToken;
+
+    try {
+        const loginResp = await fetch(API_BASE + "/v1/auth/dev-login", {
+            method: "POST",
+            credentials: "include",
+            headers,
+        });
+        if (!loginResp.ok) return false;
+    } catch (_) {
+        return false;
+    }
+
+    try {
+        const verifyResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
+        return verifyResp.ok;
+    } catch (_) {
+        return false;
+    }
+}
+async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); await ensureLocalDevSession(); }
 function buildCognitoLoginUrl() {
         if (!cognitoConfig.enabled || !cognitoConfig.domain || !cognitoConfig.clientId) return "";
         var base = String(cognitoConfig.domain).trim().replace(/\/+$/, "");
@@ -54,7 +124,8 @@ async function renderAuthUI() {
     } else {
         const url = buildCognitoLoginUrl();
         if (!url) { wrap.innerHTML = ""; return; }
-        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in with Google</button>";
+        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in" +
+            "</button>";
         wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
     }
 }
@@ -3022,6 +3093,7 @@ async function doCompare(prompt, {
 async function callAPI(path, body, options = {}) {
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
         signal: options?.signal,
@@ -4249,6 +4321,7 @@ function refreshModelSelectors({ preserveSingle = true, preserveCompare = true }
 async function fetchCatalogJson(path) {
     const resp = await fetch(`${API_BASE}${path}`, {
         method: "GET",
+        credentials: "include",
         headers: getAuthHeaders(),
     });
     if (!resp.ok) {
@@ -4841,6 +4914,7 @@ historyEl.clearAllBtn.addEventListener("click", async () => {
     if (!confirm("Delete all history?")) return;
     await fetch(`${API_BASE}/v1/history`, {
         method: "DELETE",
+        credentials: "include",
         headers: getAuthHeaders(),
     });
     conversationHistory = [];
@@ -4859,6 +4933,7 @@ loadHistory({ restoreActiveTranscript: true });
 async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
         const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
+            credentials: "include",
             headers: getAuthHeaders(),
         });
         if (!resp.ok) return;
@@ -5066,6 +5141,7 @@ function renderHistory(data, filter = "") {
             for (const entry of thread.entries) {
                 await fetch(`${API_BASE}/v1/history/${entry.id}`, {
                     method: "DELETE",
+                    credentials: "include",
                     headers: getAuthHeaders(),
                 });
             }

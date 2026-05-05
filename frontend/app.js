@@ -124,8 +124,7 @@ async function renderAuthUI() {
     } else {
         const url = buildCognitoLoginUrl();
         if (!url) { wrap.innerHTML = ""; return; }
-        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in" +
-            "</button>";
+        wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in</button>";
         wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
     }
 }
@@ -179,14 +178,7 @@ const FALLBACK_MODEL_CATALOG = FALLBACK_PROVIDER_CATALOG.map(spec => ({
     provider: spec.provider,
     model: spec.default_model,
     enabled: true,
-})).concat([
-    { provider: "claude", model: "claude-haiku-4-5", enabled: true },
-]);
-const COMPARE_THIRD_SLOT_PREFERRED_KEYS = [
-    "claude:claude-haiku-4-5",
-    "claude:claude-sonnet-4-6",
-    "claude:claude-sonnet-4-5",
-];
+}));
 
 const PROVIDER_FAVICON_DOMAIN_BY_ID = {
     openai: "openai.com",
@@ -430,29 +422,6 @@ function resolveModelAttachmentCapabilities(row, providerRaw) {
     };
 }
 
-function appendPreferredCompareModels(byKey, allowedProviders) {
-    if (!byKey || typeof byKey.set !== "function") return;
-    if (!(allowedProviders instanceof Set) || !allowedProviders.has("claude")) return;
-    const capabilities = fallbackAttachmentCapabilities("claude");
-    COMPARE_THIRD_SLOT_PREFERRED_KEYS.forEach(key => {
-        const parsed = parseKey(key);
-        const provider = toProviderId(parsed.provider);
-        const model = String(parsed.model || "").trim();
-        if (provider !== "claude" || !model) return;
-        const normalizedKey = modelKeyOf(provider, model);
-        if (byKey.has(normalizedKey)) return;
-        byKey.set(normalizedKey, {
-            provider,
-            model,
-            enabled: true,
-            supports_image_input: capabilities.supports_image_input,
-            supported_attachment_mime_types: capabilities.supported_attachment_mime_types,
-            max_attachment_bytes: capabilities.max_attachment_bytes,
-            max_attachments_per_request: capabilities.max_attachments_per_request,
-        });
-    });
-}
-
 function applyCatalogData(nextProviders, nextModels) {
     const providerRows = Array.isArray(nextProviders) ? nextProviders : [];
     const modelRows = Array.isArray(nextModels) ? nextModels : [];
@@ -535,7 +504,6 @@ function applyCatalogData(nextProviders, nextModels) {
             });
         }
     });
-    appendPreferredCompareModels(byKey, allowedProviders);
 
     modelCatalog = [...byKey.values()];
     if (modelCatalog.length === 0) {
@@ -619,6 +587,13 @@ function normalizeAttachmentCardStatus(statusRaw) {
     return "ready";
 }
 
+function getAttachmentCardStatusLabel(statusRaw) {
+    const status = normalizeAttachmentCardStatus(statusRaw);
+    if (status === "uploading") return "Processing";
+    if (status === "failed") return "Needs attention";
+    return "Ready for analysis";
+}
+
 function getAttachmentCardTypeLabel(mimeTypeRaw, filenameRaw = "") {
     const mimeType = normalizeAttachmentMimeType(mimeTypeRaw, filenameRaw);
     if (!mimeType) return "FILE";
@@ -633,6 +608,15 @@ function getAttachmentCardTypeLabel(mimeTypeRaw, filenameRaw = "") {
     return "FILE";
 }
 
+function normalizeAttachmentPreviewUrl(urlRaw, mimeTypeRaw) {
+    const mimeType = normalizeAttachmentMimeType(mimeTypeRaw);
+    if (!mimeType.startsWith("image/")) return "";
+    const raw = String(urlRaw || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("blob:") || raw.startsWith("data:image/")) return raw;
+    return "";
+}
+
 function normalizeUserTurnAttachmentItems(items) {
     if (!Array.isArray(items)) return [];
 
@@ -641,13 +625,18 @@ function normalizeUserTurnAttachmentItems(items) {
 
     items.forEach((item, index) => {
         if (!item) return;
-        const fileName = normalizeAttachmentFileName(item?.file_name || item?.filename || item?.original_filename || `file-${index + 1}`);
-        const mimeType = normalizeAttachmentMimeType(item?.file_type || item?.mime_type, fileName);
-        const fileSize = Number(item?.file_size ?? item?.size_bytes) || 0;
-        const fileId = String(item?.file_id || "").trim();
-        const status = normalizeAttachmentCardStatus(item?.status);
+        const source = item?.payload && typeof item.payload === "object" ? item.payload : item;
+        const fileName = normalizeAttachmentFileName(source?.file_name || source?.filename || source?.original_filename || `file-${index + 1}`);
+        const mimeType = normalizeAttachmentMimeType(source?.file_type || source?.mime_type, fileName);
+        const fileSize = Number(source?.file_size ?? source?.size_bytes) || 0;
+        const fileId = String(source?.file_id || "").trim();
+        const status = normalizeAttachmentCardStatus(source?.status);
+        const previewUrl = normalizeAttachmentPreviewUrl(
+            source?.preview_url || source?.thumbnail_url || source?.object_url,
+            mimeType
+        );
 
-        const dedupeKey = [fileId, fileName, mimeType, fileSize].join("|").toLowerCase();
+        const dedupeKey = [fileId, fileName, mimeType, fileSize, previewUrl].join("|").toLowerCase();
         if (seen.has(dedupeKey)) return;
         seen.add(dedupeKey);
 
@@ -659,6 +648,7 @@ function normalizeUserTurnAttachmentItems(items) {
                 file_type: mimeType,
                 file_id: fileId,
                 status,
+                preview_url: previewUrl,
             },
         });
     });
@@ -673,20 +663,25 @@ function buildUserAttachmentCards(attachments) {
     const cardsHtml = messageItems.map(item => {
         const payload = item?.payload || {};
         const status = normalizeAttachmentCardStatus(payload.status);
-        const statusLabel = status === "uploading"
-            ? "Uploading..."
-            : (status === "failed" ? "Failed" : "Ready");
+        const statusLabel = getAttachmentCardStatusLabel(status);
         const fileName = normalizeAttachmentFileName(payload.file_name);
         const sizeText = formatBytes(payload.file_size);
         const typeLabel = getAttachmentCardTypeLabel(payload.file_type, fileName);
+        const mimeType = normalizeAttachmentMimeType(payload.file_type, fileName);
+        const previewUrl = normalizeAttachmentPreviewUrl(payload.preview_url, mimeType);
+        const thumbClass = previewUrl ? "user-file-thumb has-preview" : (mimeType.startsWith("image/") ? "user-file-thumb is-image" : "user-file-thumb");
+        const thumbnailHtml = previewUrl
+            ? `<img class="user-file-thumb-img" src="${escHtml(previewUrl)}" alt="" loading="lazy">`
+            : escHtml(typeLabel);
+        const statusAriaLabel = `File status: ${statusLabel}`;
 
         return `<article class="user-file-card is-${escHtml(status)}" data-file-id="${escHtml(String(payload.file_id || ""))}">
-            <span class="user-file-icon" aria-hidden="true">${escHtml(typeLabel)}</span>
+            <span class="${thumbClass}" aria-hidden="true">${thumbnailHtml}</span>
             <span class="user-file-main">
-                <span class="user-file-name">${escHtml(fileName)}</span>
+                <span class="user-file-name" title="${escHtml(fileName)}">${escHtml(fileName)}</span>
                 <span class="user-file-meta">${escHtml(`${sizeText} | ${typeLabel}`)}</span>
+                <span class="user-file-status" aria-label="${escHtml(statusAriaLabel)}">${escHtml(statusLabel)}</span>
             </span>
-            <span class="user-file-status">${escHtml(statusLabel)}</span>
         </article>`;
     }).join("");
 
@@ -861,9 +856,12 @@ const pendingWebSourcesByCard = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
 let modelPickerOutsideHandlersAttached = false;
+const MODEL_PICKER_VIEWPORT_PADDING = 16;
+const COMPARE_MODEL_PICKER_DESKTOP_WIDTH = 400;
 let attachmentItems = [];
 let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
+const attachmentPreviewUrls = new Set();
 const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
@@ -907,6 +905,9 @@ const el = {
     compareModel1: $("compareModel1"),
     compareModel2: $("compareModel2"),
     compareModel3: $("compareModel3"),
+    compareRemoveModel1: $("compareRemoveModel1"),
+    compareRemoveModel2: $("compareRemoveModel2"),
+    compareRemoveModel3: $("compareRemoveModel3"),
     promptCard: $("promptCard"),
     promptInputWrap: $("promptInputWrap"),
     promptAddBtn: $("promptAddBtn"),
@@ -1074,18 +1075,79 @@ function closeAllModelPickers(exceptSelectId = "") {
     });
 }
 
+function isCompareModelSelect(selectEl) {
+    return !!selectEl?.classList?.contains?.("compare-model-select");
+}
+
+function clampNumber(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function removeInlineStyleProperty(el, propertyName) {
+    if (!el?.style) return;
+    if (typeof el.style.removeProperty === "function") {
+        el.style.removeProperty(propertyName);
+        return;
+    }
+    el.style[propertyName] = "";
+}
+
+function getCompareModelPickerAlignment(selectEl) {
+    const activeSelects = [el.compareModel1, el.compareModel2];
+    if (compareSlotCount === 3) {
+        activeSelects.push(el.compareModel3);
+    }
+
+    const slotIndex = activeSelects.indexOf(selectEl);
+    if (slotIndex <= 0) return "left";
+    if (slotIndex === activeSelects.length - 1) return "right";
+    return "center";
+}
+
+function positionCompareModelPickerMenu(picker, buttonRect, viewportWidth) {
+    const wrapperRect = picker.wrapperEl?.getBoundingClientRect?.() || buttonRect;
+    if (!wrapperRect) return;
+
+    const safeViewportWidth = viewportWidth || document?.documentElement?.clientWidth || 0;
+    if (!safeViewportWidth) return;
+
+    const maxSafeWidth = Math.max(120, safeViewportWidth - (MODEL_PICKER_VIEWPORT_PADDING * 2));
+    const buttonWidth = buttonRect.width || Math.max(0, buttonRect.right - buttonRect.left);
+    const menuWidth = Math.min(
+        maxSafeWidth,
+        Math.max(buttonWidth, COMPARE_MODEL_PICKER_DESKTOP_WIDTH)
+    );
+    const alignment = getCompareModelPickerAlignment(picker.selectEl);
+    const alignedLeft = alignment === "right"
+        ? buttonRect.right - menuWidth
+        : alignment === "center"
+            ? buttonRect.left + (buttonWidth / 2) - (menuWidth / 2)
+            : buttonRect.left;
+    const maxLeft = safeViewportWidth - menuWidth - MODEL_PICKER_VIEWPORT_PADDING;
+    const clampedLeft = clampNumber(
+        alignedLeft,
+        MODEL_PICKER_VIEWPORT_PADDING,
+        Math.max(MODEL_PICKER_VIEWPORT_PADDING, maxLeft)
+    );
+
+    picker.menuEl.style.width = `${menuWidth}px`;
+    picker.menuEl.style.left = `${Math.round(clampedLeft - wrapperRect.left)}px`;
+    picker.menuEl.style.maxWidth = `calc(100vw - ${MODEL_PICKER_VIEWPORT_PADDING * 2}px)`;
+}
+
 function positionModelPickerMenu(selectEl) {
     const picker = getModelPicker(selectEl);
     if (!picker) return;
 
     const buttonRect = picker.buttonEl?.getBoundingClientRect?.();
     const viewportHeight = window?.innerHeight || document?.documentElement?.clientHeight || 0;
+    const viewportWidth = window?.innerWidth || document?.documentElement?.clientWidth || 0;
     if (!buttonRect || !viewportHeight) return;
 
-    const edgePadding = 8;
     const desiredMaxHeight = 260;
-    const spaceAbove = Math.max(0, buttonRect.top - edgePadding);
-    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - edgePadding);
+    const verticalPadding = 8;
+    const spaceAbove = Math.max(0, buttonRect.top - verticalPadding);
+    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - verticalPadding);
     const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
     const available = openUp ? spaceAbove : spaceBelow;
     const nextMaxHeight = Math.max(0, Math.min(desiredMaxHeight, available - 6));
@@ -1094,7 +1156,15 @@ function positionModelPickerMenu(selectEl) {
     if (nextMaxHeight > 0) {
         picker.menuEl.style.maxHeight = `${nextMaxHeight}px`;
     } else {
-        picker.menuEl.style.removeProperty("max-height");
+        removeInlineStyleProperty(picker.menuEl, "max-height");
+    }
+
+    if (isCompareModelSelect(selectEl)) {
+        positionCompareModelPickerMenu(picker, buttonRect, viewportWidth);
+    } else {
+        removeInlineStyleProperty(picker.menuEl, "left");
+        removeInlineStyleProperty(picker.menuEl, "width");
+        removeInlineStyleProperty(picker.menuEl, "max-width");
     }
 }
 
@@ -1148,13 +1218,13 @@ function renderModelPickerOptions(selectEl) {
             ? getModelDisplayMetadata(providerId, model)
             : {
                 shortLabel: String(option?.textContent || "Select a model"),
+                fullModel: "",
                 title: String(option?.textContent || "Select a model"),
                 ariaLabel: String(option?.textContent || "Select a model"),
             };
         const label = meta.shortLabel;
+        const secondaryLabel = value && meta.fullModel ? meta.fullModel : "";
         const glyph = providerId ? buildModelPickerGlyph(providerId, 14) : "";
-        const catalogItem = getModelCatalogItemByKey(value);
-        const capabilityBadge = catalogItem?.supports_image_input ? "Vision" : "";
 
         return `<button type="button"
                 class="model-picker-option${isActive ? " is-active" : ""}${isDisabled ? " is-disabled" : ""}"
@@ -1166,8 +1236,10 @@ function renderModelPickerOptions(selectEl) {
                 title="${escHtml(meta.title)}"
                 ${isDisabled ? "disabled" : ""}>
                 ${glyph}
-                <span class="model-picker-option-label">${escHtml(label)}</span>
-                ${capabilityBadge ? `<span class="model-picker-option-badge">${escHtml(capabilityBadge)}</span>` : ""}
+                <span class="model-picker-option-text">
+                    <span class="model-picker-option-label">${escHtml(label)}</span>
+                    ${secondaryLabel ? `<span class="model-picker-option-secondary">${escHtml(secondaryLabel)}</span>` : ""}
+                </span>
             </button>`;
     }).join("");
 
@@ -1248,6 +1320,9 @@ function ensureModelPicker(selectEl) {
     const wrapper = document.createElement("div");
     wrapper.className = "model-picker";
     wrapper.setAttribute("data-select-id", selectEl.id);
+    if (isCompareModelSelect(selectEl)) {
+        wrapper.classList.add("compare-model-picker");
+    }
 
     const button = document.createElement("button");
     button.type = "button";
@@ -1443,6 +1518,58 @@ function getActiveCompareSelects() {
     return s;
 }
 
+function getCompareRemoveButtons() {
+    return [el.compareRemoveModel1, el.compareRemoveModel2, el.compareRemoveModel3].filter(Boolean);
+}
+
+function getCompareRemoveLabel(selectEl) {
+    const { provider, model } = parseKey(String(selectEl?.value || ""));
+    const meta = getModelDisplayMetadata(provider, model);
+    return meta.shortLabel || meta.fullModel || "model";
+}
+
+function removeCompareSlot(slotIndexRaw) {
+    const slotIndex = Number(slotIndexRaw);
+    const selects = getActiveCompareSelects();
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= selects.length) return;
+    if (selects.length <= 2) {
+        updateCompareAddButton();
+        return;
+    }
+
+    const remainingValues = selects
+        .map(selectEl => String(selectEl.value || ""))
+        .filter((_, index) => index !== slotIndex);
+
+    compareSlotCount = Math.max(2, remainingValues.length);
+    el.compareModel1.value = remainingValues[0] || "";
+    el.compareModel2.value = remainingValues[1] || "";
+    el.compareModel3.value = remainingValues[2] || "";
+    syncCompareDropdowns();
+}
+
+function shouldAnimateCompareRemoval(slotEl) {
+    if (!slotEl || !slotEl.classList || typeof window === "undefined" || typeof window.setTimeout !== "function") {
+        return false;
+    }
+    const prefersReducedMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return !prefersReducedMotion;
+}
+
+function animateCompareRemoval(button, slotIndex) {
+    const slotEl = button?.closest?.(".toolbar-compare-slot");
+    if (!shouldAnimateCompareRemoval(slotEl)) return false;
+
+    button.disabled = true;
+    slotEl.classList.add("is-removing");
+    window.setTimeout(() => {
+        slotEl.classList.remove("is-removing");
+        removeCompareSlot(slotIndex);
+    }, 160);
+    return true;
+}
+
 function reconcileCompareSelections(selects) {
     if (!Array.isArray(selects) || selects.length === 0) return [];
     // Safety pass: if programmatic updates introduced duplicates, normalize to unique values.
@@ -1453,7 +1580,7 @@ function reconcileCompareSelections(selects) {
             selectEl.value = nextValue;
         }
     });
-    return resolved.map(value => String(value || ""));
+    return selects.map(sel => String(sel.value || ""));
 }
 
 function canAddAnotherCompareSlot() {
@@ -1486,15 +1613,43 @@ function updateCompareAddButton() {
         el.compareModel3Wrap.classList.toggle("hidden", !showThird);
     }
     if (el.compareAddModelBtn) {
-        el.compareAddModelBtn.textContent = showThird ? "- Remove Model" : "+ Add Model";
+        el.compareAddModelBtn.textContent = "+ Add Model";
         el.compareAddModelBtn.setAttribute("aria-expanded", showThird ? "true" : "false");
         const canAdd = canAddAnotherCompareSlot();
         const compareModeActive = currentMode === "compare";
-        el.compareAddModelBtn.disabled = showThird
-            ? !compareModeActive
-            : (!compareModeActive || !canAdd);
+        el.compareAddModelBtn.classList.toggle("hidden", showThird);
+        el.compareAddModelBtn.disabled = !compareModeActive || showThird || !canAdd;
+        el.compareAddModelBtn.title = canAdd ? "Add another model to compare" : "No additional compatible models available";
     }
+    updateCompareRemoveButtons();
     syncAllModelPickers();
+}
+
+function updateCompareRemoveButtons() {
+    const activeSelects = getActiveCompareSelects();
+    const activeCount = activeSelects.length;
+    const canRemove = currentMode === "compare" && activeCount > 2;
+    const floorMessage = "At least 2 models required";
+
+    getCompareRemoveButtons().forEach((button, index) => {
+        const selectEl = activeSelects[index] || null;
+        const isVisible = Boolean(selectEl) && canRemove;
+        button.classList.toggle("hidden", !isVisible);
+        if (!isVisible) {
+            button.disabled = true;
+            button.setAttribute("aria-label", floorMessage);
+            button.title = floorMessage;
+            return;
+        }
+
+        const label = getCompareRemoveLabel(selectEl);
+        const ariaLabel = canRemove
+            ? `Remove ${label} from comparison`
+            : floorMessage;
+        button.disabled = !canRemove;
+        button.setAttribute("aria-label", ariaLabel);
+        button.title = canRemove ? ariaLabel : floorMessage;
+    });
 }
 
 function parseKey(key) {
@@ -1824,26 +1979,13 @@ function isSingleManualModePendingSelection() {
 
 if (el.compareAddModelBtn) {
     el.compareAddModelBtn.addEventListener("click", () => {
-        if (compareSlotCount === 3) {
-            compareSlotCount = 2;
-            updateCompareAddButton();
-            syncCompareDropdowns();
-            return;
-        }
         if (!canAddAnotherCompareSlot()) {
             updateCompareAddButton();
             return;
         }
         compareSlotCount = 3;
-        // Prefer Claude Haiku (cost-aware) for slot 3 before generic unique fallback.
-        const slotOne = String(el.compareModel1.value || "");
-        const slotTwo = String(el.compareModel2.value || "");
-        const used = new Set([slotOne, slotTwo].filter(Boolean));
-        const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
-        const availableKeys = getSelectableModels()
-            .filter(item => isModelCompatibleWithAttachments(item, attachmentDescriptors))
-            .map(item => modelKeyOf(item.provider, item.model));
-        el.compareModel3.value = pickCompareFallbackKey(2, availableKeys, used);
+        // Let the sync/reconcile pass choose the next available unique model.
+        el.compareModel3.value = "";
         updateCompareAddButton();
         syncCompareDropdowns();
     });
@@ -1852,6 +1994,18 @@ if (el.compareAddModelBtn) {
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    PROMPT OPTIMIZATION TOGGLE
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+getCompareRemoveButtons().forEach(button => {
+    button.addEventListener("click", () => {
+        if (button.disabled) {
+            updateCompareAddButton();
+            return;
+        }
+        const slotIndex = Number(button.getAttribute("data-compare-slot"));
+        if (animateCompareRemoval(button, slotIndex)) return;
+        removeCompareSlot(slotIndex);
+    });
+});
 
 el.routeOptimizeBtn.addEventListener("click", () => {
     optimizeEnabled = !optimizeEnabled;
@@ -2232,6 +2386,30 @@ function toSafeHeaderFileName(nameRaw) {
         .trim() || "file";
 }
 
+function createAttachmentPreviewUrl(file, mimeTypeRaw) {
+    const mimeType = normalizeAttachmentMimeType(mimeTypeRaw, file?.name);
+    if (!mimeType.startsWith("image/")) return "";
+    if (!file || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") return "";
+    try {
+        const url = URL.createObjectURL(file);
+        attachmentPreviewUrls.add(url);
+        return url;
+    } catch {
+        return "";
+    }
+}
+
+function revokeAttachmentPreviewUrl(urlRaw) {
+    const url = String(urlRaw || "").trim();
+    if (!url || !attachmentPreviewUrls.has(url) || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+    URL.revokeObjectURL(url);
+    attachmentPreviewUrls.delete(url);
+}
+
+function revokeAllAttachmentPreviewUrls() {
+    Array.from(attachmentPreviewUrls).forEach(url => revokeAttachmentPreviewUrl(url));
+}
+
 function enqueueSelectedFiles(fileList) {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
@@ -2270,6 +2448,7 @@ function enqueueSelectedFiles(fileList) {
             continue;
         }
 
+        const previewUrl = createAttachmentPreviewUrl(file, mimeType);
         attachmentItems.push({
             local_id: nextAttachmentLocalId(),
             filename,
@@ -2279,6 +2458,7 @@ function enqueueSelectedFiles(fileList) {
             file_id: "",
             error_message: "",
             file_blob: file || null,
+            preview_url: previewUrl,
         });
     }
 
@@ -2419,6 +2599,8 @@ async function processAttachmentUploadQueue() {
 }
 
 function removeAttachment(localId) {
+    const current = getAttachmentItemByLocalId(localId);
+    revokeAttachmentPreviewUrl(current?.preview_url);
     attachmentItems = attachmentItems.filter(item => String(item?.local_id || "") !== String(localId || ""));
     refreshAttachmentUi({ refreshModels: true });
 }
@@ -2504,6 +2686,7 @@ function buildRequestAttachmentPayload() {
             file_size: Number(item.size_bytes) || 0,
             file_type: normalizeAttachmentMimeType(item.mime_type, item.filename),
             status: normalizeAttachmentCardStatus(item.status),
+            preview_url: String(item.preview_url || ""),
         }))
     );
     const compatibilityDescriptors = readyItems
@@ -3821,9 +4004,7 @@ function finalizeStreamCard(index, resp) {
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
     const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
-    const text = hasError
-        ? getModelErrorDisplayText(resp)
-        : (explicitText.trim() || "(empty response)");
+    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -3977,90 +4158,11 @@ function showResults(responses, isMulti, compareData) {
     scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 96 });
 }
 
-function providerDisplayNameForError(providerRaw) {
-    const provider = toProviderId(providerRaw);
-    const fromCatalog = String(providerLabelById[provider] || "").trim();
-    if (fromCatalog) return fromCatalog;
-
-    const fallbackNames = {
-        openai: "OpenAI",
-        gemini: "Gemini",
-        deepseek: "DeepSeek",
-        grok: "Grok",
-        claude: "Claude",
-    };
-    if (fallbackNames[provider]) return fallbackNames[provider];
-    if (provider) return `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
-    return "This model";
-}
-
-function hasUnsafeModelErrorPayload(rawMessage) {
-    const text = String(rawMessage || "");
-    if (!text) return false;
-    if (text.length > 220) return true;
-    const lowered = text.toLowerCase();
-    return (
-        text.includes("{")
-        || text.includes("}")
-        || text.includes("[")
-        || text.includes("]")
-        || text.includes("\n")
-        || text.includes("\r")
-        || /['"]error['"]\s*:/.test(text)
-        || lowered.includes("traceback")
-        || lowered.includes("stack trace")
-        || lowered.includes("exception:")
-        || lowered.includes("request body")
-        || lowered.includes("<html")
-    );
-}
-
-function normalizeModelErrorMessage(rawMessage) {
-    let text = String(rawMessage || "").trim();
-    if (!text) return "";
-    text = text.replace(/^error:\s*/i, "").replace(/\s+/g, " ").trim();
-    if (!text || hasUnsafeModelErrorPayload(text)) return "";
-    return text;
-}
-
-function fallbackModelErrorMessage(error = {}) {
-    const code = String(error?.code || "").trim().toLowerCase();
-    const providerName = providerDisplayNameForError(error?.provider);
-    if (code === "timeout") {
-        return `${providerName} took too long to respond. Please try again.`;
-    }
-    if (code === "auth") {
-        return `${providerName} authentication failed. Please verify credentials and try again.`;
-    }
-    if (code === "rate_limit") {
-        return `${providerName} is rate limited right now. Please try again shortly.`;
-    }
-    if (code === "bad_request") {
-        return `${providerName} could not process this request. Please adjust your input and try again.`;
-    }
-    if (code === "provider_error") {
-        return `${providerName} is temporarily unavailable. Please try again.`;
-    }
-    if (providerName === "This model") {
-        return "This model is temporarily unavailable. Please try again.";
-    }
-    return `${providerName} is temporarily unavailable. Please try again.`;
-}
-
-function getModelErrorDisplayText(resp) {
-    const error = (resp && typeof resp === "object" && resp.error && typeof resp.error === "object")
-        ? resp.error
-        : {};
-    const normalizedMessage = normalizeModelErrorMessage(error.message || "");
-    const safeMessage = normalizedMessage || fallbackModelErrorMessage(error);
-    return `Error: ${safeMessage}`;
-}
-
 
 function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const hasError = !!resp.error;
-    const text = hasError ? getModelErrorDisplayText(resp) : (resp.text || "(empty response)");
+    const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
     const { summary } = getProviderPresentation(resp.provider, resp.model);
     const webSources = normalizeWebSources(resp.web_source_items || []);
     const providerSummaryHtml = showProvider
@@ -4104,6 +4206,7 @@ el.clearBtn.addEventListener("click", () => { clearResults(); });
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
+    revokeAllAttachmentPreviewUrls();
     pendingWebSourcesByCard.clear();
     hasReceivedFirstStreamResponse = false;
     setComposerDocked(true);
@@ -4241,24 +4344,6 @@ function setLoading(loading) {
     updateSendButtonState();
 }
 
-function pickCompareFallbackKey(slotIndex, availableKeys, used) {
-    if (slotIndex === 2) {
-        const preferredClaudeFamily = COMPARE_THIRD_SLOT_PREFERRED_KEYS.find(
-            key => availableKeys.includes(key) && !used.has(key)
-        );
-        if (preferredClaudeFamily) {
-            return preferredClaudeFamily;
-        }
-        const preferredClaude = availableKeys.find(
-            key => key.startsWith("claude:") && !used.has(key)
-        );
-        if (preferredClaude) {
-            return preferredClaude;
-        }
-    }
-    return availableKeys.find(key => !used.has(key)) || "";
-}
-
 function resolveCompareSelections(previousValues, slotCount = 3) {
     const rawPrev = Array.isArray(previousValues) ? previousValues : [];
     const attachmentDescriptors = getAttachmentDescriptorsForCompatibility();
@@ -4275,7 +4360,7 @@ function resolveCompareSelections(previousValues, slotCount = 3) {
             used.add(preferred);
             continue;
         }
-        const fallback = pickCompareFallbackKey(index, availableKeys, used);
+        const fallback = availableKeys.find(key => !used.has(key)) || "";
         resolved.push(fallback);
         if (fallback) {
             used.add(fallback);
@@ -4350,6 +4435,19 @@ async function loadDynamicProviderModelCatalog() {
     }
 }
 
+async function initializeAuthAndCatalog() {
+    try {
+        await initCognitoAuth();
+    } catch (error) {
+        console.warn("Auth bootstrap unavailable, continuing with existing session state.", error);
+    }
+
+    await Promise.all([
+        Promise.resolve().then(() => renderAuthUI()),
+        loadDynamicProviderModelCatalog(),
+    ]);
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    INIT
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -4376,8 +4474,7 @@ async function loadDynamicProviderModelCatalog() {
     setMode("single");
     refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
-    void initCognitoAuth().then(function () { return renderAuthUI(); });
-    void loadDynamicProviderModelCatalog();
+    void initializeAuthAndCatalog();
 })();
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -4537,14 +4634,6 @@ function renderMarkdownToHtml(markdownText) {
         if (!paragraphText) return;
         htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
     };
-    const findNextNonEmptyLineIndex = (startIndex) => {
-        let cursor = startIndex;
-        while (cursor < lines.length) {
-            if (String(lines[cursor] || "").trim()) return cursor;
-            cursor += 1;
-        }
-        return -1;
-    };
 
     let index = 0;
     while (index < lines.length) {
@@ -4601,31 +4690,13 @@ function renderMarkdownToHtml(markdownText) {
         if (/^\d+\.\s+/.test(trimmed)) {
             flushParagraph();
             const items = [];
-            let startNumber = 1;
             while (index < lines.length) {
                 const current = String(lines[index] || "").trim();
-                if (!current) {
-                    const nextIndex = findNextNonEmptyLineIndex(index + 1);
-                    if (nextIndex === -1) break;
-                    const nextLine = String(lines[nextIndex] || "").trim();
-                    if (!/^\d+\.\s+/.test(nextLine)) break;
-                    index = nextIndex;
-                    continue;
-                }
-
-                const itemMatch = /^(\d+)\.\s+(.*)$/.exec(current);
-                if (!itemMatch) break;
-                if (items.length === 0) {
-                    const parsedStart = Number(itemMatch[1]);
-                    if (Number.isFinite(parsedStart) && parsedStart > 0) {
-                        startNumber = parsedStart;
-                    }
-                }
-                items.push(itemMatch[2]);
+                if (!/^\d+\.\s+/.test(current)) break;
+                items.push(current.replace(/^\d+\.\s+/, ""));
                 index += 1;
             }
-            const startAttr = startNumber > 1 ? ` start="${startNumber}"` : "";
-            htmlParts.push(`<ol${startAttr}>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
             continue;
         }
 

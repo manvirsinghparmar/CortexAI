@@ -26,3 +26,12 @@ def test_research_pack_never_emits_na_timestamp_line():
 
     assert "Research retrieved at (UTC): " in text
     assert "Research retrieved at (UTC): N/A" not in text
+
+
+def test_research_pack_does_not_force_source_only_answers():
+    text = build_injected_text([_source()])
+
+    assert "SYSTEM OVERRIDE - MANDATORY INSTRUCTIONS" not in text
+    assert "Answer using only the information above" not in text
+    assert "primary evidence for current or source-dependent factual claims" in text
+    assert "You may use model knowledge for stable background context" in text

@@ -33,6 +33,12 @@ FRONTEND_DIR=frontend
 # FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
 # Optional browser-visible dev-login token (local only)
 # FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=
+# Optional prompt optimization
+# ENABLE_PROMPT_OPTIMIZATION=false
+# ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false
+# PROMPT_OPTIMIZER_PROVIDER=gemini
+# PROMPT_OPTIMIZER_MODEL=
+# PROMPT_OPTIMIZER_MAX_RETRIES=3
 ```
 
 5. Start server:
@@ -44,6 +50,8 @@ python run_server.py --reload
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
+- Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
+- Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
 
 ## Endpoints
 
@@ -106,6 +114,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - `enableDevSessionLogin` defaults from `ENABLE_DEV_SESSION_LOGIN`.
 - Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
+- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped catalog endpoints (`/v1/providers`, `/v1/models`) so Ask and Compare selectors hydrate from the full enabled model registry.
 - Response is sent with no-cache headers so config changes apply immediately.
 
 ## API Key Persistence Policy
@@ -167,6 +176,14 @@ Notes:
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
+
+Prompt optimization:
+- `POST /v1/optimize` is gated by `ENABLE_PROMPT_OPTIMIZATION=true`.
+- `/v1/optimize` is the UI optimization path; chat/compare do not auto-optimize by default.
+- Set `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true` only when chat/compare should automatically rewrite prompts without the explicit optimize endpoint.
+- `PROMPT_OPTIMIZER_MODEL` must match the configured `PROMPT_OPTIMIZER_PROVIDER`.
+- Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt instead of rewriting it.
+- Rejected or disabled optimization returns the original prompt with `was_optimized=false`.
 
 ## Chat API
 
@@ -350,6 +367,7 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 - Web research is orchestrator-managed.
 - When `routing.research_mode=true`, Ask performs a fresh research pass for the current turn.
 - When `routing.research_mode=true`, Compare performs one shared research pass for the compare turn.
+- Injected sources are primary evidence for current/source-dependent facts; models may still use non-conflicting baseline knowledge for background context.
 - Response payloads expose normalized source metadata through `web_source_items`.
 
 ## Guardrails
@@ -372,7 +390,6 @@ Security/logging:
 - Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.
 - File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
 - Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
-- Provider/model completion errors are normalized to user-safe text; raw provider JSON payload fragments are not returned in API error message fields rendered by chat/compare cards.
 - Logging destinations are configurable for EC2/containers via `LOG_DESTINATION=file|stdout|both`; see `docs/LOGGING.md`.
 
 ## Testing
@@ -394,4 +411,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-04-18
+Last updated: 2026-04-11

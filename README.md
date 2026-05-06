@@ -191,6 +191,9 @@ Frontend runtime config (`/runtime-config.js`):
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
+- History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
+- Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
+- Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 
 ## Authentication
 
@@ -384,6 +387,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
 - Frontend Compare selectors support per-model removal with compact circular controls attached to each selector; remove controls show only when three models are active, fade in on selector hover/focus, and request payloads include only active selected models.
+- Frontend Compare response cards hide per-card token/resource text in side-by-side layouts and keep compact Resources/copy/feedback icons; aggregate tokens, usage, and success counts remain in the summary bar.
 
 ## Web Research Behavior (Current)
 

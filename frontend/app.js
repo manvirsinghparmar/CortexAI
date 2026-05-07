@@ -3611,16 +3611,19 @@ function buildWebSourceStripHtml(sources, index) {
       <button type="button"
               class="web-source-toggle"
               data-role="source-toggle"
-              aria-label="Toggle Sources"
+              aria-label="Resources"
+              title="Resources"
               aria-expanded="false"
               aria-controls="${listId}">
         <span class="web-source-toggle-leading-icon" aria-hidden="true">
-          <svg viewBox="0 0 16 16" focusable="false">
-            <path d="M2.5 8a5.5 5.5 0 1 1 11 0a5.5 5.5 0 0 1-11 0Zm2.1 0h6.8M8 2.5c1.25 1.3 2 3.37 2 5.5s-.75 4.2-2 5.5m0-11c-1.25 1.3-2 3.37-2 5.5s.75 4.2 2 5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path>
+          <svg viewBox="0 0 24 24" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 2a14.5 14.5 0 0 1 0 20 14.5 14.5 0 0 1 0-20"></path>
+            <path d="M2 12h20"></path>
           </svg>
         </span>
         <span class="web-source-toggle-text">
-          <span class="web-source-toggle-label">Sources</span>
+          <span class="web-source-toggle-label">Resources</span>
         </span>
         <span class="web-source-toggle-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
@@ -3698,22 +3701,22 @@ function getNextStreamCardIndex() {
 function buildActionIcon(action) {
     if (action === "copy") {
         return `
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="10" height="10" rx="2"></rect>
             <rect x="5" y="5" width="10" height="10" rx="2"></rect>
           </svg>`;
     }
     if (action === "like") {
         return `
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">
-            <path d="M9 11V20H5V11H9Z"></path>
-            <path d="M11 20H17.6C18.42 20 19.14 19.45 19.36 18.66L20.81 13.66C21.12 12.59 20.31 11.52 19.19 11.52H15V7.74C15 6.78 14.22 6 13.26 6C12.92 6 12.59 6.1 12.31 6.29L9.82 11H11V20Z"></path>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 10V21"></path>
+            <path d="M15.3 4.8 14.25 10H19.1c1.28 0 2.22 1.2 1.92 2.45l-1.34 5.58A2.5 2.5 0 0 1 17.25 20H8.4A1.4 1.4 0 0 1 7 18.6v-6.05c0-.36.14-.7.39-.96l4.52-4.75c.83-.87 2.08-1.2 3.2-.84.25.08.35.36.19.8Z"></path>
           </svg>`;
     }
     return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">
-        <path d="M15 13V4H19V13H15Z"></path>
-        <path d="M13 4H6.4C5.58 4 4.86 4.55 4.64 5.34L3.19 10.34C2.88 11.41 3.69 12.48 4.81 12.48H9V16.26C9 17.22 9.78 18 10.74 18C11.08 18 11.41 17.9 11.69 17.71L14.18 13H13V4Z"></path>
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 14V3"></path>
+        <path d="M8.7 19.2 9.75 14H4.9c-1.28 0-2.22-1.2-1.92-2.45l1.34-5.58A2.5 2.5 0 0 1 6.75 4h8.85A1.4 1.4 0 0 1 17 5.4v6.05c0 .36-.14.7-.39.96l-4.52 4.75c-.83.87-2.08 1.2-3.2.84-.25-.08-.35-.36-.19-.8Z"></path>
       </svg>`;
 }
 
@@ -3761,6 +3764,31 @@ function getTokenUsageTotal(tokenUsage) {
     return Number.isFinite(value) ? value : null;
 }
 
+function formatResponseUsageUsd(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return null;
+    const safe = Math.max(0, amount);
+    const precision = safe >= 1 ? 2 : 4;
+    return `$${safe.toLocaleString(undefined, {
+        minimumFractionDigits: precision,
+        maximumFractionDigits: precision,
+    })}`;
+}
+
+function buildCompareResponseTooltip(resp, summary, webSources = []) {
+    const tokens = getTokenUsageTotal(resp?.token_usage);
+    const usage = formatResponseUsageUsd(resp?.estimated_cost);
+    const sourceCount = Array.isArray(webSources) ? webSources.length : 0;
+    return [
+        String(summary || "").trim() || "Assistant",
+        `Tokens: ${tokens === null ? "Unavailable" : tokens.toLocaleString()}`,
+        `Usage: ${usage || "Unavailable"}`,
+        sourceCount > 0
+            ? `Resources: ${sourceCount} available`
+            : "Resources: None",
+    ].join("\n");
+}
+
 function buildTokenUsageText(tokenUsage, index = null) {
     const total = getTokenUsageTotal(tokenUsage);
     const idAttr = index === null ? "" : ` id="response-token-usage-${index}"`;
@@ -3775,22 +3803,30 @@ function buildResponseProviderMeta(summary, index = null) {
     return `<div class="response-provider-meta"${idAttr} title="${escHtml(safeSummary)}">${escHtml(safeSummary)}</div>`;
 }
 
-function buildResponseFooter(index, summary, tokenUsage, webSources = []) {
+function buildResponseFooter(index, summary, tokenUsage, webSources = [], options = {}) {
     const safeSources = Array.isArray(webSources) ? webSources : [];
     const sourceStripHtml = safeSources.length > 0 ? buildWebSourceStripHtml(safeSources, index) : "";
     const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources) : "";
+    const compact = Boolean(options.compact);
+    const compactClass = compact ? " is-compare-compact" : "";
+    const providerMetaHtml = compact ? "" : buildResponseProviderMeta(summary, index);
+    const tokenUsageHtml = compact ? "" : buildTokenUsageText(tokenUsage, index);
+    const footerMetaHtml = compact ? "" : `
+          <div class="message-footer-meta">
+            ${providerMetaHtml}
+            ${tokenUsageHtml}
+          </div>`;
 
     return `
-      <div class="message-footer">
+      <div class="message-footer${compactClass}">
         <div class="message-footer-bar">
-          <div class="web-source-strip${webSources.length > 0 ? "" : " hidden"}" id="response-sources-${index}" aria-label="Web sources">${sourceStripHtml}</div>
-          <div class="message-footer-meta">
-            ${buildResponseProviderMeta(summary, index)}
-            ${buildTokenUsageText(tokenUsage, index)}
+          ${footerMetaHtml}
+          <div class="response-action-rail" role="group" aria-label="Response actions">
+            <div class="web-source-strip${safeSources.length > 0 ? "" : " hidden"}" id="response-sources-${index}" aria-label="Resources">${sourceStripHtml}</div>
             ${buildResponseActionButtons(index)}
           </div>
         </div>
-        <div class="web-source-list${webSources.length > 0 ? "" : " hidden"}" id="${webSourceListId(index)}" aria-hidden="true">${sourceListHtml}</div>
+        <div class="web-source-list${safeSources.length > 0 ? "" : " hidden"}" id="${webSourceListId(index)}" aria-hidden="true">${sourceListHtml}</div>
       </div>`;
 }
 
@@ -3838,10 +3874,12 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
     const { summary } = getProviderPresentation(target.provider, target.model);
     const providerSummary = escHtml(summary);
     const providerSummaryHtml = showProvider ? `<div class="message-provider">${providerSummary}</div>` : "";
-    const footerHtml = buildResponseFooter(index, summary, null, []);
+    const footerHtml = buildResponseFooter(index, summary, null, [], { compact: compareView });
+    const compareTitleAttr = compareView ? ` title="${escHtml(summary)}"` : "";
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} is-streaming" id="chat-msg-${index}"
+         ${compareTitleAttr}
          style="animation: messageIn .2s ease-out ${delay}ms both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
@@ -4012,6 +4050,8 @@ function finalizeStreamCard(index, resp) {
     const typingEl = document.getElementById(`response-typing-${index}`);
     const tokensEl = document.getElementById(`response-token-usage-${index}`);
     const summaryEl = document.getElementById(`response-provider-summary-${index}`);
+    const pendingSources = pendingWebSourcesByCard.get(Number(index))
+        || normalizeWebSources(resp.web_source_items || []);
 
     if (textEl) {
         renderResponseMarkdown(textEl, text, { hasError });
@@ -4033,6 +4073,9 @@ function finalizeStreamCard(index, resp) {
 
     card.classList.remove("is-streaming");
     card.classList.toggle("is-error", hasError);
+    if (card.classList.contains("compare-response")) {
+        card.setAttribute("title", buildCompareResponseTooltip(resp, summary, pendingSources));
+    }
     applyPendingWebSources(index, !hasError);
     maybeAutoScrollDuringStream();
 }
@@ -4168,12 +4211,16 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const providerSummaryHtml = showProvider
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
-    const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources);
+    const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources, { compact: compareView });
     const responseHtml = hasError ? escHtml(text) : renderMarkdownToHtml(text);
+    const compareTitleAttr = compareView
+        ? ` title="${escHtml(buildCompareResponseTooltip(resp, summary, webSources))}"`
+        : "";
 
     return `
     <div class="chat-message chat-message-ai${compareView ? " compare-response" : ""} ${hasError ? "is-error" : ""}"
          id="chat-msg-${index}"
+         ${compareTitleAttr}
          style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
@@ -4185,12 +4232,14 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
 
 function buildCompareSummary(data) {
     const count = Array.isArray(data.responses) ? data.responses.length : 0;
+    const usageLabel = formatResponseUsageUsd(data.total_cost);
     return `
     <div class="chat-message chat-message-system compare-summary-card" style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-system">
         <div class="compare-summary-line">
           <span>Compared ${count} model${count === 1 ? "" : "s"}</span>
           <span>${(data.total_tokens || 0).toLocaleString()} tokens</span>
+          ${usageLabel ? `<span>Usage: ${escHtml(usageLabel)}</span>` : ""}
           <span>${data.success_count || 0}/${count} successful</span>
         </div>
       </div>
@@ -5041,6 +5090,37 @@ function parseHistoryTimestamp(value) {
     return Number.isFinite(ts) ? ts : 0;
 }
 
+function isSameLocalHistoryDate(left, right) {
+    return left.getFullYear() === right.getFullYear()
+        && left.getMonth() === right.getMonth()
+        && left.getDate() === right.getDate();
+}
+
+function formatHistoryDateTime(value, now = new Date()) {
+    const ts = parseHistoryTimestamp(value);
+    if (!ts) return "";
+
+    const date = new Date(ts);
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const timeLabel = date.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+
+    if (isSameLocalHistoryDate(date, now)) {
+        return `Today, ${timeLabel}`;
+    }
+    if (isSameLocalHistoryDate(date, yesterday)) {
+        return `Yesterday, ${timeLabel}`;
+    }
+
+    return date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
+}
+
 function isPromptPlaceholder(prompt) {
     const text = String(prompt || "").trim().toLowerCase();
     return text.startsWith("[prompt hash:") || text.startsWith("[prompt not stored]");
@@ -5084,8 +5164,8 @@ function formatHistoryUsd(value) {
 
 function getHistoryThreadBadgeLabel(modeLabel) {
     if (modeLabel === "compare") return "Compare";
-    if (modeLabel === "mixed") return "Mixed";
-    return "Chat";
+    if (modeLabel === "mixed") return "Hybrid";
+    return "Ask";
 }
 
 function buildHistoryThreads(data) {
@@ -5117,10 +5197,6 @@ function buildHistoryThreads(data) {
         const provider = providerSet.size > 1 ? "mixed" : String(latestEntry.provider || "");
         const modelSet = new Set(entries.map(entry => String(entry.model || "").trim()).filter(Boolean));
         const model = modelSet.size > 1 ? "mixed" : String(latestEntry.model || "");
-        const totalTokens = entries.reduce((sum, entry) => {
-            const n = Number(entry.tokens);
-            return Number.isFinite(n) ? sum + n : sum;
-        }, 0);
         const totalCost = entries.reduce((sum, entry) => {
             const n = Number(entry.cost);
             return Number.isFinite(n) ? sum + n : sum;
@@ -5142,7 +5218,6 @@ function buildHistoryThreads(data) {
             preferredMode: latestModeLabel,
             provider,
             model,
-            totalTokens,
             totalCost,
             hasCost,
             searchBlob,
@@ -5168,11 +5243,10 @@ function renderHistory(data, filter = "") {
 
     historyEl.list.innerHTML = filteredThreads.map(thread => {
         const rawPrompt = thread.firstPrompt || "[prompt not stored]";
-        const promptSnippet = escHtml(rawPrompt.length > 80
-            ? rawPrompt.slice(0, 80) + "..."
-            : rawPrompt);
-        const tokStr = thread.totalTokens ? thread.totalTokens.toLocaleString() : "-";
-        const totalCostLabel = thread.hasCost ? formatHistoryUsd(thread.totalCost) : null;
+        const promptSnippet = escHtml(rawPrompt);
+        const totalCostLabel = thread.hasCost ? formatHistoryUsd(thread.totalCost) : "-";
+        const timestampLabel = formatHistoryDateTime(thread.latestEntry.timestamp) || "Date unavailable";
+        const timestampIso = String(thread.latestEntry.timestamp || "");
         const isActive = thread.sessionId
             && thread.sessionId === activeSessionId;
         const activeClass = isActive ? " is-active-session" : "";
@@ -5180,12 +5254,12 @@ function renderHistory(data, filter = "") {
         return `<li class="history-entry${activeClass}" data-thread-key="${escHtml(thread.key)}" data-session-id="${escHtml(thread.sessionId || "")}">
           <div class="history-entry-top">
             <span class="history-mode-badge history-mode-${thread.modeLabel}">${getHistoryThreadBadgeLabel(thread.modeLabel)}</span>
+            <time class="history-timestamp" datetime="${escHtml(timestampIso)}">${escHtml(timestampLabel)}</time>
           </div>
-          <div class="history-prompt">${promptSnippet}</div>
+          <div class="history-prompt" title="${escHtml(rawPrompt)}">${promptSnippet}</div>
           <div class="history-meta">
             <span class="history-meta-left">
-              <span class="history-token-text">Tokens: ${tokStr}</span>
-              ${totalCostLabel ? `<span class="history-cost-text">Est. cost: ${escHtml(totalCostLabel)}</span>` : ""}
+              <span class="history-cost-text">Usage: ${escHtml(totalCostLabel || "-")}</span>
             </span>
             <button class="history-delete-btn" data-thread-key="${escHtml(thread.key)}" title="Delete chat thread" aria-label="Delete thread">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7">

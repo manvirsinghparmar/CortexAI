@@ -147,6 +147,25 @@ test("compare transcript renders turn-based side-by-side columns with model head
     assert.match(appJs, /buildResponseCard\(resp, index, false, \{ compareView: true \}\)/);
 });
 
+test("compare response cards use compact icon-only footers", () => {
+    assert.match(appJs, /function buildResponseFooter\(index, summary, tokenUsage, webSources = \[\], options = \{\}\) \{/);
+    assert.match(appJs, /const compact = Boolean\(options\.compact\);/);
+    assert.match(appJs, /const providerMetaHtml = compact \? "" : buildResponseProviderMeta\(summary, index\);/);
+    assert.match(appJs, /const tokenUsageHtml = compact \? "" : buildTokenUsageText\(tokenUsage, index\);/);
+    assert.match(appJs, /class="message-footer\$\{compactClass\}"/);
+    assert.match(appJs, /buildResponseFooter\(index, summary, null, \[\], \{ compact: compareView \}\)/);
+    assert.match(appJs, /buildResponseFooter\(index, summary, resp\.token_usage, webSources, \{ compact: compareView \}\)/);
+    assert.match(appJs, /function buildCompareResponseTooltip\(resp, summary, webSources = \[\]\) \{/);
+    assert.match(appJs, /<span>Usage: \$\{escHtml\(usageLabel\)\}<\/span>/);
+    assert.match(appJs, /<div class="response-action-rail" role="group" aria-label="Response actions">/);
+    assert.match(appJs, /aria-label="Resources"[\s\S]*title="Resources"/);
+    assert.doesNotMatch(appJs, /aria-label="Toggle Sources"/);
+    assert.match(styleCss, /\.message-footer\.is-compare-compact \{/);
+    assert.match(styleCss, /\.message-footer\.is-compare-compact \.response-action-rail \{[\s\S]*--response-action-size: 30px;/);
+    assert.match(styleCss, /\.response-action-rail \.web-source-toggle-text,[\s\S]*\.response-action-rail \.web-source-toggle-icon \{[\s\S]*display: none;/);
+    assert.match(styleCss, /\.message-footer\.is-compare-compact \.response-action-group \{[\s\S]*gap: 12px;/);
+});
+
 test("compare mode sends session context and preserves prompt history between turns", () => {
     assert.match(
         appJs,
@@ -175,6 +194,9 @@ test("history threads are grouped by shared session id and can surface mixed-mod
     assert.match(appJs, /function buildHistoryThreads\(data\) \{[\s\S]*const key = sessionId \? `session:\$\{sessionId\}` : `entry:\$\{entry\.id\}`;/);
     assert.match(appJs, /const normalizedModes = new Set\(entries\.map\(entry => normalizeHistoryModeLabel\(entry\.mode\)\)\);/);
     assert.match(appJs, /const modeLabel = normalizedModes\.size > 1[\s\S]*\? "mixed"/);
+    assert.match(appJs, /function getHistoryThreadBadgeLabel\(modeLabel\) \{[^}]*if \(modeLabel === "compare"\) return "Compare";[^}]*if \(modeLabel === "mixed"\) return "Hybrid";[^}]*return "Ask";[^}]*\}/);
+    assert.doesNotMatch(appJs, /function getHistoryThreadBadgeLabel\(modeLabel\) \{[^}]*return "Chat";/);
+    assert.doesNotMatch(appJs, /function getHistoryThreadBadgeLabel\(modeLabel\) \{[^}]*return "Mixed";/);
     assert.match(appJs, /const isActive = thread\.sessionId[\s\S]*thread\.sessionId === activeSessionId;/);
 });
 
@@ -211,13 +233,28 @@ test("floating compact header bar is removed from html, css, and script logic", 
     assert.doesNotMatch(styleCss, /\.compact-send-btn/);
 });
 
-test("response cards and history hide price and latency metadata", () => {
+test("response cards hide price and latency while history keeps cost only", () => {
     assert.doesNotMatch(appJs, /Est\. Cost/);
+    assert.doesNotMatch(appJs, /Est\. cost/);
     assert.doesNotMatch(appJs, /response-cost-/);
     assert.doesNotMatch(appJs, /response-latency-/);
     assert.doesNotMatch(appJs, /Latency:/);
-    assert.match(appJs, /<span class="history-token-text">Tokens: \$\{tokStr\}<\/span>/);
+    assert.doesNotMatch(appJs, /history-token-text/);
+    assert.doesNotMatch(appJs, /Tokens: \$\{tokStr\}/);
     assert.match(appJs, /history-cost-text/);
+});
+
+test("history sidebar cards render compact timestamp and cost metadata", () => {
+    assert.match(appJs, /function formatHistoryDateTime\(value, now = new Date\(\)\) \{/);
+    assert.match(appJs, /Today, \$\{timeLabel\}/);
+    assert.match(appJs, /Yesterday, \$\{timeLabel\}/);
+    assert.match(appJs, /class="history-timestamp"/);
+    assert.match(appJs, /<span class="history-cost-text">Usage: \$\{escHtml\(totalCostLabel \|\| "-"\)\}<\/span>/);
+    assert.match(styleCss, /\.history-entry \{[\s\S]*padding: 8px 10px 7px;[\s\S]*margin-bottom: 6px;/);
+    assert.match(styleCss, /\.history-prompt \{[\s\S]*-webkit-line-clamp: 2;/);
+    assert.match(styleCss, /\.history-entry\.is-active-session \{[^}]*background: rgba\(255, 255, 255, \.96\);[^}]*box-shadow: none;/);
+    assert.doesNotMatch(styleCss, /\.history-entry\.is-active-session \{[^}]*linear-gradient/);
+    assert.match(styleCss, /\.history-list::-webkit-scrollbar \{[\s\S]*width: 6px;/);
 });
 
 test("ask mode defaults Web toggle to enabled", () => {
@@ -267,18 +304,21 @@ test("streaming placeholder shows Thinking label with animated dots and reduced-
 test("chat action controls use persistent premium footer layout", () => {
     assert.match(appJs, /response-action-group-copy/);
     assert.match(appJs, /response-action-group-feedback/);
-    assert.match(appJs, /class="message-footer"/);
-    assert.match(appJs, /buildResponseFooter\(index, summary, resp\.token_usage, webSources\)/);
+    assert.match(appJs, /class="message-footer\$\{compactClass\}"/);
+    assert.match(appJs, /buildResponseFooter\(index, summary, resp\.token_usage, webSources, \{ compact: compareView \}\)/);
     assert.doesNotMatch(appJs, /message-details/);
     assert.match(styleCss, /\.message-footer \{/);
     assert.match(styleCss, /\.message-footer-meta \{/);
     assert.match(styleCss, /\.response-token-usage \{/);
     assert.doesNotMatch(styleCss, /\.chat-bubble-ai:hover \.response-actions,/);
-    assert.match(styleCss, /width: 38px;/);
-    assert.match(styleCss, /height: 38px;/);
-    assert.match(styleCss, /width: 19px;/);
+    assert.match(styleCss, /\.response-action-rail \{[\s\S]*--response-action-size: 32px;[\s\S]*gap: 12px;[\s\S]*padding: 0;[\s\S]*border: 0;[\s\S]*background: transparent;[\s\S]*box-shadow: none;/);
+    assert.match(styleCss, /\.response-action-btn \{[\s\S]*width: var\(--response-action-size, 32px\);[\s\S]*height: var\(--response-action-size, 32px\);/);
+    assert.match(styleCss, /\.response-action-btn svg \{[\s\S]*width: var\(--response-action-icon-size, 17px\);/);
+    assert.match(styleCss, /\.response-action-rail \.web-source-toggle \{[\s\S]*background: transparent;/);
+    assert.match(styleCss, /\.response-action-btn:active \{[\s\S]*transform: scale\(\.96\);/);
     assert.match(styleCss, /\.response-action-group \+ \.response-action-group \{/);
-    assert.match(styleCss, /margin-left: 13px;/);
+    assert.match(styleCss, /margin-left: 0;/);
+    assert.doesNotMatch(styleCss, /\.response-action-rail \{[\s\S]*background: rgba\(248, 250, 252, \.86\);/);
 });
 
 test("history thread selection restores transcript instead of reusing last prompt text", () => {
@@ -329,7 +369,7 @@ test("new streaming turns auto-scroll to Thinking and keep following streamed te
 test("historical transcripts render persisted web source citations", () => {
     assert.match(appJs, /const webSourceItems = normalizeWebSources\(entry\.web_source_items \|\| \[\]\);/);
     assert.match(appJs, /const webSources = normalizeWebSources\(resp\.web_source_items \|\| \[\]\);/);
-    assert.match(appJs, /class="web-source-strip\$\{webSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Web sources"/);
+    assert.match(appJs, /class="web-source-strip\$\{safeSources\.length > 0 \? "" : " hidden"\}" id="response-sources-\$\{index\}" aria-label="Resources"/);
 });
 
 test("composer supports attachment upload chips and request wiring", () => {

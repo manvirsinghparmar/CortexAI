@@ -47,6 +47,11 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 `requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set.
+React frontend dependencies are managed by npm, not `requirements.txt`. If you want to run or build the React UI from `frontend-react/`, also install its locked Node dependencies:
+```bash
+npm ci --prefix frontend-react
+```
+Use Node.js 20.x for the React/Vite toolchain.
 
 3. Configure `.env`.
 
@@ -136,7 +141,8 @@ BASELINE_MODEL_ID=openai:gpt-4o-mini
 
 # Component boundary controls
 SERVE_FRONTEND=true      # false => API-only runtime (no static frontend mount)
-FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true
+FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true; set to frontend-react/dist for React
+REACT_FRONTEND=false     # optional convenience switch; when true and FRONTEND_DIR is unset, serves frontend-react/dist
 # Frontend runtime config served by GET /runtime-config.js
 FRONTEND_RUNTIME_API_BASE=                           # optional; defaults to request origin
 FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false      # optional browser override
@@ -166,6 +172,26 @@ Useful URLs:
 - Swagger: `http://127.0.0.1:8000/docs`
 - Frontend: `http://127.0.0.1:8000/`
 
+### Run the React Frontend Through FastAPI
+
+Build the React/Vite app first, then point the FastAPI static mount at the generated `dist` folder:
+
+```powershell
+npm ci --prefix frontend-react
+npm run --prefix frontend-react build
+$env:FRONTEND_DIR=(Resolve-Path .\frontend-react\dist).Path
+python run_server.py --reload
+```
+
+`FRONTEND_DIR` is the most explicit option and takes precedence over `REACT_FRONTEND`. For a shorter local setup, you can set `REACT_FRONTEND=true` instead, as long as `frontend-react/dist` already exists:
+
+```powershell
+$env:REACT_FRONTEND="true"
+python run_server.py --reload
+```
+
+Do not add React packages to `requirements.txt`; keep React dependencies in `frontend-react/package.json` and `frontend-react/package-lock.json`.
+
 ### Run Components Independently
 
 API only (disable static frontend mount):
@@ -180,6 +206,17 @@ Frontend only (serve static UI separately):
 python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 ```
 
+React development server (hot reload, with `/v1`, `/auth`, and `/runtime-config.js` proxied to the API on port 8000):
+```bash
+npm run --prefix frontend-react dev
+```
+
+For this split local workflow, run the API separately with `SERVE_FRONTEND=false`:
+```powershell
+$env:SERVE_FRONTEND="false"
+python run_server.py --reload
+```
+
 Frontend runtime config (`/runtime-config.js`):
 - In monolith mode (`SERVE_FRONTEND=true`), FastAPI serves `/runtime-config.js` dynamically with `Cache-Control: no-store`.
 - `apiBase` defaults to current request origin. Override with `FRONTEND_RUNTIME_API_BASE` when API is on another origin.
@@ -190,6 +227,7 @@ Frontend runtime config (`/runtime-config.js`):
 - The frontend completes Cognito/local dev-session bootstrap before fetching `/v1/providers` and `/v1/models`, so session-scoped catalog discovery can populate Ask and Compare model dropdowns.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
+- For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
 - Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
@@ -593,15 +631,36 @@ class CortexClient:
 
 ## Build Artifacts
 
-Frontend artifact (static files + manifest + zip):
+Legacy static frontend artifact (static files + manifest + zip):
 ```bash
 python scripts/build_frontend_artifact.py
+```
+
+React static frontend build:
+```bash
+npm ci --prefix frontend-react
+npm run --prefix frontend-react build
+```
+
+Optional React artifact zip/manifest after building:
+```bash
+python scripts/build_frontend_artifact.py --source-dir frontend-react/dist --output-dir dist/frontend-react
 ```
 
 API runtime image:
 ```bash
 docker build -f Dockerfile.api -t cortexai-api:dev .
 ```
+
+Standalone React/nginx image:
+```bash
+docker build -f Dockerfile.frontend -t cortexai-frontend:dev .
+```
+
+Production deployment notes:
+- `Dockerfile.api` is API-only and does not copy `frontend-react/dist`; if the API image should serve React directly, include the built `frontend-react/dist` directory in that runtime image and set `FRONTEND_DIR` to its absolute path.
+- `Dockerfile.frontend` builds and serves React static assets with nginx. Put it behind a reverse proxy or update nginx/CDN routing so `/v1/*`, `/auth`, and `/runtime-config.js` reach the FastAPI service.
+- Keep `APP_ENV`, `ENVIRONMENT`, or `ENV` set to `prod`/`production` in production-like deployments so browser dev-session login is forced off.
 
 These artifacts are intentionally separate so frontend-only or API-only changes can be built independently.
 
@@ -738,6 +797,8 @@ Postman collection:
 OpenAIProject/
   .dockerignore
   Dockerfile.api
+  Dockerfile.frontend
+  nginx.conf
   main.py
   run_server.py
   list-models.cmd
@@ -820,6 +881,19 @@ OpenAIProject/
     layout-smoke.test.mjs
     provider-discovery.e2e.test.mjs
     smart-routing-state.test.mjs
+
+  frontend-react/
+    index.html
+    package.json
+    package-lock.json
+    vite.config.ts
+    src/
+      main.tsx
+      App.tsx
+      components/
+      hooks/
+      api/
+      store/
 
   models/
     __init__.py

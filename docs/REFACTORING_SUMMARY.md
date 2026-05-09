@@ -17,7 +17,7 @@ Use the following for current architecture and implementation boundaries:
 - Orchestration/routing in `orchestrator/`
 - Provider adapters in `api/`
 - PostgreSQL persistence/reporting via `db/` and `server/*`
-- Static frontend in `frontend/` and browser E2E in `e2e/`
+- Legacy static frontend in `frontend/`, React/Vite frontend in `frontend-react/`, and browser E2E in `e2e/`
 
 ## Why This Doc Is Historical
 
@@ -29,4 +29,4 @@ Some details in earlier refactor writeups were scoped to transitional phases and
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-05-09

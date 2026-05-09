@@ -39,6 +39,7 @@
 
 .compareGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(var(--compare-cols, 2), 1fr);
   gap: 1rem;
+  min-width: 0;
 }

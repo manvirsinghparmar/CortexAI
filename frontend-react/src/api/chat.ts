@@ -2,31 +2,46 @@ import { streamPost } from "./client";
 import type { ChatRequest, ChatResponse, StreamChunk } from "../types";
 
 /**
- * Streams a chat response from /v1/chat.
+ * Streams a chat response from /v1/chat/stream.
  *
- * The backend sends newline-delimited JSON where each line is a StreamChunk.
- * Falls back gracefully if the server returns plain text lines.
+ * Backend sends NDJSON with types: start | line | response_done | done | error.
+ * We normalise these into StreamChunk (delta | metadata | done | error).
  */
 export async function* streamChat(
   request: ChatRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<StreamChunk> {
-  const lines = streamPost("/v1/chat", request);
+  const lines = streamPost("/v1/chat/stream", request);
 
   for await (const line of lines) {
     if (signal?.aborted) break;
     const trimmed = line.trim();
     if (!trimmed || trimmed === "data: [DONE]") continue;
 
-    // Handle SSE "data: {...}" envelope if present
     const raw = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed;
 
+    let event: Record<string, unknown>;
     try {
-      const chunk = JSON.parse(raw) as StreamChunk;
-      yield chunk;
+      event = JSON.parse(raw) as Record<string, unknown>;
     } catch {
-      // Plain text delta line from the server
       yield { type: "delta", text: raw };
+      continue;
+    }
+
+    switch (event.type) {
+      case "line":
+        yield { type: "delta", text: String(event.text ?? "") };
+        break;
+      case "response_done":
+        yield { type: "metadata", metadata: event.response as Partial<ChatResponse> };
+        break;
+      case "done":
+        yield { type: "done" };
+        break;
+      case "error":
+        yield { type: "error", error: String(event.message ?? "Unknown error") };
+        break;
+      // "start" — ignore, no UI action needed
     }
   }
 }

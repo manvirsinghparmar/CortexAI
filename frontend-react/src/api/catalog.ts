@@ -2,9 +2,9 @@ import { get } from "./client";
 import type { ModelsCatalogResponse, ProvidersCatalogResponse } from "../types";
 
 export async function fetchModels(enabledOnly = true): Promise<ModelsCatalogResponse> {
-  return get<ModelsCatalogResponse>(`/v1/catalog/models?enabled_only=${enabledOnly}`);
+  return get<ModelsCatalogResponse>(`/v1/models?enabled_only=${enabledOnly}`);
 }
 
 export async function fetchProviders(): Promise<ProvidersCatalogResponse> {
-  return get<ProvidersCatalogResponse>("/v1/catalog/providers");
+  return get<ProvidersCatalogResponse>("/v1/providers");
 }

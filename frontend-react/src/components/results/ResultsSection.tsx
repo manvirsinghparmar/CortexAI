@@ -25,7 +25,10 @@ export function ResultsSection() {
         </button>
       </div>
 
-      <div className={`${styles.grid} ${mode === "compare" ? styles.compareGrid : ""}`}>
+      <div
+        className={`${styles.grid} ${mode === "compare" ? styles.compareGrid : ""}`}
+        style={mode === "compare" ? { ["--compare-cols" as string]: responses.length || 2 } : undefined}
+      >
         {/* Streaming card (single mode) */}
         {streaming && mode === "single" && (
           <ResponseCard

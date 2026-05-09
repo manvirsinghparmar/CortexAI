@@ -1,0 +1,28 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+
+.select {
+  font-size: 0.8125rem;
+  padding: 0.3125rem 0.625rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  background: var(--surface-1, #f9fafb);
+  color: var(--text-primary, #111827);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+  max-width: 200px;
+}
+
+.select:focus {
+  border-color: var(--accent, #6366f1);
+}

@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { streamChat } from "../api/chat";
-import { sendCompare } from "../api/compare";
+import { streamCompare } from "../api/compare";
 import { optimizePrompt } from "../api/optimize";
 import { useChatStore } from "../store/chatStore";
 import { parseModelKey } from "./useSmartRouting";
@@ -27,6 +27,10 @@ export function useChat() {
       setResponses,
       setError,
       setSessionId,
+      initCompareStreaming,
+      appendCompareStreamingText,
+      finalizeCompareCard,
+      clearCompareStreaming,
     } = store;
 
     if (!prompt.trim() && attachments.length === 0) return;
@@ -60,7 +64,6 @@ export function useChat() {
 
     try {
       if (mode === "compare") {
-        // Compare mode — use non-streaming endpoint
         const activeKeys = compareModelKeys.filter(Boolean);
         if (activeKeys.length < 2) {
           setError("Select at least 2 models to compare.");
@@ -78,14 +81,32 @@ export function useChat() {
           targets,
           routing: { smart_mode: false, research_mode: researchMode },
           attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
-          context: sessionId
-            ? { session_id: sessionId }
-            : undefined,
+          context: sessionId ? { session_id: sessionId } : undefined,
         };
 
-        const result = await sendCompare(req);
-        setResponses(result.responses);
-        if (result.session_id) setSessionId(result.session_id);
+        // Initialise N placeholder cards so the grid renders immediately
+        initCompareStreaming(activeKeys.length);
+        const partialResponses: Partial<ChatResponse>[] = Array(activeKeys.length).fill({});
+
+        for await (const event of streamCompare(req, controller.signal)) {
+          if (controller.signal.aborted) break;
+
+          if (event.type === "line") {
+            appendCompareStreamingText(event.index, event.text);
+          } else if (event.type === "response_done") {
+            partialResponses[event.index] = event.response;
+            finalizeCompareCard(event.index);
+          } else if (event.type === "done") {
+            if (event.session_id) setSessionId(event.session_id);
+          } else if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        }
+
+        if (!controller.signal.aborted) {
+          clearCompareStreaming();
+          setResponses(partialResponses as ChatResponse[]);
+        }
         setStreaming(false);
       } else {
         // Single / smart mode — streaming SSE

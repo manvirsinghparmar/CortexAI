@@ -43,6 +43,13 @@ interface ChatStoreState {
   setStreamingText: (text: string) => void;
   appendStreamingText: (chunk: string) => void;
 
+  // Per-card streaming state for compare mode (index → accumulated text, null = done)
+  compareStreamingTexts: (string | null)[];
+  initCompareStreaming: (count: number) => void;
+  appendCompareStreamingText: (index: number, chunk: string) => void;
+  finalizeCompareCard: (index: number) => void;
+  clearCompareStreaming: () => void;
+
   // Error
   error: string | null;
   setError: (err: string | null) => void;
@@ -103,6 +110,23 @@ export const useChatStore = create<ChatStoreState>((set) => ({
   setStreamingText: (text) => set({ streamingText: text }),
   appendStreamingText: (chunk) =>
     set((state) => ({ streamingText: state.streamingText + chunk })),
+
+  compareStreamingTexts: [],
+  initCompareStreaming: (count) =>
+    set({ compareStreamingTexts: Array(count).fill("") }),
+  appendCompareStreamingText: (index, chunk) =>
+    set((state) => {
+      const updated = [...state.compareStreamingTexts];
+      updated[index] = (updated[index] ?? "") + chunk;
+      return { compareStreamingTexts: updated };
+    }),
+  finalizeCompareCard: (index) =>
+    set((state) => {
+      const updated = [...state.compareStreamingTexts];
+      updated[index] = null;
+      return { compareStreamingTexts: updated };
+    }),
+  clearCompareStreaming: () => set({ compareStreamingTexts: [] }),
 
   error: null,
   setError: (err) => set({ error: err }),

@@ -1,0 +1,73 @@
+.strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.375rem 0;
+}
+
+.addBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.125rem;
+  padding: 0.125rem;
+  color: var(--text-secondary, #6b7280);
+  transition: color 0.12s;
+  flex-shrink: 0;
+}
+
+.addBtn:hover {
+  color: var(--text-primary, #111827);
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  background: var(--surface-1, #f9fafb);
+  font-size: 0.8125rem;
+}
+
+.fileName {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary, #111827);
+}
+
+.fileSize {
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.removeBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: 1rem;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.12s;
+}
+
+.removeBtn:hover {
+  color: var(--text-primary, #111827);
+}

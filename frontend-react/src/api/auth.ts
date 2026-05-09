@@ -2,7 +2,7 @@ import { get, post } from "./client";
 import type { CognitoConfig, WhoAmIResponse } from "../types";
 
 export async function fetchCognitoConfig(): Promise<CognitoConfig> {
-  return get<CognitoConfig>("/v1/auth/cognito-config");
+  return get<CognitoConfig>("/v1/auth/config");
 }
 
 export async function fetchWhoAmI(): Promise<WhoAmIResponse> {

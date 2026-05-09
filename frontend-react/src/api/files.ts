@@ -14,7 +14,7 @@ export async function uploadFile(file: File): Promise<FileUploadResponse> {
   const key = getApiKey();
   if (key) headers["X-API-Key"] = key;
 
-  const res = await fetch("/v1/files/upload", {
+  const res = await fetch("/v1/files", {
     method: "POST",
     credentials: "include",
     headers,

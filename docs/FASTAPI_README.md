@@ -39,6 +39,8 @@ FRONTEND_DIR=frontend
 # PROMPT_OPTIMIZER_PROVIDER=gemini
 # PROMPT_OPTIMIZER_MODEL=
 # PROMPT_OPTIMIZER_MAX_RETRIES=3
+# PROMPT_OPTIMIZER_TIMEOUT_MS=6000
+# PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=1
 ```
 
 5. Start server:
@@ -185,8 +187,12 @@ Prompt optimization:
 - `/v1/optimize` is the UI optimization path; chat/compare do not auto-optimize by default.
 - Set `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true` only when chat/compare should automatically rewrite prompts without the explicit optimize endpoint.
 - `PROMPT_OPTIMIZER_MODEL` must match the configured `PROMPT_OPTIMIZER_PROVIDER`.
+- `/v1/optimize` uses `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `6000`) as its hard deadline and `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `1`) for explicit-route attempts.
+- Request payloads may include optional `context_hint` and compact `context`; the frontend only sends them for likely follow-ups without attachments and caps context to four compact messages / 2,000 characters.
 - Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt instead of rewriting it.
-- Rejected or disabled optimization returns the original prompt with `was_optimized=false`.
+- Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
+- Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.
+- With the frontend Improve toggle enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; when `was_optimized=false` or refinement is unavailable, the original prompt is shown with a short transparent note before that prompt is sent to Ask or Compare.
 
 ## Chat API
 

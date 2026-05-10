@@ -63,6 +63,37 @@ test("composer chip row does not render optimization debug/status labels", () =>
     assert.doesNotMatch(appJs, /optViewBtn\.textContent/);
 });
 
+test("improve flow renders optimization progress without response-card ids", () => {
+    assert.match(appJs, /function appendOptimizationPendingTurn\(promptText, options = \{\}\) \{/);
+    assert.match(appJs, /function buildOptimizationUserBubble\(turnId, options = \{\}\) \{/);
+    assert.match(appJs, /Refining your prompt for better results/);
+    assert.match(appJs, /Enhancing clarity/);
+    assert.match(appJs, /Improving intent/);
+    assert.match(appJs, /Preparing optimized version/);
+    assert.match(appJs, /OPTIMIZE_REQUEST_TIMEOUT_MS\s*=\s*8000/);
+    assert.match(appJs, /function buildOptimizeContextPayload\(prompt, options = \{\}\) \{/);
+    assert.match(appJs, /hasAttachments: Boolean\(options\?\.hasAttachments\)/);
+    assert.match(appJs, /function isLikelyFollowUpPrompt\(prompt\) \{/);
+    assert.match(appJs, /context_hint/);
+    assert.match(appJs, /optimization_status/);
+    assert.match(appJs, /startOptimizationProgressStates\(turnId\);/);
+    assert.match(appJs, /CortexAI reviewed this and kept your original prompt\./);
+    assert.match(appJs, /Could not refine this time\. Sent your original prompt\./);
+    assert.match(appJs, /chat-message chat-message-user optimization-message is-pending/);
+    assert.match(appJs, /skipUserBubble: renderedUserBeforeRequest/);
+    assert.match(appJs, /id="optimization-turn-\$\{turnId\}"/);
+    assert.match(appJs, /id="optimization-note-\$\{turnId\}"/);
+    assert.doesNotMatch(appJs, /id="response-text-\$\{turnId\}"/);
+    assert.match(styleCss, /\.optimization-message \{/);
+    assert.match(styleCss, /\.optimization-user-text \{/);
+    assert.match(styleCss, /\.optimization-result-note \{/);
+    assert.match(styleCss, /\.optimization-result-note \{[\s\S]*font-size:\s*\.66rem;[\s\S]*font-weight:\s*500;[\s\S]*color:\s*rgba\(15,\s*58,\s*109,\s*\.54\);/);
+    assert.match(styleCss, /@keyframes optimizationBubbleShimmer \{/);
+    assert.match(styleCss, /@keyframes optimizationSparkleGlow \{/);
+    assert.match(styleCss, /@keyframes optimizationDotFloat \{/);
+    assert.match(styleCss, /\.optimization-message\.is-pending \.optimization-user-text \{[\s\S]*font-size:\s*\.82rem;[\s\S]*font-weight:\s*700;[\s\S]*color:\s*#0F3A6D;/);
+});
+
 test("top mode tabs use Ask and Compare labels", () => {
     assert.match(html, /id="btnSingleMode"[\s\S]*>\s*Ask\s*</);
     assert.match(html, /id="btnCompareMode"[\s\S]*>\s*Compare\s*</);

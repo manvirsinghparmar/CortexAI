@@ -212,6 +212,7 @@ const LEGACY_MODE_SESSION_STORAGE_KEYS = [
 ];
 const MAX_CONTEXT_MESSAGES_UI = 20;
 const REQUEST_TIMEOUT_MS = 20000;
+const OPTIMIZE_REQUEST_TIMEOUT_MS = 8000;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_INTERVAL_MS = 1500;
@@ -852,6 +853,8 @@ let activeStreamRequest = null;
 let activeStreamRequestId = 0;
 let pendingBottomScrollRaf = null;
 let pendingBottomScrollTimer = null;
+let optimizationTurnCounter = 0;
+const optimizationProgressTimers = new Map();
 const pendingWebSourcesByCard = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
@@ -863,6 +866,15 @@ let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
 const attachmentPreviewUrls = new Set();
 const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
+const OPTIMIZE_CONTEXT_MESSAGE_LIMIT = 4;
+const OPTIMIZE_CONTEXT_TOTAL_LIMIT = 2000;
+const OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS = 500;
+const OPTIMIZATION_PROGRESS_STATES = [
+    "Refining your prompt for better results",
+    "Enhancing clarity",
+    "Improving intent",
+    "Preparing optimized version",
+];
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
         const raw = String(key || "");
@@ -2813,26 +2825,119 @@ el.promptInput.addEventListener("keydown", e => {
    OPTIMIZE PROMPT CALL
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+function normalizeOptimizeContextText(value, limit = OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS) {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= limit) return compact;
+    return compact.slice(0, limit).trim();
+}
+
+function isLikelyFollowUpPrompt(prompt) {
+    const text = String(prompt || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!text || conversationHistory.length === 0) return false;
+
+    const directFollowUpPattern = /\b(i\s+(?:mean|meant|was\s+talking\s+about)|you\s+said|as\s+above|from\s+above|previous(?:ly)?|earlier|that one|same topic|the same|continue|follow[-\s]?up)\b/i;
+    const referencePattern = /\b(the above|the previous|my last|last answer|last response|that response|this topic|same topic)\b/i;
+    const shortReferencePattern = /^(?:also|and|but|so|then|what about|how about|can you|could you|explain|list|summarize|tell me|why|what|how|where|when)\b.{0,90}\b(it|that|this|these|those|same|above|previous|earlier)\b/i;
+
+    return directFollowUpPattern.test(text)
+        || referencePattern.test(text)
+        || shortReferencePattern.test(text);
+}
+
+function selectOptimizeContextMessages() {
+    const recentMessages = conversationHistory
+        .filter(item => {
+            const role = String(item?.role || "");
+            return (role === "user" || role === "assistant")
+                && normalizeOptimizeContextText(item?.content).length > 0;
+        })
+        .slice(-8);
+
+    const userMessages = recentMessages.filter(item => item.role === "user");
+    const selected = (userMessages.length > 0 ? userMessages : recentMessages)
+        .slice(-OPTIMIZE_CONTEXT_MESSAGE_LIMIT);
+
+    return selected.map(item => ({
+        role: String(item.role || "user"),
+        content: normalizeOptimizeContextText(item.content),
+    }));
+}
+
+function buildOptimizeContextPayload(prompt, options = {}) {
+    if (options?.hasAttachments) return {};
+    if (!isLikelyFollowUpPrompt(prompt)) return {};
+
+    const contextMessages = selectOptimizeContextMessages();
+    if (!contextMessages.length) return {};
+
+    const hintPrefix = "Use only to resolve references in the latest prompt:\n";
+    const hintBody = contextMessages
+        .map((item, index) => `Recent ${item.role} ${index + 1}: ${item.content}`)
+        .join("\n")
+        .slice(0, Math.max(0, OPTIMIZE_CONTEXT_TOTAL_LIMIT - hintPrefix.length))
+        .trim();
+    if (!hintBody) return {};
+
+    return {
+        context_hint: `${hintPrefix}${hintBody}`,
+        context: {
+            session_id: activeSessionId || undefined,
+            conversation_history: contextMessages,
+            new_session: Boolean(pendingNewSession),
+        },
+    };
+}
+
 async function callOptimize(prompt, options = {}) {
     let data = null;
     try {
-        data = await callAPI("/v1/optimize", { prompt }, { signal: options?.signal });
+        data = await callAPI(
+            "/v1/optimize",
+            {
+                prompt,
+                ...buildOptimizeContextPayload(prompt, {
+                    hasAttachments: Boolean(options?.hasAttachments),
+                }),
+            },
+            {
+                signal: options?.signal,
+                timeoutMs: OPTIMIZE_REQUEST_TIMEOUT_MS,
+            },
+        );
     } catch (error) {
         if (isRequestAbortedFailure(error)) {
             throw error;
         }
-        return prompt;
+        lastOptimizeResult = null;
+        return {
+            prompt,
+            failed: true,
+            result: null,
+        };
     }
-    if (!data) return prompt;               // on error fall through
+    if (!data) {
+        lastOptimizeResult = null;
+        return {
+            prompt,
+            failed: true,
+            result: null,
+        };
+    }
 
     lastOptimizeResult = {
         original: data.original_prompt,
         optimized: data.optimized_prompt,
         wasOptimized: data.was_optimized,
         serverEnabled: data.server_optimization_enabled,
+        optimizationStatus: data.optimization_status || (data.was_optimized ? "optimized" : "kept_original"),
+        fallbackReason: data.fallback_reason || null,
     };
 
-    return data.optimized_prompt;
+    return {
+        prompt: String(data.optimized_prompt || prompt),
+        failed: false,
+        result: lastOptimizeResult,
+    };
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2909,10 +3014,33 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
 
         // Step 1: optionally optimize the prompt
         let prompt = rawPrompt;
+        let renderedUserBeforeRequest = false;
         if (optimizeEnabled && rawPrompt.trim().length > 0) {
-            prompt = await callOptimize(rawPrompt, {
-                signal: streamRequest?.controller?.signal,
+            const optimizationTurnId = appendOptimizationPendingTurn(rawPrompt, {
+                attachments: attachmentPayload.message_items,
             });
+            renderedUserBeforeRequest = true;
+            try {
+                const optimizeOutcome = await callOptimize(rawPrompt, {
+                    signal: streamRequest?.controller?.signal,
+                    hasAttachments: attachmentPayload.message_items.length > 0,
+                });
+                if (streamRequest?.userStopped) {
+                    markOptimizationTurnCancelled(optimizationTurnId);
+                    return;
+                }
+                prompt = optimizeOutcome.prompt;
+                if (optimizeOutcome.failed) {
+                    markOptimizationTurnFailed(optimizationTurnId, rawPrompt);
+                } else {
+                    await finalizeOptimizationTurn(optimizationTurnId, optimizeOutcome.result);
+                }
+            } catch (error) {
+                if (isRequestAbortedFailure(error)) {
+                    markOptimizationTurnCancelled(optimizationTurnId);
+                }
+                throw error;
+            }
         } else {
             lastOptimizeResult = null;
         }
@@ -2926,6 +3054,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
                 attachmentDescriptors: attachmentPayload.compatibility_descriptors,
                 userTurnAttachments: attachmentPayload.message_items,
                 onBeforeRequestSend: clearComposerAttachments,
+                skipUserBubble: renderedUserBeforeRequest,
             });
         } else {
             sent = await doCompare(prompt, {
@@ -2934,6 +3063,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
                 attachmentDescriptors: attachmentPayload.compatibility_descriptors,
                 userTurnAttachments: attachmentPayload.message_items,
                 onBeforeRequestSend: clearComposerAttachments,
+                skipUserBubble: renderedUserBeforeRequest,
             });
         }
         if (sent) {
@@ -2979,6 +3109,7 @@ async function doSingleChat(prompt, {
     attachmentDescriptors = [],
     userTurnAttachments = [],
     onBeforeRequestSend = null,
+    skipUserBubble = false,
 } = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
@@ -3027,6 +3158,7 @@ async function doSingleChat(prompt, {
             append: true,
             promptText: prompt,
             userAttachments: userTurnAttachments,
+            skipUserBubble,
         }
     );
     const cardIndex = streamState.indexMap[0];
@@ -3117,6 +3249,7 @@ async function doCompare(prompt, {
     attachmentDescriptors = [],
     userTurnAttachments = [],
     onBeforeRequestSend = null,
+    skipUserBubble = false,
 } = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
@@ -3154,6 +3287,7 @@ async function doCompare(prompt, {
         append: true,
         promptText: prompt,
         userAttachments: userTurnAttachments,
+        skipUserBubble,
     });
 
     const responses = new Array(targets.length).fill(null);
@@ -3280,7 +3414,7 @@ async function callAPI(path, body, options = {}) {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify(body),
         signal: options?.signal,
-    });
+    }, options?.timeoutMs);
 
     if (!resp.ok) {
         throw await toRequestFailureFromResponse(resp);
@@ -3869,6 +4003,168 @@ function buildUserMessageBubble(promptText, delay = 0, options = {}) {
     </div>`;
 }
 
+function buildOptimizationUserBubble(turnId, options = {}) {
+    const userAttachments = normalizeUserTurnAttachmentItems(options?.attachments || []);
+    const attachmentCardsHtml = buildUserAttachmentCards(userAttachments);
+    return `
+    <div class="chat-message chat-message-user optimization-message is-pending"
+         id="optimization-turn-${turnId}"
+        style="animation: messageIn .2s ease-out both;">
+      <div class="chat-bubble chat-bubble-user optimization-bubble" role="status" aria-live="polite">
+        <p class="chat-user-text optimization-user-text" id="optimization-label-${turnId}">
+          <span class="optimization-sparkle" aria-hidden="true">✨</span>
+          <span class="optimization-state-text" id="optimization-state-${turnId}">${escHtml(OPTIMIZATION_PROGRESS_STATES[0])}</span>
+          <span class="optimization-dots" id="optimization-dots-${turnId}" aria-hidden="true">
+            <span class="optimization-dot">.</span>
+            <span class="optimization-dot">.</span>
+            <span class="optimization-dot">.</span>
+          </span>
+        </p>
+        <p class="optimization-result-note hidden" id="optimization-note-${turnId}"></p>
+        ${attachmentCardsHtml}
+      </div>
+    </div>`;
+}
+
+function appendOptimizationPendingTurn(promptText, options = {}) {
+    const turnId = ++optimizationTurnCounter;
+    const html = buildOptimizationUserBubble(turnId, { attachments: options?.attachments || [] });
+
+    el.resultsSection.classList.remove("hidden");
+    el.resultsGrid.className = currentMode === "compare" ? "results-grid compare-transcript" : "results-grid";
+    el.resultsGrid.style.gridTemplateColumns = "";
+    el.resultsGrid.insertAdjacentHTML("beforeend", html);
+    setComposerDocked(true);
+    startOptimizationProgressStates(turnId);
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    return turnId;
+}
+
+function setOptimizationProgressText(turnId, text) {
+    const stateEl = document.getElementById(`optimization-state-${turnId}`);
+    if (!stateEl) return;
+
+    const timer = optimizationProgressTimers.get(turnId);
+    if (timer?.timeoutId) {
+        clearTimeout(timer.timeoutId);
+    }
+
+    stateEl.classList.add("is-swapping");
+    const timeoutId = window.setTimeout(() => {
+        stateEl.textContent = String(text || "");
+        stateEl.classList.remove("is-swapping");
+        const activeTimer = optimizationProgressTimers.get(turnId);
+        if (activeTimer?.timeoutId === timeoutId) {
+            activeTimer.timeoutId = null;
+        }
+    }, 140);
+
+    if (timer) {
+        timer.timeoutId = timeoutId;
+    }
+}
+
+function startOptimizationProgressStates(turnId) {
+    stopOptimizationProgressStates(turnId);
+    let stateIndex = 0;
+    const intervalId = window.setInterval(() => {
+        stateIndex = (stateIndex + 1) % OPTIMIZATION_PROGRESS_STATES.length;
+        setOptimizationProgressText(turnId, OPTIMIZATION_PROGRESS_STATES[stateIndex]);
+    }, 1650);
+    optimizationProgressTimers.set(turnId, {
+        intervalId,
+        timeoutId: null,
+    });
+}
+
+function stopOptimizationProgressStates(turnId) {
+    const timer = optimizationProgressTimers.get(turnId);
+    if (!timer) return;
+    if (timer.intervalId) {
+        clearInterval(timer.intervalId);
+    }
+    if (timer.timeoutId) {
+        clearTimeout(timer.timeoutId);
+    }
+    optimizationProgressTimers.delete(turnId);
+}
+
+function updateOptimizationTurn(turnId, { label, body, note = "", state = "complete" } = {}) {
+    if (!turnId) return;
+    const turn = document.getElementById(`optimization-turn-${turnId}`);
+    if (!turn) return;
+
+    const labelEl = document.getElementById(`optimization-label-${turnId}`);
+    const noteEl = document.getElementById(`optimization-note-${turnId}`);
+    const dotsEl = document.getElementById(`optimization-dots-${turnId}`);
+    const bubbleEl = turn.querySelector(".optimization-bubble");
+
+    stopOptimizationProgressStates(turnId);
+    turn.classList.remove("is-pending", "is-complete", "is-kept-original", "is-failed", "is-cancelled", "is-resolving");
+    turn.classList.add(`is-${state}`);
+    if (labelEl) {
+        labelEl.textContent = String(body || label || "");
+    }
+    if (noteEl) {
+        const noteText = String(note || "").trim();
+        noteEl.textContent = noteText;
+        noteEl.classList.toggle("hidden", !noteText);
+    }
+    if (dotsEl) dotsEl.classList.toggle("hidden", state !== "pending");
+    if (bubbleEl) {
+        bubbleEl.setAttribute("role", state === "pending" ? "status" : "note");
+        bubbleEl.setAttribute("aria-live", "polite");
+    }
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 80 });
+}
+
+function finalizeOptimizationTurn(turnId, result) {
+    const optimizedPrompt = String(result?.optimized || result?.original || "").trim();
+    const originalPrompt = String(result?.original || optimizedPrompt || "").trim();
+    const wasOptimized = Boolean(result?.wasOptimized);
+    const optimizationStatus = String(result?.optimizationStatus || "").trim();
+    const fallbackStatus = new Set(["disabled", "timeout", "failed"]);
+    const shouldShowFallbackNote = !wasOptimized
+        && (result?.serverEnabled === false || fallbackStatus.has(optimizationStatus));
+    const finalPrompt = wasOptimized ? optimizedPrompt : originalPrompt;
+    const note = wasOptimized
+        ? ""
+        : shouldShowFallbackNote
+            ? "Could not refine this time. Sent your original prompt."
+            : "CortexAI reviewed this and kept your original prompt.";
+    const turn = document.getElementById(`optimization-turn-${turnId}`);
+    stopOptimizationProgressStates(turnId);
+    if (turn) {
+        turn.classList.add("is-resolving");
+    }
+    return new Promise(resolve => {
+        window.setTimeout(() => {
+            updateOptimizationTurn(turnId, {
+                label: finalPrompt,
+                note,
+                state: wasOptimized ? "complete" : shouldShowFallbackNote ? "failed" : "kept-original",
+            });
+            resolve();
+        }, 90);
+    });
+}
+
+function markOptimizationTurnFailed(turnId, promptText) {
+    updateOptimizationTurn(turnId, {
+        label: promptText,
+        state: "failed",
+        note: "Could not refine this time. Sent your original prompt.",
+    });
+}
+
+function markOptimizationTurnCancelled(turnId) {
+    updateOptimizationTurn(turnId, {
+        label: "Optimization stopped.",
+        body: "",
+        state: "cancelled",
+    });
+}
+
 function buildStreamingCard(target, index, delay = 0, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const { summary } = getProviderPresentation(target.provider, target.model);
@@ -3900,6 +4196,7 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
 
 function buildCompareStreamingTurn(promptText, targets, indexMap, options = {}) {
     const gridClass = getCompareGridClass(targets.length);
+    const showUserBubble = !options?.skipUserBubble;
     const columnsHtml = targets.map((target, offset) => {
         const cardIndex = indexMap[offset];
         return `
@@ -3911,7 +4208,7 @@ function buildCompareStreamingTurn(promptText, targets, indexMap, options = {}) 
 
     return `
       <section class="compare-turn compare-turn-streaming">
-        ${buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] })}
+        ${showUserBubble ? buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] }) : ""}
         <div class="${gridClass}">
           ${columnsHtml}
         </div>
@@ -3955,6 +4252,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const append = Boolean(options.append);
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
+    const showUserBubble = !options.skipUserBubble;
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -3969,7 +4267,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const indexMap = targets.map((_, offset) => baseIndex + offset);
 
     let html = "";
-    if (promptText || (Array.isArray(userAttachments) && userAttachments.length > 0)) {
+    if (showUserBubble && (promptText || (Array.isArray(userAttachments) && userAttachments.length > 0))) {
         html += buildUserMessageBubble(promptText, 0, { attachments: userAttachments });
     }
     html += targets.map((target, offset) => {
@@ -3992,6 +4290,7 @@ function initCompareStreamingResults(targets, options = {}) {
     const append = options.append === undefined ? true : Boolean(options.append);
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
+    const skipUserBubble = Boolean(options.skipUserBubble);
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -4006,6 +4305,7 @@ function initCompareStreamingResults(targets, options = {}) {
     const indexMap = targets.map((_, offset) => baseIndex + offset);
     const turnHtml = buildCompareStreamingTurn(promptText, targets, indexMap, {
         userAttachments,
+        skipUserBubble,
     });
 
     if (append) {

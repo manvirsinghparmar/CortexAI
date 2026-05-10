@@ -96,6 +96,8 @@ ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false  # opt-in auto-rewrite inside chat
 PROMPT_OPTIMIZER_PROVIDER=gemini    # openai|gemini|deepseek|grok|claude
 PROMPT_OPTIMIZER_MODEL=             # optional; must belong to PROMPT_OPTIMIZER_PROVIDER
 PROMPT_OPTIMIZER_MAX_RETRIES=3
+PROMPT_OPTIMIZER_TIMEOUT_MS=6000    # explicit /v1/optimize hard deadline
+PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=1 # explicit /v1/optimize attempt count
 
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
@@ -378,8 +380,12 @@ Prompt optimization (`/v1/optimize`):
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
 - uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
+- `/v1/optimize` has an optimize-specific hard deadline from `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `6000`) and explicit-route retry count from `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `1`)
+- request payloads may include optional `context_hint` and compact `context`; the frontend sends these only for follow-up-like prompts without attachments and caps context to the last four compact messages / 2,000 characters
 - optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt instead of rewriting it
-- if optimization is disabled or rejected, the API returns the original prompt with `was_optimized=false`
+- responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
+- if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
+- when the frontend Improve toggle is enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; if the original is kept or refinement is unavailable, the original prompt is shown with a short transparent note before that prompt is sent to Ask or Compare
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)

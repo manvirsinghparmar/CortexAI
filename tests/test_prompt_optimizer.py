@@ -292,6 +292,68 @@ class TestOptimizationFlow:
         assert "optimized_prompt" in result
         assert "error" not in result
 
+    def test_optimization_with_context_hint(self):
+        """Test optimization prompt includes compact context for follow-up prompts."""
+        mock_client = Mock()
+        mock_response = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps(
+                {
+                    "optimized_prompt": "Explain why humans mine asteroids.",
+                    "steps": ["Resolved follow-up reference from context"],
+                }
+            ),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=500,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = mock_response
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt(
+            {
+                "prompt": "I was talking about mining the asteroids",
+                "context_hint": "Recent topic: asteroid mining.",
+                "max_retries": 1,
+            }
+        )
+
+        assert result["optimized_prompt"] == "Explain why humans mine asteroids."
+        sent_messages = mock_client.get_completion.call_args.kwargs["messages"]
+        user_message = sent_messages[1]["content"]
+        assert "Recent topic: asteroid mining." in user_message
+        assert "Latest user prompt to rewrite" in user_message
+        assert mock_client.get_completion.call_count == 1
+
+    def test_request_max_retries_overrides_optimizer_default(self):
+        """Test explicit route calls can use fewer retries than the optimizer default."""
+        mock_client = Mock()
+        invalid_response = UnifiedResponse(
+            request_id="test-123",
+            text="not json",
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=500,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = invalid_response
+
+        optimizer = PromptOptimizer(provider="openai", max_retries=3, client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": "write code for sorting", "max_retries": 1})
+
+        assert result["optimized_prompt"] == "write code for sorting"
+        assert "error" in result
+        assert mock_client.get_completion.call_count == 1
+
     def test_api_error_handling(self):
         """Test handling of OpenAI API errors."""
         # Setup mock
@@ -352,7 +414,7 @@ class TestOptimizationFlow:
         result = optimizer.optimize_prompt({"prompt": "how osama was killed"})
 
         assert result["optimized_prompt"] == "how osama was killed"
-        assert result["error"]["code"] == "optimization_failed"
+        assert result["error"]["code"] == "optimization_rejected"
 
 
 class TestSelfCorrection:

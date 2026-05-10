@@ -24,12 +24,20 @@ _PLAIN_SYSTEM_INSTRUCTION = (
 _JSON_SYSTEM_INSTRUCTION = (
     "You are a prompt optimization expert. "
     "Rewrite the user prompt to be clearer and more specific while preserving intent exactly. "
+    "Use any provided conversation context only to resolve references in the latest user prompt. "
+    "Do not carry unrelated earlier topics into the rewrite. "
+    "If the latest prompt is already clear, or a rewrite would be speculative or change intent, "
+    "return the original prompt unchanged as optimized_prompt. "
     "Do not answer the prompt. Do not add factual claims, conclusions, dates, names, or background information "
     "unless they are already present in the original prompt. "
     "Return strictly valid JSON with this schema: "
     '{"optimized_prompt": "string", "steps": ["string"], "explanations": ["string"], "metrics": {"key": number}}. '
     "Do not add markdown fences, commentary, or extra keys."
 )
+
+_CONTEXT_HINT_MAX_CHARS = 2000
+_CONTEXT_MESSAGE_LIMIT = 4
+_CONTEXT_MESSAGE_MAX_CHARS = 500
 
 _DEFAULT_MODELS = get_provider_default_models()
 _DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
@@ -133,6 +141,22 @@ class PromptOptimizer:
         if settings is not None and not isinstance(settings, dict):
             return self._error_payload("settings must be a dictionary")
 
+        context_hint = payload.get("context_hint")
+        if context_hint is not None and not isinstance(context_hint, str):
+            return self._error_payload("context_hint must be a string")
+
+        context = payload.get("context")
+        if context is not None and not isinstance(context, dict):
+            return self._error_payload("context must be a dictionary")
+
+        max_retries = payload.get("max_retries")
+        if max_retries is not None:
+            try:
+                if int(max_retries) < 1:
+                    return self._error_payload("max_retries must be greater than 0")
+            except (TypeError, ValueError):
+                return self._error_payload("max_retries must be an integer")
+
         return None
 
     def _is_valid_output(self, payload: Any) -> bool:
@@ -215,11 +239,77 @@ class PromptOptimizer:
 
         return False
 
-    def _build_user_message(self, prompt: str, settings: dict[str, Any] | None) -> str:
-        if not settings:
-            return prompt
-        settings_blob = json.dumps(settings, ensure_ascii=False)
-        return f"Prompt:\n{prompt}\n\nOptimization settings:\n{settings_blob}"
+    @staticmethod
+    def _trim_context_text(text: Any, limit: int = _CONTEXT_MESSAGE_MAX_CHARS) -> str:
+        compact = " ".join(str(text or "").split())
+        if len(compact) <= limit:
+            return compact
+        return compact[:limit].rstrip()
+
+    def _compact_context(self, context: Any) -> str:
+        if not isinstance(context, dict):
+            return ""
+
+        history = context.get("conversation_history")
+        if not isinstance(history, list):
+            return ""
+
+        messages: list[dict[str, str]] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            content = self._trim_context_text(item.get("content"))
+            if content:
+                messages.append({"role": role, "content": content})
+
+        if not messages:
+            return ""
+
+        user_messages = [item for item in messages if item["role"] == "user"]
+        selected = user_messages[-_CONTEXT_MESSAGE_LIMIT:] or messages[-_CONTEXT_MESSAGE_LIMIT:]
+        hint = "\n".join(f"- {item['role']}: {item['content']}" for item in selected)
+        return hint[:_CONTEXT_HINT_MAX_CHARS].rstrip()
+
+    def _build_user_message(
+        self,
+        prompt: str,
+        settings: dict[str, Any] | None,
+        context_hint: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> str:
+        parts: list[str] = []
+        compact_context_hint = self._trim_context_text(context_hint, _CONTEXT_HINT_MAX_CHARS)
+        if not compact_context_hint:
+            compact_context_hint = self._compact_context(context)
+
+        if compact_context_hint:
+            parts.append(
+                "Conversation context for reference resolution only:\n"
+                f"{compact_context_hint}"
+            )
+
+        parts.append(f"Latest user prompt to rewrite:\n{prompt}")
+
+        if settings:
+            settings_blob = json.dumps(settings, ensure_ascii=False)
+            parts.append(f"Optimization settings:\n{settings_blob}")
+
+        parts.append(
+            "Rewrite only the latest prompt. Keep it as the original prompt if context is insufficient."
+        )
+        return "\n\n".join(parts)
+
+    def _effective_max_retries(self, payload: dict[str, Any]) -> int:
+        raw_value = payload.get("max_retries")
+        if raw_value is None:
+            return max(1, self.max_retries)
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return max(1, self.max_retries)
 
     def optimize_prompt(self, payload: Any) -> dict[str, Any]:
         """
@@ -233,27 +323,55 @@ class PromptOptimizer:
 
         original_prompt = str(payload["prompt"]).strip()
         settings = payload.get("settings") if isinstance(payload, dict) else None
+        context_hint = payload.get("context_hint") if isinstance(payload, dict) else None
+        context = payload.get("context") if isinstance(payload, dict) else None
+        max_retries = self._effective_max_retries(payload)
 
-        client = self._get_client()
+        try:
+            client = self._get_client()
+        except Exception as exc:
+            return {
+                "optimized_prompt": original_prompt,
+                "steps": [],
+                "explanations": [],
+                "metrics": {},
+                "error": {
+                    "code": "optimization_failed",
+                    "message": str(exc) or "Prompt optimization client unavailable",
+                },
+            }
+
         last_error: str | None = None
+        last_error_code = "optimization_failed"
 
-        for _attempt in range(1, max(1, self.max_retries) + 1):
+        for _attempt in range(1, max_retries + 1):
             response: UnifiedResponse = client.get_completion(
                 messages=[
                     {"role": "system", "content": _JSON_SYSTEM_INSTRUCTION},
-                    {"role": "user", "content": self._build_user_message(original_prompt, settings)},
+                    {
+                        "role": "user",
+                        "content": self._build_user_message(
+                            original_prompt,
+                            settings,
+                            context_hint=context_hint,
+                            context=context,
+                        ),
+                    },
                 ],
                 model=self.model,
             )
 
             if response.is_error:
                 last_error = response.error.message if response.error else "Optimizer request failed"
+                last_error_code = "optimization_failed"
                 continue
 
             try:
                 return self._parse_ai_response(response.text, original_prompt)
             except Exception as exc:
                 last_error = str(exc)
+                if "answer the prompt" in last_error.lower():
+                    last_error_code = "optimization_rejected"
                 continue
 
         return {
@@ -262,7 +380,7 @@ class PromptOptimizer:
             "explanations": [],
             "metrics": {},
             "error": {
-                "code": "optimization_failed",
+                "code": last_error_code,
                 "message": last_error or "Prompt optimization failed",
             },
         }

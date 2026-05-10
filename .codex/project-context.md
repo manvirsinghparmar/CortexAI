@@ -28,6 +28,7 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
 - Frontend Compare selectors show attached per-model remove controls only for three active models, fade the controls in on selector hover/focus, keep at least two active models, and send only active selected slots after removal.
 - Prompt optimization for the UI goes through explicit `POST /v1/optimize`; chat/compare auto-optimization is off by default and requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`.
+- Explicit UI prompt optimization is latency-bounded (`PROMPT_OPTIMIZER_TIMEOUT_MS`, default 6000 ms), defaults to one route-level retry, and may send compact follow-up context only when the frontend detects a reference-dependent prompt without attachments.
 
 ## High-Value Paths
 

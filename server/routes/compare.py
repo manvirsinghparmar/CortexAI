@@ -20,7 +20,9 @@ from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.utils import (
     clamp_max_tokens,
+    get_client_safe_error_display_text,
     normalize_empty_success_response,
+    sanitize_provider_error_response,
     validate_and_trim_context,
 )
 from utils.logger import get_logger
@@ -283,7 +285,9 @@ async def compare(
         **kwargs,
     )
     normalized_responses = [
-        normalize_empty_success_response(item) if item is not None else None
+        sanitize_provider_error_response(normalize_empty_success_response(item))
+        if item is not None
+        else None
         for item in response.responses
     ]
     response = MultiUnifiedResponse.from_responses(
@@ -429,13 +433,13 @@ async def compare_stream(
                 model = (target.model or "").strip()
 
                 if not provider or not model:
-                    bad = _make_error_response(
+                    bad = sanitize_provider_error_response(_make_error_response(
                         provider=provider or "unknown",
                         model=model or "unknown",
                         code="bad_request",
                         message=f"Invalid model config: provider='{provider}', model='{model}'",
                         retryable=False,
-                    )
+                    ))
                     ordered_responses[i] = bad
                     bad_dto = ChatResponseDTO.from_unified_response(bad, session_id=requested_session_id)
 
@@ -447,7 +451,7 @@ async def compare_stream(
                             "model": bad_dto.model,
                         }
                     )
-                    stream_text = f"Error: {bad_dto.error.message}" if bad_dto.error else ""
+                    stream_text = get_client_safe_error_display_text(bad_dto.error) if bad_dto.error else ""
                     for line in _iter_stream_lines(stream_text):
                         yield _to_ndjson({"type": "line", "index": i, "text": line})
                         await asyncio.sleep(STREAM_LINE_DELAY_S)
@@ -479,7 +483,7 @@ async def compare_stream(
 
             for task in asyncio.as_completed(tasks):
                 idx, response = await task
-                response = normalize_empty_success_response(response)
+                response = sanitize_provider_error_response(normalize_empty_success_response(response))
                 ordered_responses[idx] = response
                 dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
 
@@ -494,7 +498,7 @@ async def compare_stream(
 
                 stream_text = dto.text or ""
                 if not stream_text and dto.error:
-                    stream_text = f"Error: {dto.error.message}"
+                    stream_text = get_client_safe_error_display_text(dto.error)
                 for line in _iter_stream_lines(stream_text):
                     yield _to_ndjson({"type": "line", "index": idx, "text": line})
                     await asyncio.sleep(STREAM_LINE_DELAY_S)

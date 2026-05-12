@@ -26,7 +26,9 @@ from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.utils import (
     clamp_max_tokens,
+    get_client_safe_error_display_text,
     normalize_empty_success_response,
+    sanitize_provider_error_response,
     validate_and_trim_context,
 )
 from utils.logger import get_logger
@@ -529,7 +531,7 @@ async def chat(
         routing_constraints=execution_plan.routing_constraints,
         **kwargs,
     )
-    response = normalize_empty_success_response(response)
+    response = sanitize_provider_error_response(normalize_empty_success_response(response))
 
     resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
@@ -675,11 +677,11 @@ async def chat_stream(
                 routing_constraints=execution_plan.routing_constraints,
                 **kwargs,
             )
-            response = normalize_empty_success_response(response)
+            response = sanitize_provider_error_response(normalize_empty_success_response(response))
 
             stream_text = response.text or ""
             if not stream_text and response.error:
-                stream_text = f"Error: {response.error.message}"
+                stream_text = get_client_safe_error_display_text(response.error)
 
             for line in _iter_stream_lines(stream_text):
                 yield _to_ndjson({"type": "line", "index": 0, "text": line})

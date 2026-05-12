@@ -481,16 +481,27 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
     assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
     assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
-    assert.match(appJs, /const responseHtml = hasError \? escHtml\(text\) : renderMarkdownToHtml\(text\);/);
-    assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
+    assert.match(appJs, /const responseHtml = hasError \? renderResponseErrorHtml\(resp\.error\) : renderMarkdownToHtml\(text\);/);
+    assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
-    assert.match(appJs, /<div class="response-text \$\{hasError \? "error-text" : ""\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
+    assert.match(appJs, /<div class="response-text \$\{responseClasses\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
 });
 
 test("streaming still appends raw chunks before final markdown rendering", () => {
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
-    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
-    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? `Error: \$\{resp\.error\.message\}` : "\(empty response\)"\);/);
+    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
+    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? getResponseErrorDisplayText\(resp\.error\) : "\(empty response\)"\);/);
+    assert.match(appJs, /applyResponseErrorClasses\(textEl, resp\.error\);/);
+});
+
+test("model response errors use soft amber model-down styling", () => {
+    assert.match(styleCss, /\.model-soft-error \{[\s\S]*margin: 24px 16px;[\s\S]*padding: 16px 18px;[\s\S]*border-radius: 16px;[\s\S]*border: 1px solid #FDE68A;[\s\S]*background: linear-gradient\(180deg, #FFFBEB 0%, #FEF3C7 100%\);[\s\S]*color: #92400E;[\s\S]*font-size: \.92rem;[\s\S]*line-height: 1\.55;[\s\S]*font-style: normal;/);
+    assert.match(styleCss, /\.model-soft-error-title \{[\s\S]*font-weight: 650;[\s\S]*margin-bottom: 4px;/);
+    assert.match(styleCss, /\.model-soft-error-body \{[\s\S]*color: #A16207;/);
+    assert.match(appJs, /function getModelSoftErrorParts\(errorLike\) \{/);
+    assert.match(appJs, /title: "This model is temporarily busy\.",/);
+    assert.match(appJs, /body: "Try again shortly or switch to another model\.",/);
+    assert.match(styleCss, /\.chat-message-ai\.is-error \.chat-bubble-ai \{[\s\S]*background: #FFFFFF;[\s\S]*box-shadow: none;/);
 });
 
 test("markdown table css adds overflow wrapper, cell wrapping, and stacked layout", () => {

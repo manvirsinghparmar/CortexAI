@@ -380,6 +380,8 @@ Applied in `server/utils.py`:
 - Total context chars capped at 20000.
 - `max_tokens` clamped to 2048.
 - Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
+- Provider-native availability failures are sanitized before DTO/stream output. Upstream 503/high-demand/overloaded errors are tagged as `error.details.kind="transient_capacity"` and rendered as `This model is temporarily busy. Try again shortly or switch to another model.` instead of raw provider JSON.
+- Smart Ask keeps the existing automatic fallback loop for retryable provider failures. Manual Ask and Compare keep the user-selected model targets and return safe per-model errors when those explicit targets are unavailable.
 
 Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
@@ -393,6 +395,7 @@ Security/logging:
 - Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.
 - File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
 - Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
+- Frontend model response errors are also sanitized during live stream finalization and history hydration, so older raw provider error payloads are not replayed in response cards. Transient model-capacity failures render with the amber `.model-soft-error` treatment.
 - Logging destinations are configurable for EC2/containers via `LOG_DESTINATION=file|stdout|both`; see `docs/LOGGING.md`.
 
 ## Testing

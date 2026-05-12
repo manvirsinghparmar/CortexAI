@@ -70,12 +70,14 @@ If these tests pass, the application guarantees:
 
 import pytest
 import json
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from sqlalchemy import Boolean, Column, MetaData, String, Table, Uuid, text
 
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
@@ -215,6 +217,45 @@ class DummyClient(BaseAIClient):
         return []
 
 
+def _reset_db_runtime_state(monkeypatch, *, schema_name: str) -> None:
+    import db.engine as db_engine
+    import db.tables as db_tables
+
+    with suppress(Exception):
+        if db_engine._ENGINE is not None:
+            db_engine._ENGINE.dispose()
+
+    monkeypatch.setattr(db_engine, "_ENGINE", None)
+    monkeypatch.setattr(db_tables, "DB_SCHEMA", schema_name)
+    db_tables._tables_cache.clear()
+    db_tables.metadata.clear()
+
+
+def _bootstrap_dev_auth_sqlite_schema() -> None:
+    import db.engine as db_engine
+
+    engine = db_engine.get_engine()
+    metadata = MetaData()
+    Table(
+        "users",
+        metadata,
+        Column(
+            "id",
+            Uuid,
+            primary_key=True,
+            nullable=False,
+            server_default=text("(lower(hex(randomblob(16))))"),
+        ),
+        Column("email", String, unique=True),
+        Column("display_name", String),
+        Column("is_active", Boolean, nullable=False, default=True),
+        Column("auth_provider", String),
+        Column("auth_subject", String),
+        Column("auth_issuer", String),
+    )
+    metadata.create_all(engine)
+
+
 # -------------------------------------------------------------------
 # Pytest fixtures
 # -------------------------------------------------------------------
@@ -227,6 +268,7 @@ def app(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
+    monkeypatch.setenv("DB_SCHEMA", "main")
     monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "false")
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
@@ -234,6 +276,8 @@ def app(monkeypatch):
     monkeypatch.delenv("FRONTEND_RUNTIME_API_BASE", raising=False)
     monkeypatch.delenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", raising=False)
     monkeypatch.delenv("FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN", raising=False)
+    _reset_db_runtime_state(monkeypatch, schema_name="main")
+    _bootstrap_dev_auth_sqlite_schema()
     app = create_app()
 
     # Keep these tests DB-agnostic and deterministic.
@@ -259,7 +303,8 @@ def app(monkeypatch):
     fake_orchestrator = FakeOrchestrator()
     app.state.fake_orchestrator = fake_orchestrator
     app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orchestrator
-    return app
+    yield app
+    _reset_db_runtime_state(monkeypatch, schema_name="main")
 
 
 @pytest.fixture()

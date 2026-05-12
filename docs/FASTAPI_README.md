@@ -192,7 +192,7 @@ Prompt optimization:
 - Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt instead of rewriting it.
 - Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
 - Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.
-- With the frontend Improve toggle enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; when `was_optimized=false` or refinement is unavailable, the original prompt is shown with a short transparent note before that prompt is sent to Ask or Compare.
+- With the frontend Improve toggle enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; when `was_optimized=false` or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare.
 
 ## Chat API
 

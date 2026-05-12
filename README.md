@@ -385,7 +385,7 @@ Prompt optimization (`/v1/optimize`):
 - optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt instead of rewriting it
 - responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
 - if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
-- when the frontend Improve toggle is enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; if the original is kept or refinement is unavailable, the original prompt is shown with a short transparent note before that prompt is sent to Ask or Compare
+- when the frontend Improve toggle is enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; if the original is kept or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)

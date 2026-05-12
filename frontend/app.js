@@ -875,6 +875,7 @@ const OPTIMIZATION_PROGRESS_STATES = [
     "Improving intent",
     "Preparing optimized version",
 ];
+const OPTIMIZATION_ORIGINAL_NOTE = "Your prompt was already clear. CortexAI sent the original version.";
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
         const raw = String(key || "");
@@ -4122,16 +4123,8 @@ function finalizeOptimizationTurn(turnId, result) {
     const optimizedPrompt = String(result?.optimized || result?.original || "").trim();
     const originalPrompt = String(result?.original || optimizedPrompt || "").trim();
     const wasOptimized = Boolean(result?.wasOptimized);
-    const optimizationStatus = String(result?.optimizationStatus || "").trim();
-    const fallbackStatus = new Set(["disabled", "timeout", "failed"]);
-    const shouldShowFallbackNote = !wasOptimized
-        && (result?.serverEnabled === false || fallbackStatus.has(optimizationStatus));
     const finalPrompt = wasOptimized ? optimizedPrompt : originalPrompt;
-    const note = wasOptimized
-        ? ""
-        : shouldShowFallbackNote
-            ? "Could not refine this time. Sent your original prompt."
-            : "CortexAI reviewed this and kept your original prompt.";
+    const note = wasOptimized ? "" : OPTIMIZATION_ORIGINAL_NOTE;
     const turn = document.getElementById(`optimization-turn-${turnId}`);
     stopOptimizationProgressStates(turnId);
     if (turn) {
@@ -4142,7 +4135,7 @@ function finalizeOptimizationTurn(turnId, result) {
             updateOptimizationTurn(turnId, {
                 label: finalPrompt,
                 note,
-                state: wasOptimized ? "complete" : shouldShowFallbackNote ? "failed" : "kept-original",
+                state: wasOptimized ? "complete" : "kept-original",
             });
             resolve();
         }, 90);
@@ -4152,8 +4145,8 @@ function finalizeOptimizationTurn(turnId, result) {
 function markOptimizationTurnFailed(turnId, promptText) {
     updateOptimizationTurn(turnId, {
         label: promptText,
-        state: "failed",
-        note: "Could not refine this time. Sent your original prompt.",
+        state: "kept-original",
+        note: OPTIMIZATION_ORIGINAL_NOTE,
     });
 }
 

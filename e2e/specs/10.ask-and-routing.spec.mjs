@@ -264,7 +264,7 @@ test("improve flow explains when original prompt is kept", async ({ liveApp }) =
     await page.locator("#submitBtn").click();
 
     await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
-    await expect(page.locator(".optimization-result-note")).toHaveText("CortexAI reviewed this and kept your original prompt.");
+    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
     await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
 });
 
@@ -306,7 +306,7 @@ test("improve flow explains fallback when prompt refinement is unavailable", asy
     await page.locator("#submitBtn").click();
 
     await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
-    await expect(page.locator(".optimization-result-note")).toHaveText("Could not refine this time. Sent your original prompt.");
+    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
     await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
 });
 

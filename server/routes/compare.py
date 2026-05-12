@@ -4,6 +4,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -34,7 +35,6 @@ STREAM_LINE_DELAY_S = 0.1
 ATTACHMENTS_ONLY_FALLBACK_PROMPT = "Please analyze the attached file(s)."
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
-ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 
 logger = get_logger(__name__)
 _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
@@ -204,7 +204,7 @@ async def compare(
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -214,9 +214,9 @@ async def compare(
             providers=providers,
         )
 
-    resolved_attachments = []
-    inference_attachments = []
-    persistence_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if request.attachments:
         if persistence_resolution is None:
             raise HTTPException(
@@ -341,7 +341,7 @@ async def compare_stream(
     research_mode = _resolve_compare_research_mode(request)
     orchestrator_research_mode = "on" if research_mode else "off"
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -351,9 +351,9 @@ async def compare_stream(
             providers=providers,
         )
 
-    resolved_attachments = []
-    inference_attachments = []
-    persistence_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if request.attachments:
         if persistence_resolution is None:
             raise HTTPException(

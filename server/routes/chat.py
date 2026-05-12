@@ -54,7 +54,6 @@ TRUE_SMART_ROUTING_ENABLED = os.getenv(
     "ENABLE_TRUE_SMART_CHAT_ROUTING", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _persist_chat_interaction = persistence_service.persist_chat_interaction
 _resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
@@ -443,7 +442,7 @@ async def chat(
     orchestrator_research_mode = "on" if research_mode else "off"
     
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -452,7 +451,7 @@ async def chat(
             providers=SUPPORTED_PROVIDERS,
         )
 
-    resolved_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
     attachment_compatible_providers: list[str] | None = None
     if request.attachments:
         if persistence_resolution is None:
@@ -491,8 +490,8 @@ async def chat(
         provider_api_keys=provider_api_keys,
         attachment_compatible_providers=attachment_compatible_providers,
     )
-    inference_attachments = []
-    persistence_attachments = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if resolved_attachments:
         attachments_service.enforce_model_attachment_compatibility(
             provider=execution_plan.preview_provider,
@@ -572,7 +571,7 @@ async def chat_stream(
     orchestrator_research_mode = "on" if research_mode else "off"
     
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -581,7 +580,7 @@ async def chat_stream(
             providers=SUPPORTED_PROVIDERS,
         )
 
-    resolved_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
     attachment_compatible_providers: list[str] | None = None
     if request.attachments:
         if persistence_resolution is None:
@@ -620,8 +619,8 @@ async def chat_stream(
         provider_api_keys=provider_api_keys,
         attachment_compatible_providers=attachment_compatible_providers,
     )
-    inference_attachments = []
-    persistence_attachments = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if resolved_attachments:
         attachments_service.enforce_model_attachment_compatibility(
             provider=execution_plan.preview_provider,

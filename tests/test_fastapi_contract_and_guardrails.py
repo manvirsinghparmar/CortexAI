@@ -724,7 +724,7 @@ def test_provider_503_high_demand_error_is_classified_as_transient_capacity():
             "experiencing high demand. Please try again later.'}}"
         ),
         provider="gemini",
-    )  # type: ignore
+    )
 
     assert err.code == "provider_error"
     assert err.retryable is True

@@ -229,6 +229,9 @@ Optional request correlation:
 ```http
 X-Request-ID: <custom-id>
 ```
+The browser frontend now sends `X-Request-ID` on Ask/Compare/Optimize calls. For
+streaming requests, frontend console diagnostics include the client request id
+and the server-returned request id when a stream read fails.
 For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
 For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
@@ -435,6 +438,8 @@ Notes:
 - Chat responses now include `session_id`.
 - Chat `response_done` payloads include `web_source_items` for rendered source chips.
 - Chat `start` and `done` stream events include the active `session_id`.
+- Server logs include `chat.stream.*` body lifecycle events so mid-stream
+  disconnects can be distinguished from normal HTTP request completion.
 
 `/v1/compare/stream` events:
 - `start`
@@ -449,6 +454,8 @@ Notes:
 - Per-model compare `response_done` payloads include `web_source_items`.
 - Compare `start` and `done` stream events include the active `session_id`.
 - The final compare `done` payload includes both `request_group_id` and `session_id`.
+- Server logs include `compare.stream.*` body lifecycle events with per-target
+  provider-call progress and terminal stream reason.
 
 ## BYOK (Bring Your Own Keys)
 
@@ -531,6 +538,11 @@ Common `detail.code` values:
 - `invalid_model`
 - `unauthorized`
 
+Provider-model failures that originate from upstream APIs are normalized before
+they reach API/stream/frontend surfaces. `error.details.kind` carries the stable
+failure class when available, such as `transient_capacity`, `rate_limited`,
+`quota_exceeded`, `timeout`, `auth`, `bad_request`, or `provider_5xx`.
+
 ## Output Guardrails (Current)
 
 - Route-level `max_tokens` is clamped to `2048` (`server/utils.py`).
@@ -538,6 +550,7 @@ Common `detail.code` values:
 - If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
 - Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
 - This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
+- Raw provider availability payloads (for example 503/high-demand/overloaded errors) are converted to client-safe messages before chat, compare, stream, and history rendering. Smart Ask still uses its existing fallback loop; manual Ask and Compare preserve explicit model choices and show `This model is temporarily busy. Try again shortly or switch to another model.` when the selected model is unavailable.
 
 ## Minimal Python SDK Snippet
 
@@ -583,6 +596,7 @@ class CortexClient:
 - Circuit breaker opens per `provider:model` and allows automatic fallback.
 - Circuit breaker scope is currently global per `provider:model` (not tenant-scoped).
 - Retry/fallback paths are bounded; no unbounded loops.
+- Transient provider capacity failures are tagged with `error.details.kind="transient_capacity"` so routing telemetry, circuit-breaker behavior, and the amber `.model-soft-error` UI treatment stay consistent across providers.
 
 ## Privacy and Retention
 

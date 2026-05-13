@@ -1897,9 +1897,39 @@ body {
     word-break: break-word;
 }
 
+.model-soft-error {
+    margin: 24px 16px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid #FDE68A;
+    background: linear-gradient(180deg, #FFFBEB 0%, #FEF3C7 100%);
+    color: #92400E;
+    font-size: .92rem;
+    line-height: 1.55;
+    font-style: normal;
+}
+
+.model-soft-error-title {
+    font-weight: 650;
+    margin-bottom: 4px;
+}
+
+.model-soft-error-body {
+    color: #A16207;
+}
+
+.response-error,
 .response-text.error-text {
-    color: #DC2626;
-    font-style: italic;
+    font-family: var(--font);
+    font-size: .9rem;
+    line-height: 1.58;
+    color: #92400E;
+    background: #FFFBEB;
+    border: 1px solid #FDE68A;
+    border-radius: 14px;
+    padding: 12px 14px;
+    box-shadow: none;
+    font-style: normal;
 }
 
 .response-card-footer {
@@ -3069,7 +3099,7 @@ body {
 }
 
 .chat-message-ai.is-error .chat-bubble-ai {
-    background: #FEF2F2;
+    background: #FFFFFF;
     box-shadow: none;
 }
 

@@ -1,5 +1,10 @@
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
-from server.utils import clamp_max_tokens, normalize_empty_success_response, redact_sensitive_headers
+from server.utils import (
+    clamp_max_tokens,
+    normalize_empty_success_response,
+    redact_sensitive_headers,
+    sanitize_provider_error_response,
+)
 
 
 def _build_response(
@@ -100,3 +105,43 @@ def test_redact_sensitive_headers_is_case_insensitive():
     assert redacted["x-api-key"] == "[REDACTED]"
     assert redacted["Authorization"] == "[REDACTED]"
     assert redacted["Content-Type"] == "application/json"
+
+
+def test_sanitize_provider_error_response_hides_raw_transient_capacity_payload():
+    original = _build_response(
+        text="",
+        finish_reason="error",
+        error=NormalizedError(
+            code="provider_error",
+            message=(
+                "Provider error: 503 UNAVAILABLE. {'error': {'message': "
+                "'This model is currently experiencing high demand. Please try again later.'}}"
+            ),
+            provider="gemini",
+            retryable=True,
+            details={"exception_type": "ServerError"},
+        ),
+    )
+
+    sanitized = sanitize_provider_error_response(original)
+
+    assert sanitized.error is not None
+    assert sanitized.error.message == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert sanitized.error.details["kind"] == "transient_capacity"
+    assert sanitized.error.details["client_safe"] is True
+    assert "UNAVAILABLE" not in sanitized.error.message
+
+
+def test_sanitize_provider_error_response_preserves_explicit_bad_request_message():
+    original = _build_response(
+        text="",
+        finish_reason="error",
+        error=NormalizedError(
+            code="bad_request",
+            message="Model 'not-real' for provider 'openai' is not configured in model_registry.yaml",
+            provider="openai",
+            retryable=False,
+        ),
+    )
+
+    assert sanitize_provider_error_response(original) == original

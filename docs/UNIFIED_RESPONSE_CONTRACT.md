@@ -63,10 +63,28 @@ Normalized error codes:
 
 The `retryable` flag is derived from normalized semantics and used by fallback/retry paths.
 
+Provider-native exception text is not exposed directly as the client-facing
+`error.message`. Adapters classify failures into stable `error.details.kind`
+values while preserving the public error-code set above:
+
+- `transient_capacity` for temporary 503/high-demand/overloaded/unavailable failures; client copy is `This model is temporarily busy. Try again shortly or switch to another model.`
+- `rate_limited` for retryable provider throttling
+- `quota_exceeded` for billing or hard quota exhaustion
+- `timeout`
+- `auth`
+- `bad_request`
+- `provider_5xx`
+- `unknown`
+
+Routes apply a final `server/utils.py` sanitization pass before DTO or stream
+output, and frontend rendering applies the same safe-copy mapping for older
+persisted history entries.
+
 ## Route/Orchestrator Guardrails Tied to Contract
 
 - Route-level `max_tokens` clamps in `server/utils.py` (current cap: `2048`).
 - Empty-success normalization in `server/utils.py` converts blank `finish_reason=length` payloads into provider errors for safe retry/fallback behavior.
+- Provider availability errors are sanitized in `server/utils.py` so manual Ask, Compare, and streaming cards never render raw upstream JSON. Smart routing still uses retryable provider errors for its existing fallback path, and frontend response cards render transient capacity failures with `.model-soft-error`.
 - OpenAI compatibility retry (`max_tokens` -> `max_completion_tokens`) is handled in `api/openai_client.py` for models that reject legacy parameter shapes.
 
 ## Validation Tests

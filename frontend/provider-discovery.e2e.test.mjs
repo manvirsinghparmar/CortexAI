@@ -795,3 +795,66 @@ test("upload errors are mapped to safe user-facing messages", async () => {
     );
     assert.equal(displaySafe.includes("internal-prod-uploads"), false);
 });
+
+test("provider response errors are mapped to safe user-facing messages", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+        ],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [{ provider: "gemini", model: "gemini-2.5-flash", enabled: true }],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context } = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(typeof context.getSafeResponseErrorMessage, "function");
+    assert.equal(typeof context.getResponseErrorDisplayText, "function");
+
+    const rawProviderMessage = (
+        "Provider error: 503 UNAVAILABLE. {'error': {'message': " +
+        "'This model is currently experiencing high demand. Please try again later.'}}"
+    );
+    const safeMessage = context.getSafeResponseErrorMessage({
+        code: "provider_error",
+        message: rawProviderMessage,
+    });
+    assert.equal(
+        safeMessage,
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
+    assert.equal(safeMessage.includes("UNAVAILABLE"), false);
+    assert.equal(safeMessage.includes("high demand"), false);
+
+    assert.equal(
+        context.getSafeResponseErrorMessage({
+            code: "provider_error",
+            message: "anything",
+            details: { kind: "transient_capacity" },
+        }),
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
+    assert.equal(
+        context.getResponseErrorDisplayText({
+            code: "provider_error",
+            message: "anything",
+            details: { kind: "transient_capacity" },
+        }),
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
+});

@@ -289,43 +289,117 @@ class BaseAIClient(ABC):
         return int((time.time() - start_time) * 1000)
 
     @staticmethod
-    def _provider_display_name(provider: str) -> str:
-        """
-        Return a human-friendly provider name for user-facing error copy.
-        """
-        normalized = str(provider or "").strip().lower()
-        provider_names = {
-            "openai": "OpenAI",
-            "gemini": "Gemini",
-            "deepseek": "DeepSeek",
-            "grok": "Grok",
-            "claude": "Claude",
+    def _extract_http_status_code(message: str) -> int | None:
+        match = re.search(r"\b(400|401|403|408|429|500|502|503|504)\b", message or "")
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_provider_error_message(kind: str) -> str:
+        messages = {
+            "timeout": "The provider request timed out. Please retry in a moment.",
+            "auth": "Provider authentication failed. Check the configured API key.",
+            "rate_limited": "The provider is rate limiting requests. Please retry in a moment.",
+            "quota_exceeded": "Provider quota is exhausted. Check billing or API key limits.",
+            "bad_request": "The provider rejected the request. Check the selected model and request settings.",
+            "transient_capacity": "This model is temporarily busy. Try again shortly or switch to another model.",
+            "provider_5xx": "The provider is temporarily unavailable. Please retry in a moment.",
+            "unknown": "The provider request failed unexpectedly. Please retry or choose another model.",
         }
-        if normalized in provider_names:
-            return provider_names[normalized]
-        if normalized:
-            return normalized.capitalize()
-        return "The model provider"
+        return messages.get(kind, messages["unknown"])
 
-    def _safe_client_error_message(self, *, code: str, provider: str) -> str:
+    @classmethod
+    def _classify_exception(
+        cls,
+        exception: Exception,
+    ) -> tuple[str, str, bool]:
         """
-        Build user-safe error copy without leaking raw provider payloads.
+        Return (normalized_code, provider_error_kind, retryable).
 
-        Raw exception text can contain provider JSON, request payload fragments, or
-        other internals that should not be returned to end users.
+        The normalized code stays within the public UnifiedResponse contract while
+        `kind` gives routes/UI a stable, provider-agnostic display signal.
         """
-        provider_name = self._provider_display_name(provider)
-        if code == "timeout":
-            return f"{provider_name} took too long to respond. Please try again."
-        if code == "auth":
-            return f"{provider_name} authentication failed. Please verify credentials and try again."
-        if code == "rate_limit":
-            return f"{provider_name} is rate limited right now. Please try again shortly."
-        if code == "bad_request":
-            return f"{provider_name} could not process this request. Please adjust your input and try again."
-        if code == "provider_error":
-            return f"{provider_name} is temporarily unavailable. Please try again."
-        return f"{provider_name} returned an unexpected error. Please try again."
+        exc_str = str(exception).lower()
+        status_code = cls._extract_http_status_code(exc_str)
+
+        # Timeout errors
+        if (
+            status_code in {408, 504}
+            or "timeout" in exc_str
+            or "timed out" in exc_str
+            or "deadline exceeded" in exc_str
+        ):
+            return "timeout", "timeout", True
+
+        # Authentication errors
+        if (
+            status_code in {401, 403}
+            or "unauthorized" in exc_str
+            or "forbidden" in exc_str
+            or "api key" in exc_str
+            or "authentication" in exc_str
+            or "permission denied" in exc_str
+        ):
+            return "auth", "auth", False
+
+        # Hard quota/billing errors are commonly encoded as 429 but are not
+        # fixed by an immediate retry.
+        quota_phrases = (
+            "insufficient quota",
+            "quota exceeded",
+            "exceeded your current quota",
+            "billing",
+            "hard limit",
+        )
+        if any(phrase in exc_str for phrase in quota_phrases):
+            return "rate_limit", "quota_exceeded", False
+
+        # Rate limit errors
+        if (
+            status_code == 429
+            or "rate limit" in exc_str
+            or "rate_limit" in exc_str
+            or "too many requests" in exc_str
+            or "resource exhausted" in exc_str
+        ):
+            return "rate_limit", "rate_limited", True
+
+        # Bad request errors
+        if status_code == 400 or "bad request" in exc_str or "invalid" in exc_str:
+            return "bad_request", "bad_request", False
+
+        transient_phrases = (
+            "high demand",
+            "overloaded",
+            "temporarily busy",
+            "temporarily unavailable",
+            "temporary unavailable",
+            "service unavailable",
+            "currently unavailable",
+            "currently experiencing",
+            "try again later",
+            "server busy",
+            "capacity",
+            "unavailable",
+        )
+
+        # Provider errors (5xx)
+        if status_code in {500, 502, 503, 504} or "server error" in exc_str:
+            kind = (
+                "transient_capacity"
+                if status_code == 503 or any(phrase in exc_str for phrase in transient_phrases)
+                else "provider_5xx"
+            )
+            return "provider_error", kind, True
+
+        if any(phrase in exc_str for phrase in transient_phrases):
+            return "provider_error", "transient_capacity", True
+
+        return "unknown", "unknown", False
 
     def _normalize_error(
         self, exception: Exception, provider: str | None = None
@@ -349,75 +423,20 @@ class BaseAIClient(ABC):
             NormalizedError with appropriate code and retryable flag
         """
         provider = provider or self.provider_name
-        exc_str = str(exception).lower()
         exc_type = type(exception).__name__
+        exc_str = str(exception).lower()
+        status_code = self._extract_http_status_code(exc_str)
+        code, kind, retryable = self._classify_exception(exception)
+        details: dict[str, Any] = {"exception_type": exc_type, "kind": kind}
+        if status_code is not None:
+            details["status_code"] = status_code
 
-        # Timeout errors
-        if "timeout" in exc_str or "timed out" in exc_str:
-            return NormalizedError(
-                code="timeout",
-                message=self._safe_client_error_message(code="timeout", provider=provider),
-                provider=provider,
-                retryable=True,
-                details={"exception_type": exc_type},
-            )
-
-        # Authentication errors
-        if (
-            "401" in exc_str
-            or "403" in exc_str
-            or "unauthorized" in exc_str
-            or "api key" in exc_str
-            or "authentication" in exc_str
-        ):
-            return NormalizedError(
-                code="auth",
-                message=self._safe_client_error_message(code="auth", provider=provider),
-                provider=provider,
-                retryable=False,
-                details={"exception_type": exc_type},
-            )
-
-        # Rate limit errors
-        if "429" in exc_str or "rate limit" in exc_str or "too many requests" in exc_str:
-            return NormalizedError(
-                code="rate_limit",
-                message=self._safe_client_error_message(code="rate_limit", provider=provider),
-                provider=provider,
-                retryable=True,
-                details={"exception_type": exc_type},
-            )
-
-        # Bad request errors
-        if "400" in exc_str or "bad request" in exc_str or "invalid" in exc_str:
-            return NormalizedError(
-                code="bad_request",
-                message=self._safe_client_error_message(code="bad_request", provider=provider),
-                provider=provider,
-                retryable=False,
-                details={"exception_type": exc_type},
-            )
-
-        # Provider errors (5xx)
-        if (
-            any(code in exc_str for code in ["500", "502", "503", "504"])
-            or "server error" in exc_str
-        ):
-            return NormalizedError(
-                code="provider_error",
-                message=self._safe_client_error_message(code="provider_error", provider=provider),
-                provider=provider,
-                retryable=True,
-                details={"exception_type": exc_type},
-            )
-
-        # Unknown error
         return NormalizedError(
-            code="unknown",
-            message=self._safe_client_error_message(code="unknown", provider=provider),
+            code=code,
+            message=self._safe_provider_error_message(kind),
             provider=provider,
-            retryable=False,
-            details={"exception_type": exc_type},
+            retryable=retryable,
+            details=details,
         )
 
     def _normalize_finish_reason(

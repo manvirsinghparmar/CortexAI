@@ -649,6 +649,59 @@ test("compare request target construction excludes removed model slots", async (
     );
 });
 
+test("compare mode defaults sources on and preserves a manual off choice", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const runtime = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(runtime.context);
+    vm.runInContext(source, runtime.context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const btnSingleMode = runtime.elements.get("btnSingleMode");
+    const btnCompareMode = runtime.elements.get("btnCompareMode");
+    const routeResearchBtn = runtime.elements.get("routeResearchBtn");
+
+    btnCompareMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "true");
+    assert.equal(routeResearchBtn.classList.contains("active"), true);
+    assert.equal(runtime.context.getRoutingPayload().research_mode, true);
+
+    routeResearchBtn.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "false");
+    assert.equal(routeResearchBtn.classList.contains("active"), false);
+    assert.equal(runtime.context.getRoutingPayload().research_mode, false);
+
+    btnSingleMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "true");
+
+    btnCompareMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "false");
+    assert.equal(runtime.context.getRoutingPayload().research_mode, false);
+});
+
 test("user attachment file cards preserve uploaded file metadata", async () => {
     const appJsPath = path.join(process.cwd(), "frontend", "app.js");
     const source = fs.readFileSync(appJsPath, "utf8");
@@ -794,4 +847,67 @@ test("upload errors are mapped to safe user-facing messages", async () => {
         "Upload failed. Please try again.",
     );
     assert.equal(displaySafe.includes("internal-prod-uploads"), false);
+});
+
+test("provider response errors are mapped to safe user-facing messages", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+        ],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [{ provider: "gemini", model: "gemini-2.5-flash", enabled: true }],
+        total: 1,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const { context } = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(context);
+    vm.runInContext(source, context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(typeof context.getSafeResponseErrorMessage, "function");
+    assert.equal(typeof context.getResponseErrorDisplayText, "function");
+
+    const rawProviderMessage = (
+        "Provider error: 503 UNAVAILABLE. {'error': {'message': " +
+        "'This model is currently experiencing high demand. Please try again later.'}}"
+    );
+    const safeMessage = context.getSafeResponseErrorMessage({
+        code: "provider_error",
+        message: rawProviderMessage,
+    });
+    assert.equal(
+        safeMessage,
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
+    assert.equal(safeMessage.includes("UNAVAILABLE"), false);
+    assert.equal(safeMessage.includes("high demand"), false);
+
+    assert.equal(
+        context.getSafeResponseErrorMessage({
+            code: "provider_error",
+            message: "anything",
+            details: { kind: "transient_capacity" },
+        }),
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
+    assert.equal(
+        context.getResponseErrorDisplayText({
+            code: "provider_error",
+            message: "anything",
+            details: { kind: "transient_capacity" },
+        }),
+        "This model is temporarily busy. Try again shortly or switch to another model.",
+    );
 });

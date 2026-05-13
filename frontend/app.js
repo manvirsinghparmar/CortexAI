@@ -7,6 +7,7 @@ const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
     RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
+const REQUEST_ID_HEADER = "X-Request-ID";
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
@@ -231,6 +232,12 @@ const ATTACHMENT_ALLOWED_MIME_TYPES = new Set([
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+
+function createClientRequestId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).slice(2, 10) || "0";
+    return `web-${timestamp}-${random}`;
+}
 const ATTACHMENT_MIME_BY_EXTENSION = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
@@ -834,7 +841,7 @@ let pendingNewSession = false;
 let optimizeEnabled = false;
 let smartModeEnabled = true;
 let askResearchModeEnabled = true;
-let compareResearchModeEnabled = false;
+let compareResearchModeEnabled = true;
 let isSubmitting = false;
 let isRetryingLastPrompt = false;
 let hasReceivedFirstStreamResponse = false;
@@ -1666,6 +1673,170 @@ function truncateContextText(value, limit) {
     return `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
+const RESPONSE_ERROR_COPY_BY_KIND = {
+    timeout: "The provider request timed out. Please retry in a moment.",
+    auth: "Provider authentication failed. Check the configured API key.",
+    rate_limited: "The provider is rate limiting requests. Please retry in a moment.",
+    quota_exceeded: "Provider quota is exhausted. Check billing or API key limits.",
+    bad_request: "The provider rejected the request. Check the selected model and request settings.",
+    transient_capacity: "This model is temporarily busy. Try again shortly or switch to another model.",
+    provider_5xx: "The provider is temporarily unavailable. Please retry in a moment.",
+    unknown: "The provider request failed unexpectedly. Please retry or choose another model.",
+};
+
+function stripLeadingErrorPrefix(value) {
+    return String(value || "").replace(/^error:\s*/i, "").trim();
+}
+
+function inferResponseErrorKindFromMessage(messageRaw, codeRaw = "") {
+    const message = stripLeadingErrorPrefix(messageRaw).toLowerCase();
+    const code = String(codeRaw || "").trim().toLowerCase();
+    if (!message && !code) return "";
+
+    if (
+        code === "timeout"
+        || message.includes("timeout")
+        || message.includes("timed out")
+        || message.includes("deadline exceeded")
+    ) {
+        return "timeout";
+    }
+    if (
+        code === "auth"
+        || message.includes("authentication failed")
+        || message.includes("unauthorized")
+        || message.includes("forbidden")
+        || message.includes("api key")
+        || message.includes("permission denied")
+    ) {
+        return "auth";
+    }
+    if (
+        message.includes("insufficient quota")
+        || message.includes("quota exceeded")
+        || message.includes("exceeded your current quota")
+        || message.includes("billing")
+        || message.includes("hard limit")
+    ) {
+        return "quota_exceeded";
+    }
+    if (
+        code === "rate_limit"
+        || message.includes("429")
+        || message.includes("rate limit")
+        || message.includes("too many requests")
+        || message.includes("resource exhausted")
+    ) {
+        return "rate_limited";
+    }
+    if (
+        message.includes("503")
+        || message.includes("circuit open")
+        || message.includes("high demand")
+        || message.includes("overloaded")
+        || message.includes("temporarily busy")
+        || message.includes("temporarily unavailable")
+        || message.includes("service unavailable")
+        || message.includes("currently unavailable")
+        || message.includes("currently experiencing")
+        || message.includes("try again later")
+        || message.includes("server busy")
+        || message.includes("capacity")
+        || /\bunavailable\b/.test(message)
+    ) {
+        return "transient_capacity";
+    }
+    if (
+        message.includes("500")
+        || message.includes("502")
+        || message.includes("504")
+        || message.includes("server error")
+    ) {
+        return "provider_5xx";
+    }
+    if (
+        code === "bad_request"
+        && (
+            message.includes("provider rejected")
+            || message.includes("bad request")
+            || message.includes("invalid request")
+            || message.includes("error code:")
+        )
+    ) {
+        return "bad_request";
+    }
+    if (
+        code === "unknown"
+        && (
+            message.includes("provider error:")
+            || message.includes("error code:")
+            || message.includes("{'error'")
+            || message.includes('"error"')
+            || message.includes("traceback")
+            || message.includes("exception")
+        )
+    ) {
+        return "unknown";
+    }
+    return "";
+}
+
+function getResponseErrorKind(errorLike) {
+    const error = errorLike && typeof errorLike === "object" ? errorLike : {};
+    const details = error.details && typeof error.details === "object" ? error.details : {};
+    const explicitKind = String(details.kind || details.error_kind || "").trim().toLowerCase();
+    if (explicitKind && RESPONSE_ERROR_COPY_BY_KIND[explicitKind]) {
+        return explicitKind;
+    }
+
+    const rawMessage = stripLeadingErrorPrefix(error.message || error.detail || "");
+    return inferResponseErrorKindFromMessage(rawMessage, error.code);
+}
+
+function getSafeResponseErrorMessage(errorLike) {
+    const error = errorLike && typeof errorLike === "object" ? errorLike : {};
+    const kind = getResponseErrorKind(error);
+    if (kind && RESPONSE_ERROR_COPY_BY_KIND[kind]) {
+        return RESPONSE_ERROR_COPY_BY_KIND[kind];
+    }
+
+    const rawMessage = stripLeadingErrorPrefix(error.message || error.detail || "");
+    return rawMessage || "Request failed.";
+}
+
+function getResponseErrorDisplayText(errorLike) {
+    const safeMessage = getSafeResponseErrorMessage(errorLike);
+    if (getResponseErrorKind(errorLike) === "transient_capacity") {
+        return safeMessage;
+    }
+    return `Error: ${safeMessage}`;
+}
+
+function getModelSoftErrorParts(errorLike) {
+    if (getResponseErrorKind(errorLike) !== "transient_capacity") return null;
+    return {
+        title: "This model is temporarily busy.",
+        body: "Try again shortly or switch to another model.",
+    };
+}
+
+function renderResponseErrorHtml(errorLike) {
+    const softError = getModelSoftErrorParts(errorLike);
+    if (softError) {
+        return `
+          <div class="model-soft-error-title">${escHtml(softError.title)}</div>
+          <div class="model-soft-error-body">${escHtml(softError.body)}</div>`;
+    }
+    return escHtml(getResponseErrorDisplayText(errorLike));
+}
+
+function applyResponseErrorClasses(targetEl, errorLike) {
+    const isSoftError = !!getModelSoftErrorParts(errorLike);
+    targetEl.classList.toggle("model-soft-error", isSoftError);
+    targetEl.classList.toggle("response-error", !isSoftError);
+    targetEl.classList.toggle("error-text", !isSoftError);
+}
+
 function buildCompareAssistantContext(responses) {
     const safeResponses = Array.isArray(responses) ? responses.filter(Boolean) : [];
     if (safeResponses.length === 0) return "";
@@ -1682,7 +1853,7 @@ function buildCompareAssistantContext(responses) {
         const slotLabel = `${providerLabel} · ${modelLabel}`;
 
         let responseText = "";
-        const errorMessage = String(resp?.error?.message || "").trim();
+        const errorMessage = resp?.error ? getSafeResponseErrorMessage(resp.error) : "";
         if (errorMessage) {
             responseText = `Error: ${errorMessage}`;
         } else {
@@ -3273,41 +3444,137 @@ async function doCompare(prompt, {
    API
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+function getStreamModeForPath(path) {
+    const value = String(path || "");
+    if (value.includes("/compare/")) return "compare";
+    if (value.includes("/chat/")) return "chat";
+    return "unknown";
+}
+
+function getResponseHeader(resp, name) {
+    try {
+        return String(resp?.headers?.get(name) || "").trim();
+    } catch (_) {
+        return "";
+    }
+}
+
+function reportStreamRequestFailure(error, {
+    path = "",
+    mode = "unknown",
+    requestId = "",
+    serverRequestId = "",
+    status = null,
+    startedAt = 0,
+    eventsReceived = 0,
+    classifiedKind = "",
+    phase = "unknown",
+} = {}) {
+    if (typeof console === "undefined" || typeof console.error !== "function") {
+        return;
+    }
+    const detail = String(error?.detail || error?.message || "").trim();
+    const kind = classifiedKind
+        || String(error?.uiErrorKind || "").trim()
+        || inferErrorKindFromMessage(detail)
+        || "connection";
+    const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : null;
+    console.error("CortexAI stream request failed", {
+        path: String(path || error?.path || ""),
+        mode: String(mode || "unknown"),
+        request_id: String(requestId || error?.requestId || ""),
+        server_request_id: String(serverRequestId || error?.serverRequestId || ""),
+        status: Number(status || error?.status || error?.httpStatus) || null,
+        elapsed_ms: elapsedMs,
+        error_name: String(error?.name || ""),
+        error_message: detail,
+        classified_kind: kind,
+        events_received: Number(eventsReceived) || 0,
+        api_base: API_BASE,
+        phase: String(phase || "unknown"),
+    }, error);
+}
+
 async function callAPI(path, body, options = {}) {
+    const requestId = createClientRequestId();
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(), [REQUEST_ID_HEADER]: requestId },
         body: JSON.stringify(body),
         signal: options?.signal,
     });
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, { path, requestId });
     }
     return resp.json();
 }
 
 async function callAPIStream(path, body, onEvent, options = {}) {
     const signal = options?.signal;
-    const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/x-ndjson",
-            ...getSessionScopedAuthHeaders(),
-        },
-        body: JSON.stringify(body),
-        signal,
-    });
+    const requestId = createClientRequestId();
+    const startedAt = Date.now();
+    const mode = getStreamModeForPath(path);
+    let status = null;
+    let serverRequestId = "";
+    let eventsReceived = 0;
+    let resp = null;
+
+    try {
+        resp = await fetchWithTimeout(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+                ...getSessionScopedAuthHeaders(),
+                [REQUEST_ID_HEADER]: requestId,
+            },
+            body: JSON.stringify(body),
+            signal,
+        });
+    } catch (error) {
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            startedAt,
+            phase: "fetch",
+        });
+        throw error;
+    }
+
+    status = Number(resp.status) || null;
+    serverRequestId = getResponseHeader(resp, REQUEST_ID_HEADER);
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, {
+            path,
+            requestId,
+            serverRequestId,
+        });
     }
 
     if (!resp.body) {
-        throw createRequestFailure("Streaming unsupported", { kind: "service" });
+        const failure = createRequestFailure("Streaming unsupported", {
+            kind: "service",
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(failure, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            phase: "body_missing",
+        });
+        throw failure;
     }
 
     const reader = resp.body.getReader();
@@ -3327,7 +3594,10 @@ async function callAPIStream(path, body, onEvent, options = {}) {
                 if (raw) {
                     let event = null;
                     try { event = JSON.parse(raw); } catch { }
-                    if (event && onEvent) await onEvent(event);
+                    if (event) {
+                        eventsReceived += 1;
+                        if (onEvent) await onEvent(event);
+                    }
                 }
                 newlineIdx = buffer.indexOf("\n");
             }
@@ -3336,6 +3606,7 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         if (tail) {
             try {
                 const event = JSON.parse(tail);
+                eventsReceived += 1;
                 if (onEvent) await onEvent(event);
             } catch { }
         }
@@ -3345,13 +3616,31 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         }
         const message = String(error?.detail || error?.message || "stream_read_failed");
         const inferred = inferErrorKindFromMessage(message) || "connection";
-        throw createRequestFailure(message, { kind: inferred });
+        const failure = createRequestFailure(message, {
+            kind: inferred,
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            classifiedKind: inferred,
+            phase: "read",
+        });
+        throw failure;
     } finally {
         try { reader.releaseLock(); } catch (_) { }
     }
 }
 
-function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
+function createRequestFailure(detail = "", { kind = "", status = null, requestId = "", serverRequestId = "", path = "" } = {}) {
     const error = new Error("request_failed");
     if (kind) {
         error.uiErrorKind = kind;
@@ -3361,6 +3650,15 @@ function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
     }
     if (detail) {
         error.detail = String(detail);
+    }
+    if (requestId) {
+        error.requestId = String(requestId);
+    }
+    if (serverRequestId) {
+        error.serverRequestId = String(serverRequestId);
+    }
+    if (path) {
+        error.path = String(path);
     }
     return error;
 }
@@ -3447,12 +3745,18 @@ async function readResponseErrorDetail(resp) {
     }
 }
 
-async function toRequestFailureFromResponse(resp) {
+async function toRequestFailureFromResponse(resp, { path = "", requestId = "", serverRequestId = "" } = {}) {
     const detail = await readResponseErrorDetail(resp);
     const statusKind = mapStatusToErrorKind(resp?.status);
     const detailKind = inferErrorKindFromMessage(detail);
     const kind = statusKind || detailKind || "service";
-    return createRequestFailure(detail, { kind, status: resp?.status });
+    return createRequestFailure(detail, {
+        kind,
+        status: resp?.status,
+        requestId,
+        serverRequestId: serverRequestId || getResponseHeader(resp, REQUEST_ID_HEADER),
+        path,
+    });
 }
 
 function isAbortErrorLike(error) {
@@ -4042,7 +4346,7 @@ function finalizeStreamCard(index, resp) {
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
     const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
-    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = explicitText.trim() || (hasError ? getResponseErrorDisplayText(resp.error) : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -4054,10 +4358,14 @@ function finalizeStreamCard(index, resp) {
         || normalizeWebSources(resp.web_source_items || []);
 
     if (textEl) {
-        renderResponseMarkdown(textEl, text, { hasError });
+        renderResponseMarkdown(textEl, text, { hasError, error: resp.error });
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
-        textEl.classList.toggle("error-text", hasError);
+        if (hasError) {
+            applyResponseErrorClasses(textEl, resp.error);
+        } else {
+            textEl.classList.remove("model-soft-error", "response-error", "error-text");
+        }
     }
     if (typingEl) typingEl.classList.add("hidden");
     if (tokensEl) {
@@ -4205,14 +4513,17 @@ function showResults(responses, isMulti, compareData) {
 function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const hasError = !!resp.error;
-    const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = resp.text || (hasError ? getResponseErrorDisplayText(resp.error) : "(empty response)");
     const { summary } = getProviderPresentation(resp.provider, resp.model);
     const webSources = normalizeWebSources(resp.web_source_items || []);
     const providerSummaryHtml = showProvider
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
     const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources, { compact: compareView });
-    const responseHtml = hasError ? escHtml(text) : renderMarkdownToHtml(text);
+    const responseHtml = hasError ? renderResponseErrorHtml(resp.error) : renderMarkdownToHtml(text);
+    const responseClasses = hasError
+        ? getModelSoftErrorParts(resp.error) ? "model-soft-error" : "response-error error-text"
+        : "";
     const compareTitleAttr = compareView
         ? ` title="${escHtml(buildCompareResponseTooltip(resp, summary, webSources))}"`
         : "";
@@ -4224,7 +4535,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
          style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
-        <div class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${responseHtml}</div>
+        <div class="response-text ${responseClasses}" id="response-text-${index}">${responseHtml}</div>
         ${footerHtml}
       </div>
     </div>`;
@@ -4799,11 +5110,11 @@ function applyWideTableLayout(containerEl) {
     });
 }
 
-function renderResponseMarkdown(targetEl, text, { hasError = false } = {}) {
+function renderResponseMarkdown(targetEl, text, { hasError = false, error = null } = {}) {
     if (!targetEl) return;
     const value = String(text ?? "");
     if (hasError) {
-        targetEl.textContent = value;
+        targetEl.innerHTML = renderResponseErrorHtml(error || { message: value });
         return;
     }
     targetEl.innerHTML = renderMarkdownToHtml(value);
@@ -4920,6 +5231,7 @@ function buildHistoricalAssistantCardPayload(entry) {
     const response = String(entry.response || "").trim();
     const hasError = isResponsePlaceholder(response);
     const errorMessage = hasError ? response.replace(/^\[error\]\s*/i, "").trim() : "";
+    const safeErrorMessage = hasError ? getSafeResponseErrorMessage({ message: errorMessage }) : "";
     const safeResponse = response || "(empty response)";
     const tokens = Number(entry.tokens);
     const provider = String(entry.provider || "").trim().toLowerCase();
@@ -4927,13 +5239,13 @@ function buildHistoricalAssistantCardPayload(entry) {
     const webSourceItems = normalizeWebSources(entry.web_source_items || []);
 
     return {
-        text: hasError ? `Error: ${errorMessage || "Request failed"}` : safeResponse,
+        text: hasError ? getResponseErrorDisplayText({ message: safeErrorMessage || "Request failed" }) : safeResponse,
         provider,
         model,
         web_source_items: webSourceItems,
         finish_reason: hasError ? "error" : "completed",
         token_usage: { total_tokens: Number.isFinite(tokens) ? tokens : 0 },
-        ...(hasError ? { error: { message: errorMessage || "Request failed" } } : {}),
+        ...(hasError ? { error: { message: safeErrorMessage || "Request failed" } } : {}),
     };
 }
 

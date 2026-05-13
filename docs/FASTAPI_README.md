@@ -52,6 +52,7 @@ python run_server.py --reload
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - Frontend history sidebar cards show mode, local date/time, title, and usage cost in a compact layout; sidebar token counts are hidden.
 - Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
+- Frontend Compare defaults `With sources` on for new page sessions and preserves a manual off choice while switching modes.
 - Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
 - Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
@@ -293,6 +294,7 @@ Rules:
 - Compare always uses explicit targets.
 - `routing.smart_mode` is ignored in compare mode by design.
 - With `routing.research_mode=true`, research runs once per compare turn and is shared across all selected targets for fairness.
+- Browser Compare mode sends `routing.research_mode=true` by default because the `With sources` toggle starts on; users can turn it off for the current page session.
 
 Persistence:
 - One `llm_requests` + `llm_responses` row per compare target response.

@@ -649,6 +649,59 @@ test("compare request target construction excludes removed model slots", async (
     );
 });
 
+test("compare mode defaults sources on and preserves a manual off choice", async () => {
+    const appJsPath = path.join(process.cwd(), "frontend", "app.js");
+    const source = fs.readFileSync(appJsPath, "utf8");
+
+    const providersPayload = {
+        providers: [
+            { provider: "openai", label: "OpenAI", default_model: "gpt-4o", ui: { display_name: "ChatGPT" } },
+            { provider: "gemini", label: "Gemini", default_model: "gemini-2.5-flash", ui: { display_name: "Gemini" } },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const modelsPayload = {
+        provider: null,
+        enabled_only: true,
+        models: [
+            { provider: "openai", model: "gpt-4o", enabled: true },
+            { provider: "gemini", model: "gemini-2.5-flash", enabled: true },
+        ],
+        total: 2,
+        timestamp: "2026-03-01T00:00:00Z",
+    };
+
+    const runtime = createRuntime({ providersPayload, modelsPayload });
+    vm.createContext(runtime.context);
+    vm.runInContext(source, runtime.context, { filename: "frontend/app.js" });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const btnSingleMode = runtime.elements.get("btnSingleMode");
+    const btnCompareMode = runtime.elements.get("btnCompareMode");
+    const routeResearchBtn = runtime.elements.get("routeResearchBtn");
+
+    btnCompareMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "true");
+    assert.equal(routeResearchBtn.classList.contains("active"), true);
+    assert.equal(runtime.context.getRoutingPayload().research_mode, true);
+
+    routeResearchBtn.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "false");
+    assert.equal(routeResearchBtn.classList.contains("active"), false);
+    assert.equal(runtime.context.getRoutingPayload().research_mode, false);
+
+    btnSingleMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "true");
+
+    btnCompareMode.dispatchEvent("click");
+    assert.equal(routeResearchBtn.getAttribute("aria-checked"), "false");
+    assert.equal(runtime.context.getRoutingPayload().research_mode, false);
+});
+
 test("user attachment file cards preserve uploaded file metadata", async () => {
     const appJsPath = path.join(process.cwd(), "frontend", "app.js");
     const source = fs.readFileSync(appJsPath, "utf8");

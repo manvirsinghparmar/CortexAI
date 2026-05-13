@@ -12,6 +12,7 @@ Compare Mode allows you to send every query to multiple LLM providers simultaneo
 This guide covers both:
 - API compare mode (`POST /v1/compare`, `POST /v1/compare/stream`)
 - CLI compare mode (`COMPARE_MODE=true`)
+- Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
 
 ## Release Notes (2026-02-18)
 
@@ -249,8 +250,9 @@ COMPARE_TARGETS = [
 - **Order Preservation**: Results appear in the order configured, not completion order
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
+- **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
 
 ---
 
-**Last Updated:** 2026-03-19
+**Last Updated:** 2026-05-12
 **Applies To:** OpenAI Project v2.0+

@@ -7,6 +7,7 @@ const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
     RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
+const REQUEST_ID_HEADER = "X-Request-ID";
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
@@ -231,6 +232,12 @@ const ATTACHMENT_ALLOWED_MIME_TYPES = new Set([
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+
+function createClientRequestId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).slice(2, 10) || "0";
+    return `web-${timestamp}-${random}`;
+}
 const ATTACHMENT_MIME_BY_EXTENSION = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
@@ -3437,41 +3444,137 @@ async function doCompare(prompt, {
    API
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+function getStreamModeForPath(path) {
+    const value = String(path || "");
+    if (value.includes("/compare/")) return "compare";
+    if (value.includes("/chat/")) return "chat";
+    return "unknown";
+}
+
+function getResponseHeader(resp, name) {
+    try {
+        return String(resp?.headers?.get(name) || "").trim();
+    } catch (_) {
+        return "";
+    }
+}
+
+function reportStreamRequestFailure(error, {
+    path = "",
+    mode = "unknown",
+    requestId = "",
+    serverRequestId = "",
+    status = null,
+    startedAt = 0,
+    eventsReceived = 0,
+    classifiedKind = "",
+    phase = "unknown",
+} = {}) {
+    if (typeof console === "undefined" || typeof console.error !== "function") {
+        return;
+    }
+    const detail = String(error?.detail || error?.message || "").trim();
+    const kind = classifiedKind
+        || String(error?.uiErrorKind || "").trim()
+        || inferErrorKindFromMessage(detail)
+        || "connection";
+    const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : null;
+    console.error("CortexAI stream request failed", {
+        path: String(path || error?.path || ""),
+        mode: String(mode || "unknown"),
+        request_id: String(requestId || error?.requestId || ""),
+        server_request_id: String(serverRequestId || error?.serverRequestId || ""),
+        status: Number(status || error?.status || error?.httpStatus) || null,
+        elapsed_ms: elapsedMs,
+        error_name: String(error?.name || ""),
+        error_message: detail,
+        classified_kind: kind,
+        events_received: Number(eventsReceived) || 0,
+        api_base: API_BASE,
+        phase: String(phase || "unknown"),
+    }, error);
+}
+
 async function callAPI(path, body, options = {}) {
+    const requestId = createClientRequestId();
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(), [REQUEST_ID_HEADER]: requestId },
         body: JSON.stringify(body),
         signal: options?.signal,
     });
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, { path, requestId });
     }
     return resp.json();
 }
 
 async function callAPIStream(path, body, onEvent, options = {}) {
     const signal = options?.signal;
-    const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/x-ndjson",
-            ...getSessionScopedAuthHeaders(),
-        },
-        body: JSON.stringify(body),
-        signal,
-    });
+    const requestId = createClientRequestId();
+    const startedAt = Date.now();
+    const mode = getStreamModeForPath(path);
+    let status = null;
+    let serverRequestId = "";
+    let eventsReceived = 0;
+    let resp = null;
+
+    try {
+        resp = await fetchWithTimeout(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+                ...getSessionScopedAuthHeaders(),
+                [REQUEST_ID_HEADER]: requestId,
+            },
+            body: JSON.stringify(body),
+            signal,
+        });
+    } catch (error) {
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            startedAt,
+            phase: "fetch",
+        });
+        throw error;
+    }
+
+    status = Number(resp.status) || null;
+    serverRequestId = getResponseHeader(resp, REQUEST_ID_HEADER);
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, {
+            path,
+            requestId,
+            serverRequestId,
+        });
     }
 
     if (!resp.body) {
-        throw createRequestFailure("Streaming unsupported", { kind: "service" });
+        const failure = createRequestFailure("Streaming unsupported", {
+            kind: "service",
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(failure, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            phase: "body_missing",
+        });
+        throw failure;
     }
 
     const reader = resp.body.getReader();
@@ -3491,7 +3594,10 @@ async function callAPIStream(path, body, onEvent, options = {}) {
                 if (raw) {
                     let event = null;
                     try { event = JSON.parse(raw); } catch { }
-                    if (event && onEvent) await onEvent(event);
+                    if (event) {
+                        eventsReceived += 1;
+                        if (onEvent) await onEvent(event);
+                    }
                 }
                 newlineIdx = buffer.indexOf("\n");
             }
@@ -3500,6 +3606,7 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         if (tail) {
             try {
                 const event = JSON.parse(tail);
+                eventsReceived += 1;
                 if (onEvent) await onEvent(event);
             } catch { }
         }
@@ -3509,13 +3616,31 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         }
         const message = String(error?.detail || error?.message || "stream_read_failed");
         const inferred = inferErrorKindFromMessage(message) || "connection";
-        throw createRequestFailure(message, { kind: inferred });
+        const failure = createRequestFailure(message, {
+            kind: inferred,
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            classifiedKind: inferred,
+            phase: "read",
+        });
+        throw failure;
     } finally {
         try { reader.releaseLock(); } catch (_) { }
     }
 }
 
-function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
+function createRequestFailure(detail = "", { kind = "", status = null, requestId = "", serverRequestId = "", path = "" } = {}) {
     const error = new Error("request_failed");
     if (kind) {
         error.uiErrorKind = kind;
@@ -3525,6 +3650,15 @@ function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
     }
     if (detail) {
         error.detail = String(detail);
+    }
+    if (requestId) {
+        error.requestId = String(requestId);
+    }
+    if (serverRequestId) {
+        error.serverRequestId = String(serverRequestId);
+    }
+    if (path) {
+        error.path = String(path);
     }
     return error;
 }
@@ -3611,12 +3745,18 @@ async function readResponseErrorDetail(resp) {
     }
 }
 
-async function toRequestFailureFromResponse(resp) {
+async function toRequestFailureFromResponse(resp, { path = "", requestId = "", serverRequestId = "" } = {}) {
     const detail = await readResponseErrorDetail(resp);
     const statusKind = mapStatusToErrorKind(resp?.status);
     const detailKind = inferErrorKindFromMessage(detail);
     const kind = statusKind || detailKind || "service";
-    return createRequestFailure(detail, { kind, status: resp?.status });
+    return createRequestFailure(detail, {
+        kind,
+        status: resp?.status,
+        requestId,
+        serverRequestId: serverRequestId || getResponseHeader(resp, REQUEST_ID_HEADER),
+        path,
+    });
 }
 
 function isAbortErrorLike(error) {

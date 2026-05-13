@@ -19,6 +19,7 @@ from server.dependencies import AuthResult, get_auth, get_orchestrator
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
+from server.stream_observability import StreamLogContext
 from server.utils import (
     clamp_max_tokens,
     get_client_safe_error_display_text,
@@ -412,7 +413,15 @@ async def compare_stream(
     request_group_id = str(uuid.uuid4())
 
     async def event_stream():
-        yield _to_ndjson(
+        stream_log = StreamLogContext(
+            stream_name="compare",
+            request_id=req_id,
+            research_mode=research_mode,
+            target_count=len(request.targets),
+            request_group_id=request_group_id,
+        )
+        stream_log.log("opened")
+        start_line = _to_ndjson(
             {
                 "type": "start",
                 "mode": "compare",
@@ -423,6 +432,8 @@ async def compare_stream(
                 "web_source_items": [],
             }
         )
+        yield stream_log.record_event(start_line)
+        stream_log.log("start_event_sent")
 
         ordered_responses: list[UnifiedResponse | None] = [None] * len(request.targets)
         try:
@@ -443,27 +454,39 @@ async def compare_stream(
                     ordered_responses[i] = bad
                     bad_dto = ChatResponseDTO.from_unified_response(bad, session_id=requested_session_id)
 
-                    yield _to_ndjson(
+                    yield stream_log.record_event(_to_ndjson(
                         {
                             "type": "response_start",
                             "index": i,
                             "provider": bad_dto.provider,
                             "model": bad_dto.model,
                         }
-                    )
+                    ))
                     stream_text = get_client_safe_error_display_text(bad_dto.error) if bad_dto.error else ""
                     for line in _iter_stream_lines(stream_text):
-                        yield _to_ndjson({"type": "line", "index": i, "text": line})
+                        yield stream_log.record_event(_to_ndjson({"type": "line", "index": i, "text": line}))
                         await asyncio.sleep(STREAM_LINE_DELAY_S)
-                    yield _to_ndjson(
+                    yield stream_log.record_event(_to_ndjson(
                         {
                             "type": "response_done",
                             "index": i,
                             "response": jsonable_encoder(bad_dto),
                         }
+                    ))
+                    stream_log.log(
+                        "response_done_sent",
+                        target_index=i,
+                        provider=bad_dto.provider,
+                        model=bad_dto.model,
                     )
                     continue
 
+                stream_log.log(
+                    "provider_call_started",
+                    target_index=i,
+                    provider=provider,
+                    model=model,
+                )
                 tasks.append(
                     asyncio.create_task(
                         _run_compare_target(
@@ -485,30 +508,43 @@ async def compare_stream(
                 idx, response = await task
                 response = sanitize_provider_error_response(normalize_empty_success_response(response))
                 ordered_responses[idx] = response
+                stream_log.log(
+                    "provider_call_completed",
+                    target_index=idx,
+                    response_provider=getattr(response, "provider", ""),
+                    response_model=getattr(response, "model", ""),
+                    response_is_error=bool(getattr(response, "is_error", False)),
+                )
                 dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
 
-                yield _to_ndjson(
+                yield stream_log.record_event(_to_ndjson(
                     {
                         "type": "response_start",
                         "index": idx,
                         "provider": dto.provider,
                         "model": dto.model,
                     }
-                )
+                ))
 
                 stream_text = dto.text or ""
                 if not stream_text and dto.error:
                     stream_text = get_client_safe_error_display_text(dto.error)
                 for line in _iter_stream_lines(stream_text):
-                    yield _to_ndjson({"type": "line", "index": idx, "text": line})
+                    yield stream_log.record_event(_to_ndjson({"type": "line", "index": idx, "text": line}))
                     await asyncio.sleep(STREAM_LINE_DELAY_S)
 
-                yield _to_ndjson(
+                yield stream_log.record_event(_to_ndjson(
                     {
                         "type": "response_done",
                         "index": idx,
                         "response": jsonable_encoder(dto),
                     }
+                ))
+                stream_log.log(
+                    "response_done_sent",
+                    target_index=idx,
+                    provider=dto.provider,
+                    model=dto.model,
                 )
 
             raw_responses = [r for r in ordered_responses if r is not None]
@@ -544,16 +580,30 @@ async def compare_stream(
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
 
-            yield _to_ndjson(
+            yield stream_log.record_event(_to_ndjson(
                 {
                     "type": "done",
                     "mode": "compare",
                     "session_id": resolved_session_id,
                     "compare": compare_payload,
                 }
-            )
+            ))
+            stream_log.log("done_sent", terminal_reason="done")
 
+        except asyncio.CancelledError:
+            stream_log.log(
+                "client_disconnected",
+                level="warning",
+                terminal_reason="client_disconnected",
+            )
+            raise
         except Exception as exc:
+            stream_log.log(
+                "exception",
+                level="exception",
+                terminal_reason="exception",
+                error_type=type(exc).__name__,
+            )
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     partial_responses = [r for r in ordered_responses if r is not None]
@@ -579,7 +629,7 @@ async def compare_stream(
                     )
                 except Exception:
                     logger.exception("Compare stream error persistence failed in DB mode")
-            yield _to_ndjson({"type": "error", "message": str(exc)})
+            yield stream_log.record_event(_to_ndjson({"type": "error", "message": str(exc)}))
 
     return StreamingResponse(
         event_stream(),

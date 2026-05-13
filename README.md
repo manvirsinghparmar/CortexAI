@@ -229,6 +229,9 @@ Optional request correlation:
 ```http
 X-Request-ID: <custom-id>
 ```
+The browser frontend now sends `X-Request-ID` on Ask/Compare/Optimize calls. For
+streaming requests, frontend console diagnostics include the client request id
+and the server-returned request id when a stream read fails.
 For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
 For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
@@ -435,6 +438,8 @@ Notes:
 - Chat responses now include `session_id`.
 - Chat `response_done` payloads include `web_source_items` for rendered source chips.
 - Chat `start` and `done` stream events include the active `session_id`.
+- Server logs include `chat.stream.*` body lifecycle events so mid-stream
+  disconnects can be distinguished from normal HTTP request completion.
 
 `/v1/compare/stream` events:
 - `start`
@@ -449,6 +454,8 @@ Notes:
 - Per-model compare `response_done` payloads include `web_source_items`.
 - Compare `start` and `done` stream events include the active `session_id`.
 - The final compare `done` payload includes both `request_group_id` and `session_id`.
+- Server logs include `compare.stream.*` body lifecycle events with per-target
+  provider-call progress and terminal stream reason.
 
 ## BYOK (Bring Your Own Keys)
 

@@ -176,6 +176,15 @@ test("compare mode sends session context and preserves prompt history between tu
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
 });
 
+test("stream requests send correlation ids and log read failures", () => {
+    assert.match(appJs, /const REQUEST_ID_HEADER = "X-Request-ID";/);
+    assert.match(appJs, /function createClientRequestId\(\) \{[\s\S]*return `web-\$\{timestamp\}-\$\{random\}`;/);
+    assert.match(appJs, /async function callAPIStream\(path, body, onEvent, options = \{\}\) \{[\s\S]*const requestId = createClientRequestId\(\);[\s\S]*\[REQUEST_ID_HEADER\]: requestId,/);
+    assert.match(appJs, /serverRequestId = getResponseHeader\(resp, REQUEST_ID_HEADER\);/);
+    assert.match(appJs, /eventsReceived \+= 1;/);
+    assert.match(appJs, /console\.error\("CortexAI stream request failed", \{[\s\S]*request_id:[\s\S]*server_request_id:[\s\S]*elapsed_ms:[\s\S]*classified_kind:[\s\S]*events_received:[\s\S]*api_base: API_BASE,/);
+});
+
 test("compare history hydration keeps prior user prompts without duplicating per-model assistant turns", () => {
     assert.match(appJs, /function buildConversationHistoryFromEntries\(entries\) \{[\s\S]*const flushCompareTurn = \(\) => \{/);
     assert.match(appJs, /const assistantContext = buildCompareAssistantContext\(activeCompareTurn\.responses\);/);

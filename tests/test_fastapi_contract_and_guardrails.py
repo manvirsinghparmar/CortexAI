@@ -68,14 +68,15 @@ If these tests pass, the application guarantees:
 - Safe orchestration boundaries
 """
 
-import pytest
 import json
+import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Boolean, Column, MetaData, String, Table, Uuid, text
 
@@ -838,7 +839,8 @@ def test_compare_never_returns_500(client):
     assert r.status_code < 500
 
 
-def test_chat_stream_returns_ndjson_events(client):
+def test_chat_stream_returns_ndjson_events(client, caplog):
+    caplog.set_level(logging.INFO, logger="server.stream_observability")
     payload = {
         "prompt": "hello",
         "provider": "openai",
@@ -859,6 +861,13 @@ def test_chat_stream_returns_ndjson_events(client):
     assert "start" in event_types
     assert "response_done" in event_types
     assert "done" in event_types
+    log_events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "chat.stream.opened" in log_events
+    assert "chat.stream.start_event_sent" in log_events
+    assert "chat.stream.provider_call_started" in log_events
+    assert "chat.stream.provider_call_completed" in log_events
+    assert "chat.stream.response_done_sent" in log_events
+    assert "chat.stream.done_sent" in log_events
 
 
 def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
@@ -1170,7 +1179,8 @@ def test_compare_sanitizes_raw_transient_provider_error(client, app):
     assert body["error_count"] == 1
 
 
-def test_compare_stream_returns_ndjson_events(client):
+def test_compare_stream_returns_ndjson_events(client, caplog):
+    caplog.set_level(logging.INFO, logger="server.stream_observability")
     payload = {
         "prompt": "hello",
         "targets": [
@@ -1193,6 +1203,13 @@ def test_compare_stream_returns_ndjson_events(client):
     assert "start" in event_types
     assert event_types.count("response_done") >= 2
     assert "done" in event_types
+    log_events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "compare.stream.opened" in log_events
+    assert "compare.stream.start_event_sent" in log_events
+    assert "compare.stream.provider_call_started" in log_events
+    assert "compare.stream.provider_call_completed" in log_events
+    assert "compare.stream.response_done_sent" in log_events
+    assert "compare.stream.done_sent" in log_events
 
 
 def test_compare_stream_normalizes_empty_success_payload_to_provider_error(client, app):

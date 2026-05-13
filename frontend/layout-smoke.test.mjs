@@ -176,6 +176,15 @@ test("compare mode sends session context and preserves prompt history between tu
     assert.match(appJs, /renderCompareSummary\(comparePayload\);[\s\S]*conversationHistory\.push\(\{ role: "user", content: prompt \}\);[\s\S]*if \(compareAssistantContext\) \{[\s\S]*conversationHistory\.push\(\{ role: "assistant", content: compareAssistantContext \}\);/);
 });
 
+test("stream requests send correlation ids and log read failures", () => {
+    assert.match(appJs, /const REQUEST_ID_HEADER = "X-Request-ID";/);
+    assert.match(appJs, /function createClientRequestId\(\) \{[\s\S]*return `web-\$\{timestamp\}-\$\{random\}`;/);
+    assert.match(appJs, /async function callAPIStream\(path, body, onEvent, options = \{\}\) \{[\s\S]*const requestId = createClientRequestId\(\);[\s\S]*\[REQUEST_ID_HEADER\]: requestId,/);
+    assert.match(appJs, /serverRequestId = getResponseHeader\(resp, REQUEST_ID_HEADER\);/);
+    assert.match(appJs, /eventsReceived \+= 1;/);
+    assert.match(appJs, /console\.error\("CortexAI stream request failed", \{[\s\S]*request_id:[\s\S]*server_request_id:[\s\S]*elapsed_ms:[\s\S]*classified_kind:[\s\S]*events_received:[\s\S]*api_base: API_BASE,/);
+});
+
 test("compare history hydration keeps prior user prompts without duplicating per-model assistant turns", () => {
     assert.match(appJs, /function buildConversationHistoryFromEntries\(entries\) \{[\s\S]*const flushCompareTurn = \(\) => \{/);
     assert.match(appJs, /const assistantContext = buildCompareAssistantContext\(activeCompareTurn\.responses\);/);
@@ -481,16 +490,27 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
     assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
     assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
-    assert.match(appJs, /const responseHtml = hasError \? escHtml\(text\) : renderMarkdownToHtml\(text\);/);
-    assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
+    assert.match(appJs, /const responseHtml = hasError \? renderResponseErrorHtml\(resp\.error\) : renderMarkdownToHtml\(text\);/);
+    assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
-    assert.match(appJs, /<div class="response-text \$\{hasError \? "error-text" : ""\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
+    assert.match(appJs, /<div class="response-text \$\{responseClasses\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
 });
 
 test("streaming still appends raw chunks before final markdown rendering", () => {
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
-    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError \}\);/);
-    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? `Error: \$\{resp\.error\.message\}` : "\(empty response\)"\);/);
+    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
+    assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? getResponseErrorDisplayText\(resp\.error\) : "\(empty response\)"\);/);
+    assert.match(appJs, /applyResponseErrorClasses\(textEl, resp\.error\);/);
+});
+
+test("model response errors use soft amber model-down styling", () => {
+    assert.match(styleCss, /\.model-soft-error \{[\s\S]*margin: 24px 16px;[\s\S]*padding: 16px 18px;[\s\S]*border-radius: 16px;[\s\S]*border: 1px solid #FDE68A;[\s\S]*background: linear-gradient\(180deg, #FFFBEB 0%, #FEF3C7 100%\);[\s\S]*color: #92400E;[\s\S]*font-size: \.92rem;[\s\S]*line-height: 1\.55;[\s\S]*font-style: normal;/);
+    assert.match(styleCss, /\.model-soft-error-title \{[\s\S]*font-weight: 650;[\s\S]*margin-bottom: 4px;/);
+    assert.match(styleCss, /\.model-soft-error-body \{[\s\S]*color: #A16207;/);
+    assert.match(appJs, /function getModelSoftErrorParts\(errorLike\) \{/);
+    assert.match(appJs, /title: "This model is temporarily busy\.",/);
+    assert.match(appJs, /body: "Try again shortly or switch to another model\.",/);
+    assert.match(styleCss, /\.chat-message-ai\.is-error \.chat-bubble-ai \{[\s\S]*background: #FFFFFF;[\s\S]*box-shadow: none;/);
 });
 
 test("markdown table css adds overflow wrapper, cell wrapping, and stacked layout", () => {

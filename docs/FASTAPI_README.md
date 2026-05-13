@@ -258,6 +258,7 @@ Notes:
 - `start` includes `session_id`, `research_mode`, and an initial `web_source_items` array.
 - `response_done` includes the full `ChatResponseDTO`, including `session_id` and `web_source_items`.
 - `done` includes the resolved `session_id`.
+- Server logs emit `chat.stream.*` lifecycle events from inside the response body generator, including provider-call start/completion and terminal stream reason.
 
 ## Compare API
 
@@ -349,6 +350,7 @@ Notes:
 - `start` includes `session_id`, `research_mode`, and target count.
 - Each `response_done` includes one full `ChatResponseDTO`.
 - Final `done` includes the aggregate compare payload with both `request_group_id` and `session_id`.
+- Server logs emit `compare.stream.*` lifecycle events from inside the response body generator, including per-target provider-call progress and terminal stream reason.
 
 ## Schema Migrations
 
@@ -380,10 +382,13 @@ Applied in `server/utils.py`:
 - Total context chars capped at 20000.
 - `max_tokens` clamped to 2048.
 - Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
+- Provider-native availability failures are sanitized before DTO/stream output. Upstream 503/high-demand/overloaded errors are tagged as `error.details.kind="transient_capacity"` and rendered as `This model is temporarily busy. Try again shortly or switch to another model.` instead of raw provider JSON.
+- Smart Ask keeps the existing automatic fallback loop for retryable provider failures. Manual Ask and Compare keep the user-selected model targets and return safe per-model errors when those explicit targets are unavailable.
 
 Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
 - Middleware sets/returns `X-Request-ID` and emits request lifecycle events (`http.request.start|complete|exception`) for correlation.
+- The browser frontend sends `X-Request-ID` on Ask/Compare/Optimize calls and logs stream read failures to the developer console with request id, server request id, status, elapsed time, classified kind, and received event count.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
 - Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
 - Tavily emits `research.network.diagnostics` entries (DNS + TCP reachability to Tavily host) plus normalized failure `error_kind` values for EC2 network troubleshooting.
@@ -393,6 +398,7 @@ Security/logging:
 - Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.
 - File upload/status APIs sanitize client-facing `error_message` values to avoid leaking bucket names, object keys, or storage internals.
 - Frontend attachment upload failures are sanitized before rendering (network/size/type/timeout/generic) so raw backend/storage error text is not shown to end users; raw errors remain available in browser console logs for debugging.
+- Frontend model response errors are also sanitized during live stream finalization and history hydration, so older raw provider error payloads are not replayed in response cards. Transient model-capacity failures render with the amber `.model-soft-error` treatment.
 - Logging destinations are configurable for EC2/containers via `LOG_DESTINATION=file|stdout|both`; see `docs/LOGGING.md`.
 
 ## Testing

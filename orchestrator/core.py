@@ -39,6 +39,7 @@ from orchestrator.fallback_manager import FallbackManager, FallbackPolicy
 from orchestrator.smart_router import SmartRouter
 from orchestrator.tier_decider import TierDecider
 from server import circuit_breaker
+from server.utils import get_client_safe_provider_error_message
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
     is_explicit_web_request,
@@ -1028,9 +1029,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
     def _explain_attempt_failure(self, response: UnifiedResponse, validation_reason: str) -> str:
         if response.is_error and response.error:
+            details = response.error.details if isinstance(response.error.details, dict) else {}
+            kind = str(details.get("kind") or "").strip()
+            safe_message = get_client_safe_provider_error_message(response.error)
+            kind_fragment = f" kind={kind}" if kind else ""
             return (
                 f"provider_error:{response.error.code}"
-                f" message={response.error.message}"
+                f"{kind_fragment} message={safe_message}"
             )
 
         reason_map = {

@@ -266,8 +266,9 @@ test("history sidebar cards render compact timestamp and cost metadata", () => {
     assert.match(styleCss, /\.history-list::-webkit-scrollbar \{[\s\S]*width: 6px;/);
 });
 
-test("ask mode defaults Web toggle to enabled", () => {
+test("ask and compare modes default Web toggle to enabled", () => {
     assert.match(appJs, /let askResearchModeEnabled = true;/);
+    assert.match(appJs, /let compareResearchModeEnabled = true;/);
     assert.match(appJs, /function isResearchEnabledForCurrentMode\(\)/);
     assert.match(appJs, /research_mode: isResearchEnabledForCurrentMode\(\),/);
 });

@@ -24,9 +24,12 @@ from server import persistence as persistence_service
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
+from server.stream_observability import StreamLogContext
 from server.utils import (
     clamp_max_tokens,
+    get_client_safe_error_display_text,
     normalize_empty_success_response,
+    sanitize_provider_error_response,
     validate_and_trim_context,
 )
 from utils.logger import get_logger
@@ -52,7 +55,6 @@ TRUE_SMART_ROUTING_ENABLED = os.getenv(
     "ENABLE_TRUE_SMART_CHAT_ROUTING", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _persist_chat_interaction = persistence_service.persist_chat_interaction
 _resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
@@ -441,7 +443,7 @@ async def chat(
     orchestrator_research_mode = "on" if research_mode else "off"
     
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -450,7 +452,7 @@ async def chat(
             providers=SUPPORTED_PROVIDERS,
         )
 
-    resolved_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
     attachment_compatible_providers: list[str] | None = None
     if request.attachments:
         if persistence_resolution is None:
@@ -489,8 +491,8 @@ async def chat(
         provider_api_keys=provider_api_keys,
         attachment_compatible_providers=attachment_compatible_providers,
     )
-    inference_attachments = []
-    persistence_attachments = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if resolved_attachments:
         attachments_service.enforce_model_attachment_compatibility(
             provider=execution_plan.preview_provider,
@@ -529,7 +531,7 @@ async def chat(
         routing_constraints=execution_plan.routing_constraints,
         **kwargs,
     )
-    response = normalize_empty_success_response(response)
+    response = sanitize_provider_error_response(normalize_empty_success_response(response))
 
     resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
@@ -570,7 +572,7 @@ async def chat_stream(
     orchestrator_research_mode = "on" if research_mode else "off"
     
 
-    persistence_resolution: ApiKeyPersistenceResolution | None = None
+    persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
@@ -579,7 +581,7 @@ async def chat_stream(
             providers=SUPPORTED_PROVIDERS,
         )
 
-    resolved_attachments = []
+    resolved_attachments: list[attachments_service.ResolvedAttachment] = []
     attachment_compatible_providers: list[str] | None = None
     if request.attachments:
         if persistence_resolution is None:
@@ -618,8 +620,8 @@ async def chat_stream(
         provider_api_keys=provider_api_keys,
         attachment_compatible_providers=attachment_compatible_providers,
     )
-    inference_attachments = []
-    persistence_attachments = []
+    inference_attachments: list[dict[str, Any]] = []
+    persistence_attachments: list[dict[str, Any]] = []
     if resolved_attachments:
         attachments_service.enforce_model_attachment_compatibility(
             provider=execution_plan.preview_provider,
@@ -649,7 +651,15 @@ async def chat_stream(
     kwargs["request_id"] = req_id
 
     async def event_stream():
-        yield _to_ndjson(
+        stream_log = StreamLogContext(
+            stream_name="chat",
+            request_id=req_id,
+            provider=target_provider,
+            model=target_model,
+            research_mode=research_mode,
+        )
+        stream_log.log("opened")
+        start_line = _to_ndjson(
             {
                 "type": "start",
                 "mode": "chat",
@@ -661,8 +671,11 @@ async def chat_stream(
                 "web_source_items": [],
             }
         )
+        yield stream_log.record_event(start_line)
+        stream_log.log("start_event_sent")
 
         try:
+            stream_log.log("provider_call_started")
             response = await asyncio.to_thread(
                 orchestrator.ask,
                 prompt=effective_prompt,
@@ -675,14 +688,20 @@ async def chat_stream(
                 routing_constraints=execution_plan.routing_constraints,
                 **kwargs,
             )
-            response = normalize_empty_success_response(response)
+            response = sanitize_provider_error_response(normalize_empty_success_response(response))
+            stream_log.log(
+                "provider_call_completed",
+                response_provider=getattr(response, "provider", ""),
+                response_model=getattr(response, "model", ""),
+                response_is_error=bool(getattr(response, "is_error", False)),
+            )
 
             stream_text = response.text or ""
             if not stream_text and response.error:
-                stream_text = f"Error: {response.error.message}"
+                stream_text = get_client_safe_error_display_text(response.error)
 
             for line in _iter_stream_lines(stream_text):
-                yield _to_ndjson({"type": "line", "index": 0, "text": line})
+                yield stream_log.record_event(_to_ndjson({"type": "line", "index": 0, "text": line}))
                 await asyncio.sleep(STREAM_LINE_DELAY_S)
 
             resolved_session_id = requested_session_id
@@ -702,16 +721,33 @@ async def chat_stream(
                     logger.exception("Chat stream persistence failed in DB mode")
 
             dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
-            yield _to_ndjson(
+            yield stream_log.record_event(_to_ndjson(
                 {
                     "type": "response_done",
                     "index": 0,
                     "response": jsonable_encoder(dto),
                 }
+            ))
+            stream_log.log("response_done_sent")
+            yield stream_log.record_event(
+                _to_ndjson({"type": "done", "mode": "chat", "session_id": resolved_session_id})
             )
-            yield _to_ndjson({"type": "done", "mode": "chat", "session_id": resolved_session_id})
+            stream_log.log("done_sent", terminal_reason="done")
 
+        except asyncio.CancelledError:
+            stream_log.log(
+                "client_disconnected",
+                level="warning",
+                terminal_reason="client_disconnected",
+            )
+            raise
         except Exception as exc:
+            stream_log.log(
+                "exception",
+                level="exception",
+                terminal_reason="exception",
+                error_type=type(exc).__name__,
+            )
             if API_DB_ENABLED and persistence_resolution is not None:
                 try:
                     error_response = persistence_service.build_error_response(
@@ -733,7 +769,7 @@ async def chat_stream(
                     )
                 except Exception:
                     logger.exception("Chat stream error persistence failed in DB mode")
-            yield _to_ndjson({"type": "error", "message": str(exc)})
+            yield stream_log.record_event(_to_ndjson({"type": "error", "message": str(exc)}))
 
     return StreamingResponse(
         event_stream(),

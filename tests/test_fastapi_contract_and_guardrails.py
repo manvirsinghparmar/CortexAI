@@ -68,15 +68,18 @@ If these tests pass, the application guarantees:
 - Safe orchestration boundaries
 """
 
-import pytest
 import json
+import logging
+from contextlib import suppress
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Boolean, Column, MetaData, String, Table, Uuid, text
 
 from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
@@ -216,6 +219,45 @@ class DummyClient(BaseAIClient):
         return []
 
 
+def _reset_db_runtime_state(monkeypatch, *, schema_name: str) -> None:
+    import db.engine as db_engine
+    import db.tables as db_tables
+
+    with suppress(Exception):
+        if db_engine._ENGINE is not None:
+            db_engine._ENGINE.dispose()
+
+    monkeypatch.setattr(db_engine, "_ENGINE", None)
+    monkeypatch.setattr(db_tables, "DB_SCHEMA", schema_name)
+    db_tables._tables_cache.clear()
+    db_tables.metadata.clear()
+
+
+def _bootstrap_dev_auth_sqlite_schema() -> None:
+    import db.engine as db_engine
+
+    engine = db_engine.get_engine()
+    metadata = MetaData()
+    Table(
+        "users",
+        metadata,
+        Column(
+            "id",
+            Uuid,
+            primary_key=True,
+            nullable=False,
+            server_default=text("(lower(hex(randomblob(16))))"),
+        ),
+        Column("email", String, unique=True),
+        Column("display_name", String),
+        Column("is_active", Boolean, nullable=False, default=True),
+        Column("auth_provider", String),
+        Column("auth_subject", String),
+        Column("auth_issuer", String),
+    )
+    metadata.create_all(engine)
+
+
 # -------------------------------------------------------------------
 # Pytest fixtures
 # -------------------------------------------------------------------
@@ -228,6 +270,7 @@ def app(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
+    monkeypatch.setenv("DB_SCHEMA", "main")
     monkeypatch.setenv("ENABLE_DEV_SESSION_LOGIN", "false")
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
@@ -235,6 +278,8 @@ def app(monkeypatch):
     monkeypatch.delenv("FRONTEND_RUNTIME_API_BASE", raising=False)
     monkeypatch.delenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", raising=False)
     monkeypatch.delenv("FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN", raising=False)
+    _reset_db_runtime_state(monkeypatch, schema_name="main")
+    _bootstrap_dev_auth_sqlite_schema()
     app = create_app()
 
     # Keep these tests DB-agnostic and deterministic.
@@ -260,7 +305,8 @@ def app(monkeypatch):
     fake_orchestrator = FakeOrchestrator()
     app.state.fake_orchestrator = fake_orchestrator
     app.dependency_overrides[deps.get_orchestrator] = lambda: fake_orchestrator
-    return app
+    yield app
+    _reset_db_runtime_state(monkeypatch, schema_name="main")
 
 
 @pytest.fixture()
@@ -796,6 +842,23 @@ def test_error_normalization(exc, expected_code, expected_retryable):
     assert err.retryable == expected_retryable
 
 
+def test_provider_503_high_demand_error_is_classified_as_transient_capacity():
+    dummy = DummyClient()
+    err: NormalizedError = dummy._normalize_error(
+        Exception(
+            "503 UNAVAILABLE. {'error': {'message': 'This model is currently "
+            "experiencing high demand. Please try again later.'}}"
+        ),
+        provider="gemini",
+    )
+
+    assert err.code == "provider_error"
+    assert err.retryable is True
+    assert err.message == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert err.details["kind"] == "transient_capacity"
+    assert err.details["status_code"] == 503
+
+
 def test_compare_dto_mapping_smoke():
     """
     Validates CompareResponseDTO mapping works against a MultiUnifiedResponse-like object.
@@ -856,7 +919,8 @@ def test_compare_never_returns_500(client):
     assert r.status_code < 500
 
 
-def test_chat_stream_returns_ndjson_events(client):
+def test_chat_stream_returns_ndjson_events(client, caplog):
+    caplog.set_level(logging.INFO, logger="server.stream_observability")
     payload = {
         "prompt": "hello",
         "provider": "openai",
@@ -877,6 +941,13 @@ def test_chat_stream_returns_ndjson_events(client):
     assert "start" in event_types
     assert "response_done" in event_types
     assert "done" in event_types
+    log_events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "chat.stream.opened" in log_events
+    assert "chat.stream.start_event_sent" in log_events
+    assert "chat.stream.provider_call_started" in log_events
+    assert "chat.stream.provider_call_completed" in log_events
+    assert "chat.stream.response_done_sent" in log_events
+    assert "chat.stream.done_sent" in log_events
 
 
 def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
@@ -916,6 +987,47 @@ def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
     assert body["error"]["code"] == "provider_error"
     assert body["error"]["details"]["finish_reason"] == "length"
     assert body["error"]["details"]["endpoint"] == "chat.completions"
+
+
+def test_chat_sanitizes_raw_transient_provider_error(client, app):
+    raw_message = (
+        "Provider error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': "
+        "'This model is currently experiencing high demand. Spikes in demand are usually temporary.'}}"
+    )
+
+    def _transient_error(*_args, **_kwargs):
+        return UnifiedResponse(
+            request_id="req_transient_chat",
+            text="",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            latency_ms=20,
+            token_usage=TokenUsage(),
+            estimated_cost=0.0,
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message=raw_message,
+                provider="gemini",
+                retryable=True,
+            ),
+            metadata={},
+        )
+
+    app.state.fake_orchestrator.ask = _transient_error
+
+    r = client.post(
+        "/v1/chat",
+        json={"prompt": "hello", "provider": "gemini", "model": "gemini-2.5-flash"},
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 200
+
+    body = r.json()
+    assert body["error"]["message"] == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert body["error"]["details"]["kind"] == "transient_capacity"
+    assert "UNAVAILABLE" not in body["error"]["message"]
 
 
 def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, app):
@@ -962,6 +1074,47 @@ def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, 
     assert payload_json["finish_reason"] == "error"
     assert payload_json["error"]["code"] == "provider_error"
     assert payload_json["error"]["details"]["finish_reason"] == "length"
+
+
+def test_chat_stream_sanitizes_raw_transient_provider_error(client, app):
+    raw_message = (
+        "Provider error: 503 UNAVAILABLE. {'error': {'message': "
+        "'This model is currently experiencing high demand. Please try again later.'}}"
+    )
+
+    def _transient_error(*_args, **_kwargs):
+        return UnifiedResponse(
+            request_id="req_transient_chat_stream",
+            text="",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            latency_ms=20,
+            token_usage=TokenUsage(),
+            estimated_cost=0.0,
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message=raw_message,
+                provider="gemini",
+                retryable=True,
+            ),
+            metadata={},
+        )
+
+    app.state.fake_orchestrator.ask = _transient_error
+
+    r = client.post(
+        "/v1/chat/stream",
+        json={"prompt": "hello", "provider": "gemini", "model": "gemini-2.5-flash"},
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 200
+    events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    rendered_text = "\n".join(str(event.get("text", "")) for event in events if event.get("type") == "line")
+    assert rendered_text == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert "UNAVAILABLE" not in rendered_text
+    assert "high demand" not in rendered_text
 
 
 def test_compare_normalizes_empty_success_payload_to_provider_error(client, app):
@@ -1029,7 +1182,85 @@ def test_compare_normalizes_empty_success_payload_to_provider_error(client, app)
     assert first["error"]["details"]["finish_reason"] == "length"
 
 
-def test_compare_stream_returns_ndjson_events(client):
+def test_compare_sanitizes_raw_transient_provider_error(client, app):
+    raw_message = (
+        "Provider error: 503 UNAVAILABLE. {'error': {'message': "
+        "'This model is currently experiencing high demand. Please try again later.'}}"
+    )
+
+    def _compare_with_transient_error(
+        prompt: str,
+        models_list: List[Dict[str, Any]],
+        context: Any = None,
+        **kwargs,
+    ):
+        failed = UnifiedResponse(
+            request_id="req_cmp_transient",
+            text="",
+            provider=models_list[0]["provider"],
+            model=models_list[0].get("model", "gemini-2.5-flash"),
+            latency_ms=15,
+            token_usage=TokenUsage(),
+            estimated_cost=0.0,
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message=raw_message,
+                provider=models_list[0]["provider"],
+                retryable=True,
+            ),
+            metadata={},
+        )
+        ok = UnifiedResponse(
+            request_id="req_cmp_still_ok",
+            text="second model answer",
+            provider=models_list[1]["provider"],
+            model=models_list[1].get("model", "openai-model"),
+            latency_ms=9,
+            token_usage=TokenUsage(prompt_tokens=12, completion_tokens=18, total_tokens=30),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        return FakeMultiUnifiedResponse(
+            request_id="req_compare_transient_shape",
+            request_group_id="grp_compare_transient_shape",
+            prompt=prompt,
+            responses=[failed, ok],
+            success_count=1,
+            failure_count=1,
+            error_count=1,
+            total_tokens=30,
+            total_cost=0.0001,
+        )
+
+    app.state.fake_orchestrator.compare = _compare_with_transient_error
+
+    r = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "compare",
+            "targets": [
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+                {"provider": "openai", "model": "gpt-4o-mini"},
+            ],
+        },
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    first = body["responses"][0]
+    assert first["error"]["message"] == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert first["error"]["details"]["kind"] == "transient_capacity"
+    assert "UNAVAILABLE" not in first["error"]["message"]
+    assert body["success_count"] == 1
+    assert body["error_count"] == 1
+
+
+def test_compare_stream_returns_ndjson_events(client, caplog):
+    caplog.set_level(logging.INFO, logger="server.stream_observability")
     payload = {
         "prompt": "hello",
         "targets": [
@@ -1052,6 +1283,13 @@ def test_compare_stream_returns_ndjson_events(client):
     assert "start" in event_types
     assert event_types.count("response_done") >= 2
     assert "done" in event_types
+    log_events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "compare.stream.opened" in log_events
+    assert "compare.stream.start_event_sent" in log_events
+    assert "compare.stream.provider_call_started" in log_events
+    assert "compare.stream.provider_call_completed" in log_events
+    assert "compare.stream.response_done_sent" in log_events
+    assert "compare.stream.done_sent" in log_events
 
 
 def test_compare_stream_normalizes_empty_success_payload_to_provider_error(client, app):

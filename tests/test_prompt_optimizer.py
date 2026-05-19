@@ -184,6 +184,15 @@ class TestResponseParsing:
 
         assert "optimized_prompt" in str(exc_info.value)
 
+    def test_parse_tolerates_extra_trailing_brace(self):
+        """Some small optimizer models occasionally emit one extra closing brace."""
+        optimizer = PromptOptimizer(client=Mock())
+        response_text = json.dumps({"optimized_prompt": "Improved prompt"}) + "}"
+
+        result = optimizer._parse_ai_response(response_text, "original")
+
+        assert result["optimized_prompt"] == "Improved prompt"
+
     def test_parse_rejects_answer_instead_of_rewrite_for_short_prompt(self):
         """Short prompts should not be replaced by a full factual answer."""
         optimizer = PromptOptimizer(client=Mock())
@@ -204,6 +213,175 @@ class TestResponseParsing:
             optimizer._parse_ai_response(response_text, "how osama was killed")
 
         assert "appears to answer" in str(exc_info.value)
+
+    def test_parse_rejects_introduced_placeholder(self):
+        optimizer = PromptOptimizer(client=Mock())
+        response_text = json.dumps(
+            {
+                "optimized_prompt": (
+                    "Provide a detailed range of estimates for [specific topic or item], "
+                    "and explain why estimates vary."
+                )
+            }
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            optimizer._parse_ai_response(response_text, "give me the detailed range")
+
+        assert "unresolved placeholder" in str(exc_info.value)
+
+    def test_parse_allows_user_provided_placeholder_template(self):
+        optimizer = PromptOptimizer(client=Mock())
+        original = "Draft an email to [customer_name] about [issue]."
+        response_text = json.dumps(
+            {
+                "optimized_prompt": (
+                    "Draft a concise, professional email to [customer_name] about [issue], "
+                    "including the impact, next step, and a polite closing."
+                )
+            }
+        )
+
+        result = optimizer._parse_ai_response(response_text, original)
+
+        assert result["optimized_prompt"].startswith("Draft a concise")
+
+
+class TestPromptQualityClassification:
+    """Test local prompt specificity classification used for retry policy."""
+
+    def test_vague_prompt_classifies_as_weak(self):
+        optimizer = PromptOptimizer(client=Mock())
+
+        assert optimizer.classify_prompt_quality("write something about ai") == "weak"
+
+    def test_clear_prompt_classifies_as_strong(self):
+        optimizer = PromptOptimizer(client=Mock())
+        prompt = (
+            "Create a concise implementation plan for adding request-level observability "
+            "to /v1/optimize, including timeout, retry, and fallback logging. Do not log raw prompt text."
+        )
+
+        assert optimizer.classify_prompt_quality(prompt) == "strong"
+
+    def test_follow_up_prompt_classifies_as_reference_dependent(self):
+        optimizer = PromptOptimizer(client=Mock())
+
+        assert optimizer.classify_prompt_quality("what about the second one?") == "reference_dependent"
+
+    def test_possessive_follow_up_classifies_as_reference_dependent(self):
+        optimizer = PromptOptimizer(client=Mock())
+
+        assert (
+            optimizer.classify_prompt_quality("How many of their cadres were actually killed?")
+            == "reference_dependent"
+        )
+
+    def test_prior_offer_follow_up_classifies_as_reference_dependent(self):
+        optimizer = PromptOptimizer(client=Mock())
+
+        assert (
+            optimizer.classify_prompt_quality("Give me the detailed range of estimates.")
+            == "reference_dependent"
+        )
+
+    def test_compact_context_preserves_assistant_messages_for_references(self):
+        optimizer = PromptOptimizer(client=Mock())
+        context = {
+            "conversation_history": [
+                {
+                    "role": "user",
+                    "content": "Compare OpenAI, Gemini, and Claude for prompt optimization.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "1. OpenAI: strong quality. 2. Gemini: low latency. 3. Claude: careful writing.",
+                },
+            ]
+        }
+
+        compact = optimizer._compact_context(context)
+
+        assert "- assistant:" in compact
+        assert "Gemini" in compact
+
+    def test_compact_context_for_fifth_follow_up_uses_expanded_reference_window(self):
+        optimizer = PromptOptimizer(client=Mock())
+        context = {
+            "conversation_history": [
+                {"role": "user", "content": "root marker: compare OpenAI, Gemini, and Claude"},
+                {"role": "assistant", "content": "root answer marker: second one is Gemini"},
+                {"role": "user", "content": "follow-up one marker"},
+                {"role": "assistant", "content": "follow-up one answer marker"},
+                {"role": "user", "content": "follow-up two marker"},
+                {"role": "assistant", "content": "follow-up two answer marker"},
+                {"role": "user", "content": "follow-up three marker"},
+                {"role": "assistant", "content": "follow-up three answer marker"},
+                {"role": "user", "content": "follow-up four marker"},
+                {"role": "assistant", "content": "follow-up four answer marker"},
+            ]
+        }
+
+        compact = optimizer._compact_context(context, prompt_quality="reference_dependent")
+
+        assert "root marker" in compact
+        assert "root answer marker" in compact
+        assert "follow-up one marker" in compact
+        assert "follow-up two marker" in compact
+        assert "follow-up three marker" in compact
+        assert "follow-up three answer marker" in compact
+        assert "follow-up four marker" in compact
+        assert "follow-up four answer marker" in compact
+        assert compact.count("- user:") == 5
+        assert compact.count("- assistant:") == 5
+
+    def test_compact_context_for_non_reference_still_uses_last_four_mixed_messages(self):
+        optimizer = PromptOptimizer(client=Mock())
+        context = {
+            "conversation_history": [
+                {"role": "user", "content": "root marker: compare OpenAI, Gemini, and Claude"},
+                {"role": "assistant", "content": "root answer marker: second one is Gemini"},
+                {"role": "user", "content": "follow-up one marker"},
+                {"role": "assistant", "content": "follow-up one answer marker"},
+                {"role": "user", "content": "follow-up two marker"},
+                {"role": "assistant", "content": "follow-up two answer marker"},
+                {"role": "user", "content": "follow-up three marker"},
+                {"role": "assistant", "content": "follow-up three answer marker"},
+                {"role": "user", "content": "follow-up four marker"},
+                {"role": "assistant", "content": "follow-up four answer marker"},
+            ]
+        }
+
+        compact = optimizer._compact_context(context)
+
+        assert "follow-up three marker" in compact
+        assert "follow-up three answer marker" in compact
+        assert "follow-up four marker" in compact
+        assert "follow-up four answer marker" in compact
+        assert "root marker" not in compact
+        assert "root answer marker" not in compact
+        assert "follow-up one marker" not in compact
+        assert "follow-up two marker" not in compact
+        assert compact.count("- user:") == 2
+        assert compact.count("- assistant:") == 2
+
+    def test_compact_context_trims_each_message_before_building_hint(self):
+        optimizer = PromptOptimizer(client=Mock())
+        context = {
+            "conversation_history": [
+                {"role": "user", "content": "short setup"},
+                {"role": "assistant", "content": "short answer"},
+                {"role": "user", "content": "x" * 700},
+                {"role": "assistant", "content": "y" * 700},
+            ]
+        }
+
+        compact = optimizer._compact_context(context)
+
+        assert "x" * 500 in compact
+        assert "x" * 501 not in compact
+        assert "y" * 500 in compact
+        assert "y" * 501 not in compact
 
 
 class TestOptimizationFlow:
@@ -329,6 +507,137 @@ class TestOptimizationFlow:
         assert "Recent topic: asteroid mining." in user_message
         assert "Latest user prompt to rewrite" in user_message
         assert mock_client.get_completion.call_count == 1
+
+    def test_placeholder_output_is_rejected_and_returns_original(self):
+        mock_client = Mock()
+        original = "give me the detailed range"
+        mock_client.get_completion.return_value = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps(
+                {
+                    "optimized_prompt": (
+                        "Provide a detailed range of estimates for [specific topic or item], "
+                        "and explain why estimates vary."
+                    )
+                }
+            ),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=100,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=50, total_tokens=100),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": original, "max_retries": 1})
+
+        assert result["optimized_prompt"] == original
+        assert result["error"]["code"] == "optimization_rejected"
+        assert result["retry_reasons"] == ["optimizer_output_rejected"]
+
+    def test_weak_prompt_retries_once_when_optimizer_returns_original(self):
+        mock_client = Mock()
+        original = "write something about ai"
+        unchanged_response = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps({"optimized_prompt": original}),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=100,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=50, total_tokens=100),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        improved_response = UnifiedResponse(
+            request_id="test-456",
+            text=json.dumps(
+                {
+                    "optimized_prompt": (
+                        "Write a concise overview of artificial intelligence for a general audience, "
+                        "covering what it is, common use cases, benefits, risks, and practical examples."
+                    )
+                }
+            ),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=100,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=80, total_tokens=130),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.side_effect = [unchanged_response, improved_response]
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": original, "max_retries": 2})
+
+        assert result["optimized_prompt"] != original
+        assert result["prompt_quality"] == "weak"
+        assert result["unchanged_retry_used"] is True
+        assert result["retry_reasons"] == ["unchanged_weak_prompt"]
+        assert mock_client.get_completion.call_count == 2
+        assert mock_client.get_completion.call_args.kwargs["response_format"] == {
+            "type": "json_object"
+        }
+
+    def test_strong_prompt_does_not_retry_when_optimizer_returns_original(self):
+        mock_client = Mock()
+        original = (
+            "Create a concise implementation plan for adding request-level observability "
+            "to /v1/optimize, including timeout, retry, and fallback logging. Do not log raw prompt text."
+        )
+        unchanged_response = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps({"optimized_prompt": original}),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=100,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=50, total_tokens=100),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = unchanged_response
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": original, "max_retries": 2})
+
+        assert result["optimized_prompt"] == original
+        assert result["prompt_quality"] == "strong"
+        assert result["unchanged_retry_used"] is False
+        assert mock_client.get_completion.call_count == 1
+
+    def test_weak_prompt_returns_original_when_unchanged_after_retry(self):
+        mock_client = Mock()
+        original = "fix this code"
+        unchanged_response = UnifiedResponse(
+            request_id="test-123",
+            text=json.dumps({"optimized_prompt": original}),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=100,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=50, total_tokens=100),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.side_effect = [unchanged_response, unchanged_response]
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt({"prompt": original, "max_retries": 2})
+
+        assert result["optimized_prompt"] == original
+        assert result["fallback_reason"] == "unchanged_after_retry"
+        assert result["unchanged_retry_used"] is True
+        assert mock_client.get_completion.call_count == 2
 
     def test_request_max_retries_overrides_optimizer_default(self):
         """Test explicit route calls can use fewer retries than the optimizer default."""

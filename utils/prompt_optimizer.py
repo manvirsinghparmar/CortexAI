@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import time
 from typing import Any, Tuple
 
 from config.provider_catalog import (
@@ -26,8 +28,11 @@ _JSON_SYSTEM_INSTRUCTION = (
     "Rewrite the user prompt to be clearer and more specific while preserving intent exactly. "
     "Use any provided conversation context only to resolve references in the latest user prompt. "
     "Do not carry unrelated earlier topics into the rewrite. "
-    "If the latest prompt is already clear, or a rewrite would be speculative or change intent, "
-    "return the original prompt unchanged as optimized_prompt. "
+    "If the latest prompt is weak or vague, rewrite it into a clearer, actionable prompt by adding "
+    "neutral structure, constraints, audience, output format, or success criteria that follow from "
+    "the original intent. "
+    "Only return the original prompt unchanged as optimized_prompt when it is already specific enough, "
+    "context is insufficient, or a rewrite would be speculative or change intent. "
     "Do not answer the prompt. Do not add factual claims, conclusions, dates, names, or background information "
     "unless they are already present in the original prompt. "
     "Return strictly valid JSON with this schema: "
@@ -36,12 +41,90 @@ _JSON_SYSTEM_INSTRUCTION = (
 )
 
 _CONTEXT_HINT_MAX_CHARS = 2000
+_REFERENCE_CONTEXT_HINT_MAX_CHARS = 4000
 _CONTEXT_MESSAGE_LIMIT = 4
+_REFERENCE_CONTEXT_MESSAGE_LIMIT = 10
 _CONTEXT_MESSAGE_MAX_CHARS = 500
+_DEFAULT_MAX_OUTPUT_TOKENS = 450
+_DEFAULT_TEMPERATURE = 0.2
+_MIN_REMAINING_SECONDS_FOR_ATTEMPT = 0.75
+_REFERENCE_DEPENDENT_PATTERNS = (
+    r"\b(what|how|why) about (it|that|this|them|those|the first|the second|the third|the other|the same)\b",
+    r"^(and|also|same|do|make|rewrite|improve|fix|compare|explain)\s+(it|that|this|them|those)$",
+    r"^(and|also|same|do|make|rewrite|improve|fix|compare|explain)\s+(the first|the second|the other)\b",
+    r"\b(the first one|the second one|the third one|the previous|the above|earlier|same one|other one)\b",
+    r"^i was talking about\b",
+    r"^(who|what|why|how|where|when|how many|how much)\b.{0,120}\b(their|its)\b",
+    r"^(give me|provide|show me|create|make)\b.{0,120}\b(the|that|those)\s+(detailed\s+)?(range|breakdown|summary|timeline|list|comparison|estimate|estimates|details)\b",
+    r"\b(organization|group|entity|topic|item|subject)\s+in\s+question\b",
+)
+_WEAK_GENERIC_PHRASES = (
+    "write something",
+    "make this better",
+    "make it better",
+    "fix this",
+    "improve this",
+    "help me with",
+    "tell me about",
+    "explain",
+    "summarize this",
+    "compare",
+)
+_OUTPUT_CUES = (
+    "plan",
+    "steps",
+    "table",
+    "json",
+    "bullets",
+    "summary",
+    "checklist",
+    "implementation",
+    "code",
+    "example",
+    "format",
+    "criteria",
+)
+_CONSTRAINT_CUES = (
+    "for ",
+    "with ",
+    "without ",
+    "including ",
+    "exclude ",
+    "do not ",
+    "don't ",
+    "under ",
+    "as a ",
+    "audience",
+    "target",
+    "because",
+)
+_UNRESOLVED_PLACEHOLDER_PATTERNS = (
+    r"\[[^\]\n]{0,80}\b(specific|topic|item|subject|organization|group|entity|person|name|date|number|range|context|placeholder|insert|fill in)\b[^\]\n]{0,80}\]",
+    r"\{[^\}\n]{0,80}\b(specific|topic|item|subject|organization|group|entity|person|name|date|number|range|context|placeholder|insert|fill in)\b[^\}\n]{0,80}\}",
+    r"<[^\>\n]{0,80}\b(specific|topic|item|subject|organization|group|entity|person|name|date|number|range|context|placeholder|insert|fill in)\b[^\>\n]{0,80}>",
+    r"\b(specific|given|relevant)\s+(topic|item|subject|organization|group|entity|case|matter|issue)\b",
+    r"\b(topic|item|subject|organization|group|entity|case|matter|issue)\s+in\s+question\b",
+)
 
 _DEFAULT_MODELS = get_provider_default_models()
 _DEFAULT_MODEL_ENVS = get_provider_default_model_envs()
 _API_KEY_ENVS = get_provider_api_key_envs()
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0, maximum: float = 2.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
 
 
 class PromptOptimizer:
@@ -67,6 +150,10 @@ class PromptOptimizer:
             self.provider
         )
         self.max_retries = max_retries or int(os.getenv("PROMPT_OPTIMIZER_MAX_RETRIES", "3"))
+        self.max_output_tokens = _env_int(
+            "PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS
+        )
+        self.temperature = _env_float("PROMPT_OPTIMIZER_TEMPERATURE", _DEFAULT_TEMPERATURE)
         self._api_key = api_key
         self._client = client
 
@@ -193,12 +280,26 @@ class PromptOptimizer:
                 return "\n".join(lines[1:-1]).strip()
         return raw
 
+    def _load_optimizer_json(self, text: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(text)
+        except Exception as first_exc:
+            try:
+                parsed, end_index = json.JSONDecoder().raw_decode(text)
+            except Exception as exc:
+                raise ValueError("Invalid JSON from optimizer response") from exc
+
+            trailing = text[end_index:].strip()
+            if trailing and set(trailing) - {"}"}:
+                raise ValueError("Invalid JSON from optimizer response") from first_exc
+
+        if not isinstance(parsed, dict):
+            raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
+        return parsed
+
     def _parse_ai_response(self, response_text: str, original_prompt: str) -> dict[str, Any]:
         cleaned = self._strip_markdown_fences(response_text or "")
-        try:
-            parsed = json.loads(cleaned)
-        except Exception as exc:
-            raise ValueError("Invalid JSON from optimizer response") from exc
+        parsed = self._load_optimizer_json(cleaned)
 
         if not self._is_valid_output(parsed):
             raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
@@ -206,6 +307,8 @@ class PromptOptimizer:
         optimized_prompt = parsed["optimized_prompt"].strip() or original_prompt
         if self._looks_like_answer_instead_of_prompt(original_prompt, optimized_prompt):
             raise ValueError("Optimizer response appears to answer the prompt instead of rewriting it")
+        if self._contains_introduced_placeholder(original_prompt, optimized_prompt):
+            raise ValueError("Optimizer response contains unresolved placeholder text")
 
         result: dict[str, Any] = {
             "optimized_prompt": optimized_prompt,
@@ -214,6 +317,53 @@ class PromptOptimizer:
             "metrics": parsed.get("metrics", {}),
         }
         return result
+
+    @staticmethod
+    def _normalized_prompt_text(value: str) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    @classmethod
+    def _same_prompt(cls, original_prompt: str, optimized_prompt: str) -> bool:
+        return cls._normalized_prompt_text(original_prompt) == cls._normalized_prompt_text(
+            optimized_prompt
+        )
+
+    def classify_prompt_quality(
+        self,
+        prompt: str,
+        *,
+        context_hint: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> str:
+        """Classify prompt specificity without logging or sending extra model calls."""
+        compact = self._normalized_prompt_text(prompt)
+        if not compact:
+            return "weak"
+
+        if any(re.search(pattern, compact) for pattern in _REFERENCE_DEPENDENT_PATTERNS):
+            return "reference_dependent"
+
+        words = re.findall(r"[a-z0-9_/-]+", compact)
+        word_count = len(words)
+        has_context = bool(context_hint) or bool(self._compact_context(context))
+        if has_context and word_count <= 8 and any(term in compact for term in ("this", "that", "it")):
+            return "reference_dependent"
+
+        starts_generic = any(compact.startswith(phrase) for phrase in _WEAK_GENERIC_PHRASES)
+        has_output_cue = any(cue in compact for cue in _OUTPUT_CUES)
+        has_constraint_cue = any(cue in compact for cue in _CONSTRAINT_CUES)
+        has_detail_cue = any(token in compact for token in (":", "/", "-", "_")) or any(
+            char.isdigit() for char in compact
+        )
+        specificity_score = sum((has_output_cue, has_constraint_cue, has_detail_cue))
+
+        if word_count <= 8 or starts_generic:
+            return "weak"
+        if word_count >= 14 and specificity_score >= 2:
+            return "strong"
+        if word_count >= 10 and specificity_score >= 3:
+            return "strong"
+        return "weak"
 
     @staticmethod
     def _looks_like_answer_instead_of_prompt(original_prompt: str, optimized_prompt: str) -> bool:
@@ -239,6 +389,24 @@ class PromptOptimizer:
 
         return False
 
+    @classmethod
+    def _contains_introduced_placeholder(
+        cls,
+        original_prompt: str,
+        optimized_prompt: str,
+    ) -> bool:
+        original = cls._normalized_prompt_text(original_prompt)
+        optimized = cls._normalized_prompt_text(optimized_prompt)
+        if not optimized:
+            return False
+
+        for pattern in _UNRESOLVED_PLACEHOLDER_PATTERNS:
+            for match in re.finditer(pattern, optimized, flags=re.IGNORECASE):
+                placeholder = " ".join(match.group(0).split()).lower()
+                if placeholder and placeholder not in original:
+                    return True
+        return False
+
     @staticmethod
     def _trim_context_text(text: Any, limit: int = _CONTEXT_MESSAGE_MAX_CHARS) -> str:
         compact = " ".join(str(text or "").split())
@@ -246,7 +414,19 @@ class PromptOptimizer:
             return compact
         return compact[:limit].rstrip()
 
-    def _compact_context(self, context: Any) -> str:
+    @staticmethod
+    def _context_message_limit(prompt_quality: str | None = None) -> int:
+        if prompt_quality == "reference_dependent":
+            return _REFERENCE_CONTEXT_MESSAGE_LIMIT
+        return _CONTEXT_MESSAGE_LIMIT
+
+    @staticmethod
+    def _context_hint_limit(prompt_quality: str | None = None) -> int:
+        if prompt_quality == "reference_dependent":
+            return _REFERENCE_CONTEXT_HINT_MAX_CHARS
+        return _CONTEXT_HINT_MAX_CHARS
+
+    def _compact_context(self, context: Any, *, prompt_quality: str | None = None) -> str:
         if not isinstance(context, dict):
             return ""
 
@@ -268,10 +448,9 @@ class PromptOptimizer:
         if not messages:
             return ""
 
-        user_messages = [item for item in messages if item["role"] == "user"]
-        selected = user_messages[-_CONTEXT_MESSAGE_LIMIT:] or messages[-_CONTEXT_MESSAGE_LIMIT:]
+        selected = messages[-self._context_message_limit(prompt_quality):]
         hint = "\n".join(f"- {item['role']}: {item['content']}" for item in selected)
-        return hint[:_CONTEXT_HINT_MAX_CHARS].rstrip()
+        return hint[: self._context_hint_limit(prompt_quality)].rstrip()
 
     def _build_user_message(
         self,
@@ -279,11 +458,16 @@ class PromptOptimizer:
         settings: dict[str, Any] | None,
         context_hint: str | None = None,
         context: dict[str, Any] | None = None,
+        prompt_quality: str | None = None,
+        retry_reason: str | None = None,
     ) -> str:
         parts: list[str] = []
-        compact_context_hint = self._trim_context_text(context_hint, _CONTEXT_HINT_MAX_CHARS)
+        compact_context_hint = self._trim_context_text(
+            context_hint,
+            self._context_hint_limit(prompt_quality),
+        )
         if not compact_context_hint:
-            compact_context_hint = self._compact_context(context)
+            compact_context_hint = self._compact_context(context, prompt_quality=prompt_quality)
 
         if compact_context_hint:
             parts.append(
@@ -292,6 +476,20 @@ class PromptOptimizer:
             )
 
         parts.append(f"Latest user prompt to rewrite:\n{prompt}")
+
+        if prompt_quality:
+            parts.append(f"Prompt quality classification: {prompt_quality}")
+            if prompt_quality == "weak":
+                parts.append(
+                    "This prompt is weak or vague. Rewrite it into a clearer prompt with "
+                    "neutral specificity while preserving the user's intent."
+                )
+
+        if retry_reason == "unchanged_weak_prompt":
+            parts.append(
+                "Previous optimizer attempt returned the original prompt unchanged. Because this "
+                "prompt is weak, provide a meaningful rewrite unless doing so would change intent."
+            )
 
         if settings:
             settings_blob = json.dumps(settings, ensure_ascii=False)
@@ -311,6 +509,37 @@ class PromptOptimizer:
         except (TypeError, ValueError):
             return max(1, self.max_retries)
 
+    @staticmethod
+    def _coerce_deadline_at(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            deadline_at = float(value)
+        except (TypeError, ValueError):
+            return None
+        return deadline_at if deadline_at > 0 else None
+
+    @staticmethod
+    def _has_time_for_attempt(deadline_at: float | None) -> bool:
+        if deadline_at is None:
+            return True
+        return (deadline_at - time.monotonic()) >= _MIN_REMAINING_SECONDS_FOR_ATTEMPT
+
+    @staticmethod
+    def _attach_metadata(
+        result: dict[str, Any],
+        *,
+        prompt_quality: str,
+        attempt_count: int,
+        retry_reasons: list[str],
+        unchanged_retry_used: bool,
+    ) -> dict[str, Any]:
+        result["prompt_quality"] = prompt_quality
+        result["attempt_count"] = attempt_count
+        result["retry_reasons"] = retry_reasons
+        result["unchanged_retry_used"] = unchanged_retry_used
+        return result
+
     def optimize_prompt(self, payload: Any) -> dict[str, Any]:
         """
         Optimize prompt using direct provider client path.
@@ -326,6 +555,12 @@ class PromptOptimizer:
         context_hint = payload.get("context_hint") if isinstance(payload, dict) else None
         context = payload.get("context") if isinstance(payload, dict) else None
         max_retries = self._effective_max_retries(payload)
+        deadline_at = self._coerce_deadline_at(payload.get("deadline_at"))
+        prompt_quality = self.classify_prompt_quality(
+            original_prompt,
+            context_hint=context_hint,
+            context=context,
+        )
 
         try:
             client = self._get_client()
@@ -335,6 +570,10 @@ class PromptOptimizer:
                 "steps": [],
                 "explanations": [],
                 "metrics": {},
+                "prompt_quality": prompt_quality,
+                "attempt_count": 0,
+                "retry_reasons": ["client_unavailable"],
+                "unchanged_retry_used": False,
                 "error": {
                     "code": "optimization_failed",
                     "message": str(exc) or "Prompt optimization client unavailable",
@@ -343,8 +582,25 @@ class PromptOptimizer:
 
         last_error: str | None = None
         last_error_code = "optimization_failed"
+        attempt_count = 0
+        retry_reasons: list[str] = []
+        unchanged_retry_used = False
+        next_retry_reason: str | None = None
+        completion_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_output_tokens,
+        }
+        if self.provider == "openai":
+            completion_kwargs["response_format"] = {"type": "json_object"}
 
-        for _attempt in range(1, max_retries + 1):
+        for attempt in range(1, max_retries + 1):
+            if not self._has_time_for_attempt(deadline_at):
+                last_error = "Optimizer deadline reached before starting another attempt"
+                last_error_code = "optimization_deadline_exceeded"
+                break
+
+            attempt_count = attempt
             response: UnifiedResponse = client.get_completion(
                 messages=[
                     {"role": "system", "content": _JSON_SYSTEM_INSTRUCTION},
@@ -355,30 +611,71 @@ class PromptOptimizer:
                             settings,
                             context_hint=context_hint,
                             context=context,
+                            prompt_quality=prompt_quality,
+                            retry_reason=next_retry_reason,
                         ),
                     },
                 ],
-                model=self.model,
+                **completion_kwargs,
             )
+            next_retry_reason = None
 
             if response.is_error:
                 last_error = response.error.message if response.error else "Optimizer request failed"
                 last_error_code = "optimization_failed"
+                retry_reasons.append("provider_error")
                 continue
 
             try:
-                return self._parse_ai_response(response.text, original_prompt)
+                result = self._parse_ai_response(response.text, original_prompt)
             except Exception as exc:
                 last_error = str(exc)
-                if "answer the prompt" in last_error.lower():
+                last_error_lower = last_error.lower()
+                if (
+                    "answer the prompt" in last_error_lower
+                    or "unresolved placeholder" in last_error_lower
+                ):
                     last_error_code = "optimization_rejected"
+                    retry_reasons.append("optimizer_output_rejected")
+                else:
+                    retry_reasons.append("invalid_optimizer_response")
                 continue
+
+            unchanged = self._same_prompt(original_prompt, result["optimized_prompt"])
+            if (
+                unchanged
+                and prompt_quality == "weak"
+                and not unchanged_retry_used
+                and attempt < max_retries
+                and self._has_time_for_attempt(deadline_at)
+            ):
+                unchanged_retry_used = True
+                retry_reasons.append("unchanged_weak_prompt")
+                next_retry_reason = "unchanged_weak_prompt"
+                last_error = "Optimizer returned original prompt unchanged for weak input"
+                last_error_code = "unchanged_after_retry"
+                continue
+
+            if unchanged and prompt_quality == "weak" and (unchanged_retry_used or attempt_count > 1):
+                result["fallback_reason"] = "unchanged_after_retry"
+
+            return self._attach_metadata(
+                result,
+                prompt_quality=prompt_quality,
+                attempt_count=attempt_count,
+                retry_reasons=retry_reasons,
+                unchanged_retry_used=unchanged_retry_used,
+            )
 
         return {
             "optimized_prompt": original_prompt,
             "steps": [],
             "explanations": [],
             "metrics": {},
+            "prompt_quality": prompt_quality,
+            "attempt_count": attempt_count,
+            "retry_reasons": retry_reasons,
+            "unchanged_retry_used": unchanged_retry_used,
             "error": {
                 "code": last_error_code,
                 "message": last_error or "Prompt optimization failed",

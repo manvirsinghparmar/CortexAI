@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 
 const htmlPath = path.join(process.cwd(), "frontend", "index.html");
 const html = fs.readFileSync(htmlPath, "utf8");
@@ -70,10 +71,21 @@ test("improve flow renders optimization progress without response-card ids", () 
     assert.match(appJs, /Enhancing clarity/);
     assert.match(appJs, /Improving intent/);
     assert.match(appJs, /Preparing optimized version/);
-    assert.match(appJs, /OPTIMIZE_REQUEST_TIMEOUT_MS\s*=\s*8000/);
+    assert.match(appJs, /OPTIMIZE_REQUEST_TIMEOUT_MS\s*=\s*5500/);
     assert.match(appJs, /function buildOptimizeContextPayload\(prompt, options = \{\}\) \{/);
     assert.match(appJs, /hasAttachments: Boolean\(options\?\.hasAttachments\)/);
     assert.match(appJs, /function isLikelyFollowUpPrompt\(prompt\) \{/);
+    assert.match(appJs, /the second one/);
+    assert.match(appJs, /make\|rewrite\|improve\|modify/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_MESSAGE_LIMIT\s*=\s*4/);
+    assert.match(appJs, /OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT\s*=\s*10/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_TOTAL_LIMIT\s*=\s*2000/);
+    assert.match(appJs, /OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT\s*=\s*4000/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS\s*=\s*500/);
+    assert.match(appJs, /possessiveReferencePattern/);
+    assert.match(appJs, /priorOfferPattern/);
+    assert.match(appJs, /\.slice\(-OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT\);/);
+    assert.match(appJs, /const selected = recentMessages\.slice\(-messageLimit\);/);
     assert.match(appJs, /context_hint/);
     assert.match(appJs, /optimization_status/);
     assert.match(appJs, /startOptimizationProgressStates\(turnId\);/);
@@ -92,6 +104,67 @@ test("improve flow renders optimization progress without response-card ids", () 
     assert.match(styleCss, /@keyframes optimizationSparkleGlow \{/);
     assert.match(styleCss, /@keyframes optimizationDotFloat \{/);
     assert.match(styleCss, /\.optimization-message\.is-pending \.optimization-user-text \{[\s\S]*font-size:\s*\.82rem;[\s\S]*font-weight:\s*700;[\s\S]*color:\s*#0F3A6D;/);
+});
+
+test("optimize reference follow-up context payload uses expanded mixed-message window", () => {
+    const constantsMatch = appJs.match(
+        /const OPTIMIZE_CONTEXT_MESSAGE_LIMIT\s*=\s*\d+;\s*[\s\S]*?const OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS\s*=\s*\d+;/,
+    );
+    assert.ok(constantsMatch);
+
+    const snippetStart = appJs.indexOf("function normalizeOptimizeContextText");
+    const snippetEnd = appJs.indexOf("async function callOptimize", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {
+        conversationHistory: [
+            { role: "user", content: "root marker: compare OpenAI, Gemini, and Claude" },
+            { role: "assistant", content: "root answer marker: second one is Gemini" },
+            { role: "user", content: "follow-up one marker" },
+            { role: "assistant", content: "follow-up one answer marker" },
+            { role: "user", content: "follow-up two marker" },
+            { role: "assistant", content: "follow-up two answer marker" },
+            { role: "user", content: "follow-up three marker" },
+            { role: "assistant", content: "follow-up three answer marker" },
+            { role: "user", content: "follow-up four marker" },
+            { role: "assistant", content: "follow-up four answer marker" },
+        ],
+        activeSessionId: "session-long-chat",
+        pendingNewSession: false,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${constantsMatch[0]}
+${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__payload = buildOptimizeContextPayload("make the second one more suitable", {});
+globalThis.__possessiveFollowUp = isLikelyFollowUpPrompt("How many of their cadres were actually killed?");
+globalThis.__priorOfferFollowUp = isLikelyFollowUpPrompt("Give me the detailed range of estimates.");`,
+        sandbox,
+    );
+
+    const payload = sandbox.__payload;
+    assert.equal(sandbox.__possessiveFollowUp, true);
+    assert.equal(sandbox.__priorOfferFollowUp, true);
+    assert.equal(payload.context.session_id, "session-long-chat");
+    assert.deepEqual(
+        payload.context.conversation_history.map(item => item.content),
+        [
+            "root marker: compare OpenAI, Gemini, and Claude",
+            "root answer marker: second one is Gemini",
+            "follow-up one marker",
+            "follow-up one answer marker",
+            "follow-up two marker",
+            "follow-up two answer marker",
+            "follow-up three marker",
+            "follow-up three answer marker",
+            "follow-up four marker",
+            "follow-up four answer marker",
+        ],
+    );
+    assert.match(payload.context_hint, /root answer marker/);
+    assert.match(payload.context_hint, /follow-up three marker/);
+    assert.match(payload.context_hint, /follow-up four answer marker/);
 });
 
 test("top mode tabs use Ask and Compare labels", () => {

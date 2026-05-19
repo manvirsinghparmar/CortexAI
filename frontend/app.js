@@ -213,7 +213,7 @@ const LEGACY_MODE_SESSION_STORAGE_KEYS = [
 ];
 const MAX_CONTEXT_MESSAGES_UI = 20;
 const REQUEST_TIMEOUT_MS = 20000;
-const OPTIMIZE_REQUEST_TIMEOUT_MS = 8000;
+const OPTIMIZE_REQUEST_TIMEOUT_MS = 5500;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_INTERVAL_MS = 1500;
@@ -874,7 +874,9 @@ let attachmentLocalCounter = 0;
 const attachmentPreviewUrls = new Set();
 const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
 const OPTIMIZE_CONTEXT_MESSAGE_LIMIT = 4;
+const OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT = 10;
 const OPTIMIZE_CONTEXT_TOTAL_LIMIT = 2000;
+const OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT = 4000;
 const OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS = 500;
 const OPTIMIZATION_PROGRESS_STATES = [
     "Refining your prompt for better results",
@@ -3008,26 +3010,31 @@ function isLikelyFollowUpPrompt(prompt) {
     if (!text || conversationHistory.length === 0) return false;
 
     const directFollowUpPattern = /\b(i\s+(?:mean|meant|was\s+talking\s+about)|you\s+said|as\s+above|from\s+above|previous(?:ly)?|earlier|that one|same topic|the same|continue|follow[-\s]?up)\b/i;
-    const referencePattern = /\b(the above|the previous|my last|last answer|last response|that response|this topic|same topic)\b/i;
-    const shortReferencePattern = /^(?:also|and|but|so|then|what about|how about|can you|could you|explain|list|summarize|tell me|why|what|how|where|when)\b.{0,90}\b(it|that|this|these|those|same|above|previous|earlier)\b/i;
+    const referencePattern = /\b(the above|the previous|the first one|the second one|the third one|first one|second one|third one|my last|last answer|last response|that response|this topic|same topic)\b/i;
+    const possessiveReferencePattern = /^(?:who|what|why|how|where|when|how many|how much)\b.{0,120}\b(their|its)\b/i;
+    const priorOfferPattern = /^(?:give me|provide|show me|create|make)\b.{0,120}\b(the|that|those)\s+(?:detailed\s+)?(?:range|breakdown|summary|timeline|list|comparison|estimate|estimates|details)\b/i;
+    const shortReferencePattern = /^(?:also|and|but|so|then|what about|how about|can you|could you|make|rewrite|improve|modify|explain|list|summarize|tell me|why|what|how|where|when)\b.{0,110}\b(it|that|this|these|those|their|its|same|above|previous|earlier|first one|second one|third one)\b/i;
 
     return directFollowUpPattern.test(text)
         || referencePattern.test(text)
+        || possessiveReferencePattern.test(text)
+        || priorOfferPattern.test(text)
         || shortReferencePattern.test(text);
 }
 
-function selectOptimizeContextMessages() {
+function selectOptimizeContextMessages(options = {}) {
+    const messageLimit = options?.referenceDependent
+        ? OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT
+        : OPTIMIZE_CONTEXT_MESSAGE_LIMIT;
     const recentMessages = conversationHistory
         .filter(item => {
             const role = String(item?.role || "");
             return (role === "user" || role === "assistant")
                 && normalizeOptimizeContextText(item?.content).length > 0;
         })
-        .slice(-8);
+        .slice(-OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT);
 
-    const userMessages = recentMessages.filter(item => item.role === "user");
-    const selected = (userMessages.length > 0 ? userMessages : recentMessages)
-        .slice(-OPTIMIZE_CONTEXT_MESSAGE_LIMIT);
+    const selected = recentMessages.slice(-messageLimit);
 
     return selected.map(item => ({
         role: String(item.role || "user"),
@@ -3037,16 +3044,20 @@ function selectOptimizeContextMessages() {
 
 function buildOptimizeContextPayload(prompt, options = {}) {
     if (options?.hasAttachments) return {};
-    if (!isLikelyFollowUpPrompt(prompt)) return {};
+    const referenceDependent = isLikelyFollowUpPrompt(prompt);
+    if (!referenceDependent) return {};
 
-    const contextMessages = selectOptimizeContextMessages();
+    const contextMessages = selectOptimizeContextMessages({ referenceDependent });
     if (!contextMessages.length) return {};
 
+    const totalLimit = referenceDependent
+        ? OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT
+        : OPTIMIZE_CONTEXT_TOTAL_LIMIT;
     const hintPrefix = "Use only to resolve references in the latest prompt:\n";
     const hintBody = contextMessages
         .map((item, index) => `Recent ${item.role} ${index + 1}: ${item.content}`)
         .join("\n")
-        .slice(0, Math.max(0, OPTIMIZE_CONTEXT_TOTAL_LIMIT - hintPrefix.length))
+        .slice(0, Math.max(0, totalLimit - hintPrefix.length))
         .trim();
     if (!hintBody) return {};
 

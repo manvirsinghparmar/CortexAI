@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from typing import Literal
 from uuid import uuid4
 
@@ -44,20 +45,20 @@ OptimizationStatus = Literal[
 
 
 def _optimizer_timeout_seconds() -> float:
-    raw_value = os.getenv("PROMPT_OPTIMIZER_TIMEOUT_MS", "6000")
+    raw_value = os.getenv("PROMPT_OPTIMIZER_TIMEOUT_MS", "5000")
     try:
         timeout_ms = int(raw_value)
     except (TypeError, ValueError):
-        timeout_ms = 6000
+        timeout_ms = 5000
     return max(timeout_ms, 1) / 1000
 
 
 def _optimizer_route_max_retries() -> int:
-    raw_value = os.getenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", "1")
+    raw_value = os.getenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", "2")
     try:
         max_retries = int(raw_value)
     except (TypeError, ValueError):
-        max_retries = 1
+        max_retries = 2
     return max(max_retries, 1)
 
 
@@ -83,6 +84,9 @@ def _fallback_reason_from_status(
     if status == "optimized":
         return None
     if status == "kept_original":
+        fallback_reason = result.get("fallback_reason") if isinstance(result, dict) else None
+        if fallback_reason:
+            return str(fallback_reason)
         return "already_clear"
     if status == "disabled":
         return "optimization_disabled"
@@ -137,10 +141,23 @@ async def optimize_prompt(
     server flag acts as a server-side safety gate.
     """
     req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
+    started_at = time.monotonic()
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     server_enabled = os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true"
 
     if not server_enabled:
+        logger.info(
+            "Prompt optimization skipped because server flag is disabled",
+            extra={
+                "extra_fields": {
+                    "event": "optimize.route.completed",
+                    "request_id": req_id,
+                    "optimization_status": "disabled",
+                    "fallback_reason": "optimization_disabled",
+                    "duration_ms": int((time.monotonic() - started_at) * 1000),
+                }
+            },
+        )
         return OptimizeResponse(
             original_prompt=request.prompt,
             optimized_prompt=request.prompt,
@@ -151,9 +168,12 @@ async def optimize_prompt(
         )
 
     optimizer = _get_optimizer()
+    timeout_seconds = _optimizer_timeout_seconds()
+    max_retries = _optimizer_route_max_retries()
     payload = {
         "prompt": request.prompt,
-        "max_retries": _optimizer_route_max_retries(),
+        "max_retries": max_retries,
+        "deadline_at": time.monotonic() + timeout_seconds,
     }
     if request.context_hint:
         payload["context_hint"] = request.context_hint
@@ -163,9 +183,26 @@ async def optimize_prompt(
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(optimizer.optimize_prompt, payload),
-            timeout=_optimizer_timeout_seconds(),
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        logger.warning(
+            "Prompt optimization timed out",
+            extra={
+                "extra_fields": {
+                    "event": "optimize.route.completed",
+                    "request_id": req_id,
+                    "provider": getattr(optimizer, "provider", None),
+                    "model": getattr(optimizer, "model", None),
+                    "optimization_status": "timeout",
+                    "fallback_reason": "timeout",
+                    "max_retries": max_retries,
+                    "timeout_ms": int(timeout_seconds * 1000),
+                    "duration_ms": duration_ms,
+                }
+            },
+        )
         return OptimizeResponse(
             original_prompt=request.prompt,
             optimized_prompt=request.prompt,
@@ -187,6 +224,30 @@ async def optimize_prompt(
     optimized = str(result.get("optimized_prompt") or request.prompt)
     status = _status_from_optimizer_result(result, request.prompt, optimized)
     was_optimized = status == "optimized"
+    fallback_reason = _fallback_reason_from_status(status, result)
+    duration_ms = int((time.monotonic() - started_at) * 1000)
+
+    logger.info(
+        "Prompt optimization completed",
+        extra={
+            "extra_fields": {
+                "event": "optimize.route.completed",
+                "request_id": req_id,
+                "provider": getattr(optimizer, "provider", None),
+                "model": getattr(optimizer, "model", None),
+                "optimization_status": status,
+                "fallback_reason": fallback_reason,
+                "was_optimized": was_optimized,
+                "prompt_quality": result.get("prompt_quality"),
+                "attempt_count": result.get("attempt_count"),
+                "retry_reasons": result.get("retry_reasons"),
+                "unchanged_retry_used": result.get("unchanged_retry_used"),
+                "max_retries": max_retries,
+                "timeout_ms": int(timeout_seconds * 1000),
+                "duration_ms": duration_ms,
+            }
+        },
+    )
 
     return OptimizeResponse(
         original_prompt=request.prompt,
@@ -194,5 +255,5 @@ async def optimize_prompt(
         was_optimized=was_optimized,
         server_optimization_enabled=True,
         optimization_status=status,
-        fallback_reason=_fallback_reason_from_status(status, result),
+        fallback_reason=fallback_reason,
     )

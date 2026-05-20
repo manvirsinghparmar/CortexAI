@@ -39,6 +39,10 @@ FRONTEND_DIR=frontend
 # PROMPT_OPTIMIZER_PROVIDER=gemini
 # PROMPT_OPTIMIZER_MODEL=
 # PROMPT_OPTIMIZER_MAX_RETRIES=3
+# PROMPT_OPTIMIZER_TIMEOUT_MS=5000
+# PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2
+# PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450
+# PROMPT_OPTIMIZER_TEMPERATURE=0.2
 ```
 
 5. Start server:
@@ -186,8 +190,15 @@ Prompt optimization:
 - `/v1/optimize` is the UI optimization path; chat/compare do not auto-optimize by default.
 - Set `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true` only when chat/compare should automatically rewrite prompts without the explicit optimize endpoint.
 - `PROMPT_OPTIMIZER_MODEL` must match the configured `PROMPT_OPTIMIZER_PROVIDER`.
-- Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt instead of rewriting it.
-- Rejected or disabled optimization returns the original prompt with `was_optimized=false`.
+- `/v1/optimize` uses `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) as its hard deadline and `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`) for explicit-route attempts.
+- Weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry.
+- Optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models.
+- Optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text.
+- Request payloads may include optional `context_hint` and compact `context`; the frontend only sends them for likely follow-ups without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt, or when it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it.
+- Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
+- Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.
+- With the frontend Improve toggle enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; when `was_optimized=false` or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare.
 
 ## Chat API
 
@@ -381,7 +392,7 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 
 Applied in `server/utils.py`:
 - Conversation history trimmed to last 10 messages.
-- Total context chars capped at 20000.
+- Oversized conversation-history payloads are soft-trimmed server-side instead of rejected; the newest context is retained first and older or oversized message content is trimmed before provider calls.
 - `max_tokens` clamped to 2048.
 - Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
 - Provider-native availability failures are sanitized before DTO/stream output. Upstream 503/high-demand/overloaded errors are tagged as `error.details.kind="transient_capacity"` and rendered as `This model is temporarily busy. Try again shortly or switch to another model.` instead of raw provider JSON.

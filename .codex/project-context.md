@@ -24,10 +24,11 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Frontend startup waits for Cognito/local dev-session bootstrap before catalog discovery so Ask/Compare model selectors can hydrate from session-scoped `/v1/providers` and `/v1/models`.
 - In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
 - Ask and Compare support shared session continuity via `session_id`.
-- Conversation-history guardrails are active (trim and payload cap).
+- Conversation-history guardrails are active, but oversized history is soft-trimmed instead of rejected.
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
 - Frontend Compare selectors show attached per-model remove controls only for three active models, fade the controls in on selector hover/focus, keep at least two active models, and send only active selected slots after removal.
 - Prompt optimization for the UI goes through explicit `POST /v1/optimize`; chat/compare auto-optimization is off by default and requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`.
+- Explicit UI prompt optimization is latency-bounded (`PROMPT_OPTIMIZER_TIMEOUT_MS`, default 5000 ms), defaults to two route-level attempts, retries unchanged output once for locally classified weak prompts, rejects answer-like or unresolved-placeholder optimizer output, and may send compact mixed user/assistant follow-up context only when the frontend detects a reference-dependent prompt without attachments. Reference-dependent optimize context is capped to the last ten mixed messages / 4,000 characters.
 
 ## High-Value Paths
 

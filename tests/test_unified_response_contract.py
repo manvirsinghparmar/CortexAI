@@ -157,6 +157,26 @@ class TestProviderContractCompliance:
         assert payload["max_tokens"] == 2048
 
     @patch("openai.OpenAI")
+    def test_openai_passes_response_format_when_requested(self, mock_openai):
+        """Optimizer can request JSON object mode for chat-completions models."""
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content='{"ok": true}'), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-4.1-nano")
+        response = client.get_completion(
+            "Return JSON",
+            response_format={"type": "json_object"},
+            max_tokens=100,
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["response_format"] == {"type": "json_object"}
+        assert payload["max_tokens"] == 100
+
+    @patch("openai.OpenAI")
     def test_openai_length_finish_reason_with_empty_content_is_preserved(self, mock_openai):
         """
         Reproduce provider payload where output cap is hit but assistant text is empty.

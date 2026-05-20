@@ -2929,6 +2929,202 @@ body {
     border-radius: 14px;
 }
 
+.optimization-message {
+    justify-content: flex-end;
+}
+
+.optimization-bubble {
+    position: relative;
+    overflow: hidden;
+    max-width: 72%;
+    background:
+        linear-gradient(135deg, rgba(234, 241, 255, .98), rgba(241, 246, 255, .94)),
+        #EAF1FF;
+    border-bottom-right-radius: 8px;
+    transition: opacity .09s ease-out, filter .09s ease-out, transform .09s ease-out;
+}
+
+.optimization-user-text {
+    min-width: 0;
+}
+
+.optimization-message.is-pending .optimization-bubble {
+    animation: optimizationBubbleBreath 3.6s ease-in-out infinite;
+}
+
+.optimization-message.is-pending .optimization-bubble::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, .38) 45%, transparent 70%);
+    opacity: .42;
+    transform: translateX(-120%);
+    animation: optimizationBubbleShimmer 3.8s ease-in-out infinite;
+}
+
+.optimization-message.is-resolving .optimization-bubble {
+    animation: optimizationResolveFade .09s ease-out forwards;
+}
+
+.optimization-message.is-pending .optimization-user-text {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: .82rem;
+    line-height: 1.35;
+    font-weight: 700;
+    color: #0F3A6D;
+}
+
+.optimization-sparkle {
+    display: inline-block;
+    font-size: 0;
+    transform-origin: center;
+    filter: drop-shadow(0 0 5px rgba(37, 99, 235, .22));
+    animation: optimizationSparkleGlow 2.6s ease-in-out infinite;
+}
+
+.optimization-sparkle::before {
+    content: "\2728";
+    font-size: .82rem;
+}
+
+.optimization-state-text {
+    display: inline-block;
+    transition: opacity .16s ease, transform .16s ease, filter .16s ease;
+}
+
+.optimization-state-text.is-swapping {
+    opacity: .28;
+    transform: translateY(-2px);
+    filter: blur(.2px);
+}
+
+.optimization-dots {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    color: rgba(23, 37, 84, .85);
+}
+
+.optimization-dot {
+    display: inline-block;
+    opacity: .28;
+    transform: translateY(0);
+    animation: optimizationDotFloat 1.25s ease-in-out infinite;
+}
+
+.optimization-dot:nth-child(2) {
+    animation-delay: .16s;
+}
+
+.optimization-dot:nth-child(3) {
+    animation-delay: .32s;
+}
+
+.optimization-message.is-cancelled .optimization-user-text {
+    color: #64748B;
+}
+
+.optimization-result-note {
+    margin: 6px 0 0;
+    display: inline-block;
+    padding: 4px 8px;
+    font-size: .66rem;
+    line-height: 1.3;
+    font-weight: 500;
+    letter-spacing: .01em;
+    color: #3F6F5E;
+    background: #F3FAF6;
+    border: 1px solid #CFE8DA;
+    border-radius: 8px;
+}
+
+.optimization-message.is-kept-original .optimization-result-note {
+    color: #3F6F5E;
+    background: #F3FAF6;
+    border-color: #CFE8DA;
+}
+
+.optimization-message.is-failed .optimization-result-note {
+    color: #3F6F5E;
+    background: #F3FAF6;
+    border-color: #CFE8DA;
+}
+
+@keyframes optimizationBubbleBreath {
+    0%,
+    100% {
+        filter: saturate(1);
+        transform: translateY(0);
+    }
+    50% {
+        filter: saturate(1.06);
+        transform: translateY(-1px);
+    }
+}
+
+@keyframes optimizationBubbleShimmer {
+    0%,
+    42% {
+        transform: translateX(-120%);
+    }
+    72%,
+    100% {
+        transform: translateX(120%);
+    }
+}
+
+@keyframes optimizationSparkleGlow {
+    0%,
+    100% {
+        opacity: .78;
+        transform: scale(1) rotate(0deg);
+    }
+    45% {
+        opacity: 1;
+        transform: scale(1.08) rotate(4deg);
+    }
+}
+
+@keyframes optimizationDotFloat {
+    0%,
+    75%,
+    100% {
+        opacity: .28;
+        transform: translateY(0);
+    }
+    35% {
+        opacity: .92;
+        transform: translateY(-2px);
+    }
+}
+
+@keyframes optimizationResolveFade {
+    from {
+        opacity: 1;
+        filter: blur(0);
+    }
+    to {
+        opacity: .18;
+        filter: blur(.8px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .optimization-message.is-pending .optimization-bubble,
+    .optimization-message.is-pending .optimization-bubble::before,
+    .optimization-sparkle,
+    .optimization-dot {
+        animation: none;
+    }
+
+    .optimization-state-text {
+        transition: none;
+    }
+}
+
 .chat-user-text {
     margin: 0;
     font-size: .92rem;

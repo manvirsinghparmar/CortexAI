@@ -96,6 +96,10 @@ ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false  # opt-in auto-rewrite inside chat
 PROMPT_OPTIMIZER_PROVIDER=gemini    # openai|gemini|deepseek|grok|claude
 PROMPT_OPTIMIZER_MODEL=             # optional; must belong to PROMPT_OPTIMIZER_PROVIDER
 PROMPT_OPTIMIZER_MAX_RETRIES=3
+PROMPT_OPTIMIZER_TIMEOUT_MS=5000    # explicit /v1/optimize hard deadline
+PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2 # explicit /v1/optimize attempt count
+PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450 # compact optimizer output cap
+PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
@@ -382,8 +386,15 @@ Prompt optimization (`/v1/optimize`):
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
 - uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
-- optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt instead of rewriting it
-- if optimization is disabled or rejected, the API returns the original prompt with `was_optimized=false`
+- `/v1/optimize` has an optimize-specific hard deadline from `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) and explicit-route retry count from `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`)
+- weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry
+- optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models
+- optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text
+- request payloads may include optional `context_hint` and compact `context`; the frontend sends these only for follow-up-like prompts without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to the last ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt, or if it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it
+- responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
+- if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
+- when the frontend Improve toggle is enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; if the original is kept or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
@@ -417,8 +428,8 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 ## Chat Context Guardrails
 
 - Conversation history sent to the API is trimmed to the last `10` messages.
-- Total conversation-history payload is capped at `20000` characters per request.
-- If the last `10` messages exceed that limit, the request is rejected until the sent context is smaller or a new session is started.
+- Oversized conversation-history payloads are soft-trimmed server-side instead of rejected.
+- The server keeps the newest context first and trims older or oversized message content within the internal context budget before calling providers.
 
 ## Compare and `request_group_id`
 

@@ -29,7 +29,9 @@ codex --cd C:\path\to\primary\repo `
 - Python `3.12` backend with FastAPI entrypoint in [run_server.py](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/run_server.py).
 - Multi-provider orchestration (`openai`, `gemini`, `deepseek`, `grok`, `claude`) under `api/` + `orchestrator/`.
 - PostgreSQL-backed runtime is the standard mode (`DATABASE_URL` required; postgres URL expected).
-- Static frontend under `frontend/` (served by API unless `SERVE_FRONTEND=false`).
+- Legacy static frontend under `frontend/` and React/Vite frontend under `frontend-react/`.
+- FastAPI serves static frontend assets unless `SERVE_FRONTEND=false`; set `FRONTEND_DIR=frontend-react/dist` after `npm run --prefix frontend-react build` to serve React.
+- React dependencies stay in `frontend-react/package.json` / `frontend-react/package-lock.json`, not `requirements.txt`.
 - Browser E2E harness under `e2e/` (Playwright).
 
 ## Engineering Conventions
@@ -66,6 +68,7 @@ codex --cd C:\path\to\primary\repo `
 - Default test command: `python -m pytest -q`
 - Full release gate: `python scripts/release_gate.py`
 - E2E suite: `npm run --prefix e2e test`
+- React frontend build: `npm run --prefix frontend-react build`
 - Pricing/registry alignment: `python -m pytest tests/test_registry_pricing_alignment.py -q`
 
 Choose the smallest relevant subset during iteration, then run broader gates before handoff.

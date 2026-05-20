@@ -50,7 +50,16 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Frontend and Browser Tests
 
-- Static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
+- Legacy static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
+- React/Vite frontend: `frontend-react/`
+  - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
+  - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
+  - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
+  - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
+- Frontend selection in FastAPI: `server/app.py`
+  - `FRONTEND_DIR` explicitly selects the static directory to mount.
+  - `REACT_FRONTEND=true` serves `frontend-react/dist` when `FRONTEND_DIR` is unset.
+- Frontend container boundary: `Dockerfile.frontend` + `nginx.conf`
 - Playwright E2E suite: `e2e/specs/`
 - Playwright config: `e2e/playwright.config.mjs`
 
@@ -92,6 +101,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Correlate CloudFront/WAF logs with `request_id`/`X-Amz-Cf-Id`
   3. Use upload (`upload.*`) and research (`research.*`) event families for root cause
 
+- Change React frontend behavior:
+  1. Update `frontend-react/src/`
+  2. Keep npm dependencies in `frontend-react/package.json` and `frontend-react/package-lock.json`
+  3. Validate with `npm run --prefix frontend-react build`
+  4. For FastAPI-hosted React, build first and set `FRONTEND_DIR` to `frontend-react/dist`
+  5. Update `README.md` / `docs/FASTAPI_README.md` if setup, runtime config, or deployment assumptions change
+
 ---
 
-Last updated: 2026-04-24
+Last updated: 2026-05-09

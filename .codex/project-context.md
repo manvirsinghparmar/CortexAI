@@ -5,7 +5,7 @@
 - Product: CortexAI B2B LLM gateway (API + optional static frontend + CLI tooling).
 - Backend stack: FastAPI + SQLAlchemy/repository pattern + PostgreSQL.
 - Orchestration: provider abstraction with smart routing/fallback across OpenAI, Gemini, DeepSeek, Grok, and Claude.
-- Frontend stack: static HTML/CSS/JS app in `frontend/`.
+- Frontend stack: legacy static HTML/CSS/JS app in `frontend/` plus React/Vite app in `frontend-react/`.
 - E2E stack: Playwright tests in `e2e/`.
 
 ## Runtime Commands
@@ -13,6 +13,8 @@
 ```bash
 python run_server.py --reload
 python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
+npm ci --prefix frontend-react
+npm run --prefix frontend-react build
 ```
 
 ## Core Invariants
@@ -23,6 +25,8 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Local dev can mint session cookies via `POST /v1/auth/dev-login` only when `ENABLE_DEV_SESSION_LOGIN=true` (blocked in production-like envs).
 - Frontend startup waits for Cognito/local dev-session bootstrap before catalog discovery so Ask/Compare model selectors can hydrate from session-scoped `/v1/providers` and `/v1/models`.
 - In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
+- `FRONTEND_DIR` explicitly selects the static frontend directory. Set it to `frontend-react/dist` after building React; `REACT_FRONTEND=true` is a convenience switch when `FRONTEND_DIR` is unset.
+- React dependencies belong in `frontend-react/package.json` and `frontend-react/package-lock.json`, never in Python `requirements.txt`.
 - Ask and Compare support shared session continuity via `session_id`.
 - Conversation-history guardrails are active (trim and payload cap).
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
@@ -47,7 +51,7 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Provider/catalog changes: `api/`, `api/client_registry.py`, `config/providers.yaml`, provider discovery tests.
 - Routing behavior changes: `orchestrator/prompt_analyzer.py`, `tier_decider.py`, `model_selector.py`, `smart_router.py`.
 - DB changes: add SQL migration under `db/migrations/`, then reflect in tables/repository usage.
-- Frontend behavior changes: `frontend/` plus contract checks (`frontend/*.test.mjs`, `e2e/` as needed).
+- Frontend behavior changes: `frontend/` for legacy UI or `frontend-react/` for React UI, plus contract checks (`frontend/*.test.mjs`, `npm run --prefix frontend-react build`, `e2e/` as needed).
 
 ## Validation Matrix
 
@@ -63,6 +67,8 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Frontend local checks (when UI touched):
   - `node --test frontend/layout-smoke.test.mjs`
   - `node --test frontend/provider-discovery.e2e.test.mjs`
+  - `npm run --prefix frontend-react build` when React UI is touched
+  - `npm run --prefix frontend-react test` when React component logic/tests are touched
 - Full browser E2E:
   - `npm run --prefix e2e test`
 

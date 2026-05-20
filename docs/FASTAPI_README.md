@@ -8,6 +8,12 @@ pip install -r requirements.txt
 ```
 `requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows.
 
+React UI dependencies live in `frontend-react/package.json` and `frontend-react/package-lock.json`; they are not Python requirements:
+```bash
+npm ci --prefix frontend-react
+```
+Use Node.js 20.x for the React/Vite toolchain.
+
 2. Configure auth in `.env`:
 ```ini
 API_KEYS=dev-key-1,dev-key-2
@@ -27,7 +33,8 @@ Notes:
 ```ini
 SERVE_FRONTEND=false
 FRONTEND_DIR=frontend
-# Optional frontend runtime-config override for cross-origin API calls
+REACT_FRONTEND=false
+# Optional frontend runtime-config override for clients that honor apiBase
 # FRONTEND_RUNTIME_API_BASE=https://kudlo.triobrain.com
 # Optional explicit browser flag override (otherwise inherits ENABLE_DEV_SESSION_LOGIN)
 # FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
@@ -45,6 +52,16 @@ FRONTEND_DIR=frontend
 ```bash
 python run_server.py --reload
 ```
+
+To serve the React/Vite frontend through FastAPI, build it and point `FRONTEND_DIR` to the built output:
+```powershell
+npm ci --prefix frontend-react
+npm run --prefix frontend-react build
+$env:FRONTEND_DIR=(Resolve-Path .\frontend-react\dist).Path
+python run_server.py --reload
+```
+
+`FRONTEND_DIR` is explicit and takes precedence. If `FRONTEND_DIR` is unset, `REACT_FRONTEND=true` makes `server/app.py` serve `frontend-react/dist` instead of the legacy `frontend/` directory.
 
 6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
@@ -119,6 +136,12 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
 - Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped catalog endpoints (`/v1/providers`, `/v1/models`) so Ask and Compare selectors hydrate from the full enabled model registry.
 - Response is sent with no-cache headers so config changes apply immediately.
+
+React/Vite frontend notes:
+- Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
+- Local hot-reload development uses `npm run --prefix frontend-react dev`; Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000`.
+- Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.
+- `Dockerfile.frontend` builds the React app and serves static assets with nginx. `Dockerfile.api` is API-only; it does not include `frontend-react/dist` unless the deployment image is extended to copy those files.
 
 ## API Key Persistence Policy
 
@@ -400,6 +423,12 @@ Security/logging:
 Run FastAPI contract tests:
 ```bash
 pytest tests/test_fastapi_contract_and_guardrails.py -v
+```
+
+Run React frontend build validation:
+```bash
+npm ci --prefix frontend-react
+npm run --prefix frontend-react build
 ```
 
 Run persistence guardrail tests:

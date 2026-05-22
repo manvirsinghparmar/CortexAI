@@ -514,9 +514,11 @@ test("catalog discovery waits for local dev session before loading compare model
     const devLoginIndex = fetchCalls.findIndex(url => url.includes("/v1/auth/dev-login"));
     const providersIndex = fetchCalls.findIndex(url => url.includes("/v1/providers"));
     const modelsIndex = fetchCalls.findIndex(url => url.includes("/v1/models?enabled_only=true"));
+    const historyIndex = fetchCalls.findIndex(url => url.includes("/v1/history"));
     assert.ok(devLoginIndex >= 0);
     assert.ok(providersIndex > devLoginIndex);
     assert.ok(modelsIndex > devLoginIndex);
+    assert.ok(historyIndex > devLoginIndex);
 
     const compareValues = optionValues(elements.get("compareModel1"));
     assert.ok(compareValues.includes("openai:gpt-4o"));

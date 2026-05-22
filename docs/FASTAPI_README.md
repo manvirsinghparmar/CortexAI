@@ -55,6 +55,7 @@ python run_server.py --reload
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - Frontend history sidebar cards show mode, local date/time, title, and usage cost in a compact layout; sidebar token counts are hidden.
+- Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
 - Frontend Compare defaults `With sources` on for new page sessions and preserves a manual off choice while switching modes.
 - Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
@@ -122,7 +123,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - `enableDevSessionLogin` defaults from `ENABLE_DEV_SESSION_LOGIN`.
 - Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
-- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped catalog endpoints (`/v1/providers`, `/v1/models`) so Ask and Compare selectors hydrate from the full enabled model registry.
+- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped startup endpoints (`/v1/providers`, `/v1/models`, `/v1/history`) so Ask/Compare selectors and the history sidebar hydrate immediately in local development.
 - Response is sent with no-cache headers so config changes apply immediately.
 
 ## API Key Persistence Policy
@@ -184,6 +185,7 @@ Notes:
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
+- The browser UI avoids that fallback on fresh login by generating a new `session_id` and sending `new_session=true` for the first turn after sign-in.
 
 Prompt optimization:
 - `POST /v1/optimize` is gated by `ENABLE_PROMPT_OPTIMIZATION=true`.

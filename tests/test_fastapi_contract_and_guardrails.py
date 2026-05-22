@@ -418,6 +418,16 @@ def test_dev_login_rejected_in_production_runtime(client, monkeypatch):
     assert r.status_code == 403
 
 
+def test_auth_success_redirect_marks_fresh_login():
+    from server.routes import auth as auth_route
+
+    assert auth_route._with_query_param("/index.html", "fresh_login", "1") == "/index.html?fresh_login=1"
+    assert (
+        auth_route._with_query_param("/index.html?foo=bar&fresh_login=0", "fresh_login", "1")
+        == "/index.html?foo=bar&fresh_login=1"
+    )
+
+
 def test_runtime_config_js_defaults_to_request_origin(client):
     r = client.get("/runtime-config.js")
     assert r.status_code == 200

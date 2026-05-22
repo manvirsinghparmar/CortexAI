@@ -11,16 +11,17 @@ const REQUEST_ID_HEADER = "X-Request-ID";
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
+const AUTH_USER_STORAGE_KEY = "cortex_authenticated_user_id";
+const FRESH_LOGIN_PENDING_STORAGE_KEY = "cortex_fresh_login_pending";
+const FRESH_LOGIN_QUERY_PARAM = "fresh_login";
 function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
 function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
 function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
-function handleCognitoCallback() { const locationObj = window.location || null; if (!locationObj) return; const hash = locationObj.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || "")); } }
-async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
 function handleCognitoCallback() {
     const locationObj = (typeof window !== "undefined" && window.location) ? window.location : null;
-    if (!locationObj) return;
+    if (!locationObj) return false;
     const hash = locationObj.hash || "";
     const m = hash.match(/id_token=([^&]+)/);
     if (m) {
@@ -28,7 +29,94 @@ function handleCognitoCallback() {
         if (window.history && window.history.replaceState) {
             window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || ""));
         }
+        return true;
     }
+    return false;
+}
+function readLocalStorageValue(key) {
+    try { return window.localStorage.getItem(key); } catch (_) { return null; }
+}
+function writeLocalStorageValue(key, value) {
+    try {
+        if (value === null || value === undefined || value === "") window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, String(value));
+    } catch (_) {}
+}
+function requestFreshLoginSessionReset() {
+    writeLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY, "1");
+}
+function consumeFreshLoginSessionReset() {
+    let requested = readLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY) === "1";
+    writeLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY, null);
+
+    const locationObj = (typeof window !== "undefined" && window.location) ? window.location : null;
+    if (!locationObj) return requested;
+    try {
+        const params = new URLSearchParams(locationObj.search || "");
+        if (params.get(FRESH_LOGIN_QUERY_PARAM) === "1") {
+            requested = true;
+            params.delete(FRESH_LOGIN_QUERY_PARAM);
+            const query = params.toString();
+            const nextUrl = `${locationObj.pathname || "/"}${query ? `?${query}` : ""}${locationObj.hash || ""}`;
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState("", document.title, nextUrl);
+            }
+        }
+    } catch (_) {}
+    return requested;
+}
+function storedAuthUserId() {
+    return normalizeSessionId(readLocalStorageValue(AUTH_USER_STORAGE_KEY));
+}
+function setStoredAuthUserId(userId) {
+    writeLocalStorageValue(AUTH_USER_STORAGE_KEY, normalizeSessionId(userId));
+}
+function authUserIdFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return String(payload.user_id || payload.sub || payload.email || (payload.authenticated ? "authenticated" : "") || "").trim();
+}
+function startFreshSessionForLogin() {
+    startNewChatSession();
+}
+function noteSignedOutForSessionRestore() {
+    setStoredAuthUserId(null);
+    activeSessionId = null;
+    pendingNewSession = true;
+    conversationHistory = [];
+    persistActiveSessionId();
+}
+async function fetchAuthUserPayload() {
+    try {
+        const resp = await fetch(API_BASE + "/v1/auth/me", {
+            credentials: "include",
+            headers: getSessionScopedAuthHeaders(),
+        });
+        if (resp.ok) {
+            return { authenticated: true, payload: await resp.json() };
+        }
+        if (resp.status === 401 || resp.status === 403) {
+            return { authenticated: false, payload: null };
+        }
+    } catch (_) {}
+    return { authenticated: null, payload: null };
+}
+async function reconcileAuthenticatedSession({ forceFresh = false } = {}) {
+    const state = await fetchAuthUserPayload();
+    if (state.authenticated === false) {
+        noteSignedOutForSessionRestore();
+        return false;
+    }
+    if (state.authenticated !== true) return false;
+
+    const userId = normalizeSessionId(authUserIdFromPayload(state.payload));
+    const priorUserId = storedAuthUserId();
+    if (forceFresh || !priorUserId || (userId && priorUserId !== userId)) {
+        startFreshSessionForLogin();
+    }
+    if (userId) {
+        setStoredAuthUserId(userId);
+    }
+    return true;
 }
 function normalizeRuntimeBoolean(value, fallback) {
     if (value === undefined || value === null) return fallback;
@@ -62,7 +150,7 @@ async function ensureLocalDevSession() {
 
     try {
         const meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
-        if (meResp.ok) return true;
+        if (meResp.ok) return false;
         if (meResp.status !== 401 && meResp.status !== 403) return false;
     } catch (_) {
         return false;
@@ -90,7 +178,12 @@ async function ensureLocalDevSession() {
         return false;
     }
 }
-async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); await ensureLocalDevSession(); }
+async function initCognitoAuth() {
+    await fetchCognitoConfig();
+    const callbackLogin = handleCognitoCallback();
+    const devLoginCreated = await ensureLocalDevSession();
+    await reconcileAuthenticatedSession({ forceFresh: callbackLogin || devLoginCreated });
+}
 function buildCognitoLoginUrl() {
         if (!cognitoConfig.enabled || !cognitoConfig.domain || !cognitoConfig.clientId) return "";
         var base = String(cognitoConfig.domain).trim().replace(/\/+$/, "");
@@ -102,6 +195,8 @@ function buildCognitoLoginUrl() {
     }
 async function cognitoSignOut() {
     try { await fetch(API_BASE + "/v1/auth/logout", { method: "POST", credentials: "include" }); } catch (_) {}
+    setStoredIdToken(null);
+    noteSignedOutForSessionRestore();
     if (cognitoConfig.logoutUrl) {
         var logoutUri =  cognitoConfig.logoutUrl + "&response_type=code&scope=email+openid&redirect_uri=" + encodeURIComponent(window.location.origin || "") + "/auth";
         window.location.href = logoutUri;
@@ -114,11 +209,11 @@ async function renderAuthUI() {
     const wrap = document.getElementById("authNavWrap");
     if (!wrap) return;
     if (!cognitoConfig.enabled) { wrap.innerHTML = ""; return; }
-    var hasSession = false;
-    try {
-        var meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
-        hasSession = meResp.ok;
-    } catch (_) {}
+    const authState = await fetchAuthUserPayload();
+    const hasSession = authState.authenticated === true;
+    if (authState.authenticated === false) {
+        noteSignedOutForSessionRestore();
+    }
     if (hasSession) {
         wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signout\" id=\"cognitoSignOutBtn\">Log off</button>";
         wrap.querySelector("#cognitoSignOutBtn").addEventListener("click", function () { void cognitoSignOut(); });
@@ -126,7 +221,10 @@ async function renderAuthUI() {
         const url = buildCognitoLoginUrl();
         if (!url) { wrap.innerHTML = ""; return; }
         wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in</button>";
-        wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
+        wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () {
+            requestFreshLoginSessionReset();
+            window.location.href = url;
+        });
     }
 }
 
@@ -2137,9 +2235,12 @@ function setMode(mode) {
         activeSessionId = loadActiveSessionId();
     }
     if (activeSessionId) {
-        hydrateConversationHistoryFromSession(activeSessionId, _historyData);
-        renderSessionTranscript(activeSessionId, _historyData);
-        pendingNewSession = false;
+        const sessionEntries = getSessionEntries(_historyData, activeSessionId);
+        hydrateConversationHistoryFromEntries(sessionEntries);
+        renderConversationFromEntries(sessionEntries);
+        if (sessionEntries.length > 0) {
+            pendingNewSession = false;
+        }
     } else {
         conversationHistory = [];
         pendingNewSession = true;
@@ -5109,6 +5210,7 @@ async function initializeAuthAndCatalog() {
     await Promise.all([
         Promise.resolve().then(() => renderAuthUI()),
         loadDynamicProviderModelCatalog(),
+        loadHistory({ restoreActiveTranscript: true }),
     ]);
 }
 
@@ -5135,6 +5237,9 @@ async function initializeAuthAndCatalog() {
     updateSingleModelRoutingUI();
     setComposerDocked(true);
     activeSessionId = loadActiveSessionId();
+    if (consumeFreshLoginSessionReset()) {
+        startFreshSessionForLogin();
+    }
     setMode("single");
     refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
@@ -5664,8 +5769,6 @@ historyEl.search.addEventListener("input", () => {
     renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
 });
 
-loadHistory({ restoreActiveTranscript: true });
-
 async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
         const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
@@ -5677,7 +5780,7 @@ async function loadHistory({ restoreActiveTranscript = false } = {}) {
 
         activeSessionId = normalizeSessionId(activeSessionId || loadActiveSessionId());
 
-        if (!activeSessionId) {
+        if (!activeSessionId && !pendingNewSession) {
             const mostRecentWithSession = _historyData.find(entry =>
                 normalizeSessionId(entry.session_id)
             );

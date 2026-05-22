@@ -191,11 +191,12 @@ Frontend runtime config (`/runtime-config.js`):
   - defaults from `ENABLE_DEV_SESSION_LOGIN`
   - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
   - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
-- The frontend completes Cognito/local dev-session bootstrap before fetching `/v1/providers` and `/v1/models`, so session-scoped catalog discovery can populate Ask and Compare model dropdowns.
+- The frontend completes Cognito/local dev-session bootstrap before fetching session-scoped startup data (`/v1/providers`, `/v1/models`, and `/v1/history`), so local development history appears on load instead of waiting for the first chat request.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
+- A fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - Frontend Compare mode defaults the `With sources` toggle on for new page sessions; if a user turns it off, their Compare-mode choice is preserved while switching between Ask and Compare.
 - Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
 - Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
@@ -424,6 +425,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Ask and Compare now share the same conversation session when the same `session_id` is reused.
 - Switching between Ask and Compare does not require creating a separate thread.
 - Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
+- The browser UI does not auto-continue the last active thread after a fresh login. It creates a new session and sends `new_session=true` for the first turn; users can still reopen older threads from History.
 
 ## Chat Context Guardrails
 

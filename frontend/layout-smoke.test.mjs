@@ -303,6 +303,33 @@ test("a single shared session id is reused across Ask and Compare", () => {
     assert.doesNotMatch(appJs, /const activeSessionIdByMode = \{/);
 });
 
+test("fresh login starts a new active thread instead of restoring the previous session", () => {
+    assert.match(appJs, /const FRESH_LOGIN_PENDING_STORAGE_KEY = "cortex_fresh_login_pending";/);
+    assert.match(appJs, /const FRESH_LOGIN_QUERY_PARAM = "fresh_login";/);
+    assert.match(appJs, /function consumeFreshLoginSessionReset\(\) \{[\s\S]*params\.get\(FRESH_LOGIN_QUERY_PARAM\) === "1"[\s\S]*window\.history\.replaceState/);
+    assert.match(appJs, /function startFreshSessionForLogin\(\) \{[\s\S]*startNewChatSession\(\);[\s\S]*\}/);
+    assert.match(appJs, /if \(consumeFreshLoginSessionReset\(\)\) \{[\s\S]*startFreshSessionForLogin\(\);[\s\S]*\}/);
+    assert.match(appJs, /wrap\.querySelector\("#cognitoSignInBtn"\)\.addEventListener\("click", function \(\) \{[\s\S]*requestFreshLoginSessionReset\(\);[\s\S]*window\.location\.href = url;/);
+    assert.match(appJs, /async function reconcileAuthenticatedSession\(\{ forceFresh = false \} = \{\}\) \{[\s\S]*if \(forceFresh \|\| !priorUserId \|\| \(userId && priorUserId !== userId\)\) \{[\s\S]*startFreshSessionForLogin\(\);/);
+    assert.match(appJs, /if \(!activeSessionId && !pendingNewSession\) \{[\s\S]*const mostRecentWithSession = _historyData\.find/);
+});
+
+test("initial history load waits for auth bootstrap", () => {
+    assert.match(
+        appJs,
+        /async function initializeAuthAndCatalog\(\) \{[\s\S]*await initCognitoAuth\(\);[\s\S]*await Promise\.all\(\[[\s\S]*loadHistory\(\{ restoreActiveTranscript: true \}\),[\s\S]*\]\);[\s\S]*\}/,
+    );
+    assert.doesNotMatch(
+        appJs,
+        /historyEl\.search\.addEventListener\("input"[\s\S]*\}\);\s*loadHistory\(\{ restoreActiveTranscript: true \}\);/,
+    );
+});
+
+test("mode switches preserve a pending new session until it has history", () => {
+    assert.match(appJs, /function setMode\(mode\) \{[\s\S]*const sessionEntries = getSessionEntries\(_historyData, activeSessionId\);[\s\S]*if \(sessionEntries\.length > 0\) \{[\s\S]*pendingNewSession = false;/);
+    assert.doesNotMatch(appJs, /renderSessionTranscript\(activeSessionId, _historyData\);\s*pendingNewSession = false;/);
+});
+
 test("history threads are grouped by shared session id and can surface mixed-mode turns", () => {
     assert.match(appJs, /function buildHistoryThreads\(data\) \{[\s\S]*const key = sessionId \? `session:\$\{sessionId\}` : `entry:\$\{entry\.id\}`;/);
     assert.match(appJs, /const normalizedModes = new Set\(entries\.map\(entry => normalizeHistoryModeLabel\(entry\.mode\)\)\);/);

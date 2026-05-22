@@ -21,9 +21,10 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Most `/v1/*` endpoints accept API key, Cognito bearer, or session cookie auth.
 - Session-scoped routes (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`, `/v1/providers`, `/v1/models`, `/v1/optimize`, `/v1/history*`) reject API-key-only auth.
 - Local dev can mint session cookies via `POST /v1/auth/dev-login` only when `ENABLE_DEV_SESSION_LOGIN=true` (blocked in production-like envs).
-- Frontend startup waits for Cognito/local dev-session bootstrap before catalog discovery so Ask/Compare model selectors can hydrate from session-scoped `/v1/providers` and `/v1/models`.
+- Frontend startup waits for Cognito/local dev-session bootstrap before session-scoped startup fetches so Ask/Compare model selectors and the history sidebar can hydrate from `/v1/providers`, `/v1/models`, and `/v1/history`.
 - In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
 - Ask and Compare support shared session continuity via `session_id`.
+- Browser fresh sign-in starts a new chat session instead of restoring the previously active thread; page refresh and explicit History thread selection still preserve continuity for the selected session.
 - Conversation-history guardrails are active, but oversized history is soft-trimmed instead of rejected.
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
 - Frontend Compare selectors show attached per-model remove controls only for three active models, fade the controls in on selector hover/focus, keep at least two active models, and send only active selected slots after removal.

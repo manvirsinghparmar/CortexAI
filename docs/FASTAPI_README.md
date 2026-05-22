@@ -61,6 +61,7 @@ python run_server.py --reload
 - Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
 - Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
 
 ## Endpoints
 

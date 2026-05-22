@@ -5461,11 +5461,22 @@ function renderMarkdownToHtml(markdownText) {
             const items = [];
             while (index < lines.length) {
                 const current = String(lines[index] || "").trim();
-                if (!/^\d+\.\s+/.test(current)) break;
-                items.push(current.replace(/^\d+\.\s+/, ""));
+                const itemMatch = /^(\d+)\.\s+(.*)$/.exec(current);
+                if (!itemMatch) break;
+                items.push({
+                    value: Number(itemMatch[1]),
+                    text: itemMatch[2],
+                });
                 index += 1;
             }
-            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            const firstValue = items[0]?.value;
+            const startAttr = Number.isSafeInteger(firstValue) && firstValue !== 1
+                ? ` start="${firstValue}"`
+                : "";
+            htmlParts.push(`<ol${startAttr}>${items.map(item => {
+                const valueAttr = Number.isSafeInteger(item.value) ? ` value="${item.value}"` : "";
+                return `<li${valueAttr}>${renderInlineMarkdown(item.text)}</li>`;
+            }).join("")}</ol>`);
             continue;
         }
 

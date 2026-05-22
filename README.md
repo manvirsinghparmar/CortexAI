@@ -200,6 +200,7 @@ Frontend runtime config (`/runtime-config.js`):
 - Frontend Compare mode defaults the `With sources` toggle on for new page sessions; if a user turns it off, their Compare-mode choice is preserved while switching between Ask and Compare.
 - Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
 - Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
 
 ## Authentication
 

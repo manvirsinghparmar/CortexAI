@@ -628,6 +628,39 @@ test("assistant markdown pipeline supports gfm tables with wide-table handling",
     assert.match(appJs, /<div class="response-text \$\{responseClasses\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
 });
 
+test("assistant markdown preserves explicit ordered-list numbering", () => {
+    assert.match(appJs, /const itemMatch = \/\^\(\\d\+\)\\\.\\s\+\(\.\*\)\$\/\.exec\(current\);/);
+    assert.match(appJs, /const startAttr = Number\.isSafeInteger\(firstValue\) && firstValue !== 1[\s\S]*start="\$\{firstValue\}"/);
+    assert.match(appJs, /const valueAttr = Number\.isSafeInteger\(item\.value\) \? ` value="\$\{item\.value\}"` : "";/);
+});
+
+test("assistant markdown renderer preserves loose ordered-list indexes at runtime", () => {
+    const snippetStart = appJs.indexOf("function escHtml");
+    const snippetEnd = appJs.indexOf("function shouldStackTableForChat", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__html = renderMarkdownToHtml([
+    "1. First cited point [1].",
+    "Context after the first point.",
+    "",
+    "2. Second cited point [2].",
+    "Context after the second point.",
+    "",
+    "4. Fourth cited point [4].",
+].join("\\n"));`,
+        sandbox,
+    );
+
+    assert.match(sandbox.__html, /<ol><li value="1">First cited point \[1\]\.<\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="2"><li value="2">Second cited point \[2\]\.<\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="4"><li value="4">Fourth cited point \[4\]\.<\/li><\/ol>/);
+});
+
 test("streaming still appends raw chunks before final markdown rendering", () => {
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
     assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);

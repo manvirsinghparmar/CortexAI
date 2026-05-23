@@ -43,6 +43,10 @@ FRONTEND_DIR=frontend
 # PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2
 # PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450
 # PROMPT_OPTIMIZER_TEMPERATURE=0.2
+# Optional Tavily search-option resolver
+# TAVILY_ENHANCED_SEARCH_ENABLED=true
+# TAVILY_CHUNKS_PER_SOURCE=3
+# TAVILY_ENHANCED_SEARCH_DOMAIN_RULES=true
 ```
 
 5. Start server:
@@ -390,6 +394,10 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 - When `routing.research_mode=true`, Compare performs one shared research pass for the compare turn.
 - Injected sources are primary evidence for current/source-dependent facts; models may still use non-conflicting baseline knowledge for background context.
 - Response payloads expose normalized source metadata through `web_source_items`.
+- Tavily search calls use a deterministic local resolver with fixed retrieval params: `max_results=5`, `search_depth=advanced`, `chunks_per_source=1..3` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
+- With `TAVILY_ENHANCED_SEARCH_ENABLED=true`, the resolver may add Tavily `topic` for `finance`/`news`, a bounded `time_range`, country targeting only when no topic is sent, and curated finance domain allowlists for Canada, US, US SEC filings, and UK economic queries.
+- The resolver does not rewrite queries. Prompt optimization and query sanitization remain separate layers before the Tavily client receives its query string.
+- Set `TAVILY_ENHANCED_SEARCH_ENABLED=false` to disable topic/time/country/domain enrichment while keeping the fixed retrieval params.
 
 ## Guardrails
 
@@ -407,6 +415,7 @@ Security/logging:
 - The browser frontend sends `X-Request-ID` on Ask/Compare/Optimize calls and logs stream read failures to the developer console with request id, server request id, status, elapsed time, classified kind, and received event count.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
 - Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
+- Tavily search-option resolver logs include category, topic/time/country decisions, domain-rule metadata, returned source-content lengths, and API credits used.
 - Tavily emits `research.network.diagnostics` entries (DNS + TCP reachability to Tavily host) plus normalized failure `error_kind` values for EC2 network troubleshooting.
 - Attachment pipeline logs include `upload.*` + `storage.*` events for upload, storage, metadata write, sync/deferred ingestion, and rollback/error paths.
 - Upload route adds `upload.route.*` events with edge/proxy request context (`X-Amz-Cf-Id`, `X-Forwarded-*`, content-length vs payload-size checks) to help isolate CloudFront/WAF/origin issues.
@@ -436,4 +445,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-04-11
+Last updated: 2026-05-23

@@ -171,9 +171,23 @@ Auth-related failures:
 ### Core Tavily events
 
 - `research.dispatch`
+- `research.search.resolver`
 - `research.search.start|success|failure|empty`
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
+
+Resolver fields to check when search quality looks poor:
+
+- `enhanced_search_enabled`
+- `chunks_per_source`
+- `category`
+- `topic_sent`
+- `time_range`
+- `country_detected`
+- `country_sent`
+- `domain_rule`
+- `include_domain_count`
+- `source_content_lengths` and `credits_used` on `research.search.success`
 
 ### Network diagnostics event
 
@@ -313,4 +327,4 @@ Likely layer:
 
 ---
 
-Last updated: 2026-04-13
+Last updated: 2026-05-23

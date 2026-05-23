@@ -28,6 +28,7 @@ python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 - Conversation-history guardrails are active, but oversized history is soft-trimmed instead of rejected.
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
 - Frontend Compare selectors show attached per-model remove controls only for three active models, fade the controls in on selector hover/focus, keep at least two active models, and send only active selected slots after removal.
+- Tavily research uses a deterministic local search-options resolver before provider calls. The resolver fixes retrieval params, may add topic/time/country/domain options when enabled, never rewrites the query, and can be reduced to fixed params with `TAVILY_ENHANCED_SEARCH_ENABLED=false`.
 - Prompt optimization for the UI goes through explicit `POST /v1/optimize`; chat/compare auto-optimization is off by default and requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`.
 - Explicit UI prompt optimization is latency-bounded (`PROMPT_OPTIMIZER_TIMEOUT_MS`, default 5000 ms), defaults to two route-level attempts, retries unchanged output once for locally classified weak prompts, rejects answer-like or unresolved-placeholder optimizer output, and may send compact mixed user/assistant follow-up context only when the frontend detects a reference-dependent prompt without attachments. Reference-dependent optimize context is capped to the last ten mixed messages / 4,000 characters.
 

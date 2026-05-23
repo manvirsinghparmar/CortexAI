@@ -101,6 +101,16 @@ PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2 # explicit /v1/optimize attempt count
 PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450 # compact optimizer output cap
 PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 
+# Tavily research retrieval
+TAVILY_API_KEY=                     # required when research_mode=true
+TAVILY_ENHANCED_SEARCH_ENABLED=true # false => fixed Tavily params only
+TAVILY_CHUNKS_PER_SOURCE=3          # 1..3; invalid values fall back to 3
+TAVILY_ENHANCED_SEARCH_DOMAIN_RULES=true
+TAVILY_NETWORK_DIAGNOSTICS_HOST=api.tavily.com
+TAVILY_NETWORK_DIAGNOSTICS_PORT=443
+TAVILY_NETWORK_DIAGNOSTICS_INTERVAL_SECONDS=300
+TAVILY_NETWORK_DIAGNOSTICS_TIMEOUT_SECONDS=2
+
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
 REDACT_PII=false          # true|false
@@ -417,6 +427,10 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - When sources are injected, they are treated as primary evidence for current/source-dependent factual claims; non-conflicting model background knowledge can still be used for explanation/context.
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
+- Tavily search options are resolved by a deterministic local resolver before the API call. It always sends `max_results=5`, `search_depth=advanced`, `chunks_per_source` from `TAVILY_CHUNKS_PER_SOURCE` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
+- When `TAVILY_ENHANCED_SEARCH_ENABLED=true`, the resolver may add Tavily `topic` (`finance` or `news` only), `time_range`, country targeting for non-topic searches, and curated finance domain allowlists. It does not rewrite the query; prompt optimization and existing query sanitization remain separate.
+- Tavily country targeting is omitted whenever `topic` is sent because Tavily country filtering applies only to general searches. Finance regional targeting uses curated domains instead, for example `bankofcanada.ca`/`statcan.gc.ca`, `bls.gov`/`bea.gov`/`federalreserve.gov`, `sec.gov`, or `ons.gov.uk`/`bankofengland.co.uk`.
+- `TAVILY_ENHANCED_SEARCH_ENABLED=false` is the kill switch for enhanced Tavily options; the call still uses the fixed retrieval params above.
 - When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
 - Tavily runtime diagnostics emit `research.network.diagnostics` with DNS + TCP egress health (host/port configurable via `TAVILY_NETWORK_DIAGNOSTICS_*` envs) for EC2 troubleshooting.
 - Tavily failures emit normalized `error_kind` fields (for example `dns_resolution_failed`, `timeout`, `auth_forbidden`, `rate_limited`) without logging raw query text.
@@ -927,6 +941,7 @@ OpenAIProject/
       research_state_store.py
       session_state.py
       tavily_client.py
+      tavily_resolver.py
       tavily_service.py
 
   utils/
@@ -965,6 +980,7 @@ OpenAIProject/
     test_server_utils.py
     test_smart_router_metadata.py
     test_tavily_client.py
+    test_tavily_resolver.py
     test_tier_decider.py
     test_unified_response_contract.py
     test_dynamic_provider_discovery_e2e.py
@@ -1020,4 +1036,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-04-13
+Last updated: 2026-05-23

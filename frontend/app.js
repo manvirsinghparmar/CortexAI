@@ -952,15 +952,21 @@ let lastAttachmentDescriptorsForRetry = [];
 let lastAttachmentMessageItemsForRetry = [];
 let _historyData = [];   // full fetched list
 let streamAutoScrollEnabled = false;
-let lastStreamAutoScrollTs = 0;
+let streamAutoScrollPausedByUser = false;
+let streamScrollProgrammatic = false;
+let streamUserScrollIntentUntil = 0;
 let composerRequestState = "idle";
 let activeStreamRequest = null;
 let activeStreamRequestId = 0;
 let pendingBottomScrollRaf = null;
 let pendingBottomScrollTimer = null;
+let streamScrollProgrammaticTimer = null;
 let optimizationTurnCounter = 0;
 const optimizationProgressTimers = new Map();
 const pendingWebSourcesByCard = new Map();
+const streamResponseBuffers = new Map();
+const streamRenderTimers = new Map();
+const streamRenderRafIds = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
 let modelPickerOutsideHandlersAttached = false;
@@ -970,7 +976,10 @@ let attachmentItems = [];
 let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
 const attachmentPreviewUrls = new Set();
-const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
+const STREAM_MARKDOWN_RENDER_DEBOUNCE_MS = 120;
+const STREAM_SCROLL_BOTTOM_THRESHOLD_PX = 120;
+const STREAM_SCROLL_PROGRAMMATIC_MS = 180;
+const STREAM_USER_SCROLL_INTENT_MS = 900;
 const OPTIMIZE_CONTEXT_MESSAGE_LIMIT = 4;
 const OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT = 10;
 const OPTIMIZE_CONTEXT_TOTAL_LIMIT = 2000;
@@ -1042,6 +1051,7 @@ const el = {
     routeResearchBtn: $("routeResearchBtn"),
     resultsSection: $("resultsSection"),
     resultsGrid: $("resultsGrid"),
+    jumpToLatestBtn: $("jumpToLatestBtn"),
     clearBtn: $("clearBtn"),
     errorBanner: $("errorBanner"),
     errorTitle: $("errorTitle"),
@@ -2097,8 +2107,91 @@ function setComposerDocked(docked) {
     el.promptCard.classList.toggle("docked", docked);
 }
 
+function getDocumentScrollElement() {
+    return document.scrollingElement || document.documentElement || document.body;
+}
+
+function isScrollableNearBottom(scrollEl, thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    if (!scrollEl) return true;
+    const threshold = Number.isFinite(Number(thresholdPx)) ? Number(thresholdPx) : STREAM_SCROLL_BOTTOM_THRESHOLD_PX;
+    const viewportHeight = scrollEl === getDocumentScrollElement()
+        ? (Number(window.innerHeight) || scrollEl.clientHeight || 0)
+        : (scrollEl.clientHeight || 0);
+    const scrollTop = scrollEl === getDocumentScrollElement()
+        ? (Number(window.scrollY) || scrollEl.scrollTop || 0)
+        : (scrollEl.scrollTop || 0);
+    const remaining = (scrollEl.scrollHeight || 0) - scrollTop - viewportHeight;
+    return remaining <= threshold;
+}
+
+function isDocumentNearBottom(thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    return isScrollableNearBottom(getDocumentScrollElement(), thresholdPx);
+}
+
+function isResultsSectionNearBottom(thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    if (!el.resultsSection || el.resultsSection.classList.contains("hidden")) return true;
+    return isScrollableNearBottom(el.resultsSection, thresholdPx);
+}
+
+function isNearStreamingBottom() {
+    return isDocumentNearBottom() && isResultsSectionNearBottom();
+}
+
+function updateJumpToLatestVisibility() {
+    if (!el.jumpToLatestBtn) return;
+    const show = streamAutoScrollEnabled && streamAutoScrollPausedByUser;
+    el.jumpToLatestBtn.classList.toggle("hidden", !show);
+    el.jumpToLatestBtn.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
+function setStreamAutoScrollPaused(paused) {
+    streamAutoScrollPausedByUser = Boolean(paused);
+    if (!streamAutoScrollPausedByUser) {
+        streamUserScrollIntentUntil = 0;
+    }
+    updateJumpToLatestVisibility();
+}
+
+function markProgrammaticStreamScroll() {
+    if (!streamAutoScrollEnabled) return;
+    streamScrollProgrammatic = true;
+    if (streamScrollProgrammaticTimer !== null) {
+        clearTimeout(streamScrollProgrammaticTimer);
+    }
+    streamScrollProgrammaticTimer = setTimeout(() => {
+        streamScrollProgrammatic = false;
+        streamScrollProgrammaticTimer = null;
+    }, STREAM_SCROLL_PROGRAMMATIC_MS);
+}
+
+function hasRecentStreamUserScrollIntent() {
+    return Date.now() <= streamUserScrollIntentUntil;
+}
+
+function markStreamUserScrollIntent(event = null) {
+    if (!streamAutoScrollEnabled) return;
+    if (event?.type === "keydown") {
+        const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+        if (!scrollKeys.has(event.key)) return;
+    }
+    streamUserScrollIntentUntil = Date.now() + STREAM_USER_SCROLL_INTENT_MS;
+}
+
+function handleUserScrollDuringStream() {
+    if (!streamAutoScrollEnabled) return;
+    if (streamScrollProgrammatic && !hasRecentStreamUserScrollIntent()) return;
+    const latestBelowViewport = !isNearStreamingBottom();
+    setStreamAutoScrollPaused(latestBelowViewport);
+    if (!latestBelowViewport && !isComposerStopModeActive()) {
+        streamAutoScrollEnabled = false;
+        updateJumpToLatestVisibility();
+    }
+}
+
 function scrollResultsToBottom(behavior = "auto") {
     if (!el.resultsSection || el.resultsSection.classList.contains("hidden")) return;
+
+    markProgrammaticStreamScroll();
 
     const lastCard = el.resultsGrid?.lastElementChild || null;
     if (lastCard && typeof lastCard.scrollIntoView === "function") {
@@ -2117,7 +2210,7 @@ function scrollResultsToBottom(behavior = "auto") {
 
     el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
 
-    const doc = document.scrollingElement || document.documentElement || document.body;
+    const doc = getDocumentScrollElement();
     if (doc && typeof window.scrollTo === "function") {
         const viewportH = Number(window.innerHeight) || 0;
         const targetTop = Math.max(0, doc.scrollHeight - viewportH);
@@ -2158,14 +2251,37 @@ function scheduleScrollResultsToBottom(options = {}) {
     }, followUpDelayMs);
 }
 
-function maybeAutoScrollDuringStream() {
+function syncJumpToLatestDuringStream() {
     if (!streamAutoScrollEnabled) return;
-    const now = Date.now();
-    if (now - lastStreamAutoScrollTs < STREAM_AUTO_SCROLL_THROTTLE_MS) {
-        return;
+    setStreamAutoScrollPaused(!isNearStreamingBottom());
+}
+
+function finishStreamingViewportControls() {
+    syncJumpToLatestDuringStream();
+    if (!streamAutoScrollPausedByUser) {
+        streamAutoScrollEnabled = false;
     }
-    lastStreamAutoScrollTs = now;
-    scrollResultsToBottom("auto");
+    updateJumpToLatestVisibility();
+}
+
+window.addEventListener("scroll", handleUserScrollDuringStream, { passive: true });
+window.addEventListener("wheel", markStreamUserScrollIntent, { passive: true });
+window.addEventListener("touchmove", markStreamUserScrollIntent, { passive: true });
+window.addEventListener("keydown", markStreamUserScrollIntent);
+if (el.resultsSection) {
+    el.resultsSection.addEventListener("scroll", handleUserScrollDuringStream, { passive: true });
+    el.resultsSection.addEventListener("wheel", markStreamUserScrollIntent, { passive: true });
+    el.resultsSection.addEventListener("touchmove", markStreamUserScrollIntent, { passive: true });
+}
+if (el.jumpToLatestBtn) {
+    el.jumpToLatestBtn.addEventListener("click", () => {
+        setStreamAutoScrollPaused(false);
+        scrollResultsToBottom("smooth");
+        if (!isComposerStopModeActive()) {
+            streamAutoScrollEnabled = false;
+            updateJumpToLatestVisibility();
+        }
+    });
 }
 
 function markFirstStreamResponseSeen() {
@@ -3451,7 +3567,8 @@ async function doSingleChat(prompt, {
     let partialText = "";
     let stoppedByUser = false;
     streamAutoScrollEnabled = true;
-    lastStreamAutoScrollTs = 0;
+    streamUserScrollIntentUntil = 0;
+    setStreamAutoScrollPaused(!streamState.shouldRevealLatest && !isNearStreamingBottom());
     try {
         await callAPIStream("/v1/chat/stream", body, async event => {
             if (event.type === "start") {
@@ -3497,7 +3614,7 @@ async function doSingleChat(prompt, {
             throw error;
         }
     } finally {
-        streamAutoScrollEnabled = false;
+        finishStreamingViewportControls();
         if (ownedStreamRequest) {
             endActiveStreamRequest(activeRequest);
         }
@@ -3580,7 +3697,8 @@ async function doCompare(prompt, {
     let stoppedByUser = false;
 
     streamAutoScrollEnabled = true;
-    lastStreamAutoScrollTs = 0;
+    streamUserScrollIntentUntil = 0;
+    setStreamAutoScrollPaused(!streamState.shouldRevealLatest && !isNearStreamingBottom());
     try {
         await callAPIStream("/v1/compare/stream", {
             prompt,
@@ -3642,7 +3760,7 @@ async function doCompare(prompt, {
             throw error;
         }
     } finally {
-        streamAutoScrollEnabled = false;
+        finishStreamingViewportControls();
         if (ownedStreamRequest) {
             endActiveStreamRequest(activeRequest);
         }
@@ -4019,6 +4137,10 @@ function isRequestAbortedFailure(error) {
 }
 
 function readStreamedResponseText(index) {
+    const key = Number(index);
+    if (streamResponseBuffers.has(key)) {
+        return String(streamResponseBuffers.get(key) || "");
+    }
     const textEl = document.getElementById(`response-text-${index}`);
     return textEl ? String(textEl.textContent || "") : "";
 }
@@ -4135,13 +4257,32 @@ function webSourceListId(index) {
         : "response-sources-list-live";
 }
 
-function buildWebSourceChipsHtml(sources) {
+function responseCitationPrefix(index) {
+    const normalizedIndex = Number(index);
+    return Number.isFinite(normalizedIndex)
+        ? `response-${normalizedIndex}`
+        : "response-live";
+}
+
+function responseCitationTargetId(index, citationNumber) {
+    const safeNumber = String(citationNumber || "").replace(/[^0-9]/g, "") || "1";
+    return `cite-${responseCitationPrefix(index)}-${safeNumber}`;
+}
+
+function citationPrefixFromResponseElement(targetEl) {
+    const match = /^response-text-(\d+)$/.exec(String(targetEl?.id || ""));
+    return match ? responseCitationPrefix(Number(match[1])) : responseCitationPrefix(null);
+}
+
+function buildWebSourceChipsHtml(sources, index = null) {
     if (!Array.isArray(sources) || sources.length === 0) return "";
     return sources.map((source, idx) => {
         const faviconUrl = `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
         const domain = sourceDomainLabel(source.url);
+        const citationId = responseCitationTargetId(index, idx + 1);
         return `
           <a class="source-chip"
+             id="${escHtml(citationId)}"
              href="${escHtml(source.url)}"
              target="_blank"
              rel="noopener noreferrer"
@@ -4231,7 +4372,7 @@ function applyPendingWebSources(index, shouldShow = true) {
     if (list) {
         list.classList.remove("hidden");
         list.setAttribute("aria-hidden", "true");
-        list.innerHTML = buildWebSourceChipsHtml(sources);
+        list.innerHTML = buildWebSourceChipsHtml(sources, index);
     }
 }
 
@@ -4357,7 +4498,7 @@ function buildResponseProviderMeta(summary, index = null) {
 function buildResponseFooter(index, summary, tokenUsage, webSources = [], options = {}) {
     const safeSources = Array.isArray(webSources) ? webSources : [];
     const sourceStripHtml = safeSources.length > 0 ? buildWebSourceStripHtml(safeSources, index) : "";
-    const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources) : "";
+    const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources, index) : "";
     const compact = Boolean(options.compact);
     const compactClass = compact ? " is-compare-compact" : "";
     const providerMetaHtml = compact ? "" : buildResponseProviderMeta(summary, index);
@@ -4662,6 +4803,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
     const showUserBubble = !options.skipUserBubble;
+    const shouldRevealLatest = el.resultsSection.classList.contains("hidden") || isNearStreamingBottom();
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -4669,6 +4811,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     el.resultsGrid.style.gridTemplateColumns = "";
 
     if (!append) {
+        resetStreamingRenderState();
         el.resultsGrid.innerHTML = "";
     }
 
@@ -4690,9 +4833,11 @@ function initStreamingResults(targets, isMulti, options = {}) {
         el.resultsGrid.innerHTML = html;
     }
 
-    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    if (shouldRevealLatest) {
+        scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    }
 
-    return { indexMap };
+    return { indexMap, shouldRevealLatest };
 }
 
 function initCompareStreamingResults(targets, options = {}) {
@@ -4700,6 +4845,7 @@ function initCompareStreamingResults(targets, options = {}) {
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
     const skipUserBubble = Boolean(options.skipUserBubble);
+    const shouldRevealLatest = el.resultsSection.classList.contains("hidden") || isNearStreamingBottom();
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -4707,6 +4853,7 @@ function initCompareStreamingResults(targets, options = {}) {
     el.resultsGrid.style.gridTemplateColumns = "";
 
     if (!append) {
+        resetStreamingRenderState();
         el.resultsGrid.innerHTML = "";
     }
 
@@ -4723,24 +4870,110 @@ function initCompareStreamingResults(targets, options = {}) {
         el.resultsGrid.innerHTML = turnHtml;
     }
 
-    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    if (shouldRevealLatest) {
+        scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    }
 
-    return { indexMap };
+    return { indexMap, shouldRevealLatest };
+}
+
+function clearStreamingRenderState(index) {
+    const key = Number(index);
+    if (streamRenderTimers.has(key)) {
+        clearTimeout(streamRenderTimers.get(key));
+        streamRenderTimers.delete(key);
+    }
+    if (streamRenderRafIds.has(key) && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(streamRenderRafIds.get(key));
+        streamRenderRafIds.delete(key);
+    }
+    streamResponseBuffers.delete(key);
+}
+
+function resetStreamingRenderState() {
+    streamRenderTimers.forEach(timer => clearTimeout(timer));
+    streamRenderTimers.clear();
+    if (typeof cancelAnimationFrame === "function") {
+        streamRenderRafIds.forEach(rafId => cancelAnimationFrame(rafId));
+    }
+    streamRenderRafIds.clear();
+    streamResponseBuffers.clear();
+}
+
+function normalizeStreamingMarkdownPreview(rawText) {
+    const source = String(rawText || "");
+    if (!source) return "";
+    const fenceMatches = source.match(/^```[^\n`]*$/gm) || [];
+    if (fenceMatches.length % 2 === 0) {
+        return source;
+    }
+    return `${source}${source.endsWith("\n") ? "" : "\n"}` + "```";
+}
+
+function renderStreamingMarkdown(index) {
+    const key = Number(index);
+    const textEl = document.getElementById(`response-text-${key}`);
+    if (!textEl || !streamResponseBuffers.has(key)) return;
+
+    const rawText = streamResponseBuffers.get(key) || "";
+    const previewText = normalizeStreamingMarkdownPreview(rawText);
+    textEl.innerHTML = renderMarkdownToHtml(previewText, {
+        citationPrefix: citationPrefixFromResponseElement(textEl),
+    });
+    textEl.dataset.empty = rawText ? "false" : "true";
+    textEl.setAttribute("data-streaming", "true");
+    applyWideTableLayout(textEl);
+    syncJumpToLatestDuringStream();
+}
+
+function scheduleStreamingMarkdownRender(index) {
+    const key = Number(index);
+    if (streamRenderTimers.has(key)) {
+        clearTimeout(streamRenderTimers.get(key));
+    }
+    if (streamRenderRafIds.has(key) && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(streamRenderRafIds.get(key));
+        streamRenderRafIds.delete(key);
+    }
+
+    const timer = setTimeout(() => {
+        streamRenderTimers.delete(key);
+        const run = () => {
+            streamRenderRafIds.delete(key);
+            renderStreamingMarkdown(key);
+        };
+        if (typeof requestAnimationFrame === "function") {
+            const rafId = requestAnimationFrame(run);
+            streamRenderRafIds.set(key, rafId);
+        } else {
+            run();
+        }
+    }, STREAM_MARKDOWN_RENDER_DEBOUNCE_MS);
+    streamRenderTimers.set(key, timer);
 }
 
 function appendStreamLine(index, text) {
     const textEl = document.getElementById(`response-text-${index}`);
     if (!textEl) return;
-    if (text) markFirstStreamResponseSeen();
+    const chunk = String(text || "");
+    if (chunk) markFirstStreamResponseSeen();
+    const key = Number(index);
+    const previousText = streamResponseBuffers.get(key) || "";
+    if (!chunk && !previousText) return;
+    const shouldRenderImmediately = textEl.dataset.empty === "true" || !previousText;
+    streamResponseBuffers.set(key, previousText + chunk);
     if (textEl.dataset.empty === "true") {
-        textEl.textContent = "";
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
+        textEl.setAttribute("data-streaming", "true");
         const typingEl = document.getElementById(`response-typing-${index}`);
         if (typingEl) typingEl.classList.add("hidden");
     }
-    textEl.textContent += text;
-    maybeAutoScrollDuringStream();
+    if (shouldRenderImmediately) {
+        renderStreamingMarkdown(key);
+    } else {
+        scheduleStreamingMarkdownRender(key);
+    }
 }
 
 function finalizeStreamCard(index, resp) {
@@ -4763,6 +4996,7 @@ function finalizeStreamCard(index, resp) {
         || normalizeWebSources(resp.web_source_items || []);
 
     if (textEl) {
+        clearStreamingRenderState(index);
         renderResponseMarkdown(textEl, text, { hasError, error: resp.error });
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
@@ -4790,14 +5024,14 @@ function finalizeStreamCard(index, resp) {
         card.setAttribute("title", buildCompareResponseTooltip(resp, summary, pendingSources));
     }
     applyPendingWebSources(index, !hasError);
-    maybeAutoScrollDuringStream();
+    syncJumpToLatestDuringStream();
 }
 
 function renderCompareSummary(data) {
     const existing = el.resultsGrid.querySelector(".compare-summary-card");
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
-    scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 64 });
+    syncJumpToLatestDuringStream();
 }
 
 async function copyTextToClipboard(text) {
@@ -4865,6 +5099,21 @@ async function handleCopyAction(button) {
 }
 
 el.resultsGrid.addEventListener("click", event => {
+    const citationLink = event.target.closest(".llm-cite");
+    if (citationLink && el.resultsGrid.contains(citationLink)) {
+        const targetId = String(citationLink.getAttribute("href") || "").replace(/^#/, "");
+        const match = /^cite-response-(\d+)-\d+$/.exec(targetId);
+        const sourceTarget = targetId ? document.getElementById(targetId) : null;
+        if (match && sourceTarget) {
+            const sourceStrip = document.getElementById(`response-sources-${match[1]}`);
+            if (sourceStrip) setSourceStripExpanded(sourceStrip, true);
+            event.preventDefault();
+            sourceTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+            sourceTarget.focus({ preventScroll: true });
+            return;
+        }
+    }
+
     const sourceToggle = event.target.closest(".web-source-toggle");
     if (sourceToggle && el.resultsGrid.contains(sourceToggle)) {
         const sourceStrip = sourceToggle.closest(".web-source-strip");
@@ -4925,7 +5174,9 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
     const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources, { compact: compareView });
-    const responseHtml = hasError ? renderResponseErrorHtml(resp.error) : renderMarkdownToHtml(text);
+    const responseHtml = hasError
+        ? renderResponseErrorHtml(resp.error)
+        : renderMarkdownToHtml(text, { citationPrefix: responseCitationPrefix(index) });
     const responseClasses = hasError
         ? getModelSoftErrorParts(resp.error) ? "model-soft-error" : "response-error error-text"
         : "";
@@ -4971,6 +5222,15 @@ el.clearBtn.addEventListener("click", () => { clearResults(); });
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
+    resetStreamingRenderState();
+    streamAutoScrollEnabled = false;
+    setStreamAutoScrollPaused(false);
+    streamScrollProgrammatic = false;
+    streamUserScrollIntentUntil = 0;
+    if (streamScrollProgrammaticTimer !== null) {
+        clearTimeout(streamScrollProgrammaticTimer);
+        streamScrollProgrammaticTimer = null;
+    }
     revokeAllAttachmentPreviewUrls();
     pendingWebSourcesByCard.clear();
     hasReceivedFirstStreamResponse = false;
@@ -5243,6 +5503,9 @@ async function initializeAuthAndCatalog() {
     setMode("single");
     refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
+    if (window.LLMResponse && typeof window.LLMResponse.installCopyDelegate === "function") {
+        window.LLMResponse.installCopyDelegate(el.resultsGrid);
+    }
     void initializeAuthAndCatalog();
 })();
 
@@ -5293,7 +5556,7 @@ function parseMarkdownTableAlignments(delimiterRow, expectedCells) {
     return aligns;
 }
 
-function renderInlineMarkdown(rawText) {
+function renderInlineMarkdown(rawText, options = {}) {
     let source = String(rawText || "");
     const codeTokens = [];
     source = source.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -5313,6 +5576,25 @@ function renderInlineMarkdown(rawText) {
         return token;
     });
 
+    // Citation markers: standalone [1], [2], adjacent groups like [1][2][3].
+    // Skipped when already inside a markdown link or code token.
+    // Collapse whitespace between consecutive [N] groups so adjacent
+    // citations render as one unit (matches Perplexity-style footnotes).
+    source = source.replace(/(\[\d{1,3}\])(?:\s+(?=\[\d{1,3}\]))/g, "$1");
+    // Also drop the space that often precedes the first citation in
+    // a sentence-ending group (e.g. "muscle [1][2][3] ." -> "muscle[1][2][3].").
+    source = source.replace(/\s+(\[\d{1,3}\](?:\[\d{1,3}\])*)(\s*[.,;:!?])/g, "$1$2");
+    const citeTokens = [];
+    source = source.replace(/\[(\d{1,3})\]/g, (match, num) => {
+        const token = `@@INLCITE${citeTokens.length}@@`;
+        const prefix = String(options.citationPrefix || "").trim();
+        const citeId = prefix ? `cite-${prefix}-${num}` : `cite-${num}`;
+        citeTokens.push(
+            `<a href="#${escHtml(citeId)}" class="llm-cite" data-cite="${escHtml(num)}" aria-label="Citation ${escHtml(num)}">${escHtml(num)}</a>`
+        );
+        return token;
+    });
+
     let html = escHtml(source)
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
@@ -5321,11 +5603,26 @@ function renderInlineMarkdown(rawText) {
     linkTokens.forEach((tokenHtml, idx) => {
         html = html.replaceAll(`@@INLLINK${idx}@@`, tokenHtml);
     });
+    citeTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLCITE${idx}@@`, tokenHtml);
+    });
     codeTokens.forEach((tokenHtml, idx) => {
         html = html.replaceAll(`@@INLCODE${idx}@@`, tokenHtml);
     });
     return html;
 }
+
+// GitHub-style callout map. Triggered by `> [!TIP]`, `> [!NOTE]`, etc.
+const LLM_CALLOUT_TYPES = {
+    TIP: { cls: "llm-callout-tip", icon: "💡", title: "Tip" },
+    NOTE: { cls: "llm-callout-info", icon: "ℹ️", title: "Note" },
+    INFO: { cls: "llm-callout-info", icon: "ℹ️", title: "Info" },
+    IMPORTANT: { cls: "llm-callout-info", icon: "ℹ️", title: "Important" },
+    WARNING: { cls: "llm-callout-warn", icon: "⚠️", title: "Warning" },
+    CAUTION: { cls: "llm-callout-warn", icon: "⚠️", title: "Caution" },
+    ERROR: { cls: "llm-callout-error", icon: "❌", title: "Error" },
+    DANGER: { cls: "llm-callout-error", icon: "❌", title: "Danger" },
+};
 
 function isMarkdownTableStart(lines, startIndex) {
     if (startIndex + 1 >= lines.length) return false;
@@ -5335,11 +5632,11 @@ function isMarkdownTableStart(lines, startIndex) {
     return GFM_TABLE_DELIMITER_RE.test(delimiterLine.trim());
 }
 
-function renderMarkdownTable(lines, startIndex) {
+function renderMarkdownTable(lines, startIndex, options = {}) {
     const headerCells = splitMarkdownTableRow(lines[startIndex]);
     if (headerCells.length === 0) {
         return {
-            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""))}</p>`,
+            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""), options)}</p>`,
             nextIndex: startIndex + 1,
         };
     }
@@ -5347,7 +5644,7 @@ function renderMarkdownTable(lines, startIndex) {
     const alignments = parseMarkdownTableAlignments(lines[startIndex + 1], headerCells.length);
     const thHtml = headerCells.map((cell, idx) => {
         const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
-        return `<th${align}>${renderInlineMarkdown(cell)}</th>`;
+        return `<th${align}>${renderInlineMarkdown(cell, options)}</th>`;
     }).join("");
 
     let cursor = startIndex + 2;
@@ -5365,7 +5662,7 @@ function renderMarkdownTable(lines, startIndex) {
         if (cells.length === 0) break;
         const tds = headerCells.map((_, idx) => {
             const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
-            return `<td${align}>${renderInlineMarkdown(cells[idx] || "")}</td>`;
+            return `<td${align}>${renderInlineMarkdown(cells[idx] || "", options)}</td>`;
         }).join("");
         rowHtml.push(`<tr>${tds}</tr>`);
         cursor += 1;
@@ -5377,7 +5674,7 @@ function renderMarkdownTable(lines, startIndex) {
     };
 }
 
-function renderMarkdownToHtml(markdownText) {
+function renderMarkdownToHtml(markdownText, options = {}) {
     let source = String(markdownText || "");
     if (!source.trim()) return "";
     source = source.replace(/\r\n?/g, "\n");
@@ -5401,7 +5698,7 @@ function renderMarkdownToHtml(markdownText) {
         const paragraphText = paragraphLines.join("\n").trim();
         paragraphLines = [];
         if (!paragraphText) return;
-        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
+        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText, options).replace(/\n/g, "<br>")}</p>`);
     };
 
     let index = 0;
@@ -5428,7 +5725,7 @@ function renderMarkdownToHtml(markdownText) {
 
         if (isMarkdownTableStart(lines, index)) {
             flushParagraph();
-            const renderedTable = renderMarkdownTable(lines, index);
+            const renderedTable = renderMarkdownTable(lines, index, options);
             htmlParts.push(renderedTable.html);
             index = renderedTable.nextIndex;
             continue;
@@ -5438,7 +5735,7 @@ function renderMarkdownToHtml(markdownText) {
         if (headingMatch) {
             flushParagraph();
             const level = headingMatch[1].length;
-            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2], options)}</h${level}>`);
             index += 1;
             continue;
         }
@@ -5452,7 +5749,7 @@ function renderMarkdownToHtml(markdownText) {
                 items.push(current.replace(/^[-*+]\s+/, ""));
                 index += 1;
             }
-            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item, options)}</li>`).join("")}</ul>`);
             continue;
         }
 
@@ -5461,11 +5758,60 @@ function renderMarkdownToHtml(markdownText) {
             const items = [];
             while (index < lines.length) {
                 const current = String(lines[index] || "").trim();
-                if (!/^\d+\.\s+/.test(current)) break;
-                items.push(current.replace(/^\d+\.\s+/, ""));
+                const itemMatch = /^(\d+)\.\s+(.*)$/.exec(current);
+                if (!itemMatch) break;
+                items.push({
+                    value: Number(itemMatch[1]),
+                    text: itemMatch[2],
+                });
                 index += 1;
             }
-            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            const firstValue = items[0]?.value;
+            const startAttr = Number.isSafeInteger(firstValue) && firstValue !== 1
+                ? ` start="${firstValue}"`
+                : "";
+            htmlParts.push(`<ol${startAttr}>${items.map(item => {
+                const num = Number.isSafeInteger(item.value) ? item.value : 1;
+                const valueAttr = Number.isSafeInteger(item.value) ? ` value="${item.value}"` : "";
+                // Explicit badge so the rendered number reflects the markdown
+                // value even when separate <ol> blocks (split by nested bullets)
+                // would otherwise restart the visual count.
+                return `<li${valueAttr}><span class="llm-ol-num" aria-hidden="true">${num}</span><span class="llm-ol-text">${renderInlineMarkdown(item.text, options)}</span></li>`;
+            }).join("")}</ol>`);
+            continue;
+        }
+
+        if (/^>\s?/.test(trimmed)) {
+            flushParagraph();
+            const quoteLines = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "");
+                if (!/^\s*>\s?/.test(current)) break;
+                quoteLines.push(current.replace(/^\s*>\s?/, ""));
+                index += 1;
+            }
+            const firstLine = (quoteLines[0] || "").trim();
+            const calloutMatch = /^\[!([A-Z]+)\]\s*(.*)$/.exec(firstLine);
+            if (calloutMatch && LLM_CALLOUT_TYPES[calloutMatch[1]]) {
+                const meta = LLM_CALLOUT_TYPES[calloutMatch[1]];
+                const headerText = calloutMatch[2].trim();
+                const bodyLines = quoteLines.slice(1);
+                const bodyMarkdown = bodyLines.join("\n").trim();
+                const bodyHtml = bodyMarkdown ? renderMarkdownToHtml(bodyMarkdown, options) : "";
+                const titleHtml = headerText
+                    ? `<div class="llm-callout-title">${renderInlineMarkdown(headerText, options)}</div>`
+                    : `<div class="llm-callout-title">${meta.title}</div>`;
+                htmlParts.push(
+                    `<aside class="llm-callout ${meta.cls}" role="note">` +
+                    `<span class="llm-callout-icon" aria-hidden="true">${meta.icon}</span>` +
+                    `<div class="llm-callout-body">${titleHtml}${bodyHtml}</div>` +
+                    `</aside>`
+                );
+                continue;
+            }
+            const quoteMarkdown = quoteLines.join("\n").trim();
+            const quoteHtml = quoteMarkdown ? renderMarkdownToHtml(quoteMarkdown, options) : "";
+            htmlParts.push(`<blockquote>${quoteHtml}</blockquote>`);
             continue;
         }
 
@@ -5522,18 +5868,26 @@ function applyWideTableLayout(containerEl) {
 function renderResponseMarkdown(targetEl, text, { hasError = false, error = null } = {}) {
     if (!targetEl) return;
     const value = String(text ?? "");
+    targetEl.removeAttribute("data-streaming");
     if (hasError) {
         targetEl.innerHTML = renderResponseErrorHtml(error || { message: value });
         return;
     }
-    targetEl.innerHTML = renderMarkdownToHtml(value);
+    targetEl.innerHTML = renderMarkdownToHtml(value, {
+        citationPrefix: citationPrefixFromResponseElement(targetEl),
+    });
     applyWideTableLayout(targetEl);
+    if (window.LLMResponse && typeof window.LLMResponse.enhanceResponseDom === "function") {
+        window.LLMResponse.enhanceResponseDom(targetEl);
+    }
 }
 
 function refreshResponseTableLayouts(root = el.resultsGrid) {
     if (!root) return;
+    const enhance = window.LLMResponse && window.LLMResponse.enhanceResponseDom;
     root.querySelectorAll(".response-text").forEach(responseEl => {
         applyWideTableLayout(responseEl);
+        if (enhance) enhance(responseEl);
     });
 }
 

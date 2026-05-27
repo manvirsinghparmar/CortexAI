@@ -1,11 +1,15 @@
+import pytest
+
 from tools.web.tavily_client import TavilyResearchClient
 
 
 class _FakeRawClient:
     def __init__(self, response):
         self._response = response
+        self.calls = []
 
-    def search(self, **_kwargs):
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
         return self._response
 
     def qna_search(self, **_kwargs):
@@ -16,6 +20,13 @@ def _make_client(response) -> TavilyResearchClient:
     client = object.__new__(TavilyResearchClient)
     client.client = _FakeRawClient(response)
     return client
+
+
+@pytest.fixture(autouse=True)
+def _stable_tavily_resolver_env(monkeypatch):
+    monkeypatch.setenv("TAVILY_ENHANCED_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_CHUNKS_PER_SOURCE", "3")
+    monkeypatch.setenv("TAVILY_ENHANCED_SEARCH_DOMAIN_RULES", "true")
 
 
 def test_search_uses_server_utc_fallback_when_provider_timestamp_missing(monkeypatch):
@@ -76,3 +87,50 @@ def test_error_classifier_detects_auth_forbidden():
     exc = RuntimeError("403 Forbidden from Tavily API")
     kind = TavilyResearchClient._classify_error_kind(exc)
     assert kind == "auth_forbidden"
+
+
+def test_search_passes_enhanced_resolver_options_to_tavily():
+    client = _make_client({"results": []})
+
+    client.search("latest Canada inflation rate", max_results=1, search_depth="basic")
+
+    call = client.client.calls[0]
+    assert call["query"] == "latest Canada inflation rate"
+    assert call["max_results"] == 5
+    assert call["search_depth"] == "advanced"
+    assert call["chunks_per_source"] == 3
+    assert call["include_raw_content"] is False
+    assert call["include_answer"] is False
+    assert call["auto_parameters"] is False
+    assert call["topic"] == "finance"
+    assert call["time_range"] == "week"
+    assert call["include_domains"] == ["bankofcanada.ca", "statcan.gc.ca"]
+    assert "country" not in call
+
+
+def test_search_kill_switch_passes_only_fixed_tavily_options(monkeypatch):
+    monkeypatch.setenv("TAVILY_ENHANCED_SEARCH_ENABLED", "false")
+    client = _make_client({"results": []})
+
+    client.search("latest Canada inflation rate")
+
+    call = client.client.calls[0]
+    assert call == {
+        "query": "latest Canada inflation rate",
+        "max_results": 5,
+        "search_depth": "advanced",
+        "chunks_per_source": 3,
+        "include_raw_content": False,
+        "include_answer": False,
+        "auto_parameters": False,
+    }
+
+
+def test_search_invalid_chunk_env_uses_default(monkeypatch):
+    monkeypatch.setenv("TAVILY_CHUNKS_PER_SOURCE", "9")
+    client = _make_client({"results": []})
+
+    client.search("what is Pythagorean theorem")
+
+    call = client.client.calls[0]
+    assert call["chunks_per_source"] == 3

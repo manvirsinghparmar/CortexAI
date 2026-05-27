@@ -13,6 +13,10 @@ from typing import Any
 from utils.logger import get_logger
 
 from .contracts import SourceDoc
+from .tavily_resolver import (
+    TAVILY_CREDITS_PER_ADVANCED_SEARCH,
+    resolve_tavily_search_options,
+)
 
 logger = get_logger(__name__)
 
@@ -113,7 +117,7 @@ class TavilyResearchClient:
     @classmethod
     def _exception_chain_types(cls, exc: Exception, *, max_depth: int = 5) -> list[str]:
         chain: list[str] = []
-        current: Exception | None = exc
+        current: BaseException | None = exc
         depth = 0
         while current is not None and depth < max_depth:
             chain.append(type(current).__name__)
@@ -356,6 +360,16 @@ class TavilyResearchClient:
 
         return fallback
 
+    @staticmethod
+    def _resolve_credits_used(response: dict[str, Any]) -> int:
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            for key in ("credits", "credits_used", "api_credits"):
+                value = usage.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    return int(value)
+        return TAVILY_CREDITS_PER_ADVANCED_SEARCH
+
     def search(
         self, query: str, max_results: int = 5, search_depth: str = "advanced"
     ) -> list[SourceDoc]:
@@ -372,7 +386,24 @@ class TavilyResearchClient:
         """
         query_hash = self._query_hash(query)
         query_length = len(str(query or ""))
+        resolution = resolve_tavily_search_options(
+            query,
+            max_results=max_results,
+            search_depth=search_depth,
+        )
         started = time.perf_counter()
+        logger.info(
+            "Tavily search options resolved",
+            extra={
+                "extra_fields": {
+                    "event": "research.search.resolver",
+                    "provider": "tavily",
+                    "query_hash": query_hash,
+                    "query_length": query_length,
+                    **resolution.log_fields,
+                }
+            },
+        )
         logger.info(
             "Tavily search started",
             extra={
@@ -381,8 +412,11 @@ class TavilyResearchClient:
                     "provider": "tavily",
                     "query_hash": query_hash,
                     "query_length": query_length,
-                    "max_results": int(max_results),
-                    "search_depth": str(search_depth or "advanced"),
+                    "max_results": int(resolution.params["max_results"]),
+                    "search_depth": str(resolution.params["search_depth"]),
+                    "chunks_per_source": int(resolution.params["chunks_per_source"]),
+                    "auto_parameters": bool(resolution.params["auto_parameters"]),
+                    **resolution.log_fields,
                     **self._network_diag_snapshot(),
                 }
             },
@@ -391,10 +425,7 @@ class TavilyResearchClient:
         try:
             response = self.client.search(
                 query=query,
-                max_results=max_results,
-                search_depth=search_depth,
-                include_raw_content=False,
-                include_answer=False,
+                **resolution.params,
             )
 
             request_timestamp = self._utc_now_iso()
@@ -428,6 +459,7 @@ class TavilyResearchClient:
                 )
 
             latency_ms = int((time.perf_counter() - started) * 1000)
+            source_content_lengths = [len(str(source.excerpt or "")) for source in sources]
             logger.info(
                 "Tavily search completed",
                 extra={
@@ -438,9 +470,14 @@ class TavilyResearchClient:
                         "query_length": query_length,
                         "result_count": len(sources),
                         "raw_result_count": len(raw_results),
+                        "source_content_lengths": source_content_lengths,
+                        "credits_used": self._resolve_credits_used(response),
                         "latency_ms": latency_ms,
-                        "max_results": int(max_results),
-                        "search_depth": str(search_depth or "advanced"),
+                        "max_results": int(resolution.params["max_results"]),
+                        "search_depth": str(resolution.params["search_depth"]),
+                        "chunks_per_source": int(resolution.params["chunks_per_source"]),
+                        "auto_parameters": bool(resolution.params["auto_parameters"]),
+                        **resolution.log_fields,
                         **self._network_diag_snapshot(),
                     }
                 },
@@ -458,13 +495,16 @@ class TavilyResearchClient:
                         "provider": "tavily",
                         "query_hash": query_hash,
                         "query_length": query_length,
-                        "max_results": int(max_results),
-                        "search_depth": str(search_depth or "advanced"),
+                        "max_results": int(resolution.params["max_results"]),
+                        "search_depth": str(resolution.params["search_depth"]),
+                        "chunks_per_source": int(resolution.params["chunks_per_source"]),
+                        "auto_parameters": bool(resolution.params["auto_parameters"]),
                         "latency_ms": latency_ms,
                         "error_type": type(exc).__name__,
                         "error_kind": self._classify_error_kind(exc),
                         "error_message": self._error_message_excerpt(exc),
                         "error_chain_types": self._exception_chain_types(exc),
+                        **resolution.log_fields,
                         "diagnostic_host": str(
                             getattr(self, "_diagnostic_host", self._DEFAULT_DIAGNOSTIC_HOST)
                         ),

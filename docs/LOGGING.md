@@ -86,9 +86,17 @@ Tavily / research:
 - `research.cache.hit|bypass`
 - `research.dispatch`
 - `research.query.rewritten`
+- `research.search.resolver`
+- `research.resolver.config.warning`
 - `research.search.start|success|failure|empty`
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
+
+Tavily resolver logs include:
+
+- enhanced resolver state (`enhanced_search_enabled`, `chunks_per_source`)
+- category and option decisions (`category`, `topic_sent`, `time_range`, `country_detected`, `country_sent`, `domain_rule`, `include_domain_count`)
+- on search success, result summary fields (`result_count`, `source_content_lengths`, `credits_used`)
 
 Tavily failure logs include:
 
@@ -195,4 +203,4 @@ Streaming failure interpretation:
 
 ---
 
-Last updated: 2026-04-15
+Last updated: 2026-05-23

@@ -617,6 +617,32 @@ class TestProviderContractCompliance:
         assert config["max_output_tokens"] == 2048
 
     @patch("google.genai.Client")
+    def test_gemini_merges_multiple_system_messages(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Context-aware answer"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=4, candidates_token_count=7, total_token_count=11
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-2.5-flash")
+        response = client.get_completion(
+            messages=[
+                {"role": "system", "content": "WEB RESEARCH SOURCES:\n1) source"},
+                {"role": "system", "content": "SYSTEM CONTEXT AND RULES:\nUse chat context."},
+                {"role": "user", "content": "how has bollywood transitioned?"},
+                {"role": "assistant", "content": "Bollywood changed across eras."},
+                {"role": "user", "content": "List popular films of the 1990s."},
+            ]
+        )
+
+        assert response.is_success
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert "WEB RESEARCH SOURCES" in config["system_instruction"]
+        assert "SYSTEM CONTEXT AND RULES" in config["system_instruction"]
+
+    @patch("google.genai.Client")
     def test_gemini_includes_inline_attachment_parts(self, mock_genai):
         mock_response = Mock()
         mock_response.text = "Image analyzed"

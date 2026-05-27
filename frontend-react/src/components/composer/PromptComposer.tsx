@@ -1,5 +1,4 @@
 import { useRef, useEffect, useCallback } from "react";
-import { ModeToggle } from "./ModeToggle";
 import { ModelSelector } from "./ModelSelector";
 import { CompareSelector } from "./CompareSelector";
 import { FeatureChips } from "./FeatureChips";
@@ -8,7 +7,6 @@ import { useChatStore } from "../../store/chatStore";
 import { useChat } from "../../hooks/useChat";
 import { isModelDropdownVisible } from "../../hooks/useSmartRouting";
 import type { ModelCatalogItem } from "../../types";
-import styles from "./PromptComposer.module.css";
 
 interface PromptComposerProps {
   models: ModelCatalogItem[];
@@ -16,7 +14,6 @@ interface PromptComposerProps {
 
 export function PromptComposer({ models }: PromptComposerProps) {
   const mode = useChatStore((s) => s.mode);
-  const setMode = useChatStore((s) => s.setMode);
   const smartMode = useChatStore((s) => s.smartMode);
   const setSmartMode = useChatStore((s) => s.setSmartMode);
   const researchMode = useChatStore((s) => s.researchMode);
@@ -34,7 +31,6 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const { submit, cancel } = useChat();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-resize textarea
   const resize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -55,7 +51,6 @@ export function PromptComposer({ models }: PromptComposerProps) {
 
   const showModelDropdown = isModelDropdownVisible(mode, smartMode);
 
-  // Seed compare model keys when models load and keys are empty
   useEffect(() => {
     if (models.length >= 2) {
       if (!compareModelKeys[0])
@@ -66,60 +61,52 @@ export function PromptComposer({ models }: PromptComposerProps) {
   }, [models, compareModelKeys, setCompareModelKey]);
 
   return (
-    <div className={styles.card}>
-      {/* Toolbar row */}
-      <div className={styles.toolbar}>
-        <ModeToggle mode={mode} onChange={setMode} />
+    <div className="bg-white dark:bg-zinc-800 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-lg overflow-hidden">
+      {/* Model selector row */}
+      {(mode === "compare" || showModelDropdown) && (
+        <div className="px-4 pt-3 pb-0">
+          {mode === "single" && showModelDropdown && (
+            <ModelSelector
+              id="singleModel"
+              label="Using:"
+              models={models}
+              value={selectedModelKey}
+              onChange={setSelectedModelKey}
+            />
+          )}
+          {mode === "compare" && (
+            <CompareSelector
+              models={models}
+              keys={compareModelKeys}
+              onChange={setCompareModelKey}
+            />
+          )}
+        </div>
+      )}
 
-        {mode === "single" && showModelDropdown && (
-          <ModelSelector
-            id="singleModel"
-            label="Using:"
-            models={models}
-            value={selectedModelKey}
-            onChange={setSelectedModelKey}
-          />
-        )}
-
-        {mode === "compare" && (
-          <CompareSelector
-            models={models}
-            keys={compareModelKeys}
-            onChange={setCompareModelKey}
-          />
-        )}
-      </div>
-
-      {/* Input area */}
-      <div className={styles.inputWrap}>
+      {/* Textarea */}
+      <div className="relative px-4 pt-3 pb-2">
         <textarea
           ref={textareaRef}
-          className={styles.textarea}
-          placeholder="Ask anything..."
+          className="w-full resize-none bg-transparent text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm leading-relaxed focus:outline-none"
+          placeholder="Ask anything…"
           rows={1}
           aria-label="Prompt input"
           value={prompt}
-          onChange={(e) => {
-            setPrompt(e.target.value);
-          }}
+          onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={streaming}
         />
-        <button
-          className={`${styles.submitBtn} ${streaming ? styles.stopBtn : ""}`}
-          aria-label={streaming ? "Stop" : "Send message"}
-          onClick={() => (streaming ? cancel() : void submit())}
-        >
-          {streaming ? <span className={styles.stopIcon}>■</span> : <span>↑</span>}
-        </button>
       </div>
 
       {/* Attachment strip */}
-      <AttachmentStrip />
+      <div className="px-4">
+        <AttachmentStrip />
+      </div>
 
-      {/* Footer: feature chips */}
-      {mode === "single" && (
-        <div className={styles.footer}>
+      {/* Footer row */}
+      <div className="flex items-center justify-between px-3 pb-3 pt-1 gap-2">
+        {mode === "single" ? (
           <FeatureChips
             smartMode={smartMode}
             researchMode={researchMode}
@@ -128,8 +115,32 @@ export function PromptComposer({ models }: PromptComposerProps) {
             onResearchToggle={setResearchMode}
             onOptimizeToggle={setOptimizeMode}
           />
-        </div>
-      )}
+        ) : (
+          <div />
+        )}
+
+        {/* Send / Stop button */}
+        <button
+          className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all ${
+            streaming
+              ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-300 dark:hover:bg-zinc-600"
+              : prompt.trim()
+              ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300"
+              : "bg-zinc-100 dark:bg-zinc-700 text-zinc-400 dark:text-zinc-500 cursor-not-allowed"
+          }`}
+          aria-label={streaming ? "Stop" : "Send message"}
+          onClick={() => (streaming ? cancel() : void submit())}
+          disabled={!streaming && !prompt.trim()}
+        >
+          {streaming ? (
+            <span className="w-3 h-3 bg-current rounded-sm" aria-hidden="true" />
+          ) : (
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

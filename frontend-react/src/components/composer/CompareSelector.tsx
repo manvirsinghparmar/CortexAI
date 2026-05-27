@@ -1,6 +1,5 @@
 import { ModelSelector } from "./ModelSelector";
 import type { ModelCatalogItem } from "../../types";
-import styles from "./CompareSelector.module.css";
 
 interface CompareSelectorProps {
   models: ModelCatalogItem[];
@@ -21,11 +20,11 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
   };
 
   return (
-    <div className={styles.wrap} aria-label="Compare model selectors">
-      <span className={styles.label}>Compare:</span>
+    <div className="flex items-center gap-2 flex-wrap" aria-label="Compare model selectors">
+      <span className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0">Compare:</span>
 
       {([0, 1] as const).map((i) => (
-        <span key={i} className={styles.slot}>
+        <span key={i} className="flex items-center gap-1">
           <ModelSelector
             id={`compareModel${i + 1}`}
             models={models}
@@ -34,21 +33,21 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
           />
           {activeCount > 2 && (
             <button
-              className={styles.removeBtn}
+              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
               type="button"
               aria-label={`Remove model ${i + 1} from comparison`}
               onClick={() => handleRemove(i)}
             >
-              &times;
+              ×
             </button>
           )}
-          {i === 0 && <span className={styles.sep}>vs</span>}
+          {i === 0 && <span className="text-xs text-zinc-300 dark:text-zinc-600">vs</span>}
         </span>
       ))}
 
       {showThird && (
-        <span className={styles.slot}>
-          <span className={styles.sep}>vs</span>
+        <span className="flex items-center gap-1">
+          <span className="text-xs text-zinc-300 dark:text-zinc-600">vs</span>
           <ModelSelector
             id="compareModel3"
             models={models}
@@ -56,19 +55,19 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
             onChange={(v) => onChange(2, v)}
           />
           <button
-            className={styles.removeBtn}
+            className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
             type="button"
             aria-label="Remove model 3 from comparison"
             onClick={() => handleRemove(2)}
           >
-            &times;
+            ×
           </button>
         </span>
       )}
 
       {!showThird && activeCount <= 2 && (
         <button
-          className={styles.addBtn}
+          className="text-xs px-2.5 py-1 rounded-full border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 hover:border-zinc-500 dark:hover:border-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
           type="button"
           onClick={handleAddModel}
           aria-label="Add a third model"

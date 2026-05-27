@@ -7,20 +7,25 @@ import { Sidebar } from "../components/layout/Sidebar";
 import { useModels } from "../hooks/useModels";
 import { useHistory } from "../hooks/useHistory";
 import { useChat } from "../hooks/useChat";
+import { useAuth } from "../hooks/useAuth";
 import { useChatStore } from "../store/chatStore";
 import type { HistoryEntry } from "../types";
-import styles from "./ChatPage.module.css";
 
 export function ChatPage() {
   const { models, loading: modelsLoading } = useModels();
   const { load: loadHistory } = useHistory();
   const { submit } = useChat();
+  const { whoAmI, cognitoConfig, loggedIn, login, logout } = useAuth();
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
   const setPrompt = useChatStore((s) => s.setPrompt);
   const setResponses = useChatStore((s) => s.setResponses);
   const setStreamingText = useChatStore((s) => s.setStreamingText);
   const setStreaming = useChatStore((s) => s.setStreaming);
+  const mode = useChatStore((s) => s.mode);
+  const setMode = useChatStore((s) => s.setMode);
+
+  const authEnabled = cognitoConfig?.enabled ?? false;
 
   useEffect(() => {
     void loadHistory();
@@ -30,7 +35,6 @@ export function ChatPage() {
     setPrompt(entry.prompt);
     setStreamingText("");
     setStreaming(false);
-    // Reconstruct a synthetic response from the history entry
     setResponses([
       {
         request_id: String(entry.id),
@@ -53,25 +57,61 @@ export function ChatPage() {
   };
 
   return (
-    <div className={styles.layout}>
-      <Sidebar onSelectEntry={handleSelectHistoryEntry} />
+    <div className="flex h-screen overflow-hidden bg-surface dark:bg-zinc-900">
+      <Sidebar
+        onSelectEntry={handleSelectHistoryEntry}
+        whoAmI={whoAmI}
+        loggedIn={loggedIn}
+        onLogin={authEnabled ? login : undefined}
+        onLogout={authEnabled ? logout : undefined}
+      />
 
-      <main className={styles.main}>
-        <ResultsSection />
+      <main className="flex flex-col flex-1 overflow-hidden">
+        {/* Ask / Compare tab bar */}
+        <div className="flex items-center gap-4 px-6 pt-5 pb-0 shrink-0">
+          <nav className="flex gap-0.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
+            <button
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                mode === "single"
+                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
+              }`}
+              onClick={() => setMode("single")}
+            >
+              Ask
+            </button>
+            <button
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                mode === "compare"
+                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
+              }`}
+              onClick={() => setMode("compare")}
+            >
+              Compare
+            </button>
+          </nav>
+        </div>
 
-        {error && (
-          <ErrorBanner
-            message={error}
-            onRetry={() => { setError(null); void submit(); }}
-            onDismiss={() => setError(null)}
-          />
-        )}
+        {/* Main scrollable content */}
+        <div className="flex flex-col flex-1 overflow-y-auto px-6 pt-4 pb-2">
+          <ResultsSection />
 
-        <ExampleChips />
+          {error && (
+            <ErrorBanner
+              message={error}
+              onRetry={() => { setError(null); void submit(); }}
+              onDismiss={() => setError(null)}
+            />
+          )}
 
-        <div className={styles.composerWrap}>
+          <ExampleChips />
+        </div>
+
+        {/* Composer pinned at bottom */}
+        <div className="px-6 pb-5 pt-2 shrink-0">
           {modelsLoading ? (
-            <div className={styles.loadingComposer}>Loading models…</div>
+            <div className="text-sm text-zinc-400 text-center py-3">Loading models…</div>
           ) : (
             <PromptComposer models={models} />
           )}

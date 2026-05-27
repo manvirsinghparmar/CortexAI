@@ -59,7 +59,7 @@ interface ChatStoreState {
 }
 
 export const useChatStore = create<ChatStoreState>((set) => ({
-  mode: "single",
+  mode: "compare",
   setMode: (mode) => set({ mode }),
 
   smartMode: true,

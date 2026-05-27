@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { fetchModels } from "../api/catalog";
 import type { ModelCatalogItem } from "../types";
+import { DEFAULT_MODELS } from "../config/defaultModels";
 
 interface UseModelsResult {
   models: ModelCatalogItem[];
@@ -9,7 +10,7 @@ interface UseModelsResult {
 }
 
 export function useModels(): UseModelsResult {
-  const [models, setModels] = useState<ModelCatalogItem[]>([]);
+  const [models, setModels] = useState<ModelCatalogItem[]>(DEFAULT_MODELS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,11 +19,13 @@ export function useModels(): UseModelsResult {
     setLoading(true);
     fetchModels(true)
       .then((data) => {
-        if (!cancelled) setModels(data.models);
+        if (!cancelled) setModels(data.models.length > 0 ? data.models : DEFAULT_MODELS);
       })
       .catch((err: unknown) => {
-        if (!cancelled)
+        if (!cancelled) {
+          setModels(DEFAULT_MODELS);
           setError(err instanceof Error ? err.message : "Failed to load models");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

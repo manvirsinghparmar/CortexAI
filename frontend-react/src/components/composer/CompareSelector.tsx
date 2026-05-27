@@ -1,5 +1,5 @@
-import { ModelSelector } from "./ModelSelector";
 import type { ModelCatalogItem } from "../../types";
+import styles from "./CompareSelector.module.css";
 
 interface CompareSelectorProps {
   models: ModelCatalogItem[];
@@ -8,73 +8,77 @@ interface CompareSelectorProps {
 }
 
 export function CompareSelector({ models, keys, onChange }: CompareSelectorProps) {
-  const activeCount = keys.filter(Boolean).length;
-  const showThird = activeCount >= 2 && (keys[2] !== "" || activeCount < 3);
-
-  const handleRemove = (index: 0 | 1 | 2) => {
-    onChange(index, "");
-  };
+  const activeIndexes = keys
+    .map((key, index) => ({ key, index: index as 0 | 1 | 2 }))
+    .filter((item) => item.key);
+  const canRemove = activeIndexes.length > 2;
+  const canAdd = activeIndexes.length < 3;
 
   const handleAddModel = () => {
-    if (!keys[2]) onChange(2, models[0] ? `${models[0].provider}:${models[0].model}` : "");
+    const emptyIndex = keys.findIndex((key) => !key) as 0 | 1 | 2;
+    if (emptyIndex < 0) return;
+    const next = models.find((model) => !keys.includes(modelKey(model)));
+    onChange(emptyIndex, next ? modelKey(next) : modelKey(models[0]));
   };
 
   return (
-    <div className="flex items-center gap-2 flex-wrap" aria-label="Compare model selectors">
-      <span className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0">Compare:</span>
-
-      {([0, 1] as const).map((i) => (
-        <span key={i} className="flex items-center gap-1">
-          <ModelSelector
-            id={`compareModel${i + 1}`}
-            models={models}
-            value={keys[i]}
-            onChange={(v) => onChange(i, v)}
-          />
-          {activeCount > 2 && (
-            <button
-              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
-              type="button"
-              aria-label={`Remove model ${i + 1} from comparison`}
-              onClick={() => handleRemove(i)}
+    <div className={styles.wrap} aria-label="Compare model selectors">
+      <div className={styles.chips}>
+        {activeIndexes.map(({ key, index }) => (
+          <span key={index} className={styles.chip}>
+            <select
+              value={key}
+              onChange={(event) => onChange(index, event.target.value)}
+              aria-label={`Compare model ${index + 1}`}
             >
-              ×
-            </button>
-          )}
-          {i === 0 && <span className="text-xs text-zinc-300 dark:text-zinc-600">vs</span>}
-        </span>
-      ))}
+              {models.map((model) => (
+                <option key={modelKey(model)} value={modelKey(model)}>
+                  {model.model}
+                </option>
+              ))}
+            </select>
+            {canRemove && (
+              <button
+                type="button"
+                aria-label={`Remove ${modelName(key)}`}
+                onClick={() => onChange(index, "")}
+              >
+                x
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
 
-      {showThird && (
-        <span className="flex items-center gap-1">
-          <span className="text-xs text-zinc-300 dark:text-zinc-600">vs</span>
-          <ModelSelector
-            id="compareModel3"
-            models={models}
-            value={keys[2]}
-            onChange={(v) => onChange(2, v)}
-          />
-          <button
-            className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors px-1"
-            type="button"
-            aria-label="Remove model 3 from comparison"
-            onClick={() => handleRemove(2)}
-          >
-            ×
-          </button>
-        </span>
-      )}
-
-      {!showThird && activeCount <= 2 && (
+      {canAdd && (
         <button
-          className="text-xs px-2.5 py-1 rounded-full border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 hover:border-zinc-500 dark:hover:border-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+          className={styles.addButton}
           type="button"
           onClick={handleAddModel}
-          aria-label="Add a third model"
+          aria-label="Add model to comparison"
         >
-          + Add Model
+          <Icon />
+          <span>Add Model</span>
         </button>
       )}
     </div>
+  );
+}
+
+function modelKey(model?: ModelCatalogItem) {
+  return model ? `${model.provider}:${model.model}` : "";
+}
+
+function modelName(key: string) {
+  return key.split(":").slice(1).join(":") || key;
+}
+
+function Icon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v8" />
+      <path d="M8 12h8" />
+    </svg>
   );
 }

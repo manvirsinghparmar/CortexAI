@@ -6,7 +6,7 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<ChatPage />} />
-        {/* Cognito redirects back to /auth?code=... — backend handles OAuth exchange */}
+        {/* Cognito redirects back to /auth?code=...; the backend handles OAuth exchange. */}
         <Route path="/auth" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

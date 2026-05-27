@@ -1,0 +1,40 @@
+import type { ModelCatalogItem } from "../types";
+
+export const DEFAULT_MODELS: ModelCatalogItem[] = [
+  {
+    provider: "openai",
+    model: "GPT-4o",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["legacy"],
+    enabled: true,
+    supports_image_input: true,
+    supported_attachment_mime_types: [],
+  },
+  {
+    provider: "gemini",
+    model: "Gemini 1.5 Pro",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["fastest"],
+    enabled: true,
+    supports_image_input: true,
+    supported_attachment_mime_types: [],
+  },
+  {
+    provider: "grok",
+    model: "Grok-1",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["raw"],
+    enabled: true,
+    supports_image_input: false,
+    supported_attachment_mime_types: [],
+  },
+];

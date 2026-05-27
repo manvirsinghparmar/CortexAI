@@ -1,46 +1,243 @@
 .section {
   display: flex;
+  height: 100%;
   flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1.5rem 0;
+  justify-content: center;
+  gap: 16px;
 }
 
 .title {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--text-tertiary, #9ca3af);
-  text-transform: uppercase;
   margin: 0;
+  color: var(--outline);
+  font: 700 12px/16px var(--font-sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .chips {
   display: flex;
+  max-width: 760px;
   flex-wrap: wrap;
-  gap: 0.5rem;
   justify-content: center;
-  max-width: 640px;
+  gap: 12px;
 }
 
 .chip {
-  padding: 0.4375rem 0.875rem;
-  border-radius: 20px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  background: var(--surface-1, #f9fafb);
-  font-size: 0.8125rem;
-  color: var(--text-secondary, #6b7280);
+  border: 1px solid rgb(198 198 205 / 40%);
+  border-radius: 999px;
+  background: var(--surface-container-lowest);
+  color: var(--on-surface-variant);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  text-align: left;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font: 500 16px/20px var(--font-sans);
+  padding: 12px 16px;
 }
 
 .chip:hover {
-  background: var(--accent-light, #ede9fe);
-  border-color: var(--accent, #6366f1);
-  color: var(--accent, #6366f1);
+  border-color: var(--outline);
+  color: var(--primary);
+}
+
+.askLanding {
+  display: grid;
+  max-width: 1128px;
+  margin: 0 auto;
+  gap: 56px;
+  padding: 72px 16px 24px;
+}
+
+.hero {
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+  text-align: center;
+}
+
+.hero h2 {
+  max-width: 980px;
+  margin: 0;
+  color: var(--on-surface);
+  font: 700 56px/1.15 var(--font-sans);
+  letter-spacing: 0;
+}
+
+.hero h2 span {
+  color: var(--secondary);
+}
+
+.hero p {
+  max-width: 780px;
+  margin: 0;
+  color: var(--on-surface);
+  font: 400 20px/30px var(--font-sans);
+}
+
+.modelPills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.modelPills button {
+  display: inline-flex;
+  min-width: 244px;
+  min-height: 60px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 55%);
+  box-shadow: var(--shadow-soft);
+  color: var(--on-surface);
+  cursor: pointer;
+  font: 500 20px/28px var(--font-sans);
+}
+
+.modelPills button:first-child {
+  border-color: rgb(0 0 0 / 18%);
+  background: rgb(255 255 255 / 80%);
+}
+
+.modelPills svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.askGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 32px;
+}
+
+.overviewCard,
+.integrationCard {
+  border: 1px solid rgb(255 255 255 / 50%);
+  border-radius: 16px;
+  background: rgb(255 255 255 / 45%);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+}
+
+.overviewCard {
+  display: flex;
+  min-height: 320px;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 44px;
+  overflow: hidden;
+}
+
+.overviewCard h3,
+.integrationCard h3 {
+  margin: 0;
+  color: var(--primary);
+  font: 700 30px/38px var(--font-sans);
+}
+
+.overviewCard p,
+.integrationCard p {
+  margin: 12px 0 0;
+  color: var(--on-surface);
+  font: 400 20px/30px var(--font-sans);
+}
+
+.overviewCard dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 56px;
+  margin: 40px 0 0;
+}
+
+.overviewCard dt {
+  color: var(--on-surface);
+  font: 700 14px/18px var(--font-sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.overviewCard dd {
+  margin: 10px 0 0;
+  color: var(--primary);
+  font: 700 30px/36px var(--font-sans);
+}
+
+.overviewCard dd span {
+  color: var(--on-surface-variant);
+  font: 400 14px/18px var(--font-sans);
+}
+
+.secondaryMetric {
+  color: var(--secondary) !important;
+}
+
+.integrationCard {
+  display: flex;
+  min-height: 320px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 44px;
+  text-align: center;
+}
+
+.integrationIcon {
+  display: inline-flex;
+  width: 80px;
+  height: 80px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--on-primary);
+  margin-bottom: 24px;
+}
+
+.integrationIcon svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.integrationCard p {
+  max-width: 260px;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.integrationCard button {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-container-highest);
+  color: var(--primary);
+  cursor: pointer;
+  font: 500 18px/24px var(--font-sans);
+  margin-top: 24px;
+}
+
+@media (max-width: 1100px) {
+  .askLanding {
+    padding-top: 40px;
+  }
+
+  .hero h2 {
+    font-size: 40px;
+  }
+
+  .askGrid {
+    grid-template-columns: 1fr;
+  }
 }

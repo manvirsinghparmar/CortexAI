@@ -11,10 +11,10 @@ export function useHistory() {
         const entries = await fetchHistory(100, sessionId);
         setHistory(entries);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load history");
+        console.warn("History load failed", err);
       }
     },
-    [setHistory, setError],
+    [setHistory],
   );
 
   const remove = useCallback(

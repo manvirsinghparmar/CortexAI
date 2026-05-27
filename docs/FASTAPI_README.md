@@ -67,10 +67,12 @@ python run_server.py --reload
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
-- Frontend history sidebar cards show mode, local date/time, title, and usage cost in a compact layout; sidebar token counts are hidden.
+- Frontend uses the Alabaster Minimal workspace shell with fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, side-by-side compare columns, and a unified bottom composer.
+- Frontend catalog loading falls back to bundled display models when `/v1/models` is unavailable, keeping Add Model and selector controls usable in frontend-only development.
+- Background history loading failures are logged but do not appear as the primary chat error banner.
 - Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
-- Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
-- Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
+- Frontend Compare selectors render as active model chips in the composer, keep at least two seeded targets, allow adding a third model, and send only active selected models in compare requests.
+- Frontend Compare response cards render as full-height model columns with model badges, latency, token metadata, and markdown response bodies.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 
 ## Endpoints

@@ -1,158 +1,219 @@
 .sidebar {
-  width: 260px;
+  display: flex;
+  width: 256px;
+  height: 100vh;
   flex-shrink: 0;
-  display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-color, #e5e7eb);
-  background: var(--surface-0, #fff);
-  height: calc(100vh - 56px);
-  position: sticky;
-  top: 56px;
-  overflow-y: auto;
+  border-right: 1px solid var(--outline-variant);
+  background: var(--surface-container-low);
+  padding: 24px 12px;
 }
 
-.sidebarHeader {
-  padding: 1rem 1rem 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.brand {
+  margin: 8px 24px 40px;
 }
 
-.titleRow {
-  display: flex;
-  align-items: center;
-}
-
-.title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary, #111827);
-}
-
-.actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.newChatBtn {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.75rem;
-  border-radius: 6px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  background: var(--surface-1, #f9fafb);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--text-primary, #111827);
-  transition: background 0.15s;
-}
-
-.newChatBtn:hover {
-  background: var(--surface-2, #f3f4f6);
-}
-
-.newChatIcon {
-  width: 14px;
-  height: 14px;
-}
-
-.clearBtn {
-  padding: 0.375rem 0.625rem;
-  border-radius: 6px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  background: transparent;
-  font-size: 0.8125rem;
-  color: var(--text-secondary, #6b7280);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.clearBtn:hover {
-  background: var(--surface-2, #f3f4f6);
-}
-
-.searchWrap {
-  display: flex;
-  align-items: center;
-  padding: 0.5rem 1rem;
-  gap: 0.5rem;
-}
-
-.searchIcon {
-  font-size: 0.875rem;
-  color: var(--text-tertiary, #9ca3af);
-}
-
-.searchInput {
-  flex: 1;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 6px;
-  padding: 0.375rem 0.625rem;
-  font-size: 0.8125rem;
-  color: var(--text-primary, #111827);
-  background: var(--surface-1, #f9fafb);
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.searchInput:focus {
-  border-color: var(--accent, #6366f1);
-}
-
-.empty {
-  padding: 2rem 1rem;
-  text-align: center;
-  color: var(--text-secondary, #6b7280);
-  font-size: 0.875rem;
-}
-
-.emptyIcon {
-  font-size: 1.5rem;
-  margin-bottom: 0.5rem;
-  opacity: 0.4;
-}
-
-.list {
-  list-style: none;
+.brand h1 {
   margin: 0;
-  padding: 0.25rem 0;
+  color: var(--primary);
+  font: 700 30px/32px var(--font-sans);
+  letter-spacing: 0;
 }
 
-.listItem {
-  padding: 0 0.5rem;
+.brand p {
+  margin: 4px 0 0;
+  color: var(--on-surface-variant);
+  font: 500 16px/20px var(--font-sans);
 }
 
-.entryBtn {
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  padding: 0.5rem 0.625rem;
-  cursor: pointer;
+.newChatButton {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  transition: background 0.12s;
+  width: calc(100% - 24px);
+  min-height: 60px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--on-primary);
+  cursor: pointer;
+  font: 600 20px/28px var(--font-sans);
+  margin: 0 12px 28px;
 }
 
-.entryBtn:hover {
-  background: var(--surface-2, #f3f4f6);
+.newChatButton span {
+  font-size: 28px;
+  line-height: 1;
 }
 
-.entryPrompt {
-  font-size: 0.8125rem;
-  color: var(--text-primary, #111827);
-  font-weight: 500;
+.nav {
+  display: grid;
+  gap: 8px;
+}
+
+.navItem,
+.navItemActive,
+.navItemActiveLight {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  font: 500 16px/24px var(--font-sans);
+  padding: 12px 20px;
+  text-align: left;
+}
+
+.navItem svg,
+.navItemActive svg,
+.navItemActiveLight svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.navItem:hover {
+  background: var(--surface-container-highest);
+  color: var(--primary);
+}
+
+.navItemActive {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+}
+
+.navItemActiveLight {
+  border-left: 4px solid var(--primary);
+  border-radius: 0;
+  background: rgb(0 0 0 / 4%);
+  color: var(--primary);
+  font-weight: 700;
+  padding-left: 16px;
+}
+
+.historyBlock {
+  min-height: 0;
+  margin: 32px 12px 0;
+  overflow: hidden;
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--outline);
+  font: 600 12px/16px var(--font-sans);
+  text-transform: uppercase;
+}
+
+.historyHeader button {
+  border: 0;
+  background: transparent;
+  color: var(--outline);
+  cursor: pointer;
+  font: inherit;
+  text-transform: none;
+}
+
+.historyList {
+  display: grid;
+  max-height: 260px;
+  gap: 4px;
+  margin: 8px 0 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.historyList button {
+  display: grid;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+}
+
+.historyList button:hover {
+  background: var(--surface-container);
+}
+
+.historyList span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 200px;
 }
 
-.entryMeta {
-  font-size: 0.6875rem;
-  color: var(--text-tertiary, #9ca3af);
+.historyList small {
+  color: var(--outline);
+}
+
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% - 48px);
+  margin: auto 24px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--on-surface);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.profile:disabled {
+  cursor: default;
+}
+
+.avatar {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #5f7f85;
+  color: white;
+  font: 700 14px/1 var(--font-sans);
+}
+
+.profileText {
+  display: grid;
+  min-width: 0;
+}
+
+.profileText strong,
+.profileText span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileText strong {
+  font: 700 15px/20px var(--font-sans);
+}
+
+.profileText span {
+  color: var(--on-surface-variant);
+  font: 500 12px/16px var(--font-sans);
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    display: none;
+  }
 }

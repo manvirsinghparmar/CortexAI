@@ -30,7 +30,8 @@ npm run --prefix frontend-react build
 - Ask and Compare support shared session continuity via `session_id`.
 - Conversation-history guardrails are active (trim and payload cap).
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
-- Frontend Compare selectors show attached per-model remove controls only for three active models, fade the controls in on selector hover/focus, keep at least two active models, and send only active selected slots after removal.
+- Frontend follows the Alabaster Minimal shell: fixed left nav, top Ask/Compare tabs, Ask landing dashboard, horizontal compare canvas, and a unified composer with active model chips.
+- Frontend-only development falls back to a bundled display model catalog when `/v1/models` is unavailable; bootstrap history failures should not set the primary chat error banner.
 - Prompt optimization for the UI goes through explicit `POST /v1/optimize`; chat/compare auto-optimization is off by default and requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`.
 
 ## High-Value Paths

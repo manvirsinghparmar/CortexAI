@@ -229,9 +229,11 @@ Frontend runtime config (`/runtime-config.js`):
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
-- History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
-- Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
-- Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, a horizontal compare canvas, and a unified bottom composer.
+- Frontend model selectors fall back to a bundled display catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
+- Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
+- The composer keeps active compare models as removable chips, exposes Add Model from the same row, and includes the Ask/Compare switch plus send action.
+- Background history fetch failures do not surface as the primary chat error banner.
 
 ## Authentication
 
@@ -424,8 +426,8 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
-- Frontend Compare selectors support per-model removal with compact circular controls attached to each selector; remove controls show only when three models are active, fade in on selector hover/focus, and request payloads include only active selected models.
-- Frontend Compare response cards hide per-card token/resource text in side-by-side layouts and keep compact Resources/copy/feedback icons; aggregate tokens, usage, and success counts remain in the summary bar.
+- Frontend Compare selectors appear as removable model chips in the unified composer; at least two active targets are seeded from the catalog and request payloads include only active selected models.
+- Frontend Compare response cards use side-by-side model columns with visible per-card latency and token metadata.
 
 ## Web Research Behavior (Current)
 

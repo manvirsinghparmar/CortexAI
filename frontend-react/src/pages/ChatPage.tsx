@@ -10,9 +10,10 @@ import { useChat } from "../hooks/useChat";
 import { useAuth } from "../hooks/useAuth";
 import { useChatStore } from "../store/chatStore";
 import type { HistoryEntry } from "../types";
+import styles from "./ChatPage.module.css";
 
 export function ChatPage() {
-  const { models, loading: modelsLoading } = useModels();
+  const { models } = useModels();
   const { load: loadHistory } = useHistory();
   const { submit } = useChat();
   const { whoAmI, cognitoConfig, loggedIn, login, logout } = useAuth();
@@ -24,7 +25,6 @@ export function ChatPage() {
   const setStreaming = useChatStore((s) => s.setStreaming);
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
-
   const authEnabled = cognitoConfig?.enabled ?? false;
 
   useEffect(() => {
@@ -57,7 +57,7 @@ export function ChatPage() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface dark:bg-zinc-900">
+    <div className={styles.layout}>
       <Sidebar
         onSelectEntry={handleSelectHistoryEntry}
         whoAmI={whoAmI}
@@ -66,57 +66,77 @@ export function ChatPage() {
         onLogout={authEnabled ? logout : undefined}
       />
 
-      <main className="flex flex-col flex-1 overflow-hidden">
-        {/* Ask / Compare tab bar */}
-        <div className="flex items-center gap-4 px-6 pt-5 pb-0 shrink-0">
-          <nav className="flex gap-0.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1">
+      <main className={styles.main}>
+        <header className={styles.topbar}>
+          <nav className={styles.tabs} aria-label="Chat mode">
             <button
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-                mode === "single"
-                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
-              }`}
+              type="button"
+              className={`${styles.tab} ${mode === "single" ? styles.activeTab : ""}`}
               onClick={() => setMode("single")}
             >
               Ask
             </button>
             <button
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-                mode === "compare"
-                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
-                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
-              }`}
+              type="button"
+              className={`${styles.tab} ${mode === "compare" ? styles.activeTab : ""}`}
               onClick={() => setMode("compare")}
             >
               Compare
             </button>
           </nav>
-        </div>
+          <div className={styles.topActions} aria-label="Workspace actions">
+            <button type="button" className={styles.iconButton} aria-label="Settings">
+              <Icon name="settings" />
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              aria-label={loggedIn ? "Account" : "Guest account"}
+              onClick={loggedIn ? logout : login}
+            >
+              <Icon name="account" />
+            </button>
+          </div>
+        </header>
 
-        {/* Main scrollable content */}
-        <div className="flex flex-col flex-1 overflow-y-auto px-6 pt-4 pb-2">
+        <div className={styles.canvas}>
           <ResultsSection />
-
           {error && (
             <ErrorBanner
               message={error}
-              onRetry={() => { setError(null); void submit(); }}
+              onRetry={() => {
+                setError(null);
+                void submit();
+              }}
               onDismiss={() => setError(null)}
             />
           )}
-
           <ExampleChips />
         </div>
 
-        {/* Composer pinned at bottom */}
-        <div className="px-6 pb-5 pt-2 shrink-0">
-          {modelsLoading ? (
-            <div className="text-sm text-zinc-400 text-center py-3">Loading models…</div>
-          ) : (
-            <PromptComposer models={models} />
-          )}
+        <div className={styles.composerWrap}>
+          <PromptComposer models={models} />
         </div>
       </main>
     </div>
+  );
+}
+
+function Icon({ name }: { name: "settings" | "account" }) {
+  if (name === "settings") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+        <path d="M19.4 15a8 8 0 0 0 .1-1 8 8 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a8.5 8.5 0 0 0-1.7-1L15 5.4h-4l-.4 2.6a8.5 8.5 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a8 8 0 0 0-.1 1 8 8 0 0 0 .1 1l-2 1.5 2 3.5 2.4-1a8.5 8.5 0 0 0 1.7 1l.4 2.6h4l.4-2.6a8.5 8.5 0 0 0 1.7-1l2.4 1 2-3.5-2.1-1.5Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
+      <circle cx="12" cy="12" r="10" />
+    </svg>
   );
 }

@@ -2,6 +2,7 @@
 
 import hmac
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -101,6 +102,14 @@ def _redirect_uri_from_request(request: Request) -> str:
     return f"{base}{path}"
 
 
+def _with_query_param(url: str, key: str, value: str) -> str:
+    """Return URL with a single query parameter added or replaced."""
+    parts = urlsplit(url)
+    pairs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != key]
+    pairs.append((key, value))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(pairs), parts.fragment))
+
+
 async def handle_oauth_callback(
     request: Request,
     response: Response,
@@ -137,7 +146,11 @@ async def handle_oauth_callback(
         )
 
     cookie_val = sign_session(user_id)
-    success_url = (os.getenv("COGNITO_SUCCESS_REDIRECT_URI") or "").strip() or "/index.html"
+    success_url = _with_query_param(
+        (os.getenv("COGNITO_SUCCESS_REDIRECT_URI") or "").strip() or "/index.html",
+        "fresh_login",
+        "1",
+    )
     redir = RedirectResponse(url=success_url, status_code=status.HTTP_302_FOUND)
     redir.set_cookie(
         key=SESSION_COOKIE_NAME,

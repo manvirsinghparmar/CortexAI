@@ -883,7 +883,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\"\n}"
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact context for follow-up prompts only.\"\n}"
             },
             "url": "{{base_url}}/v1/optimize"
           },
@@ -899,6 +899,8 @@
                   "  pm.expect(body).to.have.property('original_prompt');",
                   "  pm.expect(body).to.have.property('optimized_prompt');",
                   "  pm.expect(body).to.have.property('was_optimized');",
+                  "  pm.expect(body).to.have.property('optimization_status');",
+                  "  pm.expect(body).to.have.property('fallback_reason');",
                   "});"
                 ]
               }

@@ -71,6 +71,7 @@ If these tests pass, the application guarantees:
 import json
 import logging
 from contextlib import suppress
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -119,9 +120,12 @@ class FakeOrchestrator:
     def __init__(self):
         self.last_ask_prompt = None
         self.last_ask_model_type = None
+        self.last_ask_context = None
         self.last_compare_prompt = None
+        self.last_compare_context = None
         self.last_ask_kwargs = {}
         self.last_compare_kwargs = {}
+        self.prepare_messages_calls = []
 
     @staticmethod
     def _metadata_for_research_mode(research_mode: str | None) -> dict[str, Any]:
@@ -136,6 +140,7 @@ class FakeOrchestrator:
     def ask(self, prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs) -> UnifiedResponse:
         self.last_ask_prompt = prompt
         self.last_ask_model_type = model_type
+        self.last_ask_context = context
         self.last_ask_kwargs = dict(kwargs)
         return UnifiedResponse(
             request_id="req_ask_1",
@@ -150,6 +155,25 @@ class FakeOrchestrator:
             metadata=self._metadata_for_research_mode(kwargs.get("research_mode")),
         )
 
+    def prepare_messages_for_turn(
+        self,
+        *,
+        prompt: str,
+        context: Any = None,
+        research_mode: str = "auto",
+    ) -> dict[str, Any]:
+        self.prepare_messages_calls.append({
+            "prompt": prompt,
+            "context": context,
+            "research_mode": research_mode,
+        })
+        return {
+            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
+            "research_metadata": self._metadata_for_research_mode(research_mode),
+            "optimization_metadata": {},
+        }
+
     def compare(
         self,
         prompt: str,
@@ -158,6 +182,7 @@ class FakeOrchestrator:
         **kwargs
     ) -> FakeMultiUnifiedResponse:
         self.last_compare_prompt = prompt
+        self.last_compare_context = context
         self.last_compare_kwargs = dict(kwargs)
         shared_metadata = self._metadata_for_research_mode(kwargs.get("research_mode"))
         r1 = UnifiedResponse(
@@ -413,6 +438,16 @@ def test_dev_login_rejected_in_production_runtime(client, monkeypatch):
     assert r.status_code == 403
 
 
+def test_auth_success_redirect_marks_fresh_login():
+    from server.routes import auth as auth_route
+
+    assert auth_route._with_query_param("/index.html", "fresh_login", "1") == "/index.html?fresh_login=1"
+    assert (
+        auth_route._with_query_param("/index.html?foo=bar&fresh_login=0", "fresh_login", "1")
+        == "/index.html?foo=bar&fresh_login=1"
+    )
+
+
 def test_runtime_config_js_defaults_to_request_origin(client):
     r = client.get("/runtime-config.js")
     assert r.status_code == 200
@@ -644,7 +679,9 @@ def test_optimize_rejects_api_key_only_auth(client):
     assert r.json()["detail"]["code"] == "session_auth_required"
 
 
-def test_optimize_accepts_session_cookie_auth(client):
+def test_optimize_accepts_session_cookie_auth(client, monkeypatch):
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "false")
+
     r = client.post(
         "/v1/optimize",
         json={"prompt": "make this prompt better"},
@@ -653,6 +690,8 @@ def test_optimize_accepts_session_cookie_auth(client):
     assert r.status_code == 200
     body = r.json()
     assert body["original_prompt"] == "make this prompt better"
+    assert body["optimization_status"] == "disabled"
+    assert body["fallback_reason"] == "optimization_disabled"
 
 
 def test_optimize_uses_schema_optimizer_when_enabled(client, monkeypatch):
@@ -660,13 +699,21 @@ def test_optimize_uses_schema_optimizer_when_enabled(client, monkeypatch):
 
     class FakeOptimizer:
         def optimize_prompt(self, payload):
-            assert payload == {"prompt": "make this prompt better"}
+            assert payload["prompt"] == "make this prompt better"
+            assert payload["max_retries"] == 2
+            assert isinstance(payload["deadline_at"], float)
+            assert "context_hint" not in payload
             return {
                 "optimized_prompt": "Rewrite this prompt to be more specific and actionable.",
                 "steps": ["clarified intent"],
+                "prompt_quality": "weak",
+                "attempt_count": 1,
+                "retry_reasons": [],
+                "unchanged_retry_used": False,
             }
 
     monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.delenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", raising=False)
     monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
 
     r = client.post(
@@ -680,6 +727,55 @@ def test_optimize_uses_schema_optimizer_when_enabled(client, monkeypatch):
     assert body["optimized_prompt"] == "Rewrite this prompt to be more specific and actionable."
     assert body["was_optimized"] is True
     assert body["server_optimization_enabled"] is True
+    assert body["optimization_status"] == "optimized"
+    assert body["fallback_reason"] is None
+
+
+def test_optimize_passes_compact_context_when_enabled(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    seen_payload = {}
+
+    class FakeOptimizer:
+        def optimize_prompt(self, payload):
+            seen_payload.update(payload)
+            return {
+                "optimized_prompt": "Explain why humans mine asteroids.",
+                "steps": ["resolved follow-up reference"],
+                "prompt_quality": "reference_dependent",
+                "attempt_count": 1,
+                "retry_reasons": [],
+                "unchanged_retry_used": False,
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", "2")
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    r = client.post(
+        "/v1/optimize",
+        json={
+            "prompt": "I was talking about mining the asteroids",
+            "context_hint": "Recent topic: asteroid mining.",
+            "context": {
+                "session_id": "session-1",
+                "conversation_history": [
+                    {"role": "user", "content": "List asteroid mining candidates."}
+                ],
+            },
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    assert seen_payload["prompt"] == "I was talking about mining the asteroids"
+    assert seen_payload["max_retries"] == 2
+    assert isinstance(seen_payload["deadline_at"], float)
+    assert seen_payload["context_hint"] == "Recent topic: asteroid mining."
+    assert seen_payload["context"]["session_id"] == "session-1"
+    assert seen_payload["context"]["conversation_history"][0]["role"] == "user"
+    body = r.json()
+    assert body["optimization_status"] == "optimized"
 
 
 def test_optimize_falls_back_when_schema_optimizer_rejects_output(client, monkeypatch):
@@ -709,6 +805,70 @@ def test_optimize_falls_back_when_schema_optimizer_rejects_output(client, monkey
     assert body["optimized_prompt"] == "how osama was killed"
     assert body["was_optimized"] is False
     assert body["server_optimization_enabled"] is True
+    assert body["optimization_status"] == "rejected"
+    assert body["fallback_reason"] == "optimizer_output_rejected"
+
+
+def test_optimize_preserves_unchanged_after_retry_fallback_reason(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    class FakeOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-nano"
+
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": payload["prompt"],
+                "fallback_reason": "unchanged_after_retry",
+                "prompt_quality": "weak",
+                "attempt_count": 2,
+                "retry_reasons": ["unchanged_weak_prompt"],
+                "unchanged_retry_used": True,
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.delenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", raising=False)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "write something about ai"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["optimized_prompt"] == "write something about ai"
+    assert body["was_optimized"] is False
+    assert body["optimization_status"] == "kept_original"
+    assert body["fallback_reason"] == "unchanged_after_retry"
+
+
+def test_optimize_times_out_to_original_prompt(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    class SlowOptimizer:
+        def optimize_prompt(self, payload):
+            time.sleep(0.05)
+            return {"optimized_prompt": "This should arrive too late."}
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_TIMEOUT_MS", "1")
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: SlowOptimizer())
+
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["optimized_prompt"] == "make this prompt better"
+    assert body["was_optimized"] is False
+    assert body["server_optimization_enabled"] is True
+    assert body["optimization_status"] == "timeout"
+    assert body["fallback_reason"] == "timeout"
 
 
 def test_compare_rejects_too_many_targets(client):
@@ -868,6 +1028,64 @@ def test_chat_stream_returns_ndjson_events(client, caplog):
     assert "chat.stream.provider_call_completed" in log_events
     assert "chat.stream.response_done_sent" in log_events
     assert "chat.stream.done_sent" in log_events
+
+
+def test_context_guardrail_soft_trims_oversized_history():
+    from server.schemas.requests import ConversationHistoryItem, UserContextRequest
+    from server.utils import MAX_CONTEXT_CHARS, validate_and_trim_context
+
+    context = UserContextRequest(
+        conversation_history=[
+            ConversationHistoryItem(
+                role="user" if index % 2 == 0 else "assistant",
+                content=f"message-{index}-" + ("x" * 5000),
+            )
+            for index in range(12)
+        ]
+    )
+
+    result = validate_and_trim_context(context)
+
+    assert result is context
+    assert context.conversation_history
+    retained_content = [item.content for item in context.conversation_history]
+    assert sum(len(content) for content in retained_content) <= MAX_CONTEXT_CHARS
+    assert any("message-11-" in content for content in retained_content)
+    assert all("message-0-" not in content for content in retained_content)
+
+
+def test_chat_stream_soft_trims_oversized_context_instead_of_rejecting(client, app):
+    from server.utils import MAX_CONTEXT_CHARS
+
+    payload = {
+        "prompt": "continue",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "context": {
+            "session_id": "long-chat-session",
+            "conversation_history": [
+                {
+                    "role": "user" if index % 2 == 0 else "assistant",
+                    "content": f"long-context-message-{index}-" + ("x" * 5000),
+                }
+                for index in range(12)
+            ],
+        },
+    }
+
+    r = client.post(
+        "/v1/chat/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    sent_context = app.state.fake_orchestrator.last_ask_context
+    assert sent_context is not None
+    retained_content = [item["content"] for item in sent_context.conversation_history]
+    assert sum(len(content) for content in retained_content) <= MAX_CONTEXT_CHARS
+    assert any("long-context-message-11-" in content for content in retained_content)
 
 
 def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
@@ -1614,6 +1832,50 @@ def test_compare_stream_passes_research_mode_off_to_orchestrator(client, app):
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
     assert "routing_mode" not in app.state.fake_orchestrator.last_ask_kwargs
+
+
+def test_compare_stream_prepares_shared_research_context_once(client, app):
+    payload = {
+        "prompt": (
+            "List the top-grossing or most popular films of the 1990s, specifying "
+            "the criteria used for ranking."
+        ),
+        "context": {
+            "session_id": "session-bollywood-followup",
+            "new_session": False,
+            "conversation_history": [
+                {
+                    "role": "user",
+                    "content": "how has bollywood transitioned over the years in term of movies",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Bollywood shifted across eras and became romance-heavy in the 1990s.",
+                },
+            ],
+        },
+        "routing": {"research_mode": True},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+            {"provider": "grok", "model": "grok-4-1-fast-reasoning"},
+        ],
+    }
+
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    assert len(app.state.fake_orchestrator.prepare_messages_calls) == 1
+    prepared = app.state.fake_orchestrator.prepare_messages_calls[0]
+    assert prepared["prompt"] == payload["prompt"]
+    assert prepared["research_mode"] == "on"
+    assert prepared["context"].conversation_history[0]["content"].startswith("how has bollywood")
+    assert "_prepared_messages" in app.state.fake_orchestrator.last_ask_kwargs
 
 
 def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, app):

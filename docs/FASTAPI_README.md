@@ -6,7 +6,7 @@
 ```bash
 pip install -r requirements.txt
 ```
-`requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows.
+`requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows. FastAPI excludes `0.136.3` because `pip-audit` currently flags that release with advisory `MAL-2026-4750`.
 
 2. Configure auth in `.env`:
 ```ini
@@ -39,6 +39,14 @@ FRONTEND_DIR=frontend
 # PROMPT_OPTIMIZER_PROVIDER=gemini
 # PROMPT_OPTIMIZER_MODEL=
 # PROMPT_OPTIMIZER_MAX_RETRIES=3
+# PROMPT_OPTIMIZER_TIMEOUT_MS=5000
+# PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2
+# PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450
+# PROMPT_OPTIMIZER_TEMPERATURE=0.2
+# Optional Tavily search-option resolver
+# TAVILY_ENHANCED_SEARCH_ENABLED=true
+# TAVILY_CHUNKS_PER_SOURCE=3
+# TAVILY_ENHANCED_SEARCH_DOMAIN_RULES=true
 ```
 
 5. Start server:
@@ -51,11 +59,16 @@ python run_server.py --reload
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - Frontend history sidebar cards show mode, local date/time, title, and usage cost in a compact layout; sidebar token counts are hidden.
+- Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
 - Frontend Compare defaults `With sources` on for new page sessions and preserves a manual off choice while switching modes.
 - Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
 - Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
+- Frontend response Markdown renders response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
+- Frontend streaming responses render buffered Markdown progressively for Ask and Compare, then run the full response enhancement pass when the stream completes.
+- Frontend streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
 
 ## Endpoints
 
@@ -118,7 +131,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - `enableDevSessionLogin` defaults from `ENABLE_DEV_SESSION_LOGIN`.
 - Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
-- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped catalog endpoints (`/v1/providers`, `/v1/models`) so Ask and Compare selectors hydrate from the full enabled model registry.
+- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped startup endpoints (`/v1/providers`, `/v1/models`, `/v1/history`) so Ask/Compare selectors and the history sidebar hydrate immediately in local development.
 - Response is sent with no-cache headers so config changes apply immediately.
 
 ## API Key Persistence Policy
@@ -180,14 +193,22 @@ Notes:
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
+- The browser UI avoids that fallback on fresh login by generating a new `session_id` and sending `new_session=true` for the first turn after sign-in.
 
 Prompt optimization:
 - `POST /v1/optimize` is gated by `ENABLE_PROMPT_OPTIMIZATION=true`.
 - `/v1/optimize` is the UI optimization path; chat/compare do not auto-optimize by default.
 - Set `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true` only when chat/compare should automatically rewrite prompts without the explicit optimize endpoint.
 - `PROMPT_OPTIMIZER_MODEL` must match the configured `PROMPT_OPTIMIZER_PROVIDER`.
-- Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt instead of rewriting it.
-- Rejected or disabled optimization returns the original prompt with `was_optimized=false`.
+- `/v1/optimize` uses `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) as its hard deadline and `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`) for explicit-route attempts.
+- Weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry.
+- Optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models.
+- Optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text.
+- Request payloads may include optional `context_hint` and compact `context`; the frontend only sends them for likely follow-ups without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt, or when it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it.
+- Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
+- Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.
+- With the frontend Improve toggle enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; when `was_optimized=false` or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare.
 
 ## Chat API
 
@@ -376,12 +397,17 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 - When `routing.research_mode=true`, Compare performs one shared research pass for the compare turn.
 - Injected sources are primary evidence for current/source-dependent facts; models may still use non-conflicting baseline knowledge for background context.
 - Response payloads expose normalized source metadata through `web_source_items`.
+- Query sanitization anchors underspecified follow-up searches to the previous user topic when the current prompt omits that topic.
+- Tavily search calls use a deterministic local resolver with fixed retrieval params: `max_results=5`, `search_depth=advanced`, `chunks_per_source=1..3` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
+- With `TAVILY_ENHANCED_SEARCH_ENABLED=true`, the resolver may add Tavily `topic` for `finance`/`news`, a bounded `time_range`, country targeting only when no topic is sent, and curated finance domain allowlists for Canada, US, US SEC filings, and UK economic queries.
+- The resolver does not rewrite queries. Prompt optimization and query sanitization remain separate layers before the Tavily client receives its query string.
+- Set `TAVILY_ENHANCED_SEARCH_ENABLED=false` to disable topic/time/country/domain enrichment while keeping the fixed retrieval params.
 
 ## Guardrails
 
 Applied in `server/utils.py`:
 - Conversation history trimmed to last 10 messages.
-- Total context chars capped at 20000.
+- Oversized conversation-history payloads are soft-trimmed server-side instead of rejected; the newest context is retained first and older or oversized message content is trimmed before provider calls.
 - `max_tokens` clamped to 2048.
 - Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
 - Provider-native availability failures are sanitized before DTO/stream output. Upstream 503/high-demand/overloaded errors are tagged as `error.details.kind="transient_capacity"` and rendered as `This model is temporarily busy. Try again shortly or switch to another model.` instead of raw provider JSON.
@@ -393,6 +419,7 @@ Security/logging:
 - The browser frontend sends `X-Request-ID` on Ask/Compare/Optimize calls and logs stream read failures to the developer console with request id, server request id, status, elapsed time, classified kind, and received event count.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
 - Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
+- Tavily search-option resolver logs include category, topic/time/country decisions, domain-rule metadata, returned source-content lengths, and API credits used.
 - Tavily emits `research.network.diagnostics` entries (DNS + TCP reachability to Tavily host) plus normalized failure `error_kind` values for EC2 network troubleshooting.
 - Attachment pipeline logs include `upload.*` + `storage.*` events for upload, storage, metadata write, sync/deferred ingestion, and rollback/error paths.
 - Upload route adds `upload.route.*` events with edge/proxy request context (`X-Amz-Cf-Id`, `X-Forwarded-*`, content-length vs payload-size checks) to help isolate CloudFront/WAF/origin issues.
@@ -422,4 +449,4 @@ pytest tests/test_multi_compare_mode.py -v
 
 ---
 
-Last updated: 2026-04-11
+Last updated: 2026-05-23

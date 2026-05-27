@@ -49,11 +49,11 @@ class GeminiClient(BaseAIClient):
         Convert standard messages format to Gemini's format.
 
         Gemini expects:
-        - system_instruction (optional): system prompt
+        - system_instruction (optional): merged system prompts
         - contents: list of messages with role and parts
 
         Role mapping:
-        - "system" -> extracted as system_instruction (only first one)
+        - "system" -> merged into system_instruction
         - "user" -> role="user"
         - "assistant" -> role="model"
 
@@ -63,7 +63,7 @@ class GeminiClient(BaseAIClient):
         Returns:
             Tuple of (system_instruction, gemini_contents)
         """
-        system_instruction = None
+        system_instruction_parts: list[str] = []
         gemini_contents = []
         attachments = attachments or []
 
@@ -77,10 +77,8 @@ class GeminiClient(BaseAIClient):
             content = self._normalize_message_text(msg)
 
             if role == "system":
-                # Use first system message as system_instruction
-                if system_instruction is None:
-                    system_instruction = content
-                # Skip additional system messages or append as user message
+                if content:
+                    system_instruction_parts.append(content)
                 continue
 
             # Map roles: user->user, assistant->model
@@ -102,6 +100,7 @@ class GeminiClient(BaseAIClient):
 
             gemini_contents.append({"role": gemini_role, "parts": parts or [{"text": ""}]})
 
+        system_instruction = "\n\n".join(system_instruction_parts) or None
         return system_instruction, gemini_contents
 
     def get_completion(

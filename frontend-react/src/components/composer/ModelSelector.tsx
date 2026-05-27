@@ -1,5 +1,4 @@
 import type { ModelCatalogItem } from "../../types";
-import styles from "./ModelSelector.module.css";
 
 interface ModelSelectorProps {
   models: ModelCatalogItem[];
@@ -13,15 +12,15 @@ export function ModelSelector({ models, value, onChange, label, id }: ModelSelec
   const grouped = groupByProvider(models);
 
   return (
-    <div className={styles.wrap}>
+    <div className="flex items-center gap-1.5">
       {label && (
-        <span className={styles.label} id={id ? `${id}-label` : undefined}>
+        <span className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0" id={id ? `${id}-label` : undefined}>
           {label}
         </span>
       )}
       <select
         id={id}
-        className={styles.select}
+        className="text-xs bg-zinc-100 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 rounded-md px-2 py-1 border-none focus:ring-1 focus:ring-zinc-400 dark:focus:ring-zinc-500 cursor-pointer"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={label}

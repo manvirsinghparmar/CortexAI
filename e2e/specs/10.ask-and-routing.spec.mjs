@@ -10,6 +10,47 @@ import { ensureMode, expandSourcesForCard, setToggle, startNewChat, submitAskPro
 import { routingBoundaryScenarios } from "../test-data/routing-outcomes.mjs";
 import { expectSummaryMatchesRequest, latestRequest, waitForSnapshot } from "./_helpers.mjs";
 
+function toNdjson(events) {
+    return events.map(event => `${JSON.stringify(event)}\n`).join("");
+}
+
+async function routeOnce(page, url, handler) {
+    let consumed = false;
+    await page.route(url, async route => {
+        if (consumed) {
+            await route.continue();
+            return;
+        }
+        consumed = true;
+        await handler(route);
+    });
+}
+
+function makeChatStreamBody(text = "Request received.") {
+    return toNdjson([
+        { type: "start", mode: "single", web_source_items: [] },
+        { type: "line", text },
+        {
+            type: "response_done",
+            response: {
+                provider: "openai",
+                model: "gpt-5.1",
+                text,
+                finish_reason: "completed",
+                token_usage: {
+                    prompt_tokens: 12,
+                    completion_tokens: 8,
+                    total_tokens: 20,
+                },
+                estimated_cost: 0.0001,
+                web_source_items: [],
+                session_id: null,
+            },
+        },
+        { type: "done", session_id: null },
+    ]);
+}
+
 test("ask mode with smart routing returns streamed response and persisted selection", async ({ liveApp }) => {
     const { page, config, runState } = liveApp;
 
@@ -95,6 +136,234 @@ test("prompt optimizer on then off in the same session changes request flow", as
     expect(snapshot.requests.length).toBeGreaterThanOrEqual(2);
     const sessionId = snapshot.requests[0].session_id;
     expect(snapshot.requests.every(row => row.session_id === sessionId)).toBe(true);
+});
+
+test("improve flow shows optimization status and sends optimized prompt", async ({ liveApp }) => {
+    const { page, config } = liveApp;
+    const optimizeUrl = `${config.apiBaseUrl}/v1/optimize`;
+    const chatStreamUrl = `${config.apiBaseUrl}/v1/chat/stream`;
+    const rawPrompt = liveApp.withPromptMarker("Turn this loose ask into a crisp implementation prompt.");
+    const optimizedPrompt = `${rawPrompt}\n\nReturn an implementation-ready answer with concrete next steps.`;
+    let optimizeRequestBody = null;
+    let chatRequestBody = null;
+    let releaseOptimize;
+    const optimizeGate = new Promise(resolve => {
+        releaseOptimize = resolve;
+    });
+
+    await routeOnce(page, optimizeUrl, async route => {
+        optimizeRequestBody = JSON.parse(route.request().postData() || "{}");
+        await optimizeGate;
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                original_prompt: rawPrompt,
+                optimized_prompt: optimizedPrompt,
+                was_optimized: true,
+                server_optimization_enabled: true,
+                optimization_status: "optimized",
+                fallback_reason: null,
+            }),
+        });
+    });
+
+    await routeOnce(page, chatStreamUrl, async route => {
+        chatRequestBody = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: toNdjson([
+                { type: "start", mode: "single", web_source_items: [] },
+                { type: "line", text: "Optimized " },
+                { type: "line", text: "request received." },
+                {
+                    type: "response_done",
+                    response: {
+                        provider: "openai",
+                        model: "gpt-5.1",
+                        text: "Optimized request received.",
+                        finish_reason: "completed",
+                        token_usage: {
+                            prompt_tokens: 12,
+                            completion_tokens: 8,
+                            total_tokens: 20,
+                        },
+                        estimated_cost: 0.0001,
+                        web_source_items: [],
+                        session_id: null,
+                    },
+                },
+                { type: "done", session_id: null },
+            ]),
+        });
+    });
+
+    await ensureMode(page, "single");
+    await setToggle(page, "#routeSmartBtn", true);
+    await setToggle(page, "#routeResearchBtn", false);
+    await setToggle(page, "#routeOptimizeBtn", true);
+
+    const nextIndex = await page.locator("[id^='response-text-']").count();
+    await page.locator("#promptInput").fill(rawPrompt);
+    await page.locator("#submitBtn").click();
+
+    await expect(page.getByText("Refining your prompt for better results")).toBeVisible();
+    expect(optimizeRequestBody?.prompt).toBe(rawPrompt);
+    expect(optimizeRequestBody?.context_hint).toBeUndefined();
+    expect(chatRequestBody).toBeNull();
+
+    releaseOptimize();
+
+    await expect.poll(
+        async () => String(await page.locator(".optimization-user-text").textContent() || ""),
+    ).toBe(optimizedPrompt);
+    await expect(page.locator(".chat-message-user")).toHaveCount(1);
+    await expect.poll(() => chatRequestBody?.prompt || "").toBe(optimizedPrompt);
+    await expect(page.locator(`#response-text-${nextIndex}`)).toContainText("Optimized request received.");
+    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/, { timeout: 15_000 });
+});
+
+test("improve flow explains when original prompt is kept", async ({ liveApp }) => {
+    const { page, config } = liveApp;
+    const optimizeUrl = `${config.apiBaseUrl}/v1/optimize`;
+    const chatStreamUrl = `${config.apiBaseUrl}/v1/chat/stream`;
+    const rawPrompt = liveApp.withPromptMarker("Summarize this clearly in one paragraph.");
+    let chatRequestBody = null;
+
+    await routeOnce(page, optimizeUrl, async route => {
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                original_prompt: rawPrompt,
+                optimized_prompt: rawPrompt,
+                was_optimized: false,
+                server_optimization_enabled: true,
+                optimization_status: "kept_original",
+                fallback_reason: "already_clear",
+            }),
+        });
+    });
+
+    await routeOnce(page, chatStreamUrl, async route => {
+        chatRequestBody = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: makeChatStreamBody("Original prompt received."),
+        });
+    });
+
+    await ensureMode(page, "single");
+    await setToggle(page, "#routeSmartBtn", true);
+    await setToggle(page, "#routeResearchBtn", false);
+    await setToggle(page, "#routeOptimizeBtn", true);
+
+    await page.locator("#promptInput").fill(rawPrompt);
+    await page.locator("#submitBtn").click();
+
+    await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
+    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
+    await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
+});
+
+test("improve flow explains fallback when prompt refinement is unavailable", async ({ liveApp }) => {
+    const { page, config } = liveApp;
+    const optimizeUrl = `${config.apiBaseUrl}/v1/optimize`;
+    const chatStreamUrl = `${config.apiBaseUrl}/v1/chat/stream`;
+    const rawPrompt = liveApp.withPromptMarker("Draft a short launch announcement.");
+    let chatRequestBody = null;
+
+    await routeOnce(page, optimizeUrl, async route => {
+        await route.fulfill({
+            status: 503,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                detail: {
+                    code: "optimization_unavailable",
+                    message: "Prompt refinement unavailable.",
+                },
+            }),
+        });
+    });
+
+    await routeOnce(page, chatStreamUrl, async route => {
+        chatRequestBody = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: makeChatStreamBody("Fallback prompt received."),
+        });
+    });
+
+    await ensureMode(page, "single");
+    await setToggle(page, "#routeSmartBtn", true);
+    await setToggle(page, "#routeResearchBtn", false);
+    await setToggle(page, "#routeOptimizeBtn", true);
+
+    await page.locator("#promptInput").fill(rawPrompt);
+    await page.locator("#submitBtn").click();
+
+    await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
+    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
+    await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
+});
+
+test("improve flow sends compact context for follow-up prompts", async ({ liveApp }) => {
+    const { page, config } = liveApp;
+    const optimizeUrl = `${config.apiBaseUrl}/v1/optimize`;
+    const chatStreamUrl = `${config.apiBaseUrl}/v1/chat/stream`;
+    const firstPrompt = liveApp.withPromptMarker("List practical reasons humans may mine asteroids.");
+    const followUpPrompt = "I was talking about mining the asteroids";
+    const optimizedFollowUp = "Explain practical reasons humans may mine asteroids.";
+    let optimizeRequestBody = null;
+    const chatRequestBodies = [];
+
+    await page.route(chatStreamUrl, async route => {
+        chatRequestBodies.push(JSON.parse(route.request().postData() || "{}"));
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: makeChatStreamBody(chatRequestBodies.length === 1
+                ? "Asteroid mining context saved."
+                : "Follow-up prompt received."),
+        });
+    });
+
+    await routeOnce(page, optimizeUrl, async route => {
+        optimizeRequestBody = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                original_prompt: followUpPrompt,
+                optimized_prompt: optimizedFollowUp,
+                was_optimized: true,
+                server_optimization_enabled: true,
+                optimization_status: "optimized",
+                fallback_reason: null,
+            }),
+        });
+    });
+
+    await ensureMode(page, "single");
+    await setToggle(page, "#routeSmartBtn", true);
+    await setToggle(page, "#routeResearchBtn", false);
+    await setToggle(page, "#routeOptimizeBtn", false);
+
+    await page.locator("#promptInput").fill(firstPrompt);
+    await page.locator("#submitBtn").click();
+    await expect(page.getByText("Asteroid mining context saved.")).toBeVisible();
+
+    await setToggle(page, "#routeOptimizeBtn", true);
+    await page.locator("#promptInput").fill(followUpPrompt);
+    await page.locator("#submitBtn").click();
+
+    await expect.poll(() => optimizeRequestBody?.prompt || "").toBe(followUpPrompt);
+    expect(optimizeRequestBody?.context_hint).toContain("asteroids");
+    expect(optimizeRequestBody?.context?.conversation_history.length).toBeLessThanOrEqual(4);
+    await expect.poll(() => chatRequestBodies.at(-1)?.prompt || "").toBe(optimizedFollowUp);
 });
 
 test("routing policy boundary coverage uses allowed outcomes and varies across prompt classes", async ({ liveApp }) => {

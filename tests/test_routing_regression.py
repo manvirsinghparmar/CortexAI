@@ -1031,6 +1031,64 @@ def test_research_mode_on_falls_back_to_raw_prompt_when_sanitizer_blocks_query()
     assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in updated_messages)
 
 
+def test_prepared_messages_reuse_shared_research_without_new_search(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    fake_research = FakeResearchService()
+    fake_client = SpyClient("gemini", "gemini-2.5-flash")
+    orchestrator.research_service = fake_research
+    monkeypatch.setattr(orchestrator, "_get_client", lambda *_args, **_kwargs: fake_client)
+
+    context = UserContext(
+        session_id="session-prepared-compare",
+        conversation_history=[
+            {
+                "role": "user",
+                "content": "how has bollywood transitioned over the years in term of movies",
+            },
+            {
+                "role": "assistant",
+                "content": "Bollywood became romance-heavy in the 1990s.",
+            },
+        ],
+    )
+    prompt = "List the top-grossing or most popular films of the 1990s."
+    prepared = orchestrator.prepare_messages_for_turn(
+        prompt=prompt,
+        context=context,
+        research_mode="on",
+    )
+
+    first = orchestrator.ask(
+        prompt=prompt,
+        model_type="gemini",
+        model_name="gemini-2.5-flash",
+        routing_mode="legacy",
+        research_mode="on",
+        _prepared_prompt=prepared["prompt"],
+        _prepared_messages=prepared["messages"],
+        _prepared_research_metadata=prepared["research_metadata"],
+        _prepared_opt_metadata=prepared["optimization_metadata"],
+    )
+    second = orchestrator.ask(
+        prompt=prompt,
+        model_type="gemini",
+        model_name="gemini-2.5-flash",
+        routing_mode="legacy",
+        research_mode="on",
+        _prepared_prompt=prepared["prompt"],
+        _prepared_messages=prepared["messages"],
+        _prepared_research_metadata=prepared["research_metadata"],
+        _prepared_opt_metadata=prepared["optimization_metadata"],
+    )
+
+    assert first.is_success
+    assert second.is_success
+    assert len(fake_research.calls) == 1
+    assert fake_research.calls[0]["query"].startswith("bollywood List the top-grossing")
+    assert len(fake_client.calls) == 2
+    assert fake_client.calls[0] == fake_client.calls[1]
+
+
 def test_compare_normalizes_empty_output_to_provider_error(monkeypatch):
     orchestrator = CortexOrchestrator()
     fake = EmptyResponseClient("openai", "gpt-4o-mini")

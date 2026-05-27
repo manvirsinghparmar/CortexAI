@@ -4,14 +4,14 @@ from dataclasses import replace
 from collections.abc import Mapping
 import re
 
-from fastapi import HTTPException, status
-
 from models.unified_response import NormalizedError, UnifiedResponse
+from utils.logger import get_logger
 
 MAX_CONTEXT_MESSAGES = 10
 MAX_CONTEXT_CHARS = 20000
 MAX_OUTPUT_TOKENS = 2048
 SENSITIVE_HEADERS = {"x-api-key", "authorization", "cookie", "set-cookie"}
+logger = get_logger(__name__)
 CLIENT_SAFE_PROVIDER_ERROR_MESSAGES = {
     "timeout": "The provider request timed out. Please retry in a moment.",
     "auth": "Provider authentication failed. Check the configured API key.",
@@ -25,26 +25,73 @@ CLIENT_SAFE_PROVIDER_ERROR_MESSAGES = {
 
 
 def validate_and_trim_context(context_req):
-    """Validate and trim conversation history to prevent token explosion."""
+    """Trim conversation history to prevent token explosion without rejecting long chats."""
     if not context_req or not context_req.conversation_history:
         return context_req
 
     history = context_req.conversation_history
+    original_message_count = len(history)
 
     # Trim to last N messages
     if len(history) > MAX_CONTEXT_MESSAGES:
         history = history[-MAX_CONTEXT_MESSAGES:]
 
-    # Check total character count
-    total_chars = sum(len(item.content) for item in history)
-    if total_chars > MAX_CONTEXT_CHARS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Conversation history exceeds {MAX_CONTEXT_CHARS} characters",
+    original_chars = sum(len(str(getattr(item, "content", "") or "")) for item in history)
+    history = _trim_history_to_char_budget(history, MAX_CONTEXT_CHARS)
+
+    if original_message_count > len(history) or original_chars > MAX_CONTEXT_CHARS:
+        logger.info(
+            "Conversation context trimmed",
+            extra={
+                "event": "context.trimmed",
+                "original_message_count": original_message_count,
+                "retained_message_count": len(history),
+                "original_chars_after_message_trim": original_chars,
+                "retained_chars": sum(
+                    len(str(getattr(item, "content", "") or "")) for item in history
+                ),
+                "max_messages": MAX_CONTEXT_MESSAGES,
+                "max_chars": MAX_CONTEXT_CHARS,
+            },
         )
 
     context_req.conversation_history = history
     return context_req
+
+
+def _copy_history_item_with_content(item, content: str):
+    model_copy = getattr(item, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"content": content})
+    copy = replace(item)
+    copy.content = content
+    return copy
+
+
+def _trim_history_to_char_budget(history, max_chars: int):
+    """Keep newest context first and truncate only when needed."""
+    if max_chars <= 0:
+        return []
+
+    retained_reversed = []
+    used_chars = 0
+    for item in reversed(history):
+        content = str(getattr(item, "content", "") or "")
+        if not content:
+            continue
+
+        remaining = max_chars - used_chars
+        if remaining <= 0:
+            break
+
+        if len(content) > remaining:
+            content = content[:remaining].rstrip()
+
+        if content:
+            retained_reversed.append(_copy_history_item_with_content(item, content))
+            used_chars += len(content)
+
+    return list(reversed(retained_reversed))
 
 
 def clamp_max_tokens(max_tokens):

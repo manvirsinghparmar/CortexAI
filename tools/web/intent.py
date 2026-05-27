@@ -2,6 +2,105 @@
 
 import re
 
+CONTEXT_ANCHOR_STOP_WORDS = {
+    "about",
+    "above",
+    "across",
+    "advantage",
+    "advantages",
+    "after",
+    "again",
+    "around",
+    "because",
+    "before",
+    "between",
+    "compare",
+    "could",
+    "detail",
+    "details",
+    "different",
+    "disadvantage",
+    "disadvantages",
+    "does",
+    "explain",
+    "film",
+    "films",
+    "give",
+    "going",
+    "have",
+    "latest",
+    "list",
+    "main",
+    "more",
+    "movie",
+    "movies",
+    "over",
+    "popular",
+    "reason",
+    "reasons",
+    "recent",
+    "same",
+    "should",
+    "show",
+    "some",
+    "tell",
+    "term",
+    "terms",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "those",
+    "through",
+    "transition",
+    "transitioned",
+    "types",
+    "update",
+    "updates",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "would",
+    "years",
+}
+
+CONTEXTUAL_FOLLOWUP_STARTERS = (
+    "list ",
+    "name ",
+    "provide ",
+    "give ",
+    "show ",
+    "rank ",
+    "compare ",
+    "what are ",
+    "what were ",
+    "which ",
+    "where ",
+)
+
+CONTEXTUAL_FOLLOWUP_TERMS = {
+    "box office",
+    "criteria",
+    "critical acclaim",
+    "cultural impact",
+    "examples",
+    "films",
+    "movies",
+    "popular",
+    "ranking",
+    "rankings",
+    "that decade",
+    "the 1990s",
+    "the 2000s",
+    "these",
+    "those",
+    "top-grossing",
+}
+
+
 def is_explicit_web_request(prompt: str) -> bool:
     """
     Detect if user explicitly requests web/internet search.
@@ -383,6 +482,56 @@ def _derive_detail_followup_query(
 
     return ""
 
+
+def _derive_previous_topic_anchor(last_user_message: str | None) -> str:
+    """Extract a compact topic anchor from the previous user turn."""
+    if not last_user_message or len(last_user_message.strip()) < 5:
+        return ""
+
+    candidates = []
+    for raw_token in re.findall(r"\b[a-zA-Z][a-zA-Z0-9'-]{2,}\b", last_user_message.lower()):
+        token = raw_token.strip("'-")
+        if token.endswith("'s"):
+            token = token[:-2]
+        if len(token) < 4 or token in CONTEXT_ANCHOR_STOP_WORDS:
+            continue
+        if token not in candidates:
+            candidates.append(token)
+        if len(candidates) >= 3:
+            break
+
+    return " ".join(candidates)
+
+
+def _derive_contextual_followup_query(prompt: str, last_user_message: str | None) -> str:
+    """
+    Anchor underspecified follow-up searches to the previous turn's topic.
+
+    Example: after discussing Bollywood, "List the top-grossing films of the
+    1990s" should search for Bollywood films, not global box-office leaders.
+    """
+    prompt_text = prompt.strip()
+    prompt_lower = prompt_text.lower()
+    if not prompt_text:
+        return ""
+
+    anchor = _derive_previous_topic_anchor(last_user_message)
+    if not anchor:
+        return ""
+
+    anchor_tokens = set(anchor.split())
+    prompt_tokens = set(re.findall(r"\b[a-zA-Z][a-zA-Z0-9'-]{2,}\b", prompt_lower))
+    if anchor_tokens & prompt_tokens:
+        return ""
+
+    starts_like_followup = prompt_lower.startswith(CONTEXTUAL_FOLLOWUP_STARTERS)
+    has_contextual_terms = any(term in prompt_lower for term in CONTEXTUAL_FOLLOWUP_TERMS)
+    if not starts_like_followup and not has_contextual_terms:
+        return ""
+
+    return f"{anchor} {prompt_text}"
+
+
 def should_reuse_research(
     prompt: str, research_state: object | None, *, current_mode: str | None = None
 ) -> bool:
@@ -573,7 +722,6 @@ def is_meta_clarification(prompt: str) -> bool:
         "or was it",
         "or 2025",  # "was it 2020 or 2025?"
         "or 2026",
-        " or ",  # Generic OR question pattern
     ]
 
     # Questions asking about years/dates
@@ -636,6 +784,12 @@ def sanitize_query(
         anchored_query = _derive_detail_followup_query(research_state, last_user_message)
         if anchored_query:
             return anchored_query
+
+    # SPECIAL CASE: longer follow-ups can still be underspecified. Preserve the
+    # current request, but add the previous topic anchor for retrieval.
+    contextual_query = _derive_contextual_followup_query(prompt, last_user_message)
+    if contextual_query:
+        return contextual_query
 
     # Check if prompt is a stop-word query (exact or partial match)
     for stop_phrase in STOP_WORD_QUERIES:

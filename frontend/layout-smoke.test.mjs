@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 
 const htmlPath = path.join(process.cwd(), "frontend", "index.html");
 const html = fs.readFileSync(htmlPath, "utf8");
@@ -9,6 +10,10 @@ const appJsPath = path.join(process.cwd(), "frontend", "app.js");
 const appJs = fs.readFileSync(appJsPath, "utf8");
 const styleCssPath = path.join(process.cwd(), "frontend", "style.css");
 const styleCss = fs.readFileSync(styleCssPath, "utf8");
+const llmResponseJsPath = path.join(process.cwd(), "frontend", "llm-response.js");
+const llmResponseJs = fs.readFileSync(llmResponseJsPath, "utf8");
+const llmResponseCssPath = path.join(process.cwd(), "frontend", "llm-response.css");
+const llmResponseCss = fs.readFileSync(llmResponseCssPath, "utf8");
 
 test("runtime config script loads before app bootstrap", () => {
     const runtimeConfigScriptIndex = html.indexOf('src="runtime-config.js');
@@ -61,6 +66,109 @@ test("composer chip row does not render optimization debug/status labels", () =>
     assert.doesNotMatch(html, /Optimization Off \(server\)/);
     assert.doesNotMatch(appJs, /Optimization Off \(server\)/);
     assert.doesNotMatch(appJs, /optViewBtn\.textContent/);
+});
+
+test("improve flow renders optimization progress without response-card ids", () => {
+    assert.match(appJs, /function appendOptimizationPendingTurn\(promptText, options = \{\}\) \{/);
+    assert.match(appJs, /function buildOptimizationUserBubble\(turnId, options = \{\}\) \{/);
+    assert.match(appJs, /Refining your prompt for better results/);
+    assert.match(appJs, /Enhancing clarity/);
+    assert.match(appJs, /Improving intent/);
+    assert.match(appJs, /Preparing optimized version/);
+    assert.match(appJs, /OPTIMIZE_REQUEST_TIMEOUT_MS\s*=\s*5500/);
+    assert.match(appJs, /function buildOptimizeContextPayload\(prompt, options = \{\}\) \{/);
+    assert.match(appJs, /hasAttachments: Boolean\(options\?\.hasAttachments\)/);
+    assert.match(appJs, /function isLikelyFollowUpPrompt\(prompt\) \{/);
+    assert.match(appJs, /the second one/);
+    assert.match(appJs, /make\|rewrite\|improve\|modify/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_MESSAGE_LIMIT\s*=\s*4/);
+    assert.match(appJs, /OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT\s*=\s*10/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_TOTAL_LIMIT\s*=\s*2000/);
+    assert.match(appJs, /OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT\s*=\s*4000/);
+    assert.match(appJs, /OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS\s*=\s*500/);
+    assert.match(appJs, /possessiveReferencePattern/);
+    assert.match(appJs, /priorOfferPattern/);
+    assert.match(appJs, /\.slice\(-OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT\);/);
+    assert.match(appJs, /const selected = recentMessages\.slice\(-messageLimit\);/);
+    assert.match(appJs, /context_hint/);
+    assert.match(appJs, /optimization_status/);
+    assert.match(appJs, /startOptimizationProgressStates\(turnId\);/);
+    assert.match(appJs, /Your prompt was already clear\. CortexAI sent the original version\./);
+    assert.doesNotMatch(appJs, /Could not refine this time\. Sent your original prompt\./);
+    assert.match(appJs, /chat-message chat-message-user optimization-message is-pending/);
+    assert.match(appJs, /skipUserBubble: renderedUserBeforeRequest/);
+    assert.match(appJs, /id="optimization-turn-\$\{turnId\}"/);
+    assert.match(appJs, /id="optimization-note-\$\{turnId\}"/);
+    assert.doesNotMatch(appJs, /id="response-text-\$\{turnId\}"/);
+    assert.match(styleCss, /\.optimization-message \{/);
+    assert.match(styleCss, /\.optimization-user-text \{/);
+    assert.match(styleCss, /\.optimization-result-note \{/);
+    assert.match(styleCss, /\.optimization-result-note \{[\s\S]*font-size:\s*\.66rem;[\s\S]*font-weight:\s*500;[\s\S]*color:\s*#3F6F5E;[\s\S]*background:\s*#F3FAF6;[\s\S]*border:\s*1px solid #CFE8DA;/);
+    assert.match(styleCss, /@keyframes optimizationBubbleShimmer \{/);
+    assert.match(styleCss, /@keyframes optimizationSparkleGlow \{/);
+    assert.match(styleCss, /@keyframes optimizationDotFloat \{/);
+    assert.match(styleCss, /\.optimization-message\.is-pending \.optimization-user-text \{[\s\S]*font-size:\s*\.82rem;[\s\S]*font-weight:\s*700;[\s\S]*color:\s*#0F3A6D;/);
+});
+
+test("optimize reference follow-up context payload uses expanded mixed-message window", () => {
+    const constantsMatch = appJs.match(
+        /const OPTIMIZE_CONTEXT_MESSAGE_LIMIT\s*=\s*\d+;\s*[\s\S]*?const OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS\s*=\s*\d+;/,
+    );
+    assert.ok(constantsMatch);
+
+    const snippetStart = appJs.indexOf("function normalizeOptimizeContextText");
+    const snippetEnd = appJs.indexOf("async function callOptimize", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {
+        conversationHistory: [
+            { role: "user", content: "root marker: compare OpenAI, Gemini, and Claude" },
+            { role: "assistant", content: "root answer marker: second one is Gemini" },
+            { role: "user", content: "follow-up one marker" },
+            { role: "assistant", content: "follow-up one answer marker" },
+            { role: "user", content: "follow-up two marker" },
+            { role: "assistant", content: "follow-up two answer marker" },
+            { role: "user", content: "follow-up three marker" },
+            { role: "assistant", content: "follow-up three answer marker" },
+            { role: "user", content: "follow-up four marker" },
+            { role: "assistant", content: "follow-up four answer marker" },
+        ],
+        activeSessionId: "session-long-chat",
+        pendingNewSession: false,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${constantsMatch[0]}
+${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__payload = buildOptimizeContextPayload("make the second one more suitable", {});
+globalThis.__possessiveFollowUp = isLikelyFollowUpPrompt("How many of their cadres were actually killed?");
+globalThis.__priorOfferFollowUp = isLikelyFollowUpPrompt("Give me the detailed range of estimates.");`,
+        sandbox,
+    );
+
+    const payload = sandbox.__payload;
+    assert.equal(sandbox.__possessiveFollowUp, true);
+    assert.equal(sandbox.__priorOfferFollowUp, true);
+    assert.equal(payload.context.session_id, "session-long-chat");
+    assert.deepEqual(
+        payload.context.conversation_history.map(item => item.content),
+        [
+            "root marker: compare OpenAI, Gemini, and Claude",
+            "root answer marker: second one is Gemini",
+            "follow-up one marker",
+            "follow-up one answer marker",
+            "follow-up two marker",
+            "follow-up two answer marker",
+            "follow-up three marker",
+            "follow-up three answer marker",
+            "follow-up four marker",
+            "follow-up four answer marker",
+        ],
+    );
+    assert.match(payload.context_hint, /root answer marker/);
+    assert.match(payload.context_hint, /follow-up three marker/);
+    assert.match(payload.context_hint, /follow-up four answer marker/);
 });
 
 test("top mode tabs use Ask and Compare labels", () => {
@@ -197,6 +305,33 @@ test("a single shared session id is reused across Ask and Compare", () => {
     assert.match(appJs, /function setActiveSessionId\(sessionId, \{ persist = true \} = \{\}\)/);
     assert.match(appJs, /function ensureActiveSessionId\(\) \{[\s\S]*const existing = normalizeSessionId\(activeSessionId \|\| loadActiveSessionId\(\)\);/);
     assert.doesNotMatch(appJs, /const activeSessionIdByMode = \{/);
+});
+
+test("fresh login starts a new active thread instead of restoring the previous session", () => {
+    assert.match(appJs, /const FRESH_LOGIN_PENDING_STORAGE_KEY = "cortex_fresh_login_pending";/);
+    assert.match(appJs, /const FRESH_LOGIN_QUERY_PARAM = "fresh_login";/);
+    assert.match(appJs, /function consumeFreshLoginSessionReset\(\) \{[\s\S]*params\.get\(FRESH_LOGIN_QUERY_PARAM\) === "1"[\s\S]*window\.history\.replaceState/);
+    assert.match(appJs, /function startFreshSessionForLogin\(\) \{[\s\S]*startNewChatSession\(\);[\s\S]*\}/);
+    assert.match(appJs, /if \(consumeFreshLoginSessionReset\(\)\) \{[\s\S]*startFreshSessionForLogin\(\);[\s\S]*\}/);
+    assert.match(appJs, /wrap\.querySelector\("#cognitoSignInBtn"\)\.addEventListener\("click", function \(\) \{[\s\S]*requestFreshLoginSessionReset\(\);[\s\S]*window\.location\.href = url;/);
+    assert.match(appJs, /async function reconcileAuthenticatedSession\(\{ forceFresh = false \} = \{\}\) \{[\s\S]*if \(forceFresh \|\| !priorUserId \|\| \(userId && priorUserId !== userId\)\) \{[\s\S]*startFreshSessionForLogin\(\);/);
+    assert.match(appJs, /if \(!activeSessionId && !pendingNewSession\) \{[\s\S]*const mostRecentWithSession = _historyData\.find/);
+});
+
+test("initial history load waits for auth bootstrap", () => {
+    assert.match(
+        appJs,
+        /async function initializeAuthAndCatalog\(\) \{[\s\S]*await initCognitoAuth\(\);[\s\S]*await Promise\.all\(\[[\s\S]*loadHistory\(\{ restoreActiveTranscript: true \}\),[\s\S]*\]\);[\s\S]*\}/,
+    );
+    assert.doesNotMatch(
+        appJs,
+        /historyEl\.search\.addEventListener\("input"[\s\S]*\}\);\s*loadHistory\(\{ restoreActiveTranscript: true \}\);/,
+    );
+});
+
+test("mode switches preserve a pending new session until it has history", () => {
+    assert.match(appJs, /function setMode\(mode\) \{[\s\S]*const sessionEntries = getSessionEntries\(_historyData, activeSessionId\);[\s\S]*if \(sessionEntries\.length > 0\) \{[\s\S]*pendingNewSession = false;/);
+    assert.doesNotMatch(appJs, /renderSessionTranscript\(activeSessionId, _historyData\);\s*pendingNewSession = false;/);
 });
 
 test("history threads are grouped by shared session id and can surface mixed-mode turns", () => {
@@ -368,12 +503,38 @@ test("history thread selection scrolls to the bottom of restored messages", () =
     );
 });
 
-test("new streaming turns auto-scroll to Thinking and keep following streamed text", () => {
-    assert.match(appJs, /function maybeAutoScrollDuringStream\(\) \{/);
-    assert.match(appJs, /scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
-    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*maybeAutoScrollDuringStream\(\);/);
+test("new streaming turns reveal only from latest position and do not auto-follow streamed text", () => {
+    assert.match(appJs, /function syncJumpToLatestDuringStream\(\) \{/);
+    assert.match(appJs, /const shouldRevealLatest = el\.resultsSection\.classList\.contains\("hidden"\) \|\| isNearStreamingBottom\(\);/);
+    assert.match(appJs, /if \(shouldRevealLatest\) \{[\s\S]*scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*renderStreamingMarkdown\(key\);/);
+    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
+    assert.match(appJs, /setStreamAutoScrollPaused\(!streamState\.shouldRevealLatest && !isNearStreamingBottom\(\)\);/);
     assert.match(appJs, /streamAutoScrollEnabled = true;/);
-    assert.match(appJs, /streamAutoScrollEnabled = false;/);
+    const syncStart = appJs.indexOf("function syncJumpToLatestDuringStream()");
+    const syncEnd = appJs.indexOf("function finishStreamingViewportControls", syncStart);
+    assert.ok(syncStart > 0);
+    assert.ok(syncEnd > syncStart);
+    assert.doesNotMatch(appJs.slice(syncStart, syncEnd), /scrollResultsToBottom/);
+});
+
+test("streaming exposes jump control when latest content is below the viewport", () => {
+    assert.match(html, /id="jumpToLatestBtn"/);
+    assert.match(html, /class="jump-to-latest hidden"/);
+    assert.match(html, /aria-label="Jump to latest"/);
+    assert.match(html, /title="Jump to latest"/);
+    assert.match(html, /<span aria-hidden="true">&darr;<\/span>/);
+    assert.match(styleCss, /\.jump-to-latest \{[\s\S]*position:\s*fixed;[\s\S]*bottom:\s*128px;[\s\S]*z-index:\s*340;[\s\S]*width:\s*38px;[\s\S]*height:\s*38px;/);
+    assert.match(appJs, /let streamAutoScrollPausedByUser = false;/);
+    assert.match(appJs, /const STREAM_USER_SCROLL_INTENT_MS = 900;/);
+    assert.match(appJs, /function markStreamUserScrollIntent\(event = null\) \{/);
+    assert.match(appJs, /function isNearStreamingBottom\(\) \{[\s\S]*isDocumentNearBottom\(\) && isResultsSectionNearBottom\(\);/);
+    assert.match(appJs, /function handleUserScrollDuringStream\(\) \{[\s\S]*streamScrollProgrammatic && !hasRecentStreamUserScrollIntent\(\)[\s\S]*const latestBelowViewport = !isNearStreamingBottom\(\);[\s\S]*setStreamAutoScrollPaused\(latestBelowViewport\);/);
+    assert.match(appJs, /function updateJumpToLatestVisibility\(\) \{[\s\S]*streamAutoScrollEnabled && streamAutoScrollPausedByUser/);
+    assert.match(appJs, /window\.addEventListener\("wheel", markStreamUserScrollIntent, \{ passive: true \}\);/);
+    assert.match(appJs, /el\.jumpToLatestBtn\.addEventListener\("click", \(\) => \{[\s\S]*setStreamAutoScrollPaused\(false\);[\s\S]*scrollResultsToBottom\("smooth"\);/);
+    assert.match(appJs, /function finishStreamingViewportControls\(\) \{[\s\S]*if \(!streamAutoScrollPausedByUser\) \{/);
+    assert.match(appJs, /function renderCompareSummary\(data\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
 });
 
 test("historical transcripts render persisted web source citations", () => {
@@ -488,18 +649,114 @@ test("compare model remove controls are compact circular icon buttons", () => {
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {
     assert.match(appJs, /const GFM_TABLE_DELIMITER_RE =/);
-    assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
-    assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
+    assert.match(appJs, /function renderMarkdownToHtml\(markdownText, options = \{\}\) \{/);
+    assert.match(appJs, /function renderMarkdownTable\(lines, startIndex, options = \{\}\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
-    assert.match(appJs, /const responseHtml = hasError \? renderResponseErrorHtml\(resp\.error\) : renderMarkdownToHtml\(text\);/);
+    assert.match(appJs, /const responseHtml = hasError[\s\S]*renderResponseErrorHtml\(resp\.error\)[\s\S]*renderMarkdownToHtml\(text, \{ citationPrefix: responseCitationPrefix\(index\) \}\);/);
     assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
     assert.match(appJs, /<div class="response-text \$\{responseClasses\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
 });
 
-test("streaming still appends raw chunks before final markdown rendering", () => {
-    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
+test("response enhancer assets are loaded and wired", () => {
+    assert.match(html, /<link rel="stylesheet" href="llm-response\.css\?v=/);
+    assert.match(html, /<script src="llm-response\.js\?v=/);
+    assert.doesNotMatch(html, /id="themeToggle"/);
+    assert.doesNotMatch(appJs, /installThemeToggle/);
+    assert.match(appJs, /window\.LLMResponse\.installCopyDelegate\(el\.resultsGrid\);/);
+    assert.match(appJs, /window\.LLMResponse\.enhanceResponseDom\(targetEl\);/);
+    assert.match(llmResponseJs, /global\.LLMResponse = \{/);
+    assert.doesNotMatch(llmResponseJs, /installThemeToggle/);
+    assert.match(llmResponseCss, /\.response-text \.llm-code-copy \{/);
+    assert.doesNotMatch(llmResponseCss, /\.theme-toggle/);
+});
+
+test("assistant markdown preserves explicit ordered-list numbering", () => {
+    assert.match(appJs, /const itemMatch = \/\^\(\\d\+\)\\\.\\s\+\(\.\*\)\$\/\.exec\(current\);/);
+    assert.match(appJs, /const startAttr = Number\.isSafeInteger\(firstValue\) && firstValue !== 1[\s\S]*start="\$\{firstValue\}"/);
+    assert.match(appJs, /const valueAttr = Number\.isSafeInteger\(item\.value\) \? ` value="\$\{item\.value\}"` : "";/);
+    assert.match(appJs, /<span class="llm-ol-num" aria-hidden="true">\$\{num\}<\/span><span class="llm-ol-text">\$\{renderInlineMarkdown\(item\.text, options\)\}<\/span>/);
+});
+
+test("inline citations map to response-scoped source chip targets", () => {
+    assert.match(appJs, /function responseCitationPrefix\(index\) \{/);
+    assert.match(appJs, /function responseCitationTargetId\(index, citationNumber\) \{/);
+    assert.match(appJs, /id="\$\{escHtml\(citationId\)\}"/);
+    assert.match(appJs, /buildWebSourceChipsHtml\(safeSources, index\)/);
+    assert.match(appJs, /renderMarkdownToHtml\(text, \{ citationPrefix: responseCitationPrefix\(index\) \}\)/);
+    assert.match(appJs, /citationPrefix: citationPrefixFromResponseElement\(targetEl\)/);
+    assert.match(appJs, /const citationLink = event\.target\.closest\("\.llm-cite"\);/);
+    assert.match(appJs, /setSourceStripExpanded\(sourceStrip, true\);/);
+});
+
+test("final markdown rendering clears streaming cursor before success or error output", () => {
+    assert.match(appJs, /function renderResponseMarkdown\(targetEl, text, \{ hasError = false, error = null \} = \{\}\) \{[\s\S]*targetEl\.removeAttribute\("data-streaming"\);[\s\S]*if \(hasError\) \{/);
+});
+
+test("assistant markdown renderer preserves loose ordered-list indexes at runtime", () => {
+    const snippetStart = appJs.indexOf("function escHtml");
+    const snippetEnd = appJs.indexOf("function shouldStackTableForChat", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__html = renderMarkdownToHtml([
+    "1. First cited point [1].",
+    "Context after the first point.",
+    "",
+    "2. Second cited point [2].",
+    "Context after the second point.",
+    "",
+    "4. Fourth cited point [4].",
+].join("\\n"));`,
+        sandbox,
+    );
+
+    assert.match(sandbox.__html, /<ol><li value="1"><span class="llm-ol-num" aria-hidden="true">1<\/span><span class="llm-ol-text">First cited point<a href="#cite-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a>\.<\/span><\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="2"><li value="2"><span class="llm-ol-num" aria-hidden="true">2<\/span><span class="llm-ol-text">Second cited point<a href="#cite-2" class="llm-cite" data-cite="2" aria-label="Citation 2">2<\/a>\.<\/span><\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="4"><li value="4"><span class="llm-ol-num" aria-hidden="true">4<\/span><span class="llm-ol-text">Fourth cited point<a href="#cite-4" class="llm-cite" data-cite="4" aria-label="Citation 4">4<\/a>\.<\/span><\/li><\/ol>/);
+});
+
+test("assistant markdown renderer supports citation groups and callouts", () => {
+    const snippetStart = appJs.indexOf("function escHtml");
+    const snippetEnd = appJs.indexOf("function shouldStackTableForChat", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__html = renderMarkdownToHtml([
+    "Evidence [1] [2].",
+    "",
+    "> [!TIP] Review",
+    "> Use the source list [1].",
+].join("\\n"), { citationPrefix: "response-7" });`,
+        sandbox,
+    );
+
+    assert.match(sandbox.__html, /Evidence<a href="#cite-response-7-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a><a href="#cite-response-7-2" class="llm-cite" data-cite="2" aria-label="Citation 2">2<\/a>\./);
+    assert.match(sandbox.__html, /<aside class="llm-callout llm-callout-tip" role="note">/);
+    assert.match(sandbox.__html, /<div class="llm-callout-title">Review<\/div>/);
+    assert.match(sandbox.__html, /Use the source list<a href="#cite-response-7-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a>\./);
+});
+
+test("streaming uses a buffered progressive markdown render before final cleanup", () => {
+    assert.match(appJs, /const streamResponseBuffers = new Map\(\);/);
+    assert.match(appJs, /const STREAM_MARKDOWN_RENDER_DEBOUNCE_MS = 120;/);
+    assert.match(appJs, /function normalizeStreamingMarkdownPreview\(rawText\) \{/);
+    assert.match(appJs, /function scheduleStreamingMarkdownRender\(index\) \{/);
+    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*renderMarkdownToHtml\(previewText, \{[\s\S]*citationPrefix: citationPrefixFromResponseElement\(textEl\),/);
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*streamResponseBuffers\.set\(key, previousText \+ chunk\);[\s\S]*scheduleStreamingMarkdownRender\(key\);/);
+    assert.doesNotMatch(appJs, /textEl\.textContent \+= text;/);
+    assert.match(appJs, /function readStreamedResponseText\(index\) \{[\s\S]*streamResponseBuffers\.has\(key\)/);
+    assert.match(appJs, /function clearStreamingRenderState\(index\) \{/);
     assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
+    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*clearStreamingRenderState\(index\);[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? getResponseErrorDisplayText\(resp\.error\) : "\(empty response\)"\);/);
     assert.match(appJs, /applyResponseErrorClasses\(textEl, resp\.error\);/);
 });

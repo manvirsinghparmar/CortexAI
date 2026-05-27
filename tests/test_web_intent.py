@@ -56,3 +56,16 @@ def test_sanitize_query_keeps_explicit_topic_when_followup_has_concrete_subject(
     prompt = "go into more detail about iran and israel missile exchanges"
     query = sanitize_query(prompt, state, last_user_message="old context")
     assert query == prompt
+
+
+def test_sanitize_query_anchors_bollywood_followup_movie_list_to_previous_topic():
+    query = sanitize_query(
+        (
+            "List the top-grossing or most popular films of the 1990s, specifying "
+            "the criteria used for ranking."
+        ),
+        None,
+        last_user_message="how has bollywood transitioned over the years in term of movies",
+    )
+
+    assert query.startswith("bollywood List the top-grossing")

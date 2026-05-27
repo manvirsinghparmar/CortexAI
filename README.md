@@ -211,6 +211,9 @@ Frontend runtime config (`/runtime-config.js`):
 - Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
 - Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 - Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
+- Response Markdown rendering includes response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
+- Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text, then run the full response enhancement pass after completion.
+- Streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
 
 ## Authentication
 
@@ -425,6 +428,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
 - `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
 - When sources are injected, they are treated as primary evidence for current/source-dependent factual claims; non-conflicting model background knowledge can still be used for explanation/context.
+- Query sanitization anchors underspecified follow-up searches to the previous user topic when the current prompt omits that topic, so a Compare follow-up like a 1990s film list stays scoped to the active conversation subject.
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
 - Tavily search options are resolved by a deterministic local resolver before the API call. It always sends `max_results=5`, `search_depth=advanced`, `chunks_per_source` from `TAVILY_CHUNKS_PER_SOURCE` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
@@ -858,6 +862,8 @@ OpenAIProject/
   frontend/
     index.html
     app.js
+    llm-response.css
+    llm-response.js
     runtime-config.example.js
     style.css
     smart-routing-state.js

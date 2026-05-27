@@ -66,6 +66,9 @@ python run_server.py --reload
 - Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 - Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
+- Frontend response Markdown renders response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
+- Frontend streaming responses render buffered Markdown progressively for Ask and Compare, then run the full response enhancement pass when the stream completes.
+- Frontend streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
 
 ## Endpoints
 
@@ -394,6 +397,7 @@ For newer OpenAI models (example: `gpt-5.1`) that reject `max_tokens`, client no
 - When `routing.research_mode=true`, Compare performs one shared research pass for the compare turn.
 - Injected sources are primary evidence for current/source-dependent facts; models may still use non-conflicting baseline knowledge for background context.
 - Response payloads expose normalized source metadata through `web_source_items`.
+- Query sanitization anchors underspecified follow-up searches to the previous user topic when the current prompt omits that topic.
 - Tavily search calls use a deterministic local resolver with fixed retrieval params: `max_results=5`, `search_depth=advanced`, `chunks_per_source=1..3` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
 - With `TAVILY_ENHANCED_SEARCH_ENABLED=true`, the resolver may add Tavily `topic` for `finance`/`news`, a bounded `time_range`, country targeting only when no topic is sent, and curated finance domain allowlists for Canada, US, US SEC filings, and UK economic queries.
 - The resolver does not rewrite queries. Prompt optimization and query sanitization remain separate layers before the Tavily client receives its query string.

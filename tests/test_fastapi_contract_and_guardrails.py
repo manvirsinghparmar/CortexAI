@@ -125,6 +125,7 @@ class FakeOrchestrator:
         self.last_compare_context = None
         self.last_ask_kwargs = {}
         self.last_compare_kwargs = {}
+        self.prepare_messages_calls = []
 
     @staticmethod
     def _metadata_for_research_mode(research_mode: str | None) -> dict[str, Any]:
@@ -153,6 +154,25 @@ class FakeOrchestrator:
             error=None,
             metadata=self._metadata_for_research_mode(kwargs.get("research_mode")),
         )
+
+    def prepare_messages_for_turn(
+        self,
+        *,
+        prompt: str,
+        context: Any = None,
+        research_mode: str = "auto",
+    ) -> dict[str, Any]:
+        self.prepare_messages_calls.append({
+            "prompt": prompt,
+            "context": context,
+            "research_mode": research_mode,
+        })
+        return {
+            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
+            "research_metadata": self._metadata_for_research_mode(research_mode),
+            "optimization_metadata": {},
+        }
 
     def compare(
         self,
@@ -1812,6 +1832,50 @@ def test_compare_stream_passes_research_mode_off_to_orchestrator(client, app):
     assert r.status_code == 200
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
     assert "routing_mode" not in app.state.fake_orchestrator.last_ask_kwargs
+
+
+def test_compare_stream_prepares_shared_research_context_once(client, app):
+    payload = {
+        "prompt": (
+            "List the top-grossing or most popular films of the 1990s, specifying "
+            "the criteria used for ranking."
+        ),
+        "context": {
+            "session_id": "session-bollywood-followup",
+            "new_session": False,
+            "conversation_history": [
+                {
+                    "role": "user",
+                    "content": "how has bollywood transitioned over the years in term of movies",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Bollywood shifted across eras and became romance-heavy in the 1990s.",
+                },
+            ],
+        },
+        "routing": {"research_mode": True},
+        "targets": [
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+            {"provider": "grok", "model": "grok-4-1-fast-reasoning"},
+        ],
+    }
+
+    r = client.post(
+        "/v1/compare/stream",
+        json=payload,
+        headers={"X-API-Key": "dev-key-1"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    assert len(app.state.fake_orchestrator.prepare_messages_calls) == 1
+    prepared = app.state.fake_orchestrator.prepare_messages_calls[0]
+    assert prepared["prompt"] == payload["prompt"]
+    assert prepared["research_mode"] == "on"
+    assert prepared["context"].conversation_history[0]["content"].startswith("how has bollywood")
+    assert "_prepared_messages" in app.state.fake_orchestrator.last_ask_kwargs
 
 
 def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_turn(client, app):

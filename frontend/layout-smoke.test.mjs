@@ -10,6 +10,10 @@ const appJsPath = path.join(process.cwd(), "frontend", "app.js");
 const appJs = fs.readFileSync(appJsPath, "utf8");
 const styleCssPath = path.join(process.cwd(), "frontend", "style.css");
 const styleCss = fs.readFileSync(styleCssPath, "utf8");
+const llmResponseJsPath = path.join(process.cwd(), "frontend", "llm-response.js");
+const llmResponseJs = fs.readFileSync(llmResponseJsPath, "utf8");
+const llmResponseCssPath = path.join(process.cwd(), "frontend", "llm-response.css");
+const llmResponseCss = fs.readFileSync(llmResponseCssPath, "utf8");
 
 test("runtime config script loads before app bootstrap", () => {
     const runtimeConfigScriptIndex = html.indexOf('src="runtime-config.js');
@@ -499,12 +503,38 @@ test("history thread selection scrolls to the bottom of restored messages", () =
     );
 });
 
-test("new streaming turns auto-scroll to Thinking and keep following streamed text", () => {
-    assert.match(appJs, /function maybeAutoScrollDuringStream\(\) \{/);
-    assert.match(appJs, /scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
-    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*maybeAutoScrollDuringStream\(\);/);
+test("new streaming turns reveal only from latest position and do not auto-follow streamed text", () => {
+    assert.match(appJs, /function syncJumpToLatestDuringStream\(\) \{/);
+    assert.match(appJs, /const shouldRevealLatest = el\.resultsSection\.classList\.contains\("hidden"\) \|\| isNearStreamingBottom\(\);/);
+    assert.match(appJs, /if \(shouldRevealLatest\) \{[\s\S]*scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*renderStreamingMarkdown\(key\);/);
+    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
+    assert.match(appJs, /setStreamAutoScrollPaused\(!streamState\.shouldRevealLatest && !isNearStreamingBottom\(\)\);/);
     assert.match(appJs, /streamAutoScrollEnabled = true;/);
-    assert.match(appJs, /streamAutoScrollEnabled = false;/);
+    const syncStart = appJs.indexOf("function syncJumpToLatestDuringStream()");
+    const syncEnd = appJs.indexOf("function finishStreamingViewportControls", syncStart);
+    assert.ok(syncStart > 0);
+    assert.ok(syncEnd > syncStart);
+    assert.doesNotMatch(appJs.slice(syncStart, syncEnd), /scrollResultsToBottom/);
+});
+
+test("streaming exposes jump control when latest content is below the viewport", () => {
+    assert.match(html, /id="jumpToLatestBtn"/);
+    assert.match(html, /class="jump-to-latest hidden"/);
+    assert.match(html, /aria-label="Jump to latest"/);
+    assert.match(html, /title="Jump to latest"/);
+    assert.match(html, /<span aria-hidden="true">&darr;<\/span>/);
+    assert.match(styleCss, /\.jump-to-latest \{[\s\S]*position:\s*fixed;[\s\S]*bottom:\s*128px;[\s\S]*z-index:\s*340;[\s\S]*width:\s*38px;[\s\S]*height:\s*38px;/);
+    assert.match(appJs, /let streamAutoScrollPausedByUser = false;/);
+    assert.match(appJs, /const STREAM_USER_SCROLL_INTENT_MS = 900;/);
+    assert.match(appJs, /function markStreamUserScrollIntent\(event = null\) \{/);
+    assert.match(appJs, /function isNearStreamingBottom\(\) \{[\s\S]*isDocumentNearBottom\(\) && isResultsSectionNearBottom\(\);/);
+    assert.match(appJs, /function handleUserScrollDuringStream\(\) \{[\s\S]*streamScrollProgrammatic && !hasRecentStreamUserScrollIntent\(\)[\s\S]*const latestBelowViewport = !isNearStreamingBottom\(\);[\s\S]*setStreamAutoScrollPaused\(latestBelowViewport\);/);
+    assert.match(appJs, /function updateJumpToLatestVisibility\(\) \{[\s\S]*streamAutoScrollEnabled && streamAutoScrollPausedByUser/);
+    assert.match(appJs, /window\.addEventListener\("wheel", markStreamUserScrollIntent, \{ passive: true \}\);/);
+    assert.match(appJs, /el\.jumpToLatestBtn\.addEventListener\("click", \(\) => \{[\s\S]*setStreamAutoScrollPaused\(false\);[\s\S]*scrollResultsToBottom\("smooth"\);/);
+    assert.match(appJs, /function finishStreamingViewportControls\(\) \{[\s\S]*if \(!streamAutoScrollPausedByUser\) \{/);
+    assert.match(appJs, /function renderCompareSummary\(data\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
 });
 
 test("historical transcripts render persisted web source citations", () => {
@@ -619,19 +649,48 @@ test("compare model remove controls are compact circular icon buttons", () => {
 
 test("assistant markdown pipeline supports gfm tables with wide-table handling", () => {
     assert.match(appJs, /const GFM_TABLE_DELIMITER_RE =/);
-    assert.match(appJs, /function renderMarkdownToHtml\(markdownText\) \{/);
-    assert.match(appJs, /function renderMarkdownTable\(lines, startIndex\) \{/);
+    assert.match(appJs, /function renderMarkdownToHtml\(markdownText, options = \{\}\) \{/);
+    assert.match(appJs, /function renderMarkdownTable\(lines, startIndex, options = \{\}\) \{/);
     assert.match(appJs, /function applyWideTableLayout\(containerEl\) \{/);
-    assert.match(appJs, /const responseHtml = hasError \? renderResponseErrorHtml\(resp\.error\) : renderMarkdownToHtml\(text\);/);
+    assert.match(appJs, /const responseHtml = hasError[\s\S]*renderResponseErrorHtml\(resp\.error\)[\s\S]*renderMarkdownToHtml\(text, \{ citationPrefix: responseCitationPrefix\(index\) \}\);/);
     assert.match(appJs, /renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /<div class="response-text hidden" id="response-text-\$\{index\}" data-empty="true"><\/div>/);
     assert.match(appJs, /<div class="response-text \$\{responseClasses\}" id="response-text-\$\{index\}">\$\{responseHtml\}<\/div>/);
+});
+
+test("response enhancer assets are loaded and wired", () => {
+    assert.match(html, /<link rel="stylesheet" href="llm-response\.css\?v=/);
+    assert.match(html, /<script src="llm-response\.js\?v=/);
+    assert.doesNotMatch(html, /id="themeToggle"/);
+    assert.doesNotMatch(appJs, /installThemeToggle/);
+    assert.match(appJs, /window\.LLMResponse\.installCopyDelegate\(el\.resultsGrid\);/);
+    assert.match(appJs, /window\.LLMResponse\.enhanceResponseDom\(targetEl\);/);
+    assert.match(llmResponseJs, /global\.LLMResponse = \{/);
+    assert.doesNotMatch(llmResponseJs, /installThemeToggle/);
+    assert.match(llmResponseCss, /\.response-text \.llm-code-copy \{/);
+    assert.doesNotMatch(llmResponseCss, /\.theme-toggle/);
 });
 
 test("assistant markdown preserves explicit ordered-list numbering", () => {
     assert.match(appJs, /const itemMatch = \/\^\(\\d\+\)\\\.\\s\+\(\.\*\)\$\/\.exec\(current\);/);
     assert.match(appJs, /const startAttr = Number\.isSafeInteger\(firstValue\) && firstValue !== 1[\s\S]*start="\$\{firstValue\}"/);
     assert.match(appJs, /const valueAttr = Number\.isSafeInteger\(item\.value\) \? ` value="\$\{item\.value\}"` : "";/);
+    assert.match(appJs, /<span class="llm-ol-num" aria-hidden="true">\$\{num\}<\/span><span class="llm-ol-text">\$\{renderInlineMarkdown\(item\.text, options\)\}<\/span>/);
+});
+
+test("inline citations map to response-scoped source chip targets", () => {
+    assert.match(appJs, /function responseCitationPrefix\(index\) \{/);
+    assert.match(appJs, /function responseCitationTargetId\(index, citationNumber\) \{/);
+    assert.match(appJs, /id="\$\{escHtml\(citationId\)\}"/);
+    assert.match(appJs, /buildWebSourceChipsHtml\(safeSources, index\)/);
+    assert.match(appJs, /renderMarkdownToHtml\(text, \{ citationPrefix: responseCitationPrefix\(index\) \}\)/);
+    assert.match(appJs, /citationPrefix: citationPrefixFromResponseElement\(targetEl\)/);
+    assert.match(appJs, /const citationLink = event\.target\.closest\("\.llm-cite"\);/);
+    assert.match(appJs, /setSourceStripExpanded\(sourceStrip, true\);/);
+});
+
+test("final markdown rendering clears streaming cursor before success or error output", () => {
+    assert.match(appJs, /function renderResponseMarkdown\(targetEl, text, \{ hasError = false, error = null \} = \{\}\) \{[\s\S]*targetEl\.removeAttribute\("data-streaming"\);[\s\S]*if \(hasError\) \{/);
 });
 
 test("assistant markdown renderer preserves loose ordered-list indexes at runtime", () => {
@@ -656,14 +715,48 @@ globalThis.__html = renderMarkdownToHtml([
         sandbox,
     );
 
-    assert.match(sandbox.__html, /<ol><li value="1">First cited point \[1\]\.<\/li><\/ol>/);
-    assert.match(sandbox.__html, /<ol start="2"><li value="2">Second cited point \[2\]\.<\/li><\/ol>/);
-    assert.match(sandbox.__html, /<ol start="4"><li value="4">Fourth cited point \[4\]\.<\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol><li value="1"><span class="llm-ol-num" aria-hidden="true">1<\/span><span class="llm-ol-text">First cited point<a href="#cite-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a>\.<\/span><\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="2"><li value="2"><span class="llm-ol-num" aria-hidden="true">2<\/span><span class="llm-ol-text">Second cited point<a href="#cite-2" class="llm-cite" data-cite="2" aria-label="Citation 2">2<\/a>\.<\/span><\/li><\/ol>/);
+    assert.match(sandbox.__html, /<ol start="4"><li value="4"><span class="llm-ol-num" aria-hidden="true">4<\/span><span class="llm-ol-text">Fourth cited point<a href="#cite-4" class="llm-cite" data-cite="4" aria-label="Citation 4">4<\/a>\.<\/span><\/li><\/ol>/);
 });
 
-test("streaming still appends raw chunks before final markdown rendering", () => {
-    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*textEl\.textContent \+= text;/);
+test("assistant markdown renderer supports citation groups and callouts", () => {
+    const snippetStart = appJs.indexOf("function escHtml");
+    const snippetEnd = appJs.indexOf("function shouldStackTableForChat", snippetStart);
+    assert.ok(snippetStart > 0);
+    assert.ok(snippetEnd > snippetStart);
+
+    const sandbox = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+        `${appJs.slice(snippetStart, snippetEnd)}
+globalThis.__html = renderMarkdownToHtml([
+    "Evidence [1] [2].",
+    "",
+    "> [!TIP] Review",
+    "> Use the source list [1].",
+].join("\\n"), { citationPrefix: "response-7" });`,
+        sandbox,
+    );
+
+    assert.match(sandbox.__html, /Evidence<a href="#cite-response-7-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a><a href="#cite-response-7-2" class="llm-cite" data-cite="2" aria-label="Citation 2">2<\/a>\./);
+    assert.match(sandbox.__html, /<aside class="llm-callout llm-callout-tip" role="note">/);
+    assert.match(sandbox.__html, /<div class="llm-callout-title">Review<\/div>/);
+    assert.match(sandbox.__html, /Use the source list<a href="#cite-response-7-1" class="llm-cite" data-cite="1" aria-label="Citation 1">1<\/a>\./);
+});
+
+test("streaming uses a buffered progressive markdown render before final cleanup", () => {
+    assert.match(appJs, /const streamResponseBuffers = new Map\(\);/);
+    assert.match(appJs, /const STREAM_MARKDOWN_RENDER_DEBOUNCE_MS = 120;/);
+    assert.match(appJs, /function normalizeStreamingMarkdownPreview\(rawText\) \{/);
+    assert.match(appJs, /function scheduleStreamingMarkdownRender\(index\) \{/);
+    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*renderMarkdownToHtml\(previewText, \{[\s\S]*citationPrefix: citationPrefixFromResponseElement\(textEl\),/);
+    assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*streamResponseBuffers\.set\(key, previousText \+ chunk\);[\s\S]*scheduleStreamingMarkdownRender\(key\);/);
+    assert.doesNotMatch(appJs, /textEl\.textContent \+= text;/);
+    assert.match(appJs, /function readStreamedResponseText\(index\) \{[\s\S]*streamResponseBuffers\.has\(key\)/);
+    assert.match(appJs, /function clearStreamingRenderState\(index\) \{/);
     assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
+    assert.match(appJs, /function finalizeStreamCard\(index, resp\) \{[\s\S]*clearStreamingRenderState\(index\);[\s\S]*renderResponseMarkdown\(textEl, text, \{ hasError, error: resp\.error \}\);/);
     assert.match(appJs, /const text = explicitText\.trim\(\) \|\| \(hasError \? getResponseErrorDisplayText\(resp\.error\) : "\(empty response\)"\);/);
     assert.match(appJs, /applyResponseErrorClasses\(textEl, resp\.error\);/);
 });

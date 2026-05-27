@@ -37,6 +37,7 @@ from utils.logger import get_logger
 router = APIRouter(prefix="/v1", tags=["Chat"])
 STREAM_LINE_DELAY_S = 0.1
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
+ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 
 logger = get_logger(__name__)
 _SESSION_AUTH_GUARD = SessionScopedAuthGuard(

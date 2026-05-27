@@ -22,7 +22,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Tier selection: `orchestrator/tier_decider.py`
 - Candidate ranking: `orchestrator/model_selector.py`
 - Fallback decisions: `orchestrator/fallback_manager.py`
-- Web research and Tavily search options: `tools/web/`
+- Web research intent/query sanitization and Tavily search options: `tools/web/`
 
 ## Provider Clients
 
@@ -51,7 +51,9 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Frontend and Browser Tests
 
-- Static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
+- Static frontend shell and behavior: `frontend/index.html`, `frontend/app.js`, `frontend/style.css`
+- Response rendering enhancement assets: `frontend/llm-response.js`, `frontend/llm-response.css`
+- Static-only hosting config example: `frontend/runtime-config.example.js`
 - Playwright E2E suite: `e2e/specs/`
 - Playwright config: `e2e/playwright.config.mjs`
 
@@ -79,7 +81,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Update routing docs (`README.md`, `docs/SMART_ROUTING_DIAGRAM.md`)
 
 - Change web research or Tavily retrieval behavior:
-  1. Update `tools/web/tavily_service.py`, `tools/web/tavily_client.py`, or `tools/web/tavily_resolver.py`
+  1. Update `tools/web/intent.py`, `tools/web/tavily_service.py`, `tools/web/tavily_client.py`, or `tools/web/tavily_resolver.py`
   2. Validate with Tavily/research tests
   3. Update `README.md`, `docs/TAVILY_INTEGRATION.md`, and logging/runbook docs when option or telemetry behavior changes
 

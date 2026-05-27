@@ -348,7 +348,7 @@ body {
 ══════════════════════════════════════════ */
 .main {
     flex: 1;
-    max-width: 940px;
+    max-width: 1140px;
     margin: 0 auto;
     width: 100%;
     padding: 10px 20px 250px;
@@ -1704,6 +1704,43 @@ body {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
+.jump-to-latest {
+    position: fixed;
+    left: calc(var(--history-width) + ((100vw - var(--history-width)) / 2));
+    bottom: 128px;
+    z-index: 340;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 1px solid rgba(30, 58, 138, .18);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .96);
+    color: #1E3A8A;
+    font-family: var(--font);
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, .14);
+    cursor: pointer;
+    transition: transform var(--t), box-shadow var(--t), border-color var(--t), background var(--t);
+}
+
+.jump-to-latest:hover {
+    transform: translateX(-50%) translateY(-1px);
+    border-color: rgba(30, 58, 138, .28);
+    background: #FFFFFF;
+    box-shadow: 0 14px 32px rgba(15, 23, 42, .18);
+}
+
+.jump-to-latest:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(30, 58, 138, .18), 0 14px 32px rgba(15, 23, 42, .16);
+}
+
 /* ── Response card ── */
 .response-card {
     background: var(--white);
@@ -2354,6 +2391,10 @@ body {
     .prompt-card {
         left: 50%;
         width: calc(100vw - 28px);
+    }
+
+    .jump-to-latest {
+        left: 50%;
     }
 
     .history-sidebar {
@@ -4036,6 +4077,11 @@ body {
     .prompt-card.docked {
         width: calc(100vw - 16px);
         bottom: 8px;
+    }
+
+    .jump-to-latest {
+        bottom: 116px;
+        max-width: calc(100vw - 32px);
     }
 }
 

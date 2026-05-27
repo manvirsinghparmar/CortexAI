@@ -36,6 +36,7 @@ STREAM_LINE_DELAY_S = 0.1
 ATTACHMENTS_ONLY_FALLBACK_PROMPT = "Please analyze the attached file(s)."
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
+ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 
 logger = get_logger(__name__)
 _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
@@ -152,10 +153,16 @@ async def _run_compare_target(
     research_mode: str,
     request_id: str,
     kwargs: dict,
+    prepared_turn: dict[str, Any] | None = None,
 ):
     """Run one compare target and capture timeout as UnifiedResponse."""
     call_kwargs = dict(kwargs or {})
     call_kwargs.pop("request_id", None)
+    if prepared_turn:
+        call_kwargs["_prepared_prompt"] = prepared_turn.get("prompt")
+        call_kwargs["_prepared_messages"] = prepared_turn.get("messages")
+        call_kwargs["_prepared_research_metadata"] = prepared_turn.get("research_metadata")
+        call_kwargs["_prepared_opt_metadata"] = prepared_turn.get("optimization_metadata")
     ask_coro = asyncio.to_thread(
         orchestrator.ask,
         prompt=prompt,
@@ -437,6 +444,19 @@ async def compare_stream(
 
         ordered_responses: list[UnifiedResponse | None] = [None] * len(request.targets)
         try:
+            prepared_turn = None
+            prepare_messages = getattr(orchestrator, "prepare_messages_for_turn", None)
+            if callable(prepare_messages):
+                try:
+                    prepared_turn = await asyncio.to_thread(
+                        prepare_messages,
+                        prompt=effective_prompt,
+                        context=context,
+                        research_mode=orchestrator_research_mode,
+                    )
+                except Exception:
+                    logger.exception("Compare stream shared message preparation failed")
+
             tasks = []
 
             for i, target in enumerate(request.targets):
@@ -500,6 +520,7 @@ async def compare_stream(
                             research_mode=orchestrator_research_mode,
                             request_id=req_id,
                             kwargs=kwargs,
+                            prepared_turn=prepared_turn,
                         )
                     )
                 )

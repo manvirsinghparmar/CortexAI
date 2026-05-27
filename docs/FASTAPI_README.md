@@ -6,7 +6,7 @@
 ```bash
 pip install -r requirements.txt
 ```
-`requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows.
+`requirements.txt` already includes `tavily-python` for research-enabled Ask/Compare flows. FastAPI excludes `0.136.3` because `pip-audit` currently flags that release with advisory `MAL-2026-4750`.
 
 2. Configure auth in `.env`:
 ```ini

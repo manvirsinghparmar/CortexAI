@@ -46,7 +46,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
-`requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set.
+`requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set. The FastAPI dependency is constrained away from `0.136.3` because that release is currently flagged by `pip-audit` advisory `MAL-2026-4750`.
 
 3. Configure `.env`.
 

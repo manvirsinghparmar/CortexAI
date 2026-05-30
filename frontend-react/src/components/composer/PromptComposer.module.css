@@ -10,19 +10,27 @@
 
 .askCard {
   max-width: 1080px;
-  border-color: rgb(255 255 255 / 45%);
-  background: rgb(255 255 255 / 65%);
-  backdrop-filter: blur(12px);
+  border-color: rgb(198 198 205 / 30%);
+  background: rgb(255 255 255 / 72%);
+  backdrop-filter: blur(16px);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.askCard:focus-within {
+  border-color: var(--outline-variant);
+  box-shadow: 0 0 0 3px rgb(0 0 0 / 6%), var(--shadow-soft);
 }
 
 .askCard .modelRow {
-  display: none;
+  min-height: 48px;
+  padding: 8px 32px;
+  border-bottom: 1px solid rgb(198 198 205 / 10%);
 }
 
 .askCard .inputRow {
-  min-height: 190px;
+  min-height: 140px;
   align-items: flex-end;
-  padding-top: 32px;
+  padding-top: 16px;
 }
 
 .askCard .textarea {
@@ -54,14 +62,24 @@
   max-height: 180px;
   resize: none;
   border: 0;
+  outline: none;
+  box-shadow: none;
   background: transparent;
   color: var(--on-surface);
   font: 400 18px/28px var(--font-sans);
-  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .textarea::placeholder {
   color: var(--outline);
+}
+
+.textarea:focus,
+.textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border: 0;
 }
 
 .actions {

@@ -20,7 +20,7 @@ export function FeatureChips({
   return (
     <div className={styles.strip}>
       <Chip active={smartMode} label="Smart" onToggle={onSmartToggle} ariaLabel="Smart routing" />
-      <Chip active={researchMode} label="Web" onToggle={onResearchToggle} ariaLabel="Research mode" />
+      <Chip active={researchMode} label="With Sources" onToggle={onResearchToggle} ariaLabel="Research mode" />
       <Chip
         active={optimizeMode}
         label="Improve"

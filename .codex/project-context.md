@@ -31,7 +31,7 @@ npm run --prefix frontend-react build
 - Conversation-history guardrails are active (trim and payload cap).
 - Compare targets are explicit; smart routing flags are ignored in compare mode by design.
 - Frontend follows the Alabaster Minimal shell: fixed left nav, top Ask/Compare tabs, Ask landing dashboard, horizontal compare canvas, and a unified composer with active model chips.
-- Frontend-only development falls back to a bundled display model catalog when `/v1/models` is unavailable; bootstrap history failures should not set the primary chat error banner.
+- Frontend-only development falls back to a bundled API-safe model catalog when `/v1/models` is unavailable; Add Model must open an explicit chooser and bootstrap history failures should not set the primary chat error banner.
 - Prompt optimization for the UI goes through explicit `POST /v1/optimize`; chat/compare auto-optimization is off by default and requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`.
 
 ## High-Value Paths

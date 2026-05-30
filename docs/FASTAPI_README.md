@@ -68,10 +68,10 @@ python run_server.py --reload
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - Frontend uses the Alabaster Minimal workspace shell with fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, side-by-side compare columns, and a unified bottom composer.
-- Frontend catalog loading falls back to bundled display models when `/v1/models` is unavailable, keeping Add Model and selector controls usable in frontend-only development.
+- Frontend catalog loading falls back to bundled API-safe models when `/v1/models` is unavailable, keeping Add Model and selector controls usable in frontend-only development.
 - Background history loading failures are logged but do not appear as the primary chat error banner.
 - Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
-- Frontend Compare selectors render as active model chips in the composer, keep at least two seeded targets, allow adding a third model, and send only active selected models in compare requests.
+- Frontend Compare selectors render as active model chips in the composer, keep at least two seeded targets, open an explicit chooser before adding a third model, prevent duplicate selected targets, and send only active selected models in compare requests.
 - Frontend Compare response cards render as full-height model columns with model badges, latency, token metadata, and markdown response bodies.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 

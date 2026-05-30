@@ -230,9 +230,9 @@ Frontend runtime config (`/runtime-config.js`):
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, a horizontal compare canvas, and a unified bottom composer.
-- Frontend model selectors fall back to a bundled display catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
+- Frontend model selectors fall back to a bundled API-safe catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
 - Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
-- The composer keeps active compare models as removable chips, exposes Add Model from the same row, and includes the Ask/Compare switch plus send action.
+- The composer keeps active compare models as removable chips, exposes Add Model as an explicit chooser, prevents duplicate compare targets, and includes the Ask/Compare switch plus send action.
 - Background history fetch failures do not surface as the primary chat error banner.
 
 ## Authentication

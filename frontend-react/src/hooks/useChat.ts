@@ -61,17 +61,25 @@ export function useChat() {
     try {
       if (mode === "compare") {
         // Compare mode — use non-streaming endpoint
-        const activeKeys = compareModelKeys.filter(Boolean);
+        const activeKeys = Array.from(new Set(compareModelKeys.filter(Boolean)));
         if (activeKeys.length < 2) {
           setError("Select at least 2 models to compare.");
           setStreaming(false);
           return;
         }
 
-        const targets = activeKeys.map((key) => {
-          const { provider, model } = parseModelKey(key);
-          return { provider, model: model || undefined };
-        });
+        const targets = activeKeys
+          .map((key) => {
+            const { provider, model } = parseModelKey(key);
+            return { provider, model: model || undefined };
+          })
+          .filter((target) => target.provider);
+
+        if (targets.length < 2) {
+          setError("Choose at least 2 valid models to compare.");
+          setStreaming(false);
+          return;
+        }
 
         const req: CompareRequest = {
           prompt: finalPrompt,

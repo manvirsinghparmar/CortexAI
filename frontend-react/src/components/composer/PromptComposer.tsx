@@ -31,6 +31,8 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const prompt = useChatStore((s) => s.prompt);
   const setPrompt = useChatStore((s) => s.setPrompt);
   const streaming = useChatStore((s) => s.streaming);
+  const activeCompareCount = new Set(compareModelKeys.filter(Boolean)).size;
+  const canSubmit = prompt.trim() && (mode !== "compare" || activeCompareCount >= 2);
 
   const { submit, cancel } = useChat();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -47,18 +49,16 @@ export function PromptComposer({ models }: PromptComposerProps) {
   }, [prompt, resize]);
 
   useEffect(() => {
-    if (availableModels.length >= 2) {
-      if (!compareModelKeys[0]) {
-        setCompareModelKey(0, `${availableModels[0]!.provider}:${availableModels[0]!.model}`);
-      }
-      if (!compareModelKeys[1]) {
-        setCompareModelKey(1, `${availableModels[1]!.provider}:${availableModels[1]!.model}`);
-      }
-      if (!selectedModelKey) {
-        setSelectedModelKey(`${availableModels[0]!.provider}:${availableModels[0]!.model}`);
-      }
+    // Only auto-fill on first load — when both required slots are still empty
+    if (availableModels.length >= 2 && !compareModelKeys[0] && !compareModelKeys[1]) {
+      setCompareModelKey(0, `${availableModels[0]!.provider}:${availableModels[0]!.model}`);
+      setCompareModelKey(1, `${availableModels[1]!.provider}:${availableModels[1]!.model}`);
     }
-  }, [availableModels, compareModelKeys, selectedModelKey, setCompareModelKey, setSelectedModelKey]);
+    if (!selectedModelKey && availableModels.length >= 1) {
+      setSelectedModelKey(`${availableModels[0]!.provider}:${availableModels[0]!.model}`);
+    }
+  }, [availableModels]); // intentionally omit compareModelKeys to avoid re-triggering on removal
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -134,7 +134,12 @@ export function PromptComposer({ models }: PromptComposerProps) {
             type="button"
             aria-label={streaming ? "Stop" : "Send message"}
             onClick={() => (streaming ? cancel() : void submit())}
-            disabled={!streaming && !prompt.trim()}
+            disabled={!streaming && !canSubmit}
+            title={
+              mode === "compare" && activeCompareCount < 2
+                ? "Choose at least 2 models to compare"
+                : undefined
+            }
           >
             {streaming ? <span className={styles.stopIcon} /> : <SendIcon />}
           </button>

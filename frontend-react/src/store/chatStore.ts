@@ -76,6 +76,12 @@ export const useChatStore = create<ChatStoreState>((set) => ({
     set((state) => {
       const updated = [...state.compareModelKeys] as [string, string, string];
       updated[index] = key;
+      // On removal, compact: shift non-empty values to the front, empty slots to the back
+      if (!key) {
+        const compacted = updated.filter(Boolean);
+        while (compacted.length < 3) compacted.push("");
+        return { compareModelKeys: compacted as [string, string, string] };
+      }
       return { compareModelKeys: updated };
     }),
 

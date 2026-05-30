@@ -3,7 +3,7 @@ import type { ModelCatalogItem } from "../types";
 export const DEFAULT_MODELS: ModelCatalogItem[] = [
   {
     provider: "openai",
-    model: "GPT-4o",
+    model: "gpt-4o",
     tier: "frontier",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
@@ -15,7 +15,7 @@ export const DEFAULT_MODELS: ModelCatalogItem[] = [
   },
   {
     provider: "gemini",
-    model: "Gemini 1.5 Pro",
+    model: "gemini-2.5-flash",
     tier: "frontier",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
@@ -27,7 +27,7 @@ export const DEFAULT_MODELS: ModelCatalogItem[] = [
   },
   {
     provider: "grok",
-    model: "Grok-1",
+    model: "grok-4-1-fast-non-reasoning",
     tier: "frontier",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,

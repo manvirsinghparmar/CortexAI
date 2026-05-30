@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cortex
+      POSTGRES_PASSWORD: cortexpass
+      POSTGRES_DB: cortexai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cortex -d cortexai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://cortex:cortexpass@db:5432/cortexai
+      SERVE_FRONTEND: "true"
+      REACT_FRONTEND: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./frontend-react/dist:/app/frontend-react/dist:ro
+
+volumes:
+  pgdata:

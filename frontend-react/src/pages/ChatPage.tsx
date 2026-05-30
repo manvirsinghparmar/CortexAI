@@ -13,7 +13,8 @@ import type { HistoryEntry } from "../types";
 import styles from "./ChatPage.module.css";
 
 export function ChatPage() {
-  const { models } = useModels();
+  const { models, error: modelsError } = useModels();
+  const backendOffline = !!modelsError;
   const { load: loadHistory } = useHistory();
   const { submit } = useChat();
   const { whoAmI, cognitoConfig, loggedIn, login, logout } = useAuth();
@@ -100,6 +101,11 @@ export function ChatPage() {
         </header>
 
         <div className={styles.canvas}>
+          {backendOffline && (
+            <div style={{ background: "#fff8e1", border: "1px solid #ffe082", borderRadius: 10, padding: "10px 16px", marginBottom: 12, fontSize: 13, color: "#795548" }}>
+              ⚠ Backend not connected — chat and compare require a running backend at port 8000. The UI is fully visible but requests will fail.
+            </div>
+          )}
           <ResultsSection />
           {error && (
             <ErrorBanner

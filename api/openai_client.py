@@ -66,6 +66,7 @@ class OpenAIClient(BaseAIClient):
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
+        response_format = kwargs.get("response_format")
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -82,6 +83,7 @@ class OpenAIClient(BaseAIClient):
                 temperature=temperature,
                 max_tokens=max_tokens,
                 max_completion_tokens=max_completion_tokens,
+                response_format=response_format,
                 attachments=binary_attachments,
             )
 
@@ -212,6 +214,7 @@ class OpenAIClient(BaseAIClient):
         temperature: float | None,
         max_tokens: int,
         max_completion_tokens: int | None,
+        response_format: dict[str, Any] | None,
         attachments: list[dict[str, Any]],
     ) -> tuple[Any, str, dict[str, Any] | None]:
         if self._should_use_responses_api_for_model(model, attachments=attachments):
@@ -237,6 +240,8 @@ class OpenAIClient(BaseAIClient):
         }
         if temperature is not None:
             request_payload["temperature"] = temperature
+        if response_format is not None:
+            request_payload["response_format"] = response_format
         if max_completion_tokens is not None:
             request_payload["max_completion_tokens"] = max_completion_tokens
         else:
@@ -304,6 +309,7 @@ class OpenAIClient(BaseAIClient):
                     "frequency_penalty",
                     "max_tokens",
                     "max_completion_tokens",
+                    "response_format",
                 },
             )
             if retry_payload is not None and dropped_param is not None:

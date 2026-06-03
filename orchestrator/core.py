@@ -39,6 +39,7 @@ from orchestrator.fallback_manager import FallbackManager, FallbackPolicy
 from orchestrator.smart_router import SmartRouter
 from orchestrator.tier_decider import TierDecider
 from server import circuit_breaker
+from server.utils import get_client_safe_provider_error_message
 from tools.web import create_research_service_from_env
 from tools.web.intent import (
     is_explicit_web_request,
@@ -320,6 +321,46 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             msgs.append({"role": "user", "content": prompt})
             return [system_instruction, *msgs]
         return [system_instruction, {"role": "user", "content": prompt}]
+
+    @staticmethod
+    def _empty_research_metadata(error: str | None = None) -> dict[str, Any]:
+        return {
+            "research_used": False,
+            "research_reused": False,
+            "research_topic": None,
+            "research_error": error,
+            "sources": [],
+        }
+
+    def prepare_messages_for_turn(
+        self,
+        *,
+        prompt: str,
+        context: UserContext | None = None,
+        research_mode: str = "auto",
+    ) -> dict[str, Any]:
+        """Build one optimized/research-injected message payload for a turn."""
+        optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+        if opt_metadata.get("optimization_used"):
+            logger.debug("Using optimized prompt for request")
+
+        messages = self._build_messages(optimized_prompt, context, research_mode=research_mode)
+        if self.research_service:
+            messages, research_metadata = self._apply_research_if_needed(
+                prompt=optimized_prompt,
+                messages=messages,
+                research_mode=research_mode,
+                context=context,
+            )
+        else:
+            research_metadata = self._empty_research_metadata("service_not_configured")
+
+        return {
+            "prompt": optimized_prompt,
+            "messages": messages,
+            "research_metadata": research_metadata,
+            "optimization_metadata": opt_metadata,
+        }
 
     def _generate_session_id(self, messages: list[dict[str, str]]) -> str:
         """
@@ -1028,9 +1069,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
     def _explain_attempt_failure(self, response: UnifiedResponse, validation_reason: str) -> str:
         if response.is_error and response.error:
+            details = response.error.details if isinstance(response.error.details, dict) else {}
+            kind = str(details.get("kind") or "").strip()
+            safe_message = get_client_safe_provider_error_message(response.error)
+            kind_fragment = f" kind={kind}" if kind else ""
             return (
                 f"provider_error:{response.error.code}"
-                f" message={response.error.message}"
+                f"{kind_fragment} message={safe_message}"
             )
 
         reason_map = {
@@ -1318,30 +1363,34 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
             if not isinstance(provider_api_keys, dict):
                 provider_api_keys = {}
+            prepared_messages = kwargs.pop("_prepared_messages", None)
+            prepared_research_metadata = kwargs.pop("_prepared_research_metadata", None)
+            prepared_opt_metadata = kwargs.pop("_prepared_opt_metadata", None)
+            prepared_prompt = kwargs.pop("_prepared_prompt", None)
 
-            # Optimize prompt if enabled
-            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
-            if opt_metadata.get("optimization_used"):
-                logger.debug("Using optimized prompt for request")
-
-            messages = self._build_messages(optimized_prompt, context, research_mode=research_mode)
-
-            # Apply research if needed (and if service is configured)
-            if self.research_service:
-                messages, research_metadata = self._apply_research_if_needed(
-                    prompt=optimized_prompt,
-                    messages=messages,
-                    research_mode=research_mode,
-                    context=context,
+            if prepared_messages is not None:
+                optimized_prompt = str(prepared_prompt or prompt)
+                opt_metadata = (
+                    prepared_opt_metadata
+                    if isinstance(prepared_opt_metadata, dict)
+                    else {}
+                )
+                messages = [dict(message) for message in prepared_messages]
+                research_metadata = (
+                    prepared_research_metadata
+                    if isinstance(prepared_research_metadata, dict)
+                    else self._empty_research_metadata()
                 )
             else:
-                research_metadata = {
-                    "research_used": False,
-                    "research_reused": False,
-                    "research_topic": None,
-                    "research_error": "service_not_configured",
-                    "sources": [],
-                }
+                prepared_turn = self.prepare_messages_for_turn(
+                    prompt=prompt,
+                    context=context,
+                    research_mode=research_mode,
+                )
+                optimized_prompt = prepared_turn["prompt"]
+                messages = prepared_turn["messages"]
+                research_metadata = prepared_turn["research_metadata"]
+                opt_metadata = prepared_turn["optimization_metadata"]
 
             routing_mode_norm = (routing_mode or "").lower().strip()
             # Only use smart routing when explicitly requested.

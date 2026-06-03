@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from models.unified_response import TokenUsage, UnifiedResponse
+from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from orchestrator.routing_types import ModelCandidate, PromptFeatures, Tier
@@ -86,6 +86,28 @@ class LongSuccessClient(FakeClient):
             estimated_cost=0.0002,
             finish_reason="stop",
             error=None,
+            metadata={},
+        )
+
+
+class TransientCapacityErrorClient(FakeClient):
+    def get_completion(self, *args, **kwargs):
+        return UnifiedResponse(
+            request_id="req_transient_capacity",
+            text="",
+            provider=self.provider_name,
+            model=self.model_name,
+            latency_ms=3,
+            token_usage=TokenUsage(),
+            estimated_cost=0.0,
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message="This model is temporarily busy. Try again shortly or switch to another model.",
+                provider=self.provider_name,
+                retryable=True,
+                details={"kind": "transient_capacity", "status_code": 503},
+            ),
             metadata={},
         )
 
@@ -462,6 +484,100 @@ def test_smart_retry_on_empty_length_output_then_success(monkeypatch):
     attempts = routing.get("attempts", [])
     assert attempts[0]["validation"] == "provider_error"
     assert attempts[1]["validation"] == "ok"
+
+
+def test_smart_retry_on_transient_capacity_then_success(monkeypatch):
+    orchestrator = CortexOrchestrator()
+
+    features = PromptFeatures(
+        word_count=8,
+        char_count=60,
+        token_estimate=40,
+        has_code=False,
+        has_math=False,
+        has_analysis=False,
+        has_creative=False,
+        has_factual=False,
+        strict_format=False,
+        has_logs_stacktrace=False,
+        context_token_estimate=0,
+        context_messages=0,
+        is_follow_up=False,
+        needs_latest_info=False,
+        needs_accuracy=False,
+        intent="general",
+        has_strict_constraints=False,
+    )
+    candidates = [
+        ModelCandidate(
+            provider="gemini",
+            model_name="gemini-2.5-flash",
+            tier=Tier.T1,
+            input_cost_per_1m=0.3,
+            output_cost_per_1m=2.5,
+            context_limit=1000000,
+            tags=["fast", "general"],
+            enabled=True,
+        ),
+        ModelCandidate(
+            provider="openai",
+            model_name="gpt-4o-mini",
+            tier=Tier.T1,
+            input_cost_per_1m=0.15,
+            output_cost_per_1m=0.6,
+            context_limit=128000,
+            tags=["fast", "general"],
+            enabled=True,
+        ),
+    ]
+    routing_md = {
+        "mode": "smart",
+        "initial_tier": "T1",
+        "final_tier": "T1",
+        "attempt_count": 0,
+        "fallback_used": False,
+        "attempts": [],
+        "decision_reasons": ["general_prompt"],
+        "candidate_plan": [],
+        "selected_sequence": [],
+    }
+    monkeypatch.setattr(
+        orchestrator._smart_router,
+        "route_once_plan",
+        lambda **kwargs: (features, Tier.T1, candidates, routing_md),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda providers=None, provider_api_keys=None: ["gemini", "openai"],
+    )
+    clients = {
+        ("gemini", "gemini-2.5-flash"): TransientCapacityErrorClient("gemini", "gemini-2.5-flash"),
+        ("openai", "gpt-4o-mini"): LongSuccessClient("openai", "gpt-4o-mini"),
+    }
+    monkeypatch.setattr(
+        orchestrator,
+        "_get_client",
+        lambda model_type, model_name, **_kwargs: clients[(model_type, model_name)],
+    )
+
+    resp = orchestrator._run_smart_attempt_loop(
+        prompt="quick summary please",
+        context=None,
+        messages=[{"role": "user", "content": "quick summary please"}],
+        routing_mode="smart",
+        routing_constraints=None,
+    )
+
+    assert resp.is_success
+    assert resp.provider == "openai"
+    routing = resp.metadata.get("routing", {})
+    assert routing.get("attempt_count") == 2
+    assert routing.get("fallback_used") is True
+    attempts = routing.get("attempts", [])
+    assert attempts[0]["validation"] == "provider_error"
+    assert "transient_capacity" in attempts[0]["why_failed"]
+    assert "UNAVAILABLE" not in attempts[0]["why_failed"]
 
 
 def test_smart_routing_records_latency_budget_recovery_reason(monkeypatch):
@@ -913,6 +1029,64 @@ def test_research_mode_on_falls_back_to_raw_prompt_when_sanitizer_blocks_query()
     assert metadata["research_used"] is True
     assert metadata["research_error"] is None
     assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in updated_messages)
+
+
+def test_prepared_messages_reuse_shared_research_without_new_search(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    fake_research = FakeResearchService()
+    fake_client = SpyClient("gemini", "gemini-2.5-flash")
+    orchestrator.research_service = fake_research
+    monkeypatch.setattr(orchestrator, "_get_client", lambda *_args, **_kwargs: fake_client)
+
+    context = UserContext(
+        session_id="session-prepared-compare",
+        conversation_history=[
+            {
+                "role": "user",
+                "content": "how has bollywood transitioned over the years in term of movies",
+            },
+            {
+                "role": "assistant",
+                "content": "Bollywood became romance-heavy in the 1990s.",
+            },
+        ],
+    )
+    prompt = "List the top-grossing or most popular films of the 1990s."
+    prepared = orchestrator.prepare_messages_for_turn(
+        prompt=prompt,
+        context=context,
+        research_mode="on",
+    )
+
+    first = orchestrator.ask(
+        prompt=prompt,
+        model_type="gemini",
+        model_name="gemini-2.5-flash",
+        routing_mode="legacy",
+        research_mode="on",
+        _prepared_prompt=prepared["prompt"],
+        _prepared_messages=prepared["messages"],
+        _prepared_research_metadata=prepared["research_metadata"],
+        _prepared_opt_metadata=prepared["optimization_metadata"],
+    )
+    second = orchestrator.ask(
+        prompt=prompt,
+        model_type="gemini",
+        model_name="gemini-2.5-flash",
+        routing_mode="legacy",
+        research_mode="on",
+        _prepared_prompt=prepared["prompt"],
+        _prepared_messages=prepared["messages"],
+        _prepared_research_metadata=prepared["research_metadata"],
+        _prepared_opt_metadata=prepared["optimization_metadata"],
+    )
+
+    assert first.is_success
+    assert second.is_success
+    assert len(fake_research.calls) == 1
+    assert fake_research.calls[0]["query"].startswith("bollywood List the top-grossing")
+    assert len(fake_client.calls) == 2
+    assert fake_client.calls[0] == fake_client.calls[1]
 
 
 def test_compare_normalizes_empty_output_to_provider_error(monkeypatch):

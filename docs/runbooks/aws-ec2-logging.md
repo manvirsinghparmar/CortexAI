@@ -103,6 +103,18 @@ If CloudFront ID forwarding is enabled, correlate directly with:
 - request header: `X-Amz-Cf-Id`
 - app field: `edge_headers.x_amz_cf_id` in `upload.route.received`
 
+## Streaming Incident Workflow (`POST /v1/chat/stream`, `/v1/compare/stream`)
+
+Use this when browsers report errors such as `ERR_HTTP2_PROTOCOL_ERROR 200 (OK)`.
+
+1. Capture the browser console request id and server `X-Request-ID`.
+2. Search app logs for `chat.stream.*` or `compare.stream.*` with that `request_id`.
+3. Interpret the stream body event chain:
+   - no `*.stream.opened`: failure happened before the app began streaming.
+   - `*.stream.start_event_sent` then `*.stream.client_disconnected`: browser, CDN, load balancer, or proxy closed the stream.
+   - long gap between `*.stream.provider_call_started` and `*.stream.provider_call_completed`: provider latency or idle timeout is likely.
+   - `*.stream.done_sent` exists but browser failed: inspect CloudFront/Nginx/ALB HTTP/2 framing, buffering, compression, and read/send timeouts.
+
 ## Upload Incident Workflow (`POST /v1/files/upload`)
 
 ### Step 1: confirm route arrival
@@ -159,9 +171,23 @@ Auth-related failures:
 ### Core Tavily events
 
 - `research.dispatch`
+- `research.search.resolver`
 - `research.search.start|success|failure|empty`
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
+
+Resolver fields to check when search quality looks poor:
+
+- `enhanced_search_enabled`
+- `chunks_per_source`
+- `category`
+- `topic_sent`
+- `time_range`
+- `country_detected`
+- `country_sent`
+- `domain_rule`
+- `include_domain_count`
+- `source_content_lengths` and `credits_used` on `research.search.success`
 
 ### Network diagnostics event
 
@@ -301,4 +327,4 @@ Likely layer:
 
 ---
 
-Last updated: 2026-04-13
+Last updated: 2026-05-23

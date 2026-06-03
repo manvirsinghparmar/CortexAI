@@ -46,6 +46,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
+`requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set. The FastAPI dependency is constrained away from `0.136.3` because that release is currently flagged by `pip-audit` advisory `MAL-2026-4750`.
 `requirements.txt` includes `tavily-python`, so Research Mode works once `TAVILY_API_KEY` is set.
 React frontend dependencies are managed by npm, not `requirements.txt`. If you want to run or build the React UI from `frontend-react/`, also install its locked Node dependencies:
 ```bash
@@ -101,6 +102,20 @@ ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false  # opt-in auto-rewrite inside chat
 PROMPT_OPTIMIZER_PROVIDER=gemini    # openai|gemini|deepseek|grok|claude
 PROMPT_OPTIMIZER_MODEL=             # optional; must belong to PROMPT_OPTIMIZER_PROVIDER
 PROMPT_OPTIMIZER_MAX_RETRIES=3
+PROMPT_OPTIMIZER_TIMEOUT_MS=5000    # explicit /v1/optimize hard deadline
+PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2 # explicit /v1/optimize attempt count
+PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450 # compact optimizer output cap
+PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
+
+# Tavily research retrieval
+TAVILY_API_KEY=                     # required when research_mode=true
+TAVILY_ENHANCED_SEARCH_ENABLED=true # false => fixed Tavily params only
+TAVILY_CHUNKS_PER_SOURCE=3          # 1..3; invalid values fall back to 3
+TAVILY_ENHANCED_SEARCH_DOMAIN_RULES=true
+TAVILY_NETWORK_DIAGNOSTICS_HOST=api.tavily.com
+TAVILY_NETWORK_DIAGNOSTICS_PORT=443
+TAVILY_NETWORK_DIAGNOSTICS_INTERVAL_SECONDS=300
+TAVILY_NETWORK_DIAGNOSTICS_TIMEOUT_SECONDS=2
 
 # Storage/privacy
 STORAGE_POLICY=full       # full|metadata (default: full when unset)
@@ -224,11 +239,20 @@ Frontend runtime config (`/runtime-config.js`):
   - defaults from `ENABLE_DEV_SESSION_LOGIN`
   - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
   - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
-- The frontend completes Cognito/local dev-session bootstrap before fetching `/v1/providers` and `/v1/models`, so session-scoped catalog discovery can populate Ask and Compare model dropdowns.
+- The frontend completes Cognito/local dev-session bootstrap before fetching session-scoped startup data (`/v1/providers`, `/v1/models`, and `/v1/history`), so local development history appears on load instead of waiting for the first chat request.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
+- History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
+- A fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
+- Frontend Compare mode defaults the `With sources` toggle on for new page sessions; if a user turns it off, their Compare-mode choice is preserved while switching between Ask and Compare.
+- Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
+- Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
+- Response Markdown rendering includes response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
+- Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text, then run the full response enhancement pass after completion.
+- Streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
 - React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, a horizontal compare canvas, and a unified bottom composer.
 - Frontend model selectors fall back to a bundled display catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
 - Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
@@ -269,6 +293,9 @@ Optional request correlation:
 ```http
 X-Request-ID: <custom-id>
 ```
+The browser frontend now sends `X-Request-ID` on Ask/Compare/Optimize calls. For
+streaming requests, frontend console diagnostics include the client request id
+and the server-returned request id when a stream read fails.
 For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
 For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
@@ -418,14 +445,24 @@ Prompt optimization (`/v1/optimize`):
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
 - uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
-- optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt instead of rewriting it
-- if optimization is disabled or rejected, the API returns the original prompt with `was_optimized=false`
+- `/v1/optimize` has an optimize-specific hard deadline from `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) and explicit-route retry count from `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`)
+- weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry
+- optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models
+- optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text
+- request payloads may include optional `context_hint` and compact `context`; the frontend sends these only for follow-up-like prompts without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to the last ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt, or if it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it
+- responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
+- if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
+- when the frontend Improve toggle is enabled, the user-message slot first shows a premium rotating refinement state, then is replaced with the returned `optimized_prompt`; if the original is kept or refinement is unavailable, the original prompt is shown with a short soft-success reassurance note before that prompt is sent to Ask or Compare
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Targets are always explicit (`targets[]`).
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
+- In the browser UI, Compare starts with `With sources` enabled by default and keeps a manual off choice for that page session.
+- Frontend Compare selectors support per-model removal with compact circular controls attached to each selector; remove controls show only when three models are active, fade in on selector hover/focus, and request payloads include only active selected models.
+- Frontend Compare response cards hide per-card token/resource text in side-by-side layouts and keep compact Resources/copy/feedback icons; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend Compare selectors appear as removable model chips in the unified composer; at least two active targets are seeded from the catalog and request payloads include only active selected models.
 - Frontend Compare response cards use side-by-side model columns with visible per-card latency and token metadata.
 
@@ -437,8 +474,13 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `research_mode=auto`: reuse prior research only when intent/topic heuristics match; otherwise search.
 - `research_mode=on`: always perform fresh search for the current turn and bypass local research cache.
 - When sources are injected, they are treated as primary evidence for current/source-dependent factual claims; non-conflicting model background knowledge can still be used for explanation/context.
+- Query sanitization anchors underspecified follow-up searches to the previous user topic when the current prompt omits that topic, so a Compare follow-up like a 1990s film list stays scoped to the active conversation subject.
 - If query sanitization yields empty query in `on` mode, orchestrator falls back to the raw prompt.
 - Prompt injection includes citation requirements, partial-source fallback guidance, and a UTC retrieval timestamp.
+- Tavily search options are resolved by a deterministic local resolver before the API call. It always sends `max_results=5`, `search_depth=advanced`, `chunks_per_source` from `TAVILY_CHUNKS_PER_SOURCE` (default `3`), `include_raw_content=false`, `include_answer=false`, and `auto_parameters=false`.
+- When `TAVILY_ENHANCED_SEARCH_ENABLED=true`, the resolver may add Tavily `topic` (`finance` or `news` only), `time_range`, country targeting for non-topic searches, and curated finance domain allowlists. It does not rewrite the query; prompt optimization and existing query sanitization remain separate.
+- Tavily country targeting is omitted whenever `topic` is sent because Tavily country filtering applies only to general searches. Finance regional targeting uses curated domains instead, for example `bankofcanada.ca`/`statcan.gc.ca`, `bls.gov`/`bea.gov`/`federalreserve.gov`, `sec.gov`, or `ons.gov.uk`/`bankofengland.co.uk`.
+- `TAVILY_ENHANCED_SEARCH_ENABLED=false` is the kill switch for enhanced Tavily options; the call still uses the fixed retrieval params above.
 - When provider timestamps are missing, Tavily source timestamps fall back to server UTC ISO timestamps (never `Timestamp: N/A`).
 - Tavily runtime diagnostics emit `research.network.diagnostics` with DNS + TCP egress health (host/port configurable via `TAVILY_NETWORK_DIAGNOSTICS_*` envs) for EC2 troubleshooting.
 - Tavily failures emit normalized `error_kind` fields (for example `dns_resolution_failed`, `timeout`, `auth_forbidden`, `rate_limited`) without logging raw query text.
@@ -448,12 +490,13 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Ask and Compare now share the same conversation session when the same `session_id` is reused.
 - Switching between Ask and Compare does not require creating a separate thread.
 - Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
+- The browser UI does not auto-continue the last active thread after a fresh login. It creates a new session and sends `new_session=true` for the first turn; users can still reopen older threads from History.
 
 ## Chat Context Guardrails
 
 - Conversation history sent to the API is trimmed to the last `10` messages.
-- Total conversation-history payload is capped at `20000` characters per request.
-- If the last `10` messages exceed that limit, the request is rejected until the sent context is smaller or a new session is started.
+- Oversized conversation-history payloads are soft-trimmed server-side instead of rejected.
+- The server keeps the newest context first and trims older or oversized message content within the internal context budget before calling providers.
 
 ## Compare and `request_group_id`
 
@@ -475,6 +518,8 @@ Notes:
 - Chat responses now include `session_id`.
 - Chat `response_done` payloads include `web_source_items` for rendered source chips.
 - Chat `start` and `done` stream events include the active `session_id`.
+- Server logs include `chat.stream.*` body lifecycle events so mid-stream
+  disconnects can be distinguished from normal HTTP request completion.
 
 `/v1/compare/stream` events:
 - `start`
@@ -489,6 +534,8 @@ Notes:
 - Per-model compare `response_done` payloads include `web_source_items`.
 - Compare `start` and `done` stream events include the active `session_id`.
 - The final compare `done` payload includes both `request_group_id` and `session_id`.
+- Server logs include `compare.stream.*` body lifecycle events with per-target
+  provider-call progress and terminal stream reason.
 
 ## BYOK (Bring Your Own Keys)
 
@@ -571,6 +618,11 @@ Common `detail.code` values:
 - `invalid_model`
 - `unauthorized`
 
+Provider-model failures that originate from upstream APIs are normalized before
+they reach API/stream/frontend surfaces. `error.details.kind` carries the stable
+failure class when available, such as `transient_capacity`, `rate_limited`,
+`quota_exceeded`, `timeout`, `auth`, `bad_request`, or `provider_5xx`.
+
 ## Output Guardrails (Current)
 
 - Route-level `max_tokens` is clamped to `2048` (`server/utils.py`).
@@ -578,6 +630,7 @@ Common `detail.code` values:
 - If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
 - Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
 - This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
+- Raw provider availability payloads (for example 503/high-demand/overloaded errors) are converted to client-safe messages before chat, compare, stream, and history rendering. Smart Ask still uses its existing fallback loop; manual Ask and Compare preserve explicit model choices and show `This model is temporarily busy. Try again shortly or switch to another model.` when the selected model is unavailable.
 
 ## Minimal Python SDK Snippet
 
@@ -623,6 +676,7 @@ class CortexClient:
 - Circuit breaker opens per `provider:model` and allows automatic fallback.
 - Circuit breaker scope is currently global per `provider:model` (not tenant-scoped).
 - Retry/fallback paths are bounded; no unbounded loops.
+- Transient provider capacity failures are tagged with `error.details.kind="transient_capacity"` so routing telemetry, circuit-breaker behavior, and the amber `.model-soft-error` UI treatment stay consistent across providers.
 
 ## Privacy and Retention
 
@@ -877,6 +931,8 @@ OpenAIProject/
   frontend/
     index.html
     app.js
+    llm-response.css
+    llm-response.js
     runtime-config.example.js
     style.css
     smart-routing-state.js
@@ -973,6 +1029,7 @@ OpenAIProject/
       research_state_store.py
       session_state.py
       tavily_client.py
+      tavily_resolver.py
       tavily_service.py
 
   utils/
@@ -1011,6 +1068,7 @@ OpenAIProject/
     test_server_utils.py
     test_smart_router_metadata.py
     test_tavily_client.py
+    test_tavily_resolver.py
     test_tier_decider.py
     test_unified_response_contract.py
     test_dynamic_provider_discovery_e2e.py
@@ -1066,4 +1124,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-04-13
+Last updated: 2026-05-23

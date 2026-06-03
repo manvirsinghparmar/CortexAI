@@ -22,6 +22,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Tier selection: `orchestrator/tier_decider.py`
 - Candidate ranking: `orchestrator/model_selector.py`
 - Fallback decisions: `orchestrator/fallback_manager.py`
+- Web research intent/query sanitization and Tavily search options: `tools/web/`
 
 ## Provider Clients
 
@@ -50,6 +51,9 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Frontend and Browser Tests
 
+- Static frontend shell and behavior: `frontend/index.html`, `frontend/app.js`, `frontend/style.css`
+- Response rendering enhancement assets: `frontend/llm-response.js`, `frontend/llm-response.css`
+- Static-only hosting config example: `frontend/runtime-config.example.js`
 - Legacy static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
 - React/Vite frontend: `frontend-react/`
   - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
@@ -86,6 +90,11 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Validate with routing/fallback tests
   3. Update routing docs (`README.md`, `docs/SMART_ROUTING_DIAGRAM.md`)
 
+- Change web research or Tavily retrieval behavior:
+  1. Update `tools/web/intent.py`, `tools/web/tavily_service.py`, `tools/web/tavily_client.py`, or `tools/web/tavily_resolver.py`
+  2. Validate with Tavily/research tests
+  3. Update `README.md`, `docs/TAVILY_INTEGRATION.md`, and logging/runbook docs when option or telemetry behavior changes
+
 - Change token/cost behavior:
   1. Update provider clients and/or `server/utils.py`
   2. Keep `config/pricing.py` and `config/model_registry.yaml` aligned
@@ -110,4 +119,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-05-09
+Last updated: 2026-05-23

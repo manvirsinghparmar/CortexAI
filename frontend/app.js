@@ -7,19 +7,21 @@ const RUNTIME_CONFIG = window.CORTEX_RUNTIME_CONFIG || {};
 const API_BASE = String(
     RUNTIME_CONFIG.apiBase || window.localStorage?.getItem("cortex_api_base") || "http://localhost:8000"
 ).replace(/\/+$/, "");
+const REQUEST_ID_HEADER = "X-Request-ID";
 
 let cognitoConfig = { enabled: false };
 const COGNITO_TOKEN_KEY = "cortex_cognito_id_token";
+const AUTH_USER_STORAGE_KEY = "cortex_authenticated_user_id";
+const FRESH_LOGIN_PENDING_STORAGE_KEY = "cortex_fresh_login_pending";
+const FRESH_LOGIN_QUERY_PARAM = "fresh_login";
 function getStoredIdToken() { try { return sessionStorage.getItem(COGNITO_TOKEN_KEY); } catch (_) { return null; } }
 function setStoredIdToken(t) { try { if (t) sessionStorage.setItem(COGNITO_TOKEN_KEY, t); else sessionStorage.removeItem(COGNITO_TOKEN_KEY); } catch (_) {} }
 function getAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 function getSessionScopedAuthHeaders() { const t = getStoredIdToken(); if (t) return { "Authorization": "Bearer " + t }; return {}; }
 async function fetchCognitoConfig() { try { const r = await fetch(API_BASE + "/v1/auth/cognito-config"); if (r.ok) cognitoConfig = await r.json(); } catch (_) {} }
-function handleCognitoCallback() { const locationObj = window.location || null; if (!locationObj) return; const hash = locationObj.hash || ""; const m = hash.match(/id_token=([^&]+)/); if (m) { setStoredIdToken(m[1]); if (window.history && window.history.replaceState) window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || "")); } }
-async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); }
 function handleCognitoCallback() {
     const locationObj = (typeof window !== "undefined" && window.location) ? window.location : null;
-    if (!locationObj) return;
+    if (!locationObj) return false;
     const hash = locationObj.hash || "";
     const m = hash.match(/id_token=([^&]+)/);
     if (m) {
@@ -27,7 +29,94 @@ function handleCognitoCallback() {
         if (window.history && window.history.replaceState) {
             window.history.replaceState("", document.title, locationObj.pathname + (locationObj.search || ""));
         }
+        return true;
     }
+    return false;
+}
+function readLocalStorageValue(key) {
+    try { return window.localStorage.getItem(key); } catch (_) { return null; }
+}
+function writeLocalStorageValue(key, value) {
+    try {
+        if (value === null || value === undefined || value === "") window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, String(value));
+    } catch (_) {}
+}
+function requestFreshLoginSessionReset() {
+    writeLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY, "1");
+}
+function consumeFreshLoginSessionReset() {
+    let requested = readLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY) === "1";
+    writeLocalStorageValue(FRESH_LOGIN_PENDING_STORAGE_KEY, null);
+
+    const locationObj = (typeof window !== "undefined" && window.location) ? window.location : null;
+    if (!locationObj) return requested;
+    try {
+        const params = new URLSearchParams(locationObj.search || "");
+        if (params.get(FRESH_LOGIN_QUERY_PARAM) === "1") {
+            requested = true;
+            params.delete(FRESH_LOGIN_QUERY_PARAM);
+            const query = params.toString();
+            const nextUrl = `${locationObj.pathname || "/"}${query ? `?${query}` : ""}${locationObj.hash || ""}`;
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState("", document.title, nextUrl);
+            }
+        }
+    } catch (_) {}
+    return requested;
+}
+function storedAuthUserId() {
+    return normalizeSessionId(readLocalStorageValue(AUTH_USER_STORAGE_KEY));
+}
+function setStoredAuthUserId(userId) {
+    writeLocalStorageValue(AUTH_USER_STORAGE_KEY, normalizeSessionId(userId));
+}
+function authUserIdFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return String(payload.user_id || payload.sub || payload.email || (payload.authenticated ? "authenticated" : "") || "").trim();
+}
+function startFreshSessionForLogin() {
+    startNewChatSession();
+}
+function noteSignedOutForSessionRestore() {
+    setStoredAuthUserId(null);
+    activeSessionId = null;
+    pendingNewSession = true;
+    conversationHistory = [];
+    persistActiveSessionId();
+}
+async function fetchAuthUserPayload() {
+    try {
+        const resp = await fetch(API_BASE + "/v1/auth/me", {
+            credentials: "include",
+            headers: getSessionScopedAuthHeaders(),
+        });
+        if (resp.ok) {
+            return { authenticated: true, payload: await resp.json() };
+        }
+        if (resp.status === 401 || resp.status === 403) {
+            return { authenticated: false, payload: null };
+        }
+    } catch (_) {}
+    return { authenticated: null, payload: null };
+}
+async function reconcileAuthenticatedSession({ forceFresh = false } = {}) {
+    const state = await fetchAuthUserPayload();
+    if (state.authenticated === false) {
+        noteSignedOutForSessionRestore();
+        return false;
+    }
+    if (state.authenticated !== true) return false;
+
+    const userId = normalizeSessionId(authUserIdFromPayload(state.payload));
+    const priorUserId = storedAuthUserId();
+    if (forceFresh || !priorUserId || (userId && priorUserId !== userId)) {
+        startFreshSessionForLogin();
+    }
+    if (userId) {
+        setStoredAuthUserId(userId);
+    }
+    return true;
 }
 function normalizeRuntimeBoolean(value, fallback) {
     if (value === undefined || value === null) return fallback;
@@ -61,7 +150,7 @@ async function ensureLocalDevSession() {
 
     try {
         const meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
-        if (meResp.ok) return true;
+        if (meResp.ok) return false;
         if (meResp.status !== 401 && meResp.status !== 403) return false;
     } catch (_) {
         return false;
@@ -89,7 +178,12 @@ async function ensureLocalDevSession() {
         return false;
     }
 }
-async function initCognitoAuth() { await fetchCognitoConfig(); handleCognitoCallback(); await ensureLocalDevSession(); }
+async function initCognitoAuth() {
+    await fetchCognitoConfig();
+    const callbackLogin = handleCognitoCallback();
+    const devLoginCreated = await ensureLocalDevSession();
+    await reconcileAuthenticatedSession({ forceFresh: callbackLogin || devLoginCreated });
+}
 function buildCognitoLoginUrl() {
         if (!cognitoConfig.enabled || !cognitoConfig.domain || !cognitoConfig.clientId) return "";
         var base = String(cognitoConfig.domain).trim().replace(/\/+$/, "");
@@ -101,6 +195,8 @@ function buildCognitoLoginUrl() {
     }
 async function cognitoSignOut() {
     try { await fetch(API_BASE + "/v1/auth/logout", { method: "POST", credentials: "include" }); } catch (_) {}
+    setStoredIdToken(null);
+    noteSignedOutForSessionRestore();
     if (cognitoConfig.logoutUrl) {
         var logoutUri =  cognitoConfig.logoutUrl + "&response_type=code&scope=email+openid&redirect_uri=" + encodeURIComponent(window.location.origin || "") + "/auth";
         window.location.href = logoutUri;
@@ -113,11 +209,11 @@ async function renderAuthUI() {
     const wrap = document.getElementById("authNavWrap");
     if (!wrap) return;
     if (!cognitoConfig.enabled) { wrap.innerHTML = ""; return; }
-    var hasSession = false;
-    try {
-        var meResp = await fetch(API_BASE + "/v1/auth/me", { credentials: "include" });
-        hasSession = meResp.ok;
-    } catch (_) {}
+    const authState = await fetchAuthUserPayload();
+    const hasSession = authState.authenticated === true;
+    if (authState.authenticated === false) {
+        noteSignedOutForSessionRestore();
+    }
     if (hasSession) {
         wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signout\" id=\"cognitoSignOutBtn\">Log off</button>";
         wrap.querySelector("#cognitoSignOutBtn").addEventListener("click", function () { void cognitoSignOut(); });
@@ -125,7 +221,10 @@ async function renderAuthUI() {
         const url = buildCognitoLoginUrl();
         if (!url) { wrap.innerHTML = ""; return; }
         wrap.innerHTML = "<button type=\"button\" class=\"top-nav-link auth-signin\" id=\"cognitoSignInBtn\">Sign in</button>";
-        wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () { window.location.href = url; });
+        wrap.querySelector("#cognitoSignInBtn").addEventListener("click", function () {
+            requestFreshLoginSessionReset();
+            window.location.href = url;
+        });
     }
 }
 
@@ -212,6 +311,7 @@ const LEGACY_MODE_SESSION_STORAGE_KEYS = [
 ];
 const MAX_CONTEXT_MESSAGES_UI = 20;
 const REQUEST_TIMEOUT_MS = 20000;
+const OPTIMIZE_REQUEST_TIMEOUT_MS = 5500;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_TIMEOUT_MS = 60000;
 const ATTACHMENT_POLL_INTERVAL_MS = 1500;
@@ -231,6 +331,12 @@ const ATTACHMENT_ALLOWED_MIME_TYPES = new Set([
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+
+function createClientRequestId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).slice(2, 10) || "0";
+    return `web-${timestamp}-${random}`;
+}
 const ATTACHMENT_MIME_BY_EXTENSION = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
@@ -834,7 +940,7 @@ let pendingNewSession = false;
 let optimizeEnabled = false;
 let smartModeEnabled = true;
 let askResearchModeEnabled = true;
-let compareResearchModeEnabled = false;
+let compareResearchModeEnabled = true;
 let isSubmitting = false;
 let isRetryingLastPrompt = false;
 let hasReceivedFirstStreamResponse = false;
@@ -846,13 +952,21 @@ let lastAttachmentDescriptorsForRetry = [];
 let lastAttachmentMessageItemsForRetry = [];
 let _historyData = [];   // full fetched list
 let streamAutoScrollEnabled = false;
-let lastStreamAutoScrollTs = 0;
+let streamAutoScrollPausedByUser = false;
+let streamScrollProgrammatic = false;
+let streamUserScrollIntentUntil = 0;
 let composerRequestState = "idle";
 let activeStreamRequest = null;
 let activeStreamRequestId = 0;
 let pendingBottomScrollRaf = null;
 let pendingBottomScrollTimer = null;
+let streamScrollProgrammaticTimer = null;
+let optimizationTurnCounter = 0;
+const optimizationProgressTimers = new Map();
 const pendingWebSourcesByCard = new Map();
+const streamResponseBuffers = new Map();
+const streamRenderTimers = new Map();
+const streamRenderRafIds = new Map();
 const chipToggleTimers = new WeakMap();
 const modelPickerBySelectId = new Map();
 let modelPickerOutsideHandlersAttached = false;
@@ -862,7 +976,22 @@ let attachmentItems = [];
 let attachmentUploadInFlight = false;
 let attachmentLocalCounter = 0;
 const attachmentPreviewUrls = new Set();
-const STREAM_AUTO_SCROLL_THROTTLE_MS = 120;
+const STREAM_MARKDOWN_RENDER_DEBOUNCE_MS = 120;
+const STREAM_SCROLL_BOTTOM_THRESHOLD_PX = 120;
+const STREAM_SCROLL_PROGRAMMATIC_MS = 180;
+const STREAM_USER_SCROLL_INTENT_MS = 900;
+const OPTIMIZE_CONTEXT_MESSAGE_LIMIT = 4;
+const OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT = 10;
+const OPTIMIZE_CONTEXT_TOTAL_LIMIT = 2000;
+const OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT = 4000;
+const OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS = 500;
+const OPTIMIZATION_PROGRESS_STATES = [
+    "Refining your prompt for better results",
+    "Enhancing clarity",
+    "Improving intent",
+    "Preparing optimized version",
+];
+const OPTIMIZATION_ORIGINAL_NOTE = "Your prompt was already clear. CortexAI sent the original version.";
 const SmartRoutingState = window.CortexSmartRoutingState || {
     parseKey: key => {
         const raw = String(key || "");
@@ -922,6 +1051,7 @@ const el = {
     routeResearchBtn: $("routeResearchBtn"),
     resultsSection: $("resultsSection"),
     resultsGrid: $("resultsGrid"),
+    jumpToLatestBtn: $("jumpToLatestBtn"),
     clearBtn: $("clearBtn"),
     errorBanner: $("errorBanner"),
     errorTitle: $("errorTitle"),
@@ -1666,6 +1796,170 @@ function truncateContextText(value, limit) {
     return `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
+const RESPONSE_ERROR_COPY_BY_KIND = {
+    timeout: "The provider request timed out. Please retry in a moment.",
+    auth: "Provider authentication failed. Check the configured API key.",
+    rate_limited: "The provider is rate limiting requests. Please retry in a moment.",
+    quota_exceeded: "Provider quota is exhausted. Check billing or API key limits.",
+    bad_request: "The provider rejected the request. Check the selected model and request settings.",
+    transient_capacity: "This model is temporarily busy. Try again shortly or switch to another model.",
+    provider_5xx: "The provider is temporarily unavailable. Please retry in a moment.",
+    unknown: "The provider request failed unexpectedly. Please retry or choose another model.",
+};
+
+function stripLeadingErrorPrefix(value) {
+    return String(value || "").replace(/^error:\s*/i, "").trim();
+}
+
+function inferResponseErrorKindFromMessage(messageRaw, codeRaw = "") {
+    const message = stripLeadingErrorPrefix(messageRaw).toLowerCase();
+    const code = String(codeRaw || "").trim().toLowerCase();
+    if (!message && !code) return "";
+
+    if (
+        code === "timeout"
+        || message.includes("timeout")
+        || message.includes("timed out")
+        || message.includes("deadline exceeded")
+    ) {
+        return "timeout";
+    }
+    if (
+        code === "auth"
+        || message.includes("authentication failed")
+        || message.includes("unauthorized")
+        || message.includes("forbidden")
+        || message.includes("api key")
+        || message.includes("permission denied")
+    ) {
+        return "auth";
+    }
+    if (
+        message.includes("insufficient quota")
+        || message.includes("quota exceeded")
+        || message.includes("exceeded your current quota")
+        || message.includes("billing")
+        || message.includes("hard limit")
+    ) {
+        return "quota_exceeded";
+    }
+    if (
+        code === "rate_limit"
+        || message.includes("429")
+        || message.includes("rate limit")
+        || message.includes("too many requests")
+        || message.includes("resource exhausted")
+    ) {
+        return "rate_limited";
+    }
+    if (
+        message.includes("503")
+        || message.includes("circuit open")
+        || message.includes("high demand")
+        || message.includes("overloaded")
+        || message.includes("temporarily busy")
+        || message.includes("temporarily unavailable")
+        || message.includes("service unavailable")
+        || message.includes("currently unavailable")
+        || message.includes("currently experiencing")
+        || message.includes("try again later")
+        || message.includes("server busy")
+        || message.includes("capacity")
+        || /\bunavailable\b/.test(message)
+    ) {
+        return "transient_capacity";
+    }
+    if (
+        message.includes("500")
+        || message.includes("502")
+        || message.includes("504")
+        || message.includes("server error")
+    ) {
+        return "provider_5xx";
+    }
+    if (
+        code === "bad_request"
+        && (
+            message.includes("provider rejected")
+            || message.includes("bad request")
+            || message.includes("invalid request")
+            || message.includes("error code:")
+        )
+    ) {
+        return "bad_request";
+    }
+    if (
+        code === "unknown"
+        && (
+            message.includes("provider error:")
+            || message.includes("error code:")
+            || message.includes("{'error'")
+            || message.includes('"error"')
+            || message.includes("traceback")
+            || message.includes("exception")
+        )
+    ) {
+        return "unknown";
+    }
+    return "";
+}
+
+function getResponseErrorKind(errorLike) {
+    const error = errorLike && typeof errorLike === "object" ? errorLike : {};
+    const details = error.details && typeof error.details === "object" ? error.details : {};
+    const explicitKind = String(details.kind || details.error_kind || "").trim().toLowerCase();
+    if (explicitKind && RESPONSE_ERROR_COPY_BY_KIND[explicitKind]) {
+        return explicitKind;
+    }
+
+    const rawMessage = stripLeadingErrorPrefix(error.message || error.detail || "");
+    return inferResponseErrorKindFromMessage(rawMessage, error.code);
+}
+
+function getSafeResponseErrorMessage(errorLike) {
+    const error = errorLike && typeof errorLike === "object" ? errorLike : {};
+    const kind = getResponseErrorKind(error);
+    if (kind && RESPONSE_ERROR_COPY_BY_KIND[kind]) {
+        return RESPONSE_ERROR_COPY_BY_KIND[kind];
+    }
+
+    const rawMessage = stripLeadingErrorPrefix(error.message || error.detail || "");
+    return rawMessage || "Request failed.";
+}
+
+function getResponseErrorDisplayText(errorLike) {
+    const safeMessage = getSafeResponseErrorMessage(errorLike);
+    if (getResponseErrorKind(errorLike) === "transient_capacity") {
+        return safeMessage;
+    }
+    return `Error: ${safeMessage}`;
+}
+
+function getModelSoftErrorParts(errorLike) {
+    if (getResponseErrorKind(errorLike) !== "transient_capacity") return null;
+    return {
+        title: "This model is temporarily busy.",
+        body: "Try again shortly or switch to another model.",
+    };
+}
+
+function renderResponseErrorHtml(errorLike) {
+    const softError = getModelSoftErrorParts(errorLike);
+    if (softError) {
+        return `
+          <div class="model-soft-error-title">${escHtml(softError.title)}</div>
+          <div class="model-soft-error-body">${escHtml(softError.body)}</div>`;
+    }
+    return escHtml(getResponseErrorDisplayText(errorLike));
+}
+
+function applyResponseErrorClasses(targetEl, errorLike) {
+    const isSoftError = !!getModelSoftErrorParts(errorLike);
+    targetEl.classList.toggle("model-soft-error", isSoftError);
+    targetEl.classList.toggle("response-error", !isSoftError);
+    targetEl.classList.toggle("error-text", !isSoftError);
+}
+
 function buildCompareAssistantContext(responses) {
     const safeResponses = Array.isArray(responses) ? responses.filter(Boolean) : [];
     if (safeResponses.length === 0) return "";
@@ -1682,7 +1976,7 @@ function buildCompareAssistantContext(responses) {
         const slotLabel = `${providerLabel} · ${modelLabel}`;
 
         let responseText = "";
-        const errorMessage = String(resp?.error?.message || "").trim();
+        const errorMessage = resp?.error ? getSafeResponseErrorMessage(resp.error) : "";
         if (errorMessage) {
             responseText = `Error: ${errorMessage}`;
         } else {
@@ -1813,8 +2107,91 @@ function setComposerDocked(docked) {
     el.promptCard.classList.toggle("docked", docked);
 }
 
+function getDocumentScrollElement() {
+    return document.scrollingElement || document.documentElement || document.body;
+}
+
+function isScrollableNearBottom(scrollEl, thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    if (!scrollEl) return true;
+    const threshold = Number.isFinite(Number(thresholdPx)) ? Number(thresholdPx) : STREAM_SCROLL_BOTTOM_THRESHOLD_PX;
+    const viewportHeight = scrollEl === getDocumentScrollElement()
+        ? (Number(window.innerHeight) || scrollEl.clientHeight || 0)
+        : (scrollEl.clientHeight || 0);
+    const scrollTop = scrollEl === getDocumentScrollElement()
+        ? (Number(window.scrollY) || scrollEl.scrollTop || 0)
+        : (scrollEl.scrollTop || 0);
+    const remaining = (scrollEl.scrollHeight || 0) - scrollTop - viewportHeight;
+    return remaining <= threshold;
+}
+
+function isDocumentNearBottom(thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    return isScrollableNearBottom(getDocumentScrollElement(), thresholdPx);
+}
+
+function isResultsSectionNearBottom(thresholdPx = STREAM_SCROLL_BOTTOM_THRESHOLD_PX) {
+    if (!el.resultsSection || el.resultsSection.classList.contains("hidden")) return true;
+    return isScrollableNearBottom(el.resultsSection, thresholdPx);
+}
+
+function isNearStreamingBottom() {
+    return isDocumentNearBottom() && isResultsSectionNearBottom();
+}
+
+function updateJumpToLatestVisibility() {
+    if (!el.jumpToLatestBtn) return;
+    const show = streamAutoScrollEnabled && streamAutoScrollPausedByUser;
+    el.jumpToLatestBtn.classList.toggle("hidden", !show);
+    el.jumpToLatestBtn.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
+function setStreamAutoScrollPaused(paused) {
+    streamAutoScrollPausedByUser = Boolean(paused);
+    if (!streamAutoScrollPausedByUser) {
+        streamUserScrollIntentUntil = 0;
+    }
+    updateJumpToLatestVisibility();
+}
+
+function markProgrammaticStreamScroll() {
+    if (!streamAutoScrollEnabled) return;
+    streamScrollProgrammatic = true;
+    if (streamScrollProgrammaticTimer !== null) {
+        clearTimeout(streamScrollProgrammaticTimer);
+    }
+    streamScrollProgrammaticTimer = setTimeout(() => {
+        streamScrollProgrammatic = false;
+        streamScrollProgrammaticTimer = null;
+    }, STREAM_SCROLL_PROGRAMMATIC_MS);
+}
+
+function hasRecentStreamUserScrollIntent() {
+    return Date.now() <= streamUserScrollIntentUntil;
+}
+
+function markStreamUserScrollIntent(event = null) {
+    if (!streamAutoScrollEnabled) return;
+    if (event?.type === "keydown") {
+        const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+        if (!scrollKeys.has(event.key)) return;
+    }
+    streamUserScrollIntentUntil = Date.now() + STREAM_USER_SCROLL_INTENT_MS;
+}
+
+function handleUserScrollDuringStream() {
+    if (!streamAutoScrollEnabled) return;
+    if (streamScrollProgrammatic && !hasRecentStreamUserScrollIntent()) return;
+    const latestBelowViewport = !isNearStreamingBottom();
+    setStreamAutoScrollPaused(latestBelowViewport);
+    if (!latestBelowViewport && !isComposerStopModeActive()) {
+        streamAutoScrollEnabled = false;
+        updateJumpToLatestVisibility();
+    }
+}
+
 function scrollResultsToBottom(behavior = "auto") {
     if (!el.resultsSection || el.resultsSection.classList.contains("hidden")) return;
+
+    markProgrammaticStreamScroll();
 
     const lastCard = el.resultsGrid?.lastElementChild || null;
     if (lastCard && typeof lastCard.scrollIntoView === "function") {
@@ -1833,7 +2210,7 @@ function scrollResultsToBottom(behavior = "auto") {
 
     el.resultsSection.scrollTop = el.resultsSection.scrollHeight;
 
-    const doc = document.scrollingElement || document.documentElement || document.body;
+    const doc = getDocumentScrollElement();
     if (doc && typeof window.scrollTo === "function") {
         const viewportH = Number(window.innerHeight) || 0;
         const targetTop = Math.max(0, doc.scrollHeight - viewportH);
@@ -1874,14 +2251,37 @@ function scheduleScrollResultsToBottom(options = {}) {
     }, followUpDelayMs);
 }
 
-function maybeAutoScrollDuringStream() {
+function syncJumpToLatestDuringStream() {
     if (!streamAutoScrollEnabled) return;
-    const now = Date.now();
-    if (now - lastStreamAutoScrollTs < STREAM_AUTO_SCROLL_THROTTLE_MS) {
-        return;
+    setStreamAutoScrollPaused(!isNearStreamingBottom());
+}
+
+function finishStreamingViewportControls() {
+    syncJumpToLatestDuringStream();
+    if (!streamAutoScrollPausedByUser) {
+        streamAutoScrollEnabled = false;
     }
-    lastStreamAutoScrollTs = now;
-    scrollResultsToBottom("auto");
+    updateJumpToLatestVisibility();
+}
+
+window.addEventListener("scroll", handleUserScrollDuringStream, { passive: true });
+window.addEventListener("wheel", markStreamUserScrollIntent, { passive: true });
+window.addEventListener("touchmove", markStreamUserScrollIntent, { passive: true });
+window.addEventListener("keydown", markStreamUserScrollIntent);
+if (el.resultsSection) {
+    el.resultsSection.addEventListener("scroll", handleUserScrollDuringStream, { passive: true });
+    el.resultsSection.addEventListener("wheel", markStreamUserScrollIntent, { passive: true });
+    el.resultsSection.addEventListener("touchmove", markStreamUserScrollIntent, { passive: true });
+}
+if (el.jumpToLatestBtn) {
+    el.jumpToLatestBtn.addEventListener("click", () => {
+        setStreamAutoScrollPaused(false);
+        scrollResultsToBottom("smooth");
+        if (!isComposerStopModeActive()) {
+            streamAutoScrollEnabled = false;
+            updateJumpToLatestVisibility();
+        }
+    });
 }
 
 function markFirstStreamResponseSeen() {
@@ -1951,9 +2351,12 @@ function setMode(mode) {
         activeSessionId = loadActiveSessionId();
     }
     if (activeSessionId) {
-        hydrateConversationHistoryFromSession(activeSessionId, _historyData);
-        renderSessionTranscript(activeSessionId, _historyData);
-        pendingNewSession = false;
+        const sessionEntries = getSessionEntries(_historyData, activeSessionId);
+        hydrateConversationHistoryFromEntries(sessionEntries);
+        renderConversationFromEntries(sessionEntries);
+        if (sessionEntries.length > 0) {
+            pendingNewSession = false;
+        }
     } else {
         conversationHistory = [];
         pendingNewSession = true;
@@ -2813,26 +3216,128 @@ el.promptInput.addEventListener("keydown", e => {
    OPTIMIZE PROMPT CALL
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+function normalizeOptimizeContextText(value, limit = OPTIMIZE_CONTEXT_MESSAGE_LIMIT_CHARS) {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= limit) return compact;
+    return compact.slice(0, limit).trim();
+}
+
+function isLikelyFollowUpPrompt(prompt) {
+    const text = String(prompt || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!text || conversationHistory.length === 0) return false;
+
+    const directFollowUpPattern = /\b(i\s+(?:mean|meant|was\s+talking\s+about)|you\s+said|as\s+above|from\s+above|previous(?:ly)?|earlier|that one|same topic|the same|continue|follow[-\s]?up)\b/i;
+    const referencePattern = /\b(the above|the previous|the first one|the second one|the third one|first one|second one|third one|my last|last answer|last response|that response|this topic|same topic)\b/i;
+    const possessiveReferencePattern = /^(?:who|what|why|how|where|when|how many|how much)\b.{0,120}\b(their|its)\b/i;
+    const priorOfferPattern = /^(?:give me|provide|show me|create|make)\b.{0,120}\b(the|that|those)\s+(?:detailed\s+)?(?:range|breakdown|summary|timeline|list|comparison|estimate|estimates|details)\b/i;
+    const shortReferencePattern = /^(?:also|and|but|so|then|what about|how about|can you|could you|make|rewrite|improve|modify|explain|list|summarize|tell me|why|what|how|where|when)\b.{0,110}\b(it|that|this|these|those|their|its|same|above|previous|earlier|first one|second one|third one)\b/i;
+
+    return directFollowUpPattern.test(text)
+        || referencePattern.test(text)
+        || possessiveReferencePattern.test(text)
+        || priorOfferPattern.test(text)
+        || shortReferencePattern.test(text);
+}
+
+function selectOptimizeContextMessages(options = {}) {
+    const messageLimit = options?.referenceDependent
+        ? OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT
+        : OPTIMIZE_CONTEXT_MESSAGE_LIMIT;
+    const recentMessages = conversationHistory
+        .filter(item => {
+            const role = String(item?.role || "");
+            return (role === "user" || role === "assistant")
+                && normalizeOptimizeContextText(item?.content).length > 0;
+        })
+        .slice(-OPTIMIZE_REFERENCE_CONTEXT_MESSAGE_LIMIT);
+
+    const selected = recentMessages.slice(-messageLimit);
+
+    return selected.map(item => ({
+        role: String(item.role || "user"),
+        content: normalizeOptimizeContextText(item.content),
+    }));
+}
+
+function buildOptimizeContextPayload(prompt, options = {}) {
+    if (options?.hasAttachments) return {};
+    const referenceDependent = isLikelyFollowUpPrompt(prompt);
+    if (!referenceDependent) return {};
+
+    const contextMessages = selectOptimizeContextMessages({ referenceDependent });
+    if (!contextMessages.length) return {};
+
+    const totalLimit = referenceDependent
+        ? OPTIMIZE_REFERENCE_CONTEXT_TOTAL_LIMIT
+        : OPTIMIZE_CONTEXT_TOTAL_LIMIT;
+    const hintPrefix = "Use only to resolve references in the latest prompt:\n";
+    const hintBody = contextMessages
+        .map((item, index) => `Recent ${item.role} ${index + 1}: ${item.content}`)
+        .join("\n")
+        .slice(0, Math.max(0, totalLimit - hintPrefix.length))
+        .trim();
+    if (!hintBody) return {};
+
+    return {
+        context_hint: `${hintPrefix}${hintBody}`,
+        context: {
+            session_id: activeSessionId || undefined,
+            conversation_history: contextMessages,
+            new_session: Boolean(pendingNewSession),
+        },
+    };
+}
+
 async function callOptimize(prompt, options = {}) {
     let data = null;
     try {
-        data = await callAPI("/v1/optimize", { prompt }, { signal: options?.signal });
+        data = await callAPI(
+            "/v1/optimize",
+            {
+                prompt,
+                ...buildOptimizeContextPayload(prompt, {
+                    hasAttachments: Boolean(options?.hasAttachments),
+                }),
+            },
+            {
+                signal: options?.signal,
+                timeoutMs: OPTIMIZE_REQUEST_TIMEOUT_MS,
+            },
+        );
     } catch (error) {
         if (isRequestAbortedFailure(error)) {
             throw error;
         }
-        return prompt;
+        lastOptimizeResult = null;
+        return {
+            prompt,
+            failed: true,
+            result: null,
+        };
     }
-    if (!data) return prompt;               // on error fall through
+    if (!data) {
+        lastOptimizeResult = null;
+        return {
+            prompt,
+            failed: true,
+            result: null,
+        };
+    }
 
     lastOptimizeResult = {
         original: data.original_prompt,
         optimized: data.optimized_prompt,
         wasOptimized: data.was_optimized,
         serverEnabled: data.server_optimization_enabled,
+        optimizationStatus: data.optimization_status || (data.was_optimized ? "optimized" : "kept_original"),
+        fallbackReason: data.fallback_reason || null,
     };
 
-    return data.optimized_prompt;
+    return {
+        prompt: String(data.optimized_prompt || prompt),
+        failed: false,
+        result: lastOptimizeResult,
+    };
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2909,10 +3414,33 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
 
         // Step 1: optionally optimize the prompt
         let prompt = rawPrompt;
+        let renderedUserBeforeRequest = false;
         if (optimizeEnabled && rawPrompt.trim().length > 0) {
-            prompt = await callOptimize(rawPrompt, {
-                signal: streamRequest?.controller?.signal,
+            const optimizationTurnId = appendOptimizationPendingTurn(rawPrompt, {
+                attachments: attachmentPayload.message_items,
             });
+            renderedUserBeforeRequest = true;
+            try {
+                const optimizeOutcome = await callOptimize(rawPrompt, {
+                    signal: streamRequest?.controller?.signal,
+                    hasAttachments: attachmentPayload.message_items.length > 0,
+                });
+                if (streamRequest?.userStopped) {
+                    markOptimizationTurnCancelled(optimizationTurnId);
+                    return;
+                }
+                prompt = optimizeOutcome.prompt;
+                if (optimizeOutcome.failed) {
+                    markOptimizationTurnFailed(optimizationTurnId, rawPrompt);
+                } else {
+                    await finalizeOptimizationTurn(optimizationTurnId, optimizeOutcome.result);
+                }
+            } catch (error) {
+                if (isRequestAbortedFailure(error)) {
+                    markOptimizationTurnCancelled(optimizationTurnId);
+                }
+                throw error;
+            }
         } else {
             lastOptimizeResult = null;
         }
@@ -2926,6 +3454,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
                 attachmentDescriptors: attachmentPayload.compatibility_descriptors,
                 userTurnAttachments: attachmentPayload.message_items,
                 onBeforeRequestSend: clearComposerAttachments,
+                skipUserBubble: renderedUserBeforeRequest,
             });
         } else {
             sent = await doCompare(prompt, {
@@ -2934,6 +3463,7 @@ async function submitPrompt(rawPrompt, { fromRetry = false } = {}) {
                 attachmentDescriptors: attachmentPayload.compatibility_descriptors,
                 userTurnAttachments: attachmentPayload.message_items,
                 onBeforeRequestSend: clearComposerAttachments,
+                skipUserBubble: renderedUserBeforeRequest,
             });
         }
         if (sent) {
@@ -2979,6 +3509,7 @@ async function doSingleChat(prompt, {
     attachmentDescriptors = [],
     userTurnAttachments = [],
     onBeforeRequestSend = null,
+    skipUserBubble = false,
 } = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
@@ -3027,6 +3558,7 @@ async function doSingleChat(prompt, {
             append: true,
             promptText: prompt,
             userAttachments: userTurnAttachments,
+            skipUserBubble,
         }
     );
     const cardIndex = streamState.indexMap[0];
@@ -3035,7 +3567,8 @@ async function doSingleChat(prompt, {
     let partialText = "";
     let stoppedByUser = false;
     streamAutoScrollEnabled = true;
-    lastStreamAutoScrollTs = 0;
+    streamUserScrollIntentUntil = 0;
+    setStreamAutoScrollPaused(!streamState.shouldRevealLatest && !isNearStreamingBottom());
     try {
         await callAPIStream("/v1/chat/stream", body, async event => {
             if (event.type === "start") {
@@ -3081,7 +3614,7 @@ async function doSingleChat(prompt, {
             throw error;
         }
     } finally {
-        streamAutoScrollEnabled = false;
+        finishStreamingViewportControls();
         if (ownedStreamRequest) {
             endActiveStreamRequest(activeRequest);
         }
@@ -3117,6 +3650,7 @@ async function doCompare(prompt, {
     attachmentDescriptors = [],
     userTurnAttachments = [],
     onBeforeRequestSend = null,
+    skipUserBubble = false,
 } = {}) {
     const ownedStreamRequest = !streamRequest;
     const activeRequest = streamRequest || beginActiveStreamRequest();
@@ -3154,6 +3688,7 @@ async function doCompare(prompt, {
         append: true,
         promptText: prompt,
         userAttachments: userTurnAttachments,
+        skipUserBubble,
     });
 
     const responses = new Array(targets.length).fill(null);
@@ -3162,7 +3697,8 @@ async function doCompare(prompt, {
     let stoppedByUser = false;
 
     streamAutoScrollEnabled = true;
-    lastStreamAutoScrollTs = 0;
+    streamUserScrollIntentUntil = 0;
+    setStreamAutoScrollPaused(!streamState.shouldRevealLatest && !isNearStreamingBottom());
     try {
         await callAPIStream("/v1/compare/stream", {
             prompt,
@@ -3224,7 +3760,7 @@ async function doCompare(prompt, {
             throw error;
         }
     } finally {
-        streamAutoScrollEnabled = false;
+        finishStreamingViewportControls();
         if (ownedStreamRequest) {
             endActiveStreamRequest(activeRequest);
         }
@@ -3273,41 +3809,137 @@ async function doCompare(prompt, {
    API
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+function getStreamModeForPath(path) {
+    const value = String(path || "");
+    if (value.includes("/compare/")) return "compare";
+    if (value.includes("/chat/")) return "chat";
+    return "unknown";
+}
+
+function getResponseHeader(resp, name) {
+    try {
+        return String(resp?.headers?.get(name) || "").trim();
+    } catch (_) {
+        return "";
+    }
+}
+
+function reportStreamRequestFailure(error, {
+    path = "",
+    mode = "unknown",
+    requestId = "",
+    serverRequestId = "",
+    status = null,
+    startedAt = 0,
+    eventsReceived = 0,
+    classifiedKind = "",
+    phase = "unknown",
+} = {}) {
+    if (typeof console === "undefined" || typeof console.error !== "function") {
+        return;
+    }
+    const detail = String(error?.detail || error?.message || "").trim();
+    const kind = classifiedKind
+        || String(error?.uiErrorKind || "").trim()
+        || inferErrorKindFromMessage(detail)
+        || "connection";
+    const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : null;
+    console.error("CortexAI stream request failed", {
+        path: String(path || error?.path || ""),
+        mode: String(mode || "unknown"),
+        request_id: String(requestId || error?.requestId || ""),
+        server_request_id: String(serverRequestId || error?.serverRequestId || ""),
+        status: Number(status || error?.status || error?.httpStatus) || null,
+        elapsed_ms: elapsedMs,
+        error_name: String(error?.name || ""),
+        error_message: detail,
+        classified_kind: kind,
+        events_received: Number(eventsReceived) || 0,
+        api_base: API_BASE,
+        phase: String(phase || "unknown"),
+    }, error);
+}
+
 async function callAPI(path, body, options = {}) {
+    const requestId = createClientRequestId();
     const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(), [REQUEST_ID_HEADER]: requestId },
         body: JSON.stringify(body),
         signal: options?.signal,
-    });
+    }, options?.timeoutMs);
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, { path, requestId });
     }
     return resp.json();
 }
 
 async function callAPIStream(path, body, onEvent, options = {}) {
     const signal = options?.signal;
-    const resp = await fetchWithTimeout(`${API_BASE}${path}`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/x-ndjson",
-            ...getSessionScopedAuthHeaders(),
-        },
-        body: JSON.stringify(body),
-        signal,
-    });
+    const requestId = createClientRequestId();
+    const startedAt = Date.now();
+    const mode = getStreamModeForPath(path);
+    let status = null;
+    let serverRequestId = "";
+    let eventsReceived = 0;
+    let resp = null;
+
+    try {
+        resp = await fetchWithTimeout(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+                ...getSessionScopedAuthHeaders(),
+                [REQUEST_ID_HEADER]: requestId,
+            },
+            body: JSON.stringify(body),
+            signal,
+        });
+    } catch (error) {
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            startedAt,
+            phase: "fetch",
+        });
+        throw error;
+    }
+
+    status = Number(resp.status) || null;
+    serverRequestId = getResponseHeader(resp, REQUEST_ID_HEADER);
 
     if (!resp.ok) {
-        throw await toRequestFailureFromResponse(resp);
+        throw await toRequestFailureFromResponse(resp, {
+            path,
+            requestId,
+            serverRequestId,
+        });
     }
 
     if (!resp.body) {
-        throw createRequestFailure("Streaming unsupported", { kind: "service" });
+        const failure = createRequestFailure("Streaming unsupported", {
+            kind: "service",
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(failure, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            phase: "body_missing",
+        });
+        throw failure;
     }
 
     const reader = resp.body.getReader();
@@ -3327,7 +3959,10 @@ async function callAPIStream(path, body, onEvent, options = {}) {
                 if (raw) {
                     let event = null;
                     try { event = JSON.parse(raw); } catch { }
-                    if (event && onEvent) await onEvent(event);
+                    if (event) {
+                        eventsReceived += 1;
+                        if (onEvent) await onEvent(event);
+                    }
                 }
                 newlineIdx = buffer.indexOf("\n");
             }
@@ -3336,6 +3971,7 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         if (tail) {
             try {
                 const event = JSON.parse(tail);
+                eventsReceived += 1;
                 if (onEvent) await onEvent(event);
             } catch { }
         }
@@ -3345,13 +3981,31 @@ async function callAPIStream(path, body, onEvent, options = {}) {
         }
         const message = String(error?.detail || error?.message || "stream_read_failed");
         const inferred = inferErrorKindFromMessage(message) || "connection";
-        throw createRequestFailure(message, { kind: inferred });
+        const failure = createRequestFailure(message, {
+            kind: inferred,
+            status,
+            requestId,
+            serverRequestId,
+            path,
+        });
+        reportStreamRequestFailure(error, {
+            path,
+            mode,
+            requestId,
+            serverRequestId,
+            status,
+            startedAt,
+            eventsReceived,
+            classifiedKind: inferred,
+            phase: "read",
+        });
+        throw failure;
     } finally {
         try { reader.releaseLock(); } catch (_) { }
     }
 }
 
-function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
+function createRequestFailure(detail = "", { kind = "", status = null, requestId = "", serverRequestId = "", path = "" } = {}) {
     const error = new Error("request_failed");
     if (kind) {
         error.uiErrorKind = kind;
@@ -3361,6 +4015,15 @@ function createRequestFailure(detail = "", { kind = "", status = null } = {}) {
     }
     if (detail) {
         error.detail = String(detail);
+    }
+    if (requestId) {
+        error.requestId = String(requestId);
+    }
+    if (serverRequestId) {
+        error.serverRequestId = String(serverRequestId);
+    }
+    if (path) {
+        error.path = String(path);
     }
     return error;
 }
@@ -3447,12 +4110,18 @@ async function readResponseErrorDetail(resp) {
     }
 }
 
-async function toRequestFailureFromResponse(resp) {
+async function toRequestFailureFromResponse(resp, { path = "", requestId = "", serverRequestId = "" } = {}) {
     const detail = await readResponseErrorDetail(resp);
     const statusKind = mapStatusToErrorKind(resp?.status);
     const detailKind = inferErrorKindFromMessage(detail);
     const kind = statusKind || detailKind || "service";
-    return createRequestFailure(detail, { kind, status: resp?.status });
+    return createRequestFailure(detail, {
+        kind,
+        status: resp?.status,
+        requestId,
+        serverRequestId: serverRequestId || getResponseHeader(resp, REQUEST_ID_HEADER),
+        path,
+    });
 }
 
 function isAbortErrorLike(error) {
@@ -3468,6 +4137,10 @@ function isRequestAbortedFailure(error) {
 }
 
 function readStreamedResponseText(index) {
+    const key = Number(index);
+    if (streamResponseBuffers.has(key)) {
+        return String(streamResponseBuffers.get(key) || "");
+    }
     const textEl = document.getElementById(`response-text-${index}`);
     return textEl ? String(textEl.textContent || "") : "";
 }
@@ -3584,13 +4257,32 @@ function webSourceListId(index) {
         : "response-sources-list-live";
 }
 
-function buildWebSourceChipsHtml(sources) {
+function responseCitationPrefix(index) {
+    const normalizedIndex = Number(index);
+    return Number.isFinite(normalizedIndex)
+        ? `response-${normalizedIndex}`
+        : "response-live";
+}
+
+function responseCitationTargetId(index, citationNumber) {
+    const safeNumber = String(citationNumber || "").replace(/[^0-9]/g, "") || "1";
+    return `cite-${responseCitationPrefix(index)}-${safeNumber}`;
+}
+
+function citationPrefixFromResponseElement(targetEl) {
+    const match = /^response-text-(\d+)$/.exec(String(targetEl?.id || ""));
+    return match ? responseCitationPrefix(Number(match[1])) : responseCitationPrefix(null);
+}
+
+function buildWebSourceChipsHtml(sources, index = null) {
     if (!Array.isArray(sources) || sources.length === 0) return "";
     return sources.map((source, idx) => {
         const faviconUrl = `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
         const domain = sourceDomainLabel(source.url);
+        const citationId = responseCitationTargetId(index, idx + 1);
         return `
           <a class="source-chip"
+             id="${escHtml(citationId)}"
              href="${escHtml(source.url)}"
              target="_blank"
              rel="noopener noreferrer"
@@ -3680,7 +4372,7 @@ function applyPendingWebSources(index, shouldShow = true) {
     if (list) {
         list.classList.remove("hidden");
         list.setAttribute("aria-hidden", "true");
-        list.innerHTML = buildWebSourceChipsHtml(sources);
+        list.innerHTML = buildWebSourceChipsHtml(sources, index);
     }
 }
 
@@ -3806,7 +4498,7 @@ function buildResponseProviderMeta(summary, index = null) {
 function buildResponseFooter(index, summary, tokenUsage, webSources = [], options = {}) {
     const safeSources = Array.isArray(webSources) ? webSources : [];
     const sourceStripHtml = safeSources.length > 0 ? buildWebSourceStripHtml(safeSources, index) : "";
-    const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources) : "";
+    const sourceListHtml = safeSources.length > 0 ? buildWebSourceChipsHtml(safeSources, index) : "";
     const compact = Boolean(options.compact);
     const compactClass = compact ? " is-compare-compact" : "";
     const providerMetaHtml = compact ? "" : buildResponseProviderMeta(summary, index);
@@ -3869,6 +4561,160 @@ function buildUserMessageBubble(promptText, delay = 0, options = {}) {
     </div>`;
 }
 
+function buildOptimizationUserBubble(turnId, options = {}) {
+    const userAttachments = normalizeUserTurnAttachmentItems(options?.attachments || []);
+    const attachmentCardsHtml = buildUserAttachmentCards(userAttachments);
+    return `
+    <div class="chat-message chat-message-user optimization-message is-pending"
+         id="optimization-turn-${turnId}"
+        style="animation: messageIn .2s ease-out both;">
+      <div class="chat-bubble chat-bubble-user optimization-bubble" role="status" aria-live="polite">
+        <p class="chat-user-text optimization-user-text" id="optimization-label-${turnId}">
+          <span class="optimization-sparkle" aria-hidden="true">✨</span>
+          <span class="optimization-state-text" id="optimization-state-${turnId}">${escHtml(OPTIMIZATION_PROGRESS_STATES[0])}</span>
+          <span class="optimization-dots" id="optimization-dots-${turnId}" aria-hidden="true">
+            <span class="optimization-dot">.</span>
+            <span class="optimization-dot">.</span>
+            <span class="optimization-dot">.</span>
+          </span>
+        </p>
+        <p class="optimization-result-note hidden" id="optimization-note-${turnId}"></p>
+        ${attachmentCardsHtml}
+      </div>
+    </div>`;
+}
+
+function appendOptimizationPendingTurn(promptText, options = {}) {
+    const turnId = ++optimizationTurnCounter;
+    const html = buildOptimizationUserBubble(turnId, { attachments: options?.attachments || [] });
+
+    el.resultsSection.classList.remove("hidden");
+    el.resultsGrid.className = currentMode === "compare" ? "results-grid compare-transcript" : "results-grid";
+    el.resultsGrid.style.gridTemplateColumns = "";
+    el.resultsGrid.insertAdjacentHTML("beforeend", html);
+    setComposerDocked(true);
+    startOptimizationProgressStates(turnId);
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    return turnId;
+}
+
+function setOptimizationProgressText(turnId, text) {
+    const stateEl = document.getElementById(`optimization-state-${turnId}`);
+    if (!stateEl) return;
+
+    const timer = optimizationProgressTimers.get(turnId);
+    if (timer?.timeoutId) {
+        clearTimeout(timer.timeoutId);
+    }
+
+    stateEl.classList.add("is-swapping");
+    const timeoutId = window.setTimeout(() => {
+        stateEl.textContent = String(text || "");
+        stateEl.classList.remove("is-swapping");
+        const activeTimer = optimizationProgressTimers.get(turnId);
+        if (activeTimer?.timeoutId === timeoutId) {
+            activeTimer.timeoutId = null;
+        }
+    }, 140);
+
+    if (timer) {
+        timer.timeoutId = timeoutId;
+    }
+}
+
+function startOptimizationProgressStates(turnId) {
+    stopOptimizationProgressStates(turnId);
+    let stateIndex = 0;
+    const intervalId = window.setInterval(() => {
+        stateIndex = (stateIndex + 1) % OPTIMIZATION_PROGRESS_STATES.length;
+        setOptimizationProgressText(turnId, OPTIMIZATION_PROGRESS_STATES[stateIndex]);
+    }, 1650);
+    optimizationProgressTimers.set(turnId, {
+        intervalId,
+        timeoutId: null,
+    });
+}
+
+function stopOptimizationProgressStates(turnId) {
+    const timer = optimizationProgressTimers.get(turnId);
+    if (!timer) return;
+    if (timer.intervalId) {
+        clearInterval(timer.intervalId);
+    }
+    if (timer.timeoutId) {
+        clearTimeout(timer.timeoutId);
+    }
+    optimizationProgressTimers.delete(turnId);
+}
+
+function updateOptimizationTurn(turnId, { label, body, note = "", state = "complete" } = {}) {
+    if (!turnId) return;
+    const turn = document.getElementById(`optimization-turn-${turnId}`);
+    if (!turn) return;
+
+    const labelEl = document.getElementById(`optimization-label-${turnId}`);
+    const noteEl = document.getElementById(`optimization-note-${turnId}`);
+    const dotsEl = document.getElementById(`optimization-dots-${turnId}`);
+    const bubbleEl = turn.querySelector(".optimization-bubble");
+
+    stopOptimizationProgressStates(turnId);
+    turn.classList.remove("is-pending", "is-complete", "is-kept-original", "is-failed", "is-cancelled", "is-resolving");
+    turn.classList.add(`is-${state}`);
+    if (labelEl) {
+        labelEl.textContent = String(body || label || "");
+    }
+    if (noteEl) {
+        const noteText = String(note || "").trim();
+        noteEl.textContent = noteText;
+        noteEl.classList.toggle("hidden", !noteText);
+    }
+    if (dotsEl) dotsEl.classList.toggle("hidden", state !== "pending");
+    if (bubbleEl) {
+        bubbleEl.setAttribute("role", state === "pending" ? "status" : "note");
+        bubbleEl.setAttribute("aria-live", "polite");
+    }
+    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 80 });
+}
+
+function finalizeOptimizationTurn(turnId, result) {
+    const optimizedPrompt = String(result?.optimized || result?.original || "").trim();
+    const originalPrompt = String(result?.original || optimizedPrompt || "").trim();
+    const wasOptimized = Boolean(result?.wasOptimized);
+    const finalPrompt = wasOptimized ? optimizedPrompt : originalPrompt;
+    const note = wasOptimized ? "" : OPTIMIZATION_ORIGINAL_NOTE;
+    const turn = document.getElementById(`optimization-turn-${turnId}`);
+    stopOptimizationProgressStates(turnId);
+    if (turn) {
+        turn.classList.add("is-resolving");
+    }
+    return new Promise(resolve => {
+        window.setTimeout(() => {
+            updateOptimizationTurn(turnId, {
+                label: finalPrompt,
+                note,
+                state: wasOptimized ? "complete" : "kept-original",
+            });
+            resolve();
+        }, 90);
+    });
+}
+
+function markOptimizationTurnFailed(turnId, promptText) {
+    updateOptimizationTurn(turnId, {
+        label: promptText,
+        state: "kept-original",
+        note: OPTIMIZATION_ORIGINAL_NOTE,
+    });
+}
+
+function markOptimizationTurnCancelled(turnId) {
+    updateOptimizationTurn(turnId, {
+        label: "Optimization stopped.",
+        body: "",
+        state: "cancelled",
+    });
+}
+
 function buildStreamingCard(target, index, delay = 0, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const { summary } = getProviderPresentation(target.provider, target.model);
@@ -3900,6 +4746,7 @@ function buildStreamingCard(target, index, delay = 0, showProvider = true, optio
 
 function buildCompareStreamingTurn(promptText, targets, indexMap, options = {}) {
     const gridClass = getCompareGridClass(targets.length);
+    const showUserBubble = !options?.skipUserBubble;
     const columnsHtml = targets.map((target, offset) => {
         const cardIndex = indexMap[offset];
         return `
@@ -3911,7 +4758,7 @@ function buildCompareStreamingTurn(promptText, targets, indexMap, options = {}) 
 
     return `
       <section class="compare-turn compare-turn-streaming">
-        ${buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] })}
+        ${showUserBubble ? buildUserMessageBubble(promptText, 0, { attachments: options?.userAttachments || [] }) : ""}
         <div class="${gridClass}">
           ${columnsHtml}
         </div>
@@ -3955,6 +4802,8 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const append = Boolean(options.append);
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
+    const showUserBubble = !options.skipUserBubble;
+    const shouldRevealLatest = el.resultsSection.classList.contains("hidden") || isNearStreamingBottom();
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -3962,6 +4811,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     el.resultsGrid.style.gridTemplateColumns = "";
 
     if (!append) {
+        resetStreamingRenderState();
         el.resultsGrid.innerHTML = "";
     }
 
@@ -3969,7 +4819,7 @@ function initStreamingResults(targets, isMulti, options = {}) {
     const indexMap = targets.map((_, offset) => baseIndex + offset);
 
     let html = "";
-    if (promptText || (Array.isArray(userAttachments) && userAttachments.length > 0)) {
+    if (showUserBubble && (promptText || (Array.isArray(userAttachments) && userAttachments.length > 0))) {
         html += buildUserMessageBubble(promptText, 0, { attachments: userAttachments });
     }
     html += targets.map((target, offset) => {
@@ -3983,15 +4833,19 @@ function initStreamingResults(targets, isMulti, options = {}) {
         el.resultsGrid.innerHTML = html;
     }
 
-    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    if (shouldRevealLatest) {
+        scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    }
 
-    return { indexMap };
+    return { indexMap, shouldRevealLatest };
 }
 
 function initCompareStreamingResults(targets, options = {}) {
     const append = options.append === undefined ? true : Boolean(options.append);
     const promptText = String(options.promptText || "");
     const userAttachments = options.userAttachments || [];
+    const skipUserBubble = Boolean(options.skipUserBubble);
+    const shouldRevealLatest = el.resultsSection.classList.contains("hidden") || isNearStreamingBottom();
 
     pendingWebSourcesByCard.clear();
     el.resultsSection.classList.remove("hidden");
@@ -3999,6 +4853,7 @@ function initCompareStreamingResults(targets, options = {}) {
     el.resultsGrid.style.gridTemplateColumns = "";
 
     if (!append) {
+        resetStreamingRenderState();
         el.resultsGrid.innerHTML = "";
     }
 
@@ -4006,6 +4861,7 @@ function initCompareStreamingResults(targets, options = {}) {
     const indexMap = targets.map((_, offset) => baseIndex + offset);
     const turnHtml = buildCompareStreamingTurn(promptText, targets, indexMap, {
         userAttachments,
+        skipUserBubble,
     });
 
     if (append) {
@@ -4014,24 +4870,110 @@ function initCompareStreamingResults(targets, options = {}) {
         el.resultsGrid.innerHTML = turnHtml;
     }
 
-    scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    if (shouldRevealLatest) {
+        scheduleScrollResultsToBottom({ behavior: "smooth", followUpDelayMs: 96 });
+    }
 
-    return { indexMap };
+    return { indexMap, shouldRevealLatest };
+}
+
+function clearStreamingRenderState(index) {
+    const key = Number(index);
+    if (streamRenderTimers.has(key)) {
+        clearTimeout(streamRenderTimers.get(key));
+        streamRenderTimers.delete(key);
+    }
+    if (streamRenderRafIds.has(key) && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(streamRenderRafIds.get(key));
+        streamRenderRafIds.delete(key);
+    }
+    streamResponseBuffers.delete(key);
+}
+
+function resetStreamingRenderState() {
+    streamRenderTimers.forEach(timer => clearTimeout(timer));
+    streamRenderTimers.clear();
+    if (typeof cancelAnimationFrame === "function") {
+        streamRenderRafIds.forEach(rafId => cancelAnimationFrame(rafId));
+    }
+    streamRenderRafIds.clear();
+    streamResponseBuffers.clear();
+}
+
+function normalizeStreamingMarkdownPreview(rawText) {
+    const source = String(rawText || "");
+    if (!source) return "";
+    const fenceMatches = source.match(/^```[^\n`]*$/gm) || [];
+    if (fenceMatches.length % 2 === 0) {
+        return source;
+    }
+    return `${source}${source.endsWith("\n") ? "" : "\n"}` + "```";
+}
+
+function renderStreamingMarkdown(index) {
+    const key = Number(index);
+    const textEl = document.getElementById(`response-text-${key}`);
+    if (!textEl || !streamResponseBuffers.has(key)) return;
+
+    const rawText = streamResponseBuffers.get(key) || "";
+    const previewText = normalizeStreamingMarkdownPreview(rawText);
+    textEl.innerHTML = renderMarkdownToHtml(previewText, {
+        citationPrefix: citationPrefixFromResponseElement(textEl),
+    });
+    textEl.dataset.empty = rawText ? "false" : "true";
+    textEl.setAttribute("data-streaming", "true");
+    applyWideTableLayout(textEl);
+    syncJumpToLatestDuringStream();
+}
+
+function scheduleStreamingMarkdownRender(index) {
+    const key = Number(index);
+    if (streamRenderTimers.has(key)) {
+        clearTimeout(streamRenderTimers.get(key));
+    }
+    if (streamRenderRafIds.has(key) && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(streamRenderRafIds.get(key));
+        streamRenderRafIds.delete(key);
+    }
+
+    const timer = setTimeout(() => {
+        streamRenderTimers.delete(key);
+        const run = () => {
+            streamRenderRafIds.delete(key);
+            renderStreamingMarkdown(key);
+        };
+        if (typeof requestAnimationFrame === "function") {
+            const rafId = requestAnimationFrame(run);
+            streamRenderRafIds.set(key, rafId);
+        } else {
+            run();
+        }
+    }, STREAM_MARKDOWN_RENDER_DEBOUNCE_MS);
+    streamRenderTimers.set(key, timer);
 }
 
 function appendStreamLine(index, text) {
     const textEl = document.getElementById(`response-text-${index}`);
     if (!textEl) return;
-    if (text) markFirstStreamResponseSeen();
+    const chunk = String(text || "");
+    if (chunk) markFirstStreamResponseSeen();
+    const key = Number(index);
+    const previousText = streamResponseBuffers.get(key) || "";
+    if (!chunk && !previousText) return;
+    const shouldRenderImmediately = textEl.dataset.empty === "true" || !previousText;
+    streamResponseBuffers.set(key, previousText + chunk);
     if (textEl.dataset.empty === "true") {
-        textEl.textContent = "";
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
+        textEl.setAttribute("data-streaming", "true");
         const typingEl = document.getElementById(`response-typing-${index}`);
         if (typingEl) typingEl.classList.add("hidden");
     }
-    textEl.textContent += text;
-    maybeAutoScrollDuringStream();
+    if (shouldRenderImmediately) {
+        renderStreamingMarkdown(key);
+    } else {
+        scheduleStreamingMarkdownRender(key);
+    }
 }
 
 function finalizeStreamCard(index, resp) {
@@ -4042,7 +4984,7 @@ function finalizeStreamCard(index, resp) {
     const hasError = !!resp.error;
     const hasExplicitText = Object.prototype.hasOwnProperty.call(resp || {}, "text");
     const explicitText = hasExplicitText ? String(resp?.text ?? "") : "";
-    const text = explicitText.trim() || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = explicitText.trim() || (hasError ? getResponseErrorDisplayText(resp.error) : "(empty response)");
     const tokens = getTokenUsageTotal(resp.token_usage);
     const { summary } = getProviderPresentation(resp.provider, resp.model);
 
@@ -4054,10 +4996,15 @@ function finalizeStreamCard(index, resp) {
         || normalizeWebSources(resp.web_source_items || []);
 
     if (textEl) {
-        renderResponseMarkdown(textEl, text, { hasError });
+        clearStreamingRenderState(index);
+        renderResponseMarkdown(textEl, text, { hasError, error: resp.error });
         textEl.dataset.empty = "false";
         textEl.classList.remove("hidden");
-        textEl.classList.toggle("error-text", hasError);
+        if (hasError) {
+            applyResponseErrorClasses(textEl, resp.error);
+        } else {
+            textEl.classList.remove("model-soft-error", "response-error", "error-text");
+        }
     }
     if (typingEl) typingEl.classList.add("hidden");
     if (tokensEl) {
@@ -4077,14 +5024,14 @@ function finalizeStreamCard(index, resp) {
         card.setAttribute("title", buildCompareResponseTooltip(resp, summary, pendingSources));
     }
     applyPendingWebSources(index, !hasError);
-    maybeAutoScrollDuringStream();
+    syncJumpToLatestDuringStream();
 }
 
 function renderCompareSummary(data) {
     const existing = el.resultsGrid.querySelector(".compare-summary-card");
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
-    scheduleScrollResultsToBottom({ behavior: "auto", followUpDelayMs: 64 });
+    syncJumpToLatestDuringStream();
 }
 
 async function copyTextToClipboard(text) {
@@ -4152,6 +5099,21 @@ async function handleCopyAction(button) {
 }
 
 el.resultsGrid.addEventListener("click", event => {
+    const citationLink = event.target.closest(".llm-cite");
+    if (citationLink && el.resultsGrid.contains(citationLink)) {
+        const targetId = String(citationLink.getAttribute("href") || "").replace(/^#/, "");
+        const match = /^cite-response-(\d+)-\d+$/.exec(targetId);
+        const sourceTarget = targetId ? document.getElementById(targetId) : null;
+        if (match && sourceTarget) {
+            const sourceStrip = document.getElementById(`response-sources-${match[1]}`);
+            if (sourceStrip) setSourceStripExpanded(sourceStrip, true);
+            event.preventDefault();
+            sourceTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+            sourceTarget.focus({ preventScroll: true });
+            return;
+        }
+    }
+
     const sourceToggle = event.target.closest(".web-source-toggle");
     if (sourceToggle && el.resultsGrid.contains(sourceToggle)) {
         const sourceStrip = sourceToggle.closest(".web-source-strip");
@@ -4205,14 +5167,19 @@ function showResults(responses, isMulti, compareData) {
 function buildResponseCard(resp, index, showProvider = true, options = {}) {
     const compareView = Boolean(options.compareView);
     const hasError = !!resp.error;
-    const text = resp.text || (hasError ? `Error: ${resp.error.message}` : "(empty response)");
+    const text = resp.text || (hasError ? getResponseErrorDisplayText(resp.error) : "(empty response)");
     const { summary } = getProviderPresentation(resp.provider, resp.model);
     const webSources = normalizeWebSources(resp.web_source_items || []);
     const providerSummaryHtml = showProvider
         ? `<div class="message-provider">${escHtml(summary)}</div>`
         : "";
     const footerHtml = buildResponseFooter(index, summary, resp.token_usage, webSources, { compact: compareView });
-    const responseHtml = hasError ? escHtml(text) : renderMarkdownToHtml(text);
+    const responseHtml = hasError
+        ? renderResponseErrorHtml(resp.error)
+        : renderMarkdownToHtml(text, { citationPrefix: responseCitationPrefix(index) });
+    const responseClasses = hasError
+        ? getModelSoftErrorParts(resp.error) ? "model-soft-error" : "response-error error-text"
+        : "";
     const compareTitleAttr = compareView
         ? ` title="${escHtml(buildCompareResponseTooltip(resp, summary, webSources))}"`
         : "";
@@ -4224,7 +5191,7 @@ function buildResponseCard(resp, index, showProvider = true, options = {}) {
          style="animation: messageIn .2s ease-out both;">
       <div class="chat-bubble chat-bubble-ai">
         ${providerSummaryHtml}
-        <div class="response-text ${hasError ? "error-text" : ""}" id="response-text-${index}">${responseHtml}</div>
+        <div class="response-text ${responseClasses}" id="response-text-${index}">${responseHtml}</div>
         ${footerHtml}
       </div>
     </div>`;
@@ -4255,6 +5222,15 @@ el.clearBtn.addEventListener("click", () => { clearResults(); });
 function clearResults() {
     el.resultsSection.classList.add("hidden");
     el.resultsGrid.innerHTML = "";
+    resetStreamingRenderState();
+    streamAutoScrollEnabled = false;
+    setStreamAutoScrollPaused(false);
+    streamScrollProgrammatic = false;
+    streamUserScrollIntentUntil = 0;
+    if (streamScrollProgrammaticTimer !== null) {
+        clearTimeout(streamScrollProgrammaticTimer);
+        streamScrollProgrammaticTimer = null;
+    }
     revokeAllAttachmentPreviewUrls();
     pendingWebSourcesByCard.clear();
     hasReceivedFirstStreamResponse = false;
@@ -4494,6 +5470,7 @@ async function initializeAuthAndCatalog() {
     await Promise.all([
         Promise.resolve().then(() => renderAuthUI()),
         loadDynamicProviderModelCatalog(),
+        loadHistory({ restoreActiveTranscript: true }),
     ]);
 }
 
@@ -4520,9 +5497,15 @@ async function initializeAuthAndCatalog() {
     updateSingleModelRoutingUI();
     setComposerDocked(true);
     activeSessionId = loadActiveSessionId();
+    if (consumeFreshLoginSessionReset()) {
+        startFreshSessionForLogin();
+    }
     setMode("single");
     refreshAttachmentUi({ refreshModels: false });
     updateSendButtonState();
+    if (window.LLMResponse && typeof window.LLMResponse.installCopyDelegate === "function") {
+        window.LLMResponse.installCopyDelegate(el.resultsGrid);
+    }
     void initializeAuthAndCatalog();
 })();
 
@@ -4573,7 +5556,7 @@ function parseMarkdownTableAlignments(delimiterRow, expectedCells) {
     return aligns;
 }
 
-function renderInlineMarkdown(rawText) {
+function renderInlineMarkdown(rawText, options = {}) {
     let source = String(rawText || "");
     const codeTokens = [];
     source = source.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -4593,6 +5576,25 @@ function renderInlineMarkdown(rawText) {
         return token;
     });
 
+    // Citation markers: standalone [1], [2], adjacent groups like [1][2][3].
+    // Skipped when already inside a markdown link or code token.
+    // Collapse whitespace between consecutive [N] groups so adjacent
+    // citations render as one unit (matches Perplexity-style footnotes).
+    source = source.replace(/(\[\d{1,3}\])(?:\s+(?=\[\d{1,3}\]))/g, "$1");
+    // Also drop the space that often precedes the first citation in
+    // a sentence-ending group (e.g. "muscle [1][2][3] ." -> "muscle[1][2][3].").
+    source = source.replace(/\s+(\[\d{1,3}\](?:\[\d{1,3}\])*)(\s*[.,;:!?])/g, "$1$2");
+    const citeTokens = [];
+    source = source.replace(/\[(\d{1,3})\]/g, (match, num) => {
+        const token = `@@INLCITE${citeTokens.length}@@`;
+        const prefix = String(options.citationPrefix || "").trim();
+        const citeId = prefix ? `cite-${prefix}-${num}` : `cite-${num}`;
+        citeTokens.push(
+            `<a href="#${escHtml(citeId)}" class="llm-cite" data-cite="${escHtml(num)}" aria-label="Citation ${escHtml(num)}">${escHtml(num)}</a>`
+        );
+        return token;
+    });
+
     let html = escHtml(source)
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
@@ -4601,11 +5603,26 @@ function renderInlineMarkdown(rawText) {
     linkTokens.forEach((tokenHtml, idx) => {
         html = html.replaceAll(`@@INLLINK${idx}@@`, tokenHtml);
     });
+    citeTokens.forEach((tokenHtml, idx) => {
+        html = html.replaceAll(`@@INLCITE${idx}@@`, tokenHtml);
+    });
     codeTokens.forEach((tokenHtml, idx) => {
         html = html.replaceAll(`@@INLCODE${idx}@@`, tokenHtml);
     });
     return html;
 }
+
+// GitHub-style callout map. Triggered by `> [!TIP]`, `> [!NOTE]`, etc.
+const LLM_CALLOUT_TYPES = {
+    TIP: { cls: "llm-callout-tip", icon: "💡", title: "Tip" },
+    NOTE: { cls: "llm-callout-info", icon: "ℹ️", title: "Note" },
+    INFO: { cls: "llm-callout-info", icon: "ℹ️", title: "Info" },
+    IMPORTANT: { cls: "llm-callout-info", icon: "ℹ️", title: "Important" },
+    WARNING: { cls: "llm-callout-warn", icon: "⚠️", title: "Warning" },
+    CAUTION: { cls: "llm-callout-warn", icon: "⚠️", title: "Caution" },
+    ERROR: { cls: "llm-callout-error", icon: "❌", title: "Error" },
+    DANGER: { cls: "llm-callout-error", icon: "❌", title: "Danger" },
+};
 
 function isMarkdownTableStart(lines, startIndex) {
     if (startIndex + 1 >= lines.length) return false;
@@ -4615,11 +5632,11 @@ function isMarkdownTableStart(lines, startIndex) {
     return GFM_TABLE_DELIMITER_RE.test(delimiterLine.trim());
 }
 
-function renderMarkdownTable(lines, startIndex) {
+function renderMarkdownTable(lines, startIndex, options = {}) {
     const headerCells = splitMarkdownTableRow(lines[startIndex]);
     if (headerCells.length === 0) {
         return {
-            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""))}</p>`,
+            html: `<p>${renderInlineMarkdown(String(lines[startIndex] || ""), options)}</p>`,
             nextIndex: startIndex + 1,
         };
     }
@@ -4627,7 +5644,7 @@ function renderMarkdownTable(lines, startIndex) {
     const alignments = parseMarkdownTableAlignments(lines[startIndex + 1], headerCells.length);
     const thHtml = headerCells.map((cell, idx) => {
         const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
-        return `<th${align}>${renderInlineMarkdown(cell)}</th>`;
+        return `<th${align}>${renderInlineMarkdown(cell, options)}</th>`;
     }).join("");
 
     let cursor = startIndex + 2;
@@ -4645,7 +5662,7 @@ function renderMarkdownTable(lines, startIndex) {
         if (cells.length === 0) break;
         const tds = headerCells.map((_, idx) => {
             const align = alignments[idx] ? ` style="text-align:${alignments[idx]};"` : "";
-            return `<td${align}>${renderInlineMarkdown(cells[idx] || "")}</td>`;
+            return `<td${align}>${renderInlineMarkdown(cells[idx] || "", options)}</td>`;
         }).join("");
         rowHtml.push(`<tr>${tds}</tr>`);
         cursor += 1;
@@ -4657,7 +5674,7 @@ function renderMarkdownTable(lines, startIndex) {
     };
 }
 
-function renderMarkdownToHtml(markdownText) {
+function renderMarkdownToHtml(markdownText, options = {}) {
     let source = String(markdownText || "");
     if (!source.trim()) return "";
     source = source.replace(/\r\n?/g, "\n");
@@ -4681,7 +5698,7 @@ function renderMarkdownToHtml(markdownText) {
         const paragraphText = paragraphLines.join("\n").trim();
         paragraphLines = [];
         if (!paragraphText) return;
-        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText).replace(/\n/g, "<br>")}</p>`);
+        htmlParts.push(`<p>${renderInlineMarkdown(paragraphText, options).replace(/\n/g, "<br>")}</p>`);
     };
 
     let index = 0;
@@ -4708,7 +5725,7 @@ function renderMarkdownToHtml(markdownText) {
 
         if (isMarkdownTableStart(lines, index)) {
             flushParagraph();
-            const renderedTable = renderMarkdownTable(lines, index);
+            const renderedTable = renderMarkdownTable(lines, index, options);
             htmlParts.push(renderedTable.html);
             index = renderedTable.nextIndex;
             continue;
@@ -4718,7 +5735,7 @@ function renderMarkdownToHtml(markdownText) {
         if (headingMatch) {
             flushParagraph();
             const level = headingMatch[1].length;
-            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+            htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2], options)}</h${level}>`);
             index += 1;
             continue;
         }
@@ -4732,7 +5749,7 @@ function renderMarkdownToHtml(markdownText) {
                 items.push(current.replace(/^[-*+]\s+/, ""));
                 index += 1;
             }
-            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+            htmlParts.push(`<ul>${items.map(item => `<li>${renderInlineMarkdown(item, options)}</li>`).join("")}</ul>`);
             continue;
         }
 
@@ -4741,11 +5758,60 @@ function renderMarkdownToHtml(markdownText) {
             const items = [];
             while (index < lines.length) {
                 const current = String(lines[index] || "").trim();
-                if (!/^\d+\.\s+/.test(current)) break;
-                items.push(current.replace(/^\d+\.\s+/, ""));
+                const itemMatch = /^(\d+)\.\s+(.*)$/.exec(current);
+                if (!itemMatch) break;
+                items.push({
+                    value: Number(itemMatch[1]),
+                    text: itemMatch[2],
+                });
                 index += 1;
             }
-            htmlParts.push(`<ol>${items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+            const firstValue = items[0]?.value;
+            const startAttr = Number.isSafeInteger(firstValue) && firstValue !== 1
+                ? ` start="${firstValue}"`
+                : "";
+            htmlParts.push(`<ol${startAttr}>${items.map(item => {
+                const num = Number.isSafeInteger(item.value) ? item.value : 1;
+                const valueAttr = Number.isSafeInteger(item.value) ? ` value="${item.value}"` : "";
+                // Explicit badge so the rendered number reflects the markdown
+                // value even when separate <ol> blocks (split by nested bullets)
+                // would otherwise restart the visual count.
+                return `<li${valueAttr}><span class="llm-ol-num" aria-hidden="true">${num}</span><span class="llm-ol-text">${renderInlineMarkdown(item.text, options)}</span></li>`;
+            }).join("")}</ol>`);
+            continue;
+        }
+
+        if (/^>\s?/.test(trimmed)) {
+            flushParagraph();
+            const quoteLines = [];
+            while (index < lines.length) {
+                const current = String(lines[index] || "");
+                if (!/^\s*>\s?/.test(current)) break;
+                quoteLines.push(current.replace(/^\s*>\s?/, ""));
+                index += 1;
+            }
+            const firstLine = (quoteLines[0] || "").trim();
+            const calloutMatch = /^\[!([A-Z]+)\]\s*(.*)$/.exec(firstLine);
+            if (calloutMatch && LLM_CALLOUT_TYPES[calloutMatch[1]]) {
+                const meta = LLM_CALLOUT_TYPES[calloutMatch[1]];
+                const headerText = calloutMatch[2].trim();
+                const bodyLines = quoteLines.slice(1);
+                const bodyMarkdown = bodyLines.join("\n").trim();
+                const bodyHtml = bodyMarkdown ? renderMarkdownToHtml(bodyMarkdown, options) : "";
+                const titleHtml = headerText
+                    ? `<div class="llm-callout-title">${renderInlineMarkdown(headerText, options)}</div>`
+                    : `<div class="llm-callout-title">${meta.title}</div>`;
+                htmlParts.push(
+                    `<aside class="llm-callout ${meta.cls}" role="note">` +
+                    `<span class="llm-callout-icon" aria-hidden="true">${meta.icon}</span>` +
+                    `<div class="llm-callout-body">${titleHtml}${bodyHtml}</div>` +
+                    `</aside>`
+                );
+                continue;
+            }
+            const quoteMarkdown = quoteLines.join("\n").trim();
+            const quoteHtml = quoteMarkdown ? renderMarkdownToHtml(quoteMarkdown, options) : "";
+            htmlParts.push(`<blockquote>${quoteHtml}</blockquote>`);
             continue;
         }
 
@@ -4799,21 +5865,29 @@ function applyWideTableLayout(containerEl) {
     });
 }
 
-function renderResponseMarkdown(targetEl, text, { hasError = false } = {}) {
+function renderResponseMarkdown(targetEl, text, { hasError = false, error = null } = {}) {
     if (!targetEl) return;
     const value = String(text ?? "");
+    targetEl.removeAttribute("data-streaming");
     if (hasError) {
-        targetEl.textContent = value;
+        targetEl.innerHTML = renderResponseErrorHtml(error || { message: value });
         return;
     }
-    targetEl.innerHTML = renderMarkdownToHtml(value);
+    targetEl.innerHTML = renderMarkdownToHtml(value, {
+        citationPrefix: citationPrefixFromResponseElement(targetEl),
+    });
     applyWideTableLayout(targetEl);
+    if (window.LLMResponse && typeof window.LLMResponse.enhanceResponseDom === "function") {
+        window.LLMResponse.enhanceResponseDom(targetEl);
+    }
 }
 
 function refreshResponseTableLayouts(root = el.resultsGrid) {
     if (!root) return;
+    const enhance = window.LLMResponse && window.LLMResponse.enhanceResponseDom;
     root.querySelectorAll(".response-text").forEach(responseEl => {
         applyWideTableLayout(responseEl);
+        if (enhance) enhance(responseEl);
     });
 }
 
@@ -4920,6 +5994,7 @@ function buildHistoricalAssistantCardPayload(entry) {
     const response = String(entry.response || "").trim();
     const hasError = isResponsePlaceholder(response);
     const errorMessage = hasError ? response.replace(/^\[error\]\s*/i, "").trim() : "";
+    const safeErrorMessage = hasError ? getSafeResponseErrorMessage({ message: errorMessage }) : "";
     const safeResponse = response || "(empty response)";
     const tokens = Number(entry.tokens);
     const provider = String(entry.provider || "").trim().toLowerCase();
@@ -4927,13 +6002,13 @@ function buildHistoricalAssistantCardPayload(entry) {
     const webSourceItems = normalizeWebSources(entry.web_source_items || []);
 
     return {
-        text: hasError ? `Error: ${errorMessage || "Request failed"}` : safeResponse,
+        text: hasError ? getResponseErrorDisplayText({ message: safeErrorMessage || "Request failed" }) : safeResponse,
         provider,
         model,
         web_source_items: webSourceItems,
         finish_reason: hasError ? "error" : "completed",
         token_usage: { total_tokens: Number.isFinite(tokens) ? tokens : 0 },
-        ...(hasError ? { error: { message: errorMessage || "Request failed" } } : {}),
+        ...(hasError ? { error: { message: safeErrorMessage || "Request failed" } } : {}),
     };
 }
 
@@ -5048,8 +6123,6 @@ historyEl.search.addEventListener("input", () => {
     renderHistory(_historyData, historyEl.search.value.trim().toLowerCase());
 });
 
-loadHistory({ restoreActiveTranscript: true });
-
 async function loadHistory({ restoreActiveTranscript = false } = {}) {
     try {
         const resp = await fetch(`${API_BASE}/v1/history?limit=500`, {
@@ -5061,7 +6134,7 @@ async function loadHistory({ restoreActiveTranscript = false } = {}) {
 
         activeSessionId = normalizeSessionId(activeSessionId || loadActiveSessionId());
 
-        if (!activeSessionId) {
+        if (!activeSessionId && !pendingNewSession) {
             const mostRecentWithSession = _historyData.find(entry =>
                 normalizeSessionId(entry.session_id)
             );

@@ -60,6 +60,7 @@ e2e/.runtime/
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+frontend-react/node_modules/
 
 # Local object-storage runtime data (MinIO / S3-compatible)
 data/minio/

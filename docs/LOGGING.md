@@ -86,9 +86,17 @@ Tavily / research:
 - `research.cache.hit|bypass`
 - `research.dispatch`
 - `research.query.rewritten`
+- `research.search.resolver`
+- `research.resolver.config.warning`
 - `research.search.start|success|failure|empty`
 - `research.qna.start|success|failure`
 - `research.context.ready|failure`
+
+Tavily resolver logs include:
+
+- enhanced resolver state (`enhanced_search_enabled`, `chunks_per_source`)
+- category and option decisions (`category`, `topic_sent`, `time_range`, `country_detected`, `country_sent`, `domain_rule`, `include_domain_count`)
+- on search success, result summary fields (`result_count`, `source_content_lengths`, `credits_used`)
 
 Tavily failure logs include:
 
@@ -129,6 +137,16 @@ Provider orchestration and resilience:
 - `circuit.success.reset`
 - `circuit.reset.all`
 
+Streaming request bodies:
+
+- `chat.stream.opened|start_event_sent|provider_call_started|provider_call_completed|response_done_sent|done_sent|exception|client_disconnected`
+- `compare.stream.opened|start_event_sent|provider_call_started|provider_call_completed|response_done_sent|done_sent|exception|client_disconnected`
+
+Stream logs are emitted from inside the `StreamingResponse` body generator, after
+HTTP `200` headers may already have been returned. They include `request_id`,
+elapsed time, emitted event count, estimated bytes emitted, research mode, and
+provider/model fields when available.
+
 Authentication diagnostics:
 
 - `auth.failed`
@@ -160,12 +178,21 @@ journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
    - `http.request.start`
    - preflight/governance events
    - research/upload/provider events
+   - stream body events for `/v1/chat/stream` and `/v1/compare/stream`
    - `http.request.complete` (or `http.request.exception`)
+
+Streaming failure interpretation:
+
+- No `*.stream.opened`: the request likely died before the app began streaming.
+- `*.stream.start_event_sent` followed by `*.stream.client_disconnected`: browser, proxy, CDN, or load balancer closed the stream.
+- Long gap between `*.stream.provider_call_started` and `*.stream.provider_call_completed`: provider latency or an idle timeout is likely.
+- `*.stream.done_sent` in app logs but browser reports a protocol error: inspect CDN/proxy HTTP/2 framing, buffering, compression, and timeout behavior.
 
 ## Related Files
 
 - `utils/logger.py`
 - `server/middleware.py`
+- `server/stream_observability.py`
 - `server/persistence.py`
 - `server/files_service.py`
 - `server/object_storage.py`
@@ -176,4 +203,4 @@ journalctl -u cortexai -f | grep '"request_id":"<request-id>"'
 
 ---
 
-Last updated: 2026-04-15
+Last updated: 2026-05-23

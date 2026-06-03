@@ -384,7 +384,11 @@ test("single chat renders structured markdown (headings list table) for exec-sty
         "## Executive Summary",
         "",
         "1. Revenue risk is moderate.",
+        "Revenue controls remain active.",
+        "",
         "2. Security posture is improving.",
+        "Hardening work is underway.",
+        "",
         "3. Rollout readiness is high.",
         "",
         "| Area | Risk | Owner |",
@@ -420,6 +424,9 @@ test("single chat renders structured markdown (headings list table) for exec-sty
     const responseRoot = page.locator(`#response-text-${nextIndex}`);
     await expect(responseRoot.locator("h2")).toContainText("Executive Summary");
     await expect(responseRoot.locator("ol li")).toHaveCount(3);
+    await expect(responseRoot.locator("ol")).toHaveCount(3);
+    await expect(responseRoot.locator("ol").nth(1)).toHaveAttribute("start", "2");
+    await expect(responseRoot.locator("ol").nth(2)).toHaveAttribute("start", "3");
     await expect(responseRoot.locator("table")).toBeVisible();
 });
 

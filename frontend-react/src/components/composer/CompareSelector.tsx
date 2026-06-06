@@ -56,11 +56,37 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
                 aria-label={`Remove ${modelName(key)}`}
                 onClick={() => onChange(index, "")}
               >
-                x
-              </button>
-            )}
-          </span>
-        ))}
+                {keys[i] === "" && (
+                  <option value="" disabled>
+                    Select model…
+                  </option>
+                )}
+                {models.map((model) => (
+                  <option key={modelKey(model)} value={modelKey(model)}>
+                    {model.model}
+                  </option>
+                ))}
+              </select>
+              {canRemove && keys[i] !== "" && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${modelName(keys[i])}`}
+                  onClick={() => onChange(i, "")}
+                >
+                  ×
+                </button>
+              )}
+              {keys[i] === "" && (
+                <button
+                  type="button"
+                  aria-label="Cancel adding model"
+                  onClick={() => onChange(i, "")}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
       </div>
 
       {canAdd && (

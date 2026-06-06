@@ -231,7 +231,7 @@ Frontend runtime config (`/runtime-config.js`):
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, a horizontal compare canvas, and a unified bottom composer.
 - Frontend model selectors fall back to a bundled API-safe catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
-- Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
+- Compare response cards render as full-height model columns with latency-derived fastest badges, provider badges, token metadata, and readable markdown bodies.
 - The composer keeps active compare models as removable chips, exposes Add Model as an explicit chooser, prevents duplicate compare targets, and includes the Ask/Compare switch plus send action.
 - Background history fetch failures do not surface as the primary chat error banner.
 

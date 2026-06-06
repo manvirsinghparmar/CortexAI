@@ -28,6 +28,17 @@ export function ResultsSection() {
           },
         ]
       : responses;
+  const fastestResponseId =
+    mode === "compare"
+      ? visibleResponses.reduce<string | undefined>((fastestId, response) => {
+          if (response.error || response.latency_ms <= 0) return fastestId;
+          if (!fastestId) return response.request_id;
+
+          const fastest = visibleResponses.find((item) => item.request_id === fastestId);
+          if (!fastest || response.latency_ms < fastest.latency_ms) return response.request_id;
+          return fastestId;
+        }, undefined)
+      : undefined;
 
   return (
     <section
@@ -40,6 +51,7 @@ export function ResultsSection() {
           <ResponseCard
             key={response.request_id}
             response={response}
+            isFastest={response.request_id === fastestResponseId}
             isStreaming={streaming && mode === "single"}
             streamingText={streamingText}
           />

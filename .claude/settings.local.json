@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -b /tmp/test_cookies.txt \"http://localhost:8000/v1/models?enabled_only=true\")",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -b /tmp/test_cookies.txt \"http://localhost:8000/v1/history\")"
+    ]
+  }
+}

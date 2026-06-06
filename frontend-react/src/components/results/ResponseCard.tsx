@@ -4,14 +4,15 @@ import styles from "./ResponseCard.module.css";
 
 interface ResponseCardProps {
   response: ChatResponse;
+  isFastest?: boolean;
   isStreaming?: boolean;
   streamingText?: string;
 }
 
-export function ResponseCard({ response, isStreaming, streamingText }: ResponseCardProps) {
+export function ResponseCard({ response, isFastest, isStreaming, streamingText }: ResponseCardProps) {
   const text = isStreaming ? (streamingText ?? "") : response.text;
   const hasError = !!response.error;
-  const badge = getModelBadge(response.provider, response.model);
+  const badge = getModelBadge(response.provider, response.model, isFastest);
   const totalTokens = response.token_usage.total_tokens;
 
   return (
@@ -63,13 +64,15 @@ export function ResponseCard({ response, isStreaming, streamingText }: ResponseC
   );
 }
 
-function getModelBadge(provider: string, model: string) {
+function getModelBadge(provider: string, model: string, isFastest?: boolean) {
+  if (isFastest) return { label: "FASTEST", tone: "fastest" as const };
+
   const value = `${provider} ${model}`.toLowerCase();
-  if (value.includes("gemini")) return { label: "FASTEST", tone: "fastest" as const };
   if (value.includes("grok") || value.includes("xai")) return { label: "RAW", tone: "raw" as const };
   if (value.includes("claude") || value.includes("anthropic")) {
     return { label: "ADVANCED", tone: "advanced" as const };
   }
+  if (value.includes("gemini")) return { label: "PRO", tone: "advanced" as const };
   if (value.includes("deepseek")) return { label: "DEEP", tone: "deep" as const };
   return { label: "LEGACY", tone: "legacy" as const };
 }

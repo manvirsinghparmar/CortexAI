@@ -1,8 +1,8 @@
-import { get, post } from "./client";
+import { get } from "./client";
 import type { CognitoConfig, WhoAmIResponse } from "../types";
 
 export async function fetchCognitoConfig(): Promise<CognitoConfig> {
-  return get<CognitoConfig>("/v1/auth/config");
+  return get<CognitoConfig>("/v1/auth/cognito-config");
 }
 
 export async function fetchWhoAmI(): Promise<WhoAmIResponse> {
@@ -10,7 +10,15 @@ export async function fetchWhoAmI(): Promise<WhoAmIResponse> {
 }
 
 export async function devLogin(token?: string): Promise<{ session_id: string }> {
-  return post<{ session_id: string }>("/v1/auth/dev-login", token ? { token } : {});
+  const headers: Record<string, string> = {};
+  if (token) headers["X-Dev-Login-Token"] = token;
+  const res = await fetch("/v1/auth/dev-login", {
+    method: "POST",
+    credentials: "include",
+    headers,
+  });
+  if (!res.ok) throw new Error(res.statusText || "Dev login failed");
+  return res.json() as Promise<{ session_id: string }>;
 }
 
 export function buildCognitoLoginUrl(config: CognitoConfig): string {

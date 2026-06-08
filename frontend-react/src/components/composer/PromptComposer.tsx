@@ -8,6 +8,7 @@ import { useChat } from "../../hooks/useChat";
 import { isModelDropdownVisible } from "../../hooks/useSmartRouting";
 import type { ModelCatalogItem } from "../../types";
 import { DEFAULT_MODELS } from "../../config/defaultModels";
+import { resolveCompareModelKeys } from "../../config/compareDefaults";
 import styles from "./PromptComposer.module.css";
 
 interface PromptComposerProps {
@@ -22,6 +23,8 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const setSmartMode = useChatStore((s) => s.setSmartMode);
   const researchMode = useChatStore((s) => s.researchMode);
   const setResearchMode = useChatStore((s) => s.setResearchMode);
+  const compareResearchMode = useChatStore((s) => s.compareResearchMode);
+  const setCompareResearchMode = useChatStore((s) => s.setCompareResearchMode);
   const optimizeMode = useChatStore((s) => s.optimizeMode);
   const setOptimizeMode = useChatStore((s) => s.setOptimizeMode);
   const selectedModelKey = useChatStore((s) => s.selectedModelKey);
@@ -30,6 +33,7 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const setCompareModelKey = useChatStore((s) => s.setCompareModelKey);
   const prompt = useChatStore((s) => s.prompt);
   const setPrompt = useChatStore((s) => s.setPrompt);
+  const attachments = useChatStore((s) => s.attachments);
   const streaming = useChatStore((s) => s.streaming);
 
   const { submit, cancel } = useChat();
@@ -48,11 +52,11 @@ export function PromptComposer({ models }: PromptComposerProps) {
 
   useEffect(() => {
     if (availableModels.length >= 2) {
-      if (!compareModelKeys[0]) {
-        setCompareModelKey(0, `${availableModels[0]!.provider}:${availableModels[0]!.model}`);
-      }
-      if (!compareModelKeys[1]) {
-        setCompareModelKey(1, `${availableModels[1]!.provider}:${availableModels[1]!.model}`);
+      const resolvedCompareKeys = resolveCompareModelKeys(availableModels, compareModelKeys);
+      for (const index of [0, 1, 2] as const) {
+        if (resolvedCompareKeys[index] !== compareModelKeys[index]) {
+          setCompareModelKey(index, resolvedCompareKeys[index]);
+        }
       }
       if (!selectedModelKey) {
         setSelectedModelKey(`${availableModels[0]!.provider}:${availableModels[0]!.model}`);
@@ -63,7 +67,7 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (!streaming && prompt.trim()) void submit();
+      if (!streaming && (prompt.trim() || attachments.length > 0)) void submit();
     }
   };
 
@@ -73,11 +77,22 @@ export function PromptComposer({ models }: PromptComposerProps) {
     <div className={`${styles.card} ${mode === "single" ? styles.askCard : ""}`}>
       <div className={styles.modelRow}>
         {mode === "compare" ? (
-          <CompareSelector
-            models={availableModels}
-            keys={compareModelKeys}
-            onChange={setCompareModelKey}
-          />
+          <>
+            <CompareSelector
+              models={availableModels}
+              keys={compareModelKeys}
+              onChange={setCompareModelKey}
+            />
+            <FeatureChips
+              compareMode
+              smartMode={false}
+              researchMode={compareResearchMode}
+              optimizeMode={optimizeMode}
+              onSmartToggle={() => undefined}
+              onResearchToggle={setCompareResearchMode}
+              onOptimizeToggle={setOptimizeMode}
+            />
+          </>
         ) : (
           <>
             {showModelDropdown && (
@@ -105,6 +120,7 @@ export function PromptComposer({ models }: PromptComposerProps) {
         <AttachmentStrip />
         <textarea
           ref={textareaRef}
+          id="promptInput"
           className={styles.textarea}
           rows={1}
           aria-label="Prompt input"
@@ -133,8 +149,9 @@ export function PromptComposer({ models }: PromptComposerProps) {
             className={styles.submitButton}
             type="button"
             aria-label={streaming ? "Stop" : "Send message"}
+            id="submitBtn"
             onClick={() => (streaming ? cancel() : void submit())}
-            disabled={!streaming && !prompt.trim()}
+            disabled={!streaming && !prompt.trim() && attachments.length === 0}
           >
             {streaming ? <span className={styles.stopIcon} /> : <SendIcon />}
           </button>

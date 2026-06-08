@@ -125,9 +125,24 @@
   text-transform: none;
 }
 
+.historySearch {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-container-lowest);
+  color: var(--on-surface);
+  margin: 10px 0 8px;
+  padding: 0 10px;
+}
+
+.historySearch::placeholder {
+  color: var(--outline);
+}
+
 .historyList {
   display: grid;
-  max-height: 260px;
+  max-height: 330px;
   gap: 4px;
   margin: 8px 0 0;
   overflow: auto;
@@ -151,6 +166,11 @@
   background: var(--surface-container);
 }
 
+.historyList .historyItemActive {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+}
+
 .historyList span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -159,6 +179,9 @@
 
 .historyList small {
   color: var(--outline);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile {

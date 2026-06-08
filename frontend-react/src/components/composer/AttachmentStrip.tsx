@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { uploadFile, deleteFile } from "../../api/files";
+import { uploadFile, deleteFile, fetchFileStatus } from "../../api/files";
 import { useChatStore } from "../../store/chatStore";
 import styles from "./AttachmentStrip.module.css";
 
@@ -19,6 +19,9 @@ export function AttachmentStrip() {
       try {
         const uploaded = await uploadFile(file);
         addAttachment(uploaded);
+        if (uploaded.status === "processing") {
+          void pollAttachment(uploaded.file_id);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Upload failed");
       }
@@ -28,6 +31,16 @@ export function AttachmentStrip() {
   const handleRemove = async (fileId: string) => {
     removeAttachment(fileId);
     await deleteFile(fileId).catch(() => null);
+  };
+
+  const pollAttachment = async (fileId: string) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      const status = await fetchFileStatus(fileId).catch(() => null);
+      if (!status) return;
+      useChatStore.getState().updateAttachment(status);
+      if (status.status !== "processing") return;
+    }
   };
 
   const formatSize = (bytes: number) => {
@@ -49,6 +62,7 @@ export function AttachmentStrip() {
 
       <input
         ref={fileInputRef}
+        id="attachmentInput"
         type="file"
         multiple
         accept={ACCEPTED}
@@ -60,10 +74,12 @@ export function AttachmentStrip() {
         <ul className={styles.list} aria-live="polite">
           {attachments.map((a) => (
             <li key={a.file_id} className={styles.item}>
+              <span className={`attachment-chip is-${a.status}`} />
               <span className={styles.fileName} title={a.original_filename}>
                 {a.original_filename}
               </span>
               <span className={styles.fileSize}>{formatSize(a.size_bytes)}</span>
+              <span className={styles.status}>{a.status === "ready" ? "Ready" : a.status}</span>
               <button
                 type="button"
                 className={styles.removeBtn}

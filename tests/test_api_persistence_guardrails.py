@@ -1317,6 +1317,13 @@ def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fas
     history_payload = history_response.json()
     assert len(history_payload) == 3
     assert {item["mode"] for item in history_payload} == {"chat", "compare"}
+    compare_history = [item for item in history_payload if item["mode"] == "compare"]
+    assert len(compare_history) == 2
+    assert {item["request_group_id"] for item in compare_history} == {
+        compare_body["request_group_id"]
+    }
+    chat_history = [item for item in history_payload if item["mode"] == "chat"]
+    assert chat_history[0]["request_group_id"] is None
 
 
 @pytest.mark.integration

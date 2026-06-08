@@ -1,4 +1,10 @@
 import type { ModelCatalogItem } from "../../types";
+import {
+  removeCompareModelKey,
+  resolveAddedCompareModelKey,
+} from "../../config/compareDefaults";
+import { getModelPresentation } from "../../config/modelPresentation";
+import { ModelPicker } from "./ModelPicker";
 import styles from "./CompareSelector.module.css";
 
 interface CompareSelectorProps {
@@ -10,68 +16,53 @@ interface CompareSelectorProps {
 export function CompareSelector({ models, keys, onChange }: CompareSelectorProps) {
   const filledCount = keys.filter(Boolean).length;
   const canRemove = filledCount > 2;
-  const canAdd = filledCount < 3 && !keys.includes("");
+  const canAdd = filledCount < 3;
 
   const handleAddModel = () => {
     const emptyIndex = keys.findIndex((key) => !key) as 0 | 1 | 2;
     if (emptyIndex < 0) return;
-    // Set to empty string so a "Select model…" placeholder appears
-    onChange(emptyIndex, "");
+    onChange(emptyIndex, resolveAddedCompareModelKey(models, keys));
+  };
+
+  const handleRemoveModel = (index: 0 | 1 | 2) => {
+    if (!canRemove) return;
+    const nextKeys = removeCompareModelKey(keys, index);
+    for (const slotIndex of [0, 1, 2] as const) {
+      if (nextKeys[slotIndex] !== keys[slotIndex]) {
+        onChange(slotIndex, nextKeys[slotIndex]);
+      }
+    }
   };
 
   return (
     <div className={styles.wrap} aria-label="Compare model selectors">
       <div className={styles.chips}>
         {([0, 1, 2] as const)
-          .filter((i) => keys[i] !== "" || (i === 2 && keys[0] && keys[1] && !keys[2] && !canAdd))
-          .map((i) => (
-            <span key={i} className={styles.chip}>
-              <select
-                value={keys[i]}
-                onChange={(e) => onChange(i, e.target.value)}
-                aria-label={`Compare model ${i + 1}`}
-              >
-                {keys[i] === "" && (
-                  <option value="" disabled>
-                    Select model…
-                  </option>
-                )}
-                {models.map((model) => (
-                  <option key={modelKey(model)} value={modelKey(model)}>
-                    {model.model}
-                  </option>
-                ))}
-              </select>
-              {canRemove && keys[i] !== "" && (
-                <button
-                  type="button"
-                  aria-label={`Remove ${modelName(keys[i])}`}
-                  onClick={() => onChange(i, "")}
-                >
-                  ×
-                </button>
-              )}
-              {keys[i] === "" && (
-                <button
-                  type="button"
-                  aria-label="Cancel adding model"
-                  onClick={() => onChange(i, "")}
-                >
-                  ×
-                </button>
-              )}
-            </span>
+          .filter((index) => keys[index] !== "" || index < 2)
+          .map((index) => (
+            <CompareModelSlot
+              key={`${index}-${keys[index] || "empty"}`}
+              index={index}
+              models={models}
+              keys={keys}
+              canRemove={canRemove}
+              onSelect={(key) => {
+                onChange(index, key);
+              }}
+              onRemove={() => handleRemoveModel(index)}
+            />
           ))}
       </div>
 
       {canAdd && (
         <button
+          id="compareAddModelBtn"
           className={styles.addButton}
           type="button"
           onClick={handleAddModel}
           aria-label="Add model to comparison"
         >
-          <Icon />
+          <AddIcon />
           <span>Add Model</span>
         </button>
       )}
@@ -79,15 +70,75 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
   );
 }
 
-function modelKey(model?: ModelCatalogItem) {
-  return model ? `${model.provider}:${model.model}` : "";
+function CompareModelSlot({
+  index,
+  models,
+  keys,
+  canRemove,
+  onSelect,
+  onRemove,
+}: {
+  index: 0 | 1 | 2;
+  models: ModelCatalogItem[];
+  keys: [string, string, string];
+  canRemove: boolean;
+  onSelect: (key: string) => void;
+  onRemove: () => void;
+}) {
+  const selectedKey = keys[index];
+  const selectedModel = modelFromKey(selectedKey);
+  const selectedMeta = getModelPresentation(selectedModel.provider, selectedModel.model);
+  const activeIndexes = keys
+    .map((key, slotIndex) => (key ? slotIndex : -1))
+    .filter((slotIndex) => slotIndex >= 0);
+  const lastActiveIndex = activeIndexes[activeIndexes.length - 1] ?? index;
+  const menuAlignment =
+    index === 0
+      ? "left"
+      : index === lastActiveIndex
+        ? "right"
+        : "center";
+
+  return (
+    <span id={`compareModel${index + 1}Wrap`} className={styles.chip}>
+      <ModelPicker
+        id={`compareModel${index + 1}`}
+        models={models}
+        value={selectedKey}
+        onChange={onSelect}
+        ariaLabel={`Compare model ${index + 1}`}
+        listboxLabel={`Compare model ${index + 1} options`}
+        selectedKeys={keys}
+        align={menuAlignment}
+        placement="up"
+        className={styles.picker}
+      />
+
+      {canRemove && selectedKey && (
+        <button
+          type="button"
+          className={styles.removeButton}
+          aria-label={`Remove ${selectedMeta.label}`}
+          title={`Remove ${selectedMeta.label}`}
+          onClick={onRemove}
+        >
+          x
+        </button>
+      )}
+    </span>
+  );
 }
 
-function modelName(key: string) {
-  return key.split(":").slice(1).join(":") || key;
+function modelFromKey(key: string): Pick<ModelCatalogItem, "provider" | "model"> {
+  const separator = key.indexOf(":");
+  if (separator < 0) return { provider: "", model: key };
+  return {
+    provider: key.slice(0, separator),
+    model: key.slice(separator + 1),
+  };
 }
 
-function Icon() {
+function AddIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r="8" />

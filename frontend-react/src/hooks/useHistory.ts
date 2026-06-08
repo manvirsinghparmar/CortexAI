@@ -8,7 +8,7 @@ export function useHistory() {
   const load = useCallback(
     async (sessionId?: string) => {
       try {
-        const entries = await fetchHistory(100, sessionId);
+        const entries = await fetchHistory(500, sessionId);
         setHistory(entries);
       } catch (err) {
         console.warn("History load failed", err);

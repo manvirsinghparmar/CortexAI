@@ -178,6 +178,25 @@ python -m pytest tests/test_registry_pricing_alignment.py -q
 
 ## Run
 
+Run the full local app (FastAPI API + React/Vite frontend):
+```bash
+python run_app.py
+```
+
+Useful URLs:
+- React frontend: `http://127.0.0.1:5173/`
+- API health: `http://127.0.0.1:8000/health`
+- Swagger: `http://127.0.0.1:8000/docs`
+
+For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.env` or pass:
+```bash
+python run_app.py --enable-dev-login
+```
+
+`run_app.py` starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port.
+Before launching either process, the runner verifies that both requested ports are available and reports a clear error when another process owns one. On Windows, shutdown terminates the complete FastAPI/Vite process trees so failed startup or `Ctrl+C` does not leave an orphaned Vite listener.
+
+Run the API server by itself:
 ```bash
 python run_server.py --reload
 ```
@@ -185,7 +204,7 @@ python run_server.py --reload
 Useful URLs:
 - Health: `http://127.0.0.1:8000/health`
 - Swagger: `http://127.0.0.1:8000/docs`
-- Frontend: `http://127.0.0.1:8000/`
+- Legacy/static frontend when FastAPI serves one: `http://127.0.0.1:8000/`
 
 ### Run the React Frontend Through FastAPI
 
@@ -226,6 +245,8 @@ React development server (hot reload, with `/v1`, `/auth`, and `/runtime-config.
 npm run --prefix frontend-react dev
 ```
 
+When launched by `run_app.py`, Vite reads `CORTEX_API_PROXY_TARGET` from the runner so custom `--api-host` / `--api-port` values stay aligned with the frontend proxy.
+
 For this split local workflow, run the API separately with `SERVE_FRONTEND=false`:
 ```powershell
 $env:SERVE_FRONTEND="false"
@@ -244,20 +265,24 @@ Frontend runtime config (`/runtime-config.js`):
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
-- History sidebar cards render compact thread metadata: mode, local date/time, title, and usage cost. Token counts are hidden in the sidebar UI.
+- React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; background history failures do not surface as the primary chat error banner.
+- History sidebar cards render one row per `session_id`, aggregate compact thread metadata, and search across every persisted turn in the session. Token counts are hidden in the sidebar UI.
+- Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - A fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
-- Frontend Compare mode defaults the `With sources` toggle on for new page sessions; if a user turns it off, their Compare-mode choice is preserved while switching between Ask and Compare.
-- Compare response cards use compact icon-only footers while the compare summary bar carries aggregate tokens, usage, and success counts.
+- React Ask and Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` so follow-ups continue the selected thread and New Chat starts a new backend session.
+- React Compare mode uses `/v1/compare/stream`, defaults the `With sources` toggle on for new page sessions, and streams each model response into its own column.
+- On desktop, each React Compare response column has its own vertical response scrollbar while the comparison canvas handles horizontal overflow. Mobile keeps the model cards stacked in normal page flow.
+- React file upload uses the current raw-byte `POST /v1/files/upload` contract, polls `GET /v1/files/{file_id}` while uploads are processing, and sends attachment IDs on Ask/Compare requests.
+- Compare response cards use compact footers while the compare summary bar carries aggregate tokens, usage, and success counts.
 - Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 - Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
-- Response Markdown rendering includes response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
-- Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text, then run the full response enhancement pass after completion.
+- React response Markdown includes response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, and sanitized provider error states.
+- Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text.
 - Streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
-- React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, an Ask landing dashboard, a horizontal compare canvas, and a unified bottom composer.
+- React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, prompt starter landing, horizontal compare canvas, unified bottom composer, and mobile Ask/Compare/History navigation.
 - Frontend model selectors fall back to a bundled display catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
 - Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
 - The composer keeps active compare models as removable chips, exposes Add Model from the same row, and includes the Ask/Compare switch plus send action.
-- Background history fetch failures do not surface as the primary chat error banner.
 
 ## Authentication
 
@@ -449,7 +474,7 @@ Prompt optimization (`/v1/optimize`):
 - weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry
 - optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models
 - optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text
-- request payloads may include optional `context_hint` and compact `context`; the frontend sends these only for follow-up-like prompts without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to the last ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- request payloads may include optional `context_hint` and compact `context`; the frontend sends these only for follow-up-like prompts without attachments. Reference-dependent prompts use a mixed user/assistant context window capped to the last ten compact messages, with React's `context_hint` capped to the existing 2,000-character `/v1/optimize` request limit so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
 - optimizer model output must be valid optimizer JSON and is rejected if it appears to answer the prompt, or if it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it
 - responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
 - if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
@@ -461,9 +486,10 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
 - In the browser UI, Compare starts with `With sources` enabled by default and keeps a manual off choice for that page session.
-- Frontend Compare selectors support per-model removal with compact circular controls attached to each selector; remove controls show only when three models are active, fade in on selector hover/focus, and request payloads include only active selected models.
+- Frontend Compare selectors support per-model removal with compact circular controls attached to each selector. Remove controls show only when three models are active; removing any slot compacts the remaining two models, preserving the API's two-target minimum. Request payloads include only active selected models.
 - Frontend Compare response cards hide per-card token/resource text in side-by-side layouts and keep compact Resources/copy/feedback icons; aggregate tokens, usage, and success counts remain in the summary bar.
-- Frontend Compare selectors appear as removable model chips in the unified composer; at least two active targets are seeded from the catalog and request payloads include only active selected models.
+- Frontend Compare selectors appear as removable model chips in the unified composer. React prefers `openai:gpt-5.1` and `claude:claude-sonnet-4-5` for the initial two targets, and Add Model prefers `deepseek:deepseek-chat`; unavailable preferences fall back to distinct enabled catalog models. Request payloads include only active selected models.
+- React manual Ask and Compare model controls share one accessible picker component with provider logo, readable model-family label, exact API model ID, and active highlighting. Compare adds duplicate-option disabling and removal rules through the shared component API. Hidden native selects remain synchronized for browser automation compatibility.
 - Frontend Compare response cards use side-by-side model columns with visible per-card latency and token metadata.
 
 ## Web Research Behavior (Current)
@@ -490,6 +516,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Ask and Compare now share the same conversation session when the same `session_id` is reused.
 - Switching between Ask and Compare does not require creating a separate thread.
 - Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
+- `GET /v1/history` intentionally returns persisted request rows rather than pre-grouped UI threads. Each row includes optional `session_id` and `request_group_id`; clients group sidebar threads by `session_id` and Compare responses by `request_group_id`.
 - The browser UI does not auto-continue the last active thread after a fresh login. It creates a new session and sends `new_session=true` for the first turn; users can still reopen older threads from History.
 
 ## Chat Context Guardrails

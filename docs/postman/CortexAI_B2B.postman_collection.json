@@ -573,6 +573,12 @@
                   "if (pm.response.code === 200) {",
                   "  var body = pm.response.json();",
                   "  pm.test('history is an array', function () { pm.expect(body).to.be.an('array'); });",
+                  "  if (body.length > 0) {",
+                  "    pm.test('history exposes session and compare grouping fields', function () {",
+                  "      pm.expect(body[0]).to.have.property('session_id');",
+                  "      pm.expect(body[0]).to.have.property('request_group_id');",
+                  "    });",
+                  "  }",
                   "  if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }",
                   "}"
                 ]

@@ -1,17 +1,11 @@
-import { streamPost } from "./client";
+import { post, streamPost } from "./client";
 import type { ChatRequest, ChatResponse, StreamChunk } from "../types";
 
-/**
- * Streams a chat response from /v1/chat/stream.
- *
- * Backend sends NDJSON with types: start | line | response_done | done | error.
- * We normalise these into StreamChunk (delta | metadata | done | error).
- */
 export async function* streamChat(
   request: ChatRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<StreamChunk> {
-  const lines = streamPost("/v1/chat/stream", request);
+  const lines = streamPost("/v1/chat/stream", request, signal);
 
   for await (const line of lines) {
     if (signal?.aborted) break;
@@ -29,6 +23,9 @@ export async function* streamChat(
     }
 
     switch (event.type) {
+      case "start":
+        yield { type: "start", session_id: asOptionalString(event.session_id) };
+        break;
       case "line":
         yield { type: "delta", text: String(event.text ?? "") };
         break;
@@ -36,29 +33,19 @@ export async function* streamChat(
         yield { type: "metadata", metadata: event.response as Partial<ChatResponse> };
         break;
       case "done":
-        yield { type: "done" };
+        yield { type: "done", session_id: asOptionalString(event.session_id) };
         break;
       case "error":
         yield { type: "error", error: String(event.message ?? "Unknown error") };
         break;
-      // "start" — ignore, no UI action needed
     }
   }
 }
 
-/**
- * Sends a non-streaming chat request. Used as a fallback when SSE is unavailable.
- */
 export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
-  const res = await fetch("/v1/chat", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(String((err as { detail?: string }).detail ?? res.statusText));
-  }
-  return res.json() as Promise<ChatResponse>;
+  return post<ChatResponse>("/v1/chat", request);
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }

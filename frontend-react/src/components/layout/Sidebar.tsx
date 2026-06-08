@@ -1,11 +1,12 @@
 import { useMemo } from "react";
+import { buildHistoryThreads, filterHistoryThreads } from "../../history/historyThreads";
 import { useChatStore } from "../../store/chatStore";
 import { useHistory } from "../../hooks/useHistory";
-import type { HistoryEntry, WhoAmIResponse } from "../../types";
+import type { HistoryThread, WhoAmIResponse } from "../../types";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
-  onSelectEntry: (entry: HistoryEntry) => void;
+  onSelectThread: (thread: HistoryThread) => void;
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
   onLogin?: () => void;
@@ -13,7 +14,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  onSelectEntry,
+  onSelectThread,
   whoAmI,
   loggedIn,
   onLogin,
@@ -21,92 +22,96 @@ export function Sidebar({
 }: SidebarProps) {
   const history = useChatStore((s) => s.history);
   const setHistory = useChatStore((s) => s.setHistory);
+  const historySearch = useChatStore((s) => s.historySearch);
+  const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const sessionId = useChatStore((s) => s.sessionId);
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
+  const startNewChat = useChatStore((s) => s.startNewChat);
   const { clear } = useHistory();
 
-  const latest = useMemo(() => history.slice(0, 6), [history]);
-  const userLabel = whoAmI?.user_id ?? (mode === "single" ? "Alex Rivera" : "Alex Chen");
-  const planLabel = whoAmI?.plan_tier ?? (mode === "single" ? "Pro Plan" : loggedIn ? "Pro Plan" : "Guest");
+  const filteredThreads = useMemo(() => {
+    return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(0, 20);
+  }, [history, historySearch]);
+
+  const userLabel = whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest");
+  const planLabel = whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
 
   const handleClearAll = async () => {
-    if (!window.confirm("Clear all chat history?")) return;
+    if (!window.confirm("Clear chat history?")) return;
     await clear(sessionId ?? undefined);
     setHistory([]);
-  };
-
-  const handleNewChat = () => {
-    useChatStore.setState({
-      prompt: "",
-      responses: [],
-      streamingText: "",
-      streaming: false,
-      error: null,
-    });
   };
 
   return (
     <aside className={styles.sidebar} aria-label="Primary navigation">
       <div className={styles.brand}>
         <h1>CortexAI</h1>
-        <p>{mode === "single" ? "Technical Gateway" : "Gateway"}</p>
+        <p>LLM Gateway</p>
       </div>
 
-      {mode === "single" && (
-        <button type="button" className={styles.newChatButton} onClick={handleNewChat}>
-          <span aria-hidden="true">+</span>
-          New Chat
-        </button>
-      )}
+      <button id="historyNewChatBtn" type="button" className={styles.newChatButton} onClick={startNewChat}>
+        <span aria-hidden="true">+</span>
+        New Chat
+      </button>
 
       <nav className={styles.nav} aria-label="Workspace">
         <button
           type="button"
-          className={mode === "single" ? styles.navItemActiveLight : styles.navItem}
-          onClick={handleNewChat}
+          className={mode === "single" ? styles.navItemActive : styles.navItem}
+          onClick={() => setMode("single")}
         >
-          <Icon name="history" />
-          <span>History</span>
-        </button>
-        <button type="button" className={styles.navItem}>
-          <Icon name="analytics" />
-          <span>Analytics</span>
+          <Icon name="ask" />
+          <span>Ask</span>
         </button>
         <button
           type="button"
           className={mode === "compare" ? styles.navItemActive : styles.navItem}
           onClick={() => setMode("compare")}
         >
-          <Icon name="models" />
-          <span>Models</span>
-        </button>
-        <button type="button" className={styles.navItem}>
-          <Icon name="key" />
-          <span>API Keys</span>
+          <Icon name="compare" />
+          <span>Compare</span>
         </button>
       </nav>
 
-      {latest.length > 0 && (
-        <div className={styles.historyBlock}>
-          <div className={styles.historyHeader}>
-            <span>Recent</span>
+      <div className={styles.historyBlock}>
+        <div className={styles.historyHeader}>
+          <span>History</span>
+          {history.length > 0 && (
             <button type="button" onClick={handleClearAll}>
               Clear
             </button>
-          </div>
-          <ul className={styles.historyList}>
-            {latest.map((entry) => (
-              <li key={entry.id}>
-                <button type="button" onClick={() => onSelectEntry(entry)} title={entry.prompt}>
-                  <span>{entry.prompt}</span>
-                  <small>{entry.provider}</small>
-                </button>
-              </li>
-            ))}
-          </ul>
+          )}
         </div>
-      )}
+        <input
+          id="historySearch"
+          className={styles.historySearch}
+          value={historySearch}
+          onChange={(event) => setHistorySearch(event.target.value)}
+          placeholder="Search history"
+          aria-label="Search history"
+        />
+        <ul className={styles.historyList}>
+          {filteredThreads.map((thread) => (
+            <li key={thread.key}>
+              <button
+                type="button"
+                className={thread.sessionId === sessionId ? styles.historyItemActive : undefined}
+                onClick={() => onSelectThread(thread)}
+                title={thread.title}
+              >
+                <span>{thread.title}</span>
+                <small>
+                  {formatMode(thread.mode)} / {thread.turnCount} {thread.turnCount === 1 ? "turn" : "turns"}
+                </small>
+                <small>
+                  {thread.providerLabel}:{thread.modelLabel}
+                </small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       <button
         type="button"
@@ -115,7 +120,7 @@ export function Sidebar({
         disabled={!loggedIn && !onLogin}
       >
         <span className={styles.avatar} aria-hidden="true">
-          {(userLabel[0] ?? "A").toUpperCase()}
+          {(userLabel[0] ?? "G").toUpperCase()}
         </span>
         <span className={styles.profileText}>
           <strong>{userLabel}</strong>
@@ -126,42 +131,28 @@ export function Sidebar({
   );
 }
 
-function Icon({ name }: { name: "history" | "analytics" | "models" | "key" }) {
-  const paths = {
-    history: (
-      <>
-        <path d="M3 12a9 9 0 1 0 3-6.7" />
-        <path d="M3 4v5h5" />
-        <path d="M12 7v5l3 2" />
-      </>
-    ),
-    analytics: (
-      <>
-        <path d="M5 19V9" />
-        <path d="M12 19V5" />
-        <path d="M19 19v-7" />
-      </>
-    ),
-    models: (
-      <>
-        <path d="M8 3h8l1 4 4 1v8l-4 1-1 4H8l-1-4-4-1V8l4-1 1-4Z" />
-        <path d="M9 12h6" />
-        <path d="M12 9v6" />
-      </>
-    ),
-    key: (
-      <>
-        <circle cx="7.5" cy="12.5" r="3.5" />
-        <path d="M11 12.5h10" />
-        <path d="M17 12.5v3" />
-        <path d="M20 12.5v2" />
-      </>
-    ),
-  };
+function formatMode(mode: HistoryThread["mode"]): string {
+  if (mode === "single") return "Ask";
+  if (mode === "compare") return "Compare";
+  return "Mixed";
+}
 
+function Icon({ name }: { name: "ask" | "compare" }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      {paths[name]}
+      {name === "ask" && (
+        <>
+          <path d="M4 5h16v10H8l-4 4z" />
+          <path d="M9 9h6" />
+          <path d="M9 12h4" />
+        </>
+      )}
+      {name === "compare" && (
+        <>
+          <path d="M5 5h6v14H5z" />
+          <path d="M13 5h6v14h-6z" />
+        </>
+      )}
     </svg>
   );
 }

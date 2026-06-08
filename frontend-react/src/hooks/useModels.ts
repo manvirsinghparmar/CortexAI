@@ -9,12 +9,13 @@ interface UseModelsResult {
   error: string | null;
 }
 
-export function useModels(): UseModelsResult {
+export function useModels(enabled = true): UseModelsResult {
   const [models, setModels] = useState<ModelCatalogItem[]>(DEFAULT_MODELS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     setLoading(true);
     fetchModels(true)
@@ -33,7 +34,7 @@ export function useModels(): UseModelsResult {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled]);
 
   return { models, loading, error };
 }

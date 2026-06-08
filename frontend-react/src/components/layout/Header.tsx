@@ -10,5 +10,6 @@ interface HeaderProps {
 
 // Auth is shown in the Sidebar. Kept for API compatibility.
 export function Header(_props: HeaderProps) {
+  void _props;
   return null;
 }

@@ -1,6 +1,4 @@
-// Mirrors server/schemas/requests.py and server/schemas/responses.py
-
-// ── Requests ──────────────────────────────────────────────────────────────────
+// Mirrors server/schemas/requests.py and server/schemas/responses.py.
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -56,8 +54,6 @@ export interface CompareRequest {
   max_tokens?: number;
 }
 
-// ── Responses ─────────────────────────────────────────────────────────────────
-
 export interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
@@ -104,8 +100,6 @@ export interface CompareResponse {
   timestamp: string;
 }
 
-// ── Catalog ───────────────────────────────────────────────────────────────────
-
 export interface ModelCatalogItem {
   provider: string;
   model: string;
@@ -148,11 +142,10 @@ export interface ProvidersCatalogResponse {
   timestamp: string;
 }
 
-// ── History ───────────────────────────────────────────────────────────────────
-
 export interface HistoryEntry {
   id: number;
   session_id?: string;
+  request_group_id?: string;
   timestamp: string;
   mode: string;
   prompt: string;
@@ -165,14 +158,33 @@ export interface HistoryEntry {
   web_source_items: WebSourceItem[];
 }
 
-// ── Files ──────────────────────────────────────────────────────────────────────
+export type HistoryThreadMode = ChatMode | "mixed";
+
+export interface HistoryThread {
+  key: string;
+  sessionId?: string;
+  entries: HistoryEntry[];
+  title: string;
+  latestTimestamp: string;
+  latestTimestampMs: number;
+  mode: HistoryThreadMode;
+  preferredMode: ChatMode;
+  providerLabel: string;
+  modelLabel: string;
+  totalCost: number;
+  totalTokens: number;
+  turnCount: number;
+  searchText: string;
+}
+
+export type FileUploadStatus = "ready" | "processing" | "failed" | string;
 
 export interface FileUploadResponse {
   file_id: string;
   original_filename: string;
   mime_type: string;
   size_bytes: number;
-  status: string;
+  status: FileUploadStatus;
   error_code?: string;
   error_message?: string;
   ingestion_meta: Record<string, unknown>;
@@ -181,8 +193,6 @@ export interface FileUploadResponse {
   expires_at?: string;
   deduplicated: boolean;
 }
-
-// ── Auth / WhoAmI ─────────────────────────────────────────────────────────────
 
 export interface CognitoConfig {
   enabled: boolean;
@@ -223,44 +233,90 @@ export interface WhoAmIResponse {
   breakers: WhoAmIBreakerConfig;
 }
 
-// ── Optimize ──────────────────────────────────────────────────────────────────
-
 export interface OptimizeRequest {
   prompt: string;
-  context?: string;
+  context_hint?: string;
+  context?: UserContextRequest;
 }
 
 export interface OptimizeResponse {
-  optimized_prompt: string;
   original_prompt: string;
-  provider: string;
-  model: string;
-  latency_ms: number;
+  optimized_prompt: string;
+  was_optimized: boolean;
+  server_optimization_enabled: boolean;
+  optimization_status: string;
+  fallback_reason?: string;
 }
 
-// ── Smart-routing state ───────────────────────────────────────────────────────
-
 export type ChatMode = "single" | "compare";
+export type TurnStatus =
+  | "idle"
+  | "optimizing"
+  | "streaming"
+  | "complete"
+  | "error"
+  | "cancelled";
+
+export type PromptOptimizationUiStatus =
+  | "pending"
+  | "optimized"
+  | "kept_original"
+  | "cancelled";
+
+export interface PromptOptimizationState {
+  status: PromptOptimizationUiStatus;
+  originalPrompt: string;
+  displayPrompt: string;
+  note?: string;
+  optimizationStatus?: string;
+  fallbackReason?: string;
+}
 
 export interface ModelKey {
   provider: string;
   model: string;
 }
 
+export interface ChatTurn {
+  id: string;
+  mode: ChatMode;
+  prompt: string;
+  submittedPrompt: string;
+  attachments: FileUploadResponse[];
+  responses: ChatResponse[];
+  status: TurnStatus;
+  createdAt: string;
+  requestGroupId?: string;
+  compareSummary?: CompareResponse;
+  optimization?: PromptOptimizationState;
+}
+
 export interface AppState {
   mode: ChatMode;
   smartMode: boolean;
   researchMode: boolean;
+  compareResearchMode: boolean;
   optimizeMode: boolean;
   selectedModelKey: string;
   compareModelKeys: string[];
 }
 
-// ── SSE streaming ─────────────────────────────────────────────────────────────
-
 export interface StreamChunk {
-  type: "delta" | "done" | "error" | "metadata";
+  type: "delta" | "done" | "error" | "metadata" | "start";
   text?: string;
   error?: string;
   metadata?: Partial<ChatResponse>;
+  session_id?: string;
+}
+
+export interface CompareStreamChunk {
+  type: "start" | "response_start" | "delta" | "response_done" | "done" | "error";
+  index?: number;
+  text?: string;
+  error?: string;
+  provider?: string;
+  model?: string;
+  response?: ChatResponse;
+  compare?: CompareResponse;
+  session_id?: string;
 }

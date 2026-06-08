@@ -56,7 +56,19 @@ REACT_FRONTEND=false
 # TAVILY_ENHANCED_SEARCH_DOMAIN_RULES=true
 ```
 
-5. Start server:
+5. Start the full local app:
+```bash
+python run_app.py
+```
+
+This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port.
+
+For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.env` or run:
+```bash
+python run_app.py --enable-dev-login
+```
+
+Start only the FastAPI server:
 ```bash
 python run_server.py --reload
 ```
@@ -75,16 +87,21 @@ python run_server.py --reload
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
-- Frontend history sidebar cards show mode, local date/time, title, and usage cost in a compact layout; sidebar token counts are hidden.
+- React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data.
+- React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
+- Frontend history sidebar cards show one row per session with compact aggregate metadata and thread-wide search; sidebar token counts are hidden.
+- Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
-- Frontend attachment UX: sent Ask/Compare turns show uploaded files as flat metadata-backed file cards with original filename, size/type detail, optional image thumbnail preview, and `Ready for analysis` readiness text.
-- Frontend Compare defaults `With sources` on for new page sessions and preserves a manual off choice while switching modes.
-- Frontend Compare selectors expose compact per-model remove controls attached to each selector only when three models are active; the controls fade in on selector hover/focus, keep at least two active models, and send only active selected models in compare requests.
-- Frontend Compare response cards use compact icon-only footers; aggregate tokens, usage, and success counts remain in the summary bar.
+- React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests.
+- React Compare defaults `With sources` on for new page sessions and streams `/v1/compare/stream` events into per-model response columns.
+- Desktop React Compare columns scroll their response bodies vertically and independently; horizontal overflow belongs to the shared comparison canvas. Mobile uses stacked cards and normal page scrolling.
+- Frontend Compare selectors keep at least two active models and send only active selected models in compare requests. React prefers `openai:gpt-5.1` plus `claude:claude-sonnet-4-5` initially, and Add Model prefers `deepseek:deepseek-chat`; disabled or missing preferences fall back to distinct enabled catalog models. Remove controls appear with three active models and compact whichever two remain after any slot is removed.
+- React manual Ask and Compare controls render through the same accessible model picker with provider logos, readable model labels, exact model IDs, and active-state highlighting. Compare supplies duplicate-selection prevention and removal behavior; synchronized hidden native selects preserve existing Playwright selectors and `selectOption` flows.
+- Frontend Compare response cards use compact footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 - Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
-- Frontend response Markdown renders response-scoped citation markers, GitHub-style callouts, styled code blocks with copy controls, and system-aware light/dark response styling.
-- Frontend streaming responses render buffered Markdown progressively for Ask and Compare, then run the full response enhancement pass when the stream completes.
+- React response Markdown renders response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, and sanitized provider error states.
+- Frontend streaming responses render buffered Markdown progressively for Ask and Compare.
 - Frontend streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
 
 ## Endpoints
@@ -113,6 +130,16 @@ python run_server.py --reload
 - `GET /v1/byok/status`
 - `DELETE /v1/byok?provider=<provider-id>`
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
+
+### History response contract
+
+`GET /v1/history?limit=<n>&session_id=<optional>` returns persisted request rows, newest first. It does not pre-group records for presentation.
+
+- `session_id` identifies the user-visible conversation thread.
+- `request_group_id` is optional and is populated for Compare target rows.
+- One Ask turn produces one row.
+- One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
+- The React client groups sidebar items by `session_id`, then reconstructs Compare turns by `request_group_id` when a thread is selected.
 
 ## Authentication
 
@@ -153,7 +180,9 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
-- Local hot-reload development uses `npm run --prefix frontend-react dev`; Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000`.
+- Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
+- `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.
+- `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.
 - `Dockerfile.frontend` builds the React app and serves static assets with nginx. `Dockerfile.api` is API-only; it does not include `frontend-react/dist` unless the deployment image is extended to copy those files.
 
@@ -227,7 +256,7 @@ Prompt optimization:
 - Weak or vague prompts are classified locally and get one extra retry if the optimizer returns the original prompt unchanged; strong prompts can keep the original without retry.
 - Optimizer calls use compact generation defaults from `PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS` (default `450`) and `PROMPT_OPTIMIZER_TEMPERATURE` (default `0.2`), with JSON-object mode for OpenAI chat models.
 - Optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text.
-- Request payloads may include optional `context_hint` and compact `context`; the frontend only sends them for likely follow-ups without attachments. Reference-dependent prompts use an expanded mixed user/assistant context window capped to ten compact messages / 4,000 characters so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
+- Request payloads may include optional `context_hint` and compact `context`; the frontend only sends them for likely follow-ups without attachments. Reference-dependent prompts use a mixed user/assistant context window capped to ten compact messages, with React's `context_hint` capped to the existing 2,000-character `/v1/optimize` request limit so ordinal and pronoun references like "the second one" or "their cadres" can be resolved in longer chats.
 - Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt, or when it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it.
 - Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
 - Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.

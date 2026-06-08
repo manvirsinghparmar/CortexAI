@@ -1,46 +1,41 @@
-import { ApiClientError } from "./client";
+import { ApiClientError, buildHeaders, get } from "./client";
 import type { FileUploadResponse } from "../types";
 
-const getApiKey = (): string | null => {
-  const w = window as unknown as { __CORTEX_API_KEY?: string };
-  return w.__CORTEX_API_KEY ?? null;
-};
-
 export async function uploadFile(file: File): Promise<FileUploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const headers: Record<string, string> = {};
-  const key = getApiKey();
-  if (key) headers["X-API-Key"] = key;
-
-  const res = await fetch("/v1/files", {
+  const res = await fetch("/v1/files/upload", {
     method: "POST",
     credentials: "include",
-    headers,
-    body: formData,
+    headers: buildHeaders({
+      "Content-Type": file.type || "application/octet-stream",
+      "X-File-Name": file.name || "file",
+      "X-File-Content-Type": file.type || "application/octet-stream",
+    }),
+    body: await file.arrayBuffer(),
   });
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail =
       typeof body === "object" && body !== null && "detail" in body
-        ? String((body as Record<string, unknown>).detail)
-        : res.statusText;
-    throw new ApiClientError(res.status, detail, body);
+        ? (body as Record<string, unknown>).detail
+        : null;
+    const message =
+      typeof detail === "object" && detail !== null && "message" in detail
+        ? String((detail as Record<string, unknown>).message)
+        : typeof detail === "string"
+          ? detail
+          : res.statusText;
+    throw new ApiClientError(res.status, message, body);
   }
 
   return res.json() as Promise<FileUploadResponse>;
 }
 
-export async function deleteFile(fileId: string): Promise<void> {
-  const headers: Record<string, string> = {};
-  const key = getApiKey();
-  if (key) headers["X-API-Key"] = key;
+export async function fetchFileStatus(fileId: string): Promise<FileUploadResponse> {
+  return get<FileUploadResponse>(`/v1/files/${encodeURIComponent(fileId)}`);
+}
 
-  await fetch(`/v1/files/${fileId}`, {
-    method: "DELETE",
-    credentials: "include",
-    headers,
-  });
+export async function deleteFile(fileId: string): Promise<void> {
+  void fileId;
+  // The backend has no DELETE /v1/files/{id} contract. Removing a chip is local-only.
 }

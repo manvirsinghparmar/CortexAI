@@ -4,6 +4,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Runtime Entrypoints
 
+- Full local app runner: `run_app.py`
 - API server: `run_server.py`
 - Main FastAPI app wiring: `server/app.py`
 - Frontend runtime config renderer: `server/frontend_runtime_config.py` (`GET /runtime-config.js`)
@@ -59,6 +60,16 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
   - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
+  - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
+  - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
+  - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
+  - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
+  - History thread grouping and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`
+  - Transcript/session state: `frontend-react/src/store/chatStore.ts`
+  - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
+  - Ask/Compare result rendering: `frontend-react/src/components/results/`
+  - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
+  - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.
   - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
 - Frontend selection in FastAPI: `server/app.py`
   - `FRONTEND_DIR` explicitly selects the static directory to mount.
@@ -83,7 +94,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Update `server/routes/`
   2. Update `server/schemas/`
   3. Add/adjust tests
-  4. Update `README.md` and related docs
+
+- Change React history behavior:
+  1. Keep `/v1/history` row-level persistence semantics in `server/routes/history.py` and `db/repository.py`.
+  2. Update session/thread normalization in `frontend-react/src/history/historyThreads.ts`.
+  3. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.
+  4. Cover Ask session grouping and Compare `request_group_id` grouping in React and API tests.
+  5. Update `README.md` and related docs
 
 - Change routing behavior:
   1. Update files in `orchestrator/`
@@ -119,4 +136,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-05-23
+Last updated: 2026-06-07

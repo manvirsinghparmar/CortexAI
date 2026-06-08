@@ -42,8 +42,8 @@
   display: grid;
   max-width: 1128px;
   margin: 0 auto;
-  gap: 56px;
-  padding: 72px 16px 24px;
+  gap: 32px;
+  padding: 56px 16px 24px;
 }
 
 .hero {
@@ -65,7 +65,7 @@
   color: var(--secondary);
 }
 
-.hero p {
+.hero p:not(.title) {
   max-width: 780px;
   margin: 0;
   color: var(--on-surface);
@@ -82,7 +82,8 @@
 
 .modelPills button {
   display: inline-flex;
-  min-width: 244px;
+  max-width: 320px;
+  min-width: 220px;
   min-height: 60px;
   align-items: center;
   justify-content: center;
@@ -93,7 +94,9 @@
   box-shadow: var(--shadow-soft);
   color: var(--on-surface);
   cursor: pointer;
-  font: 500 20px/28px var(--font-sans);
+  font: 600 15px/20px var(--font-sans);
+  padding: 12px 16px;
+  text-align: left;
 }
 
 .modelPills button:first-child {
@@ -111,123 +114,6 @@
   stroke-width: 2;
 }
 
-.askGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-  gap: 32px;
-}
-
-.overviewCard,
-.integrationCard {
-  border: 1px solid rgb(255 255 255 / 50%);
-  border-radius: 16px;
-  background: rgb(255 255 255 / 45%);
-  box-shadow: var(--shadow-soft);
-  backdrop-filter: blur(10px);
-}
-
-.overviewCard {
-  display: flex;
-  min-height: 320px;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 44px;
-  overflow: hidden;
-}
-
-.overviewCard h3,
-.integrationCard h3 {
-  margin: 0;
-  color: var(--primary);
-  font: 700 30px/38px var(--font-sans);
-}
-
-.overviewCard p,
-.integrationCard p {
-  margin: 12px 0 0;
-  color: var(--on-surface);
-  font: 400 20px/30px var(--font-sans);
-}
-
-.overviewCard dl {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 56px;
-  margin: 40px 0 0;
-}
-
-.overviewCard dt {
-  color: var(--on-surface);
-  font: 700 14px/18px var(--font-sans);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.overviewCard dd {
-  margin: 10px 0 0;
-  color: var(--primary);
-  font: 700 30px/36px var(--font-sans);
-}
-
-.overviewCard dd span {
-  color: var(--on-surface-variant);
-  font: 400 14px/18px var(--font-sans);
-}
-
-.secondaryMetric {
-  color: var(--secondary) !important;
-}
-
-.integrationCard {
-  display: flex;
-  min-height: 320px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 44px;
-  text-align: center;
-}
-
-.integrationIcon {
-  display: inline-flex;
-  width: 80px;
-  height: 80px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--primary);
-  color: var(--on-primary);
-  margin-bottom: 24px;
-}
-
-.integrationIcon svg {
-  width: 34px;
-  height: 34px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-}
-
-.integrationCard p {
-  max-width: 260px;
-  font-size: 16px;
-  line-height: 24px;
-}
-
-.integrationCard button {
-  width: 100%;
-  min-height: 48px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--surface-container-highest);
-  color: var(--primary);
-  cursor: pointer;
-  font: 500 18px/24px var(--font-sans);
-  margin-top: 24px;
-}
-
 @media (max-width: 1100px) {
   .askLanding {
     padding-top: 40px;
@@ -236,8 +122,32 @@
   .hero h2 {
     font-size: 40px;
   }
+}
 
-  .askGrid {
-    grid-template-columns: 1fr;
+@media (max-width: 700px) {
+  .askLanding {
+    padding-top: 24px;
+  }
+
+  .hero {
+    gap: 16px;
+  }
+
+  .hero h2 {
+    font-size: 30px;
+  }
+
+  .hero p {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .modelPills {
+    width: 100%;
+  }
+
+  .modelPills button {
+    width: 100%;
+    max-width: none;
   }
 }

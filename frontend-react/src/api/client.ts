@@ -1,27 +1,28 @@
-/**
- * Base HTTP client. Injects the API key / session cookie automatically and
- * normalises error responses into a typed Error.
- *
- * Auth priority (mirrors the backend's dependency):
- *   1. X-API-Key header (dev / BYOK flows)
- *   2. Session cookie (Cognito OAuth — sent automatically by the browser)
- */
-
 const getApiKey = (): string | null => {
-  // runtime-config.js may inject window.__CORTEX_API_KEY at load time
   const w = window as unknown as { __CORTEX_API_KEY?: string };
   return w.__CORTEX_API_KEY ?? null;
 };
 
-function buildHeaders(extra?: Record<string, string>): Record<string, string> {
+export function makeRequestId(prefix = "react-ui"): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+export function buildHeaders(extra?: Record<string, string | undefined>): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...extra,
   };
-  const key = getApiKey();
-  if (key) {
-    headers["X-API-Key"] = key;
+
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (value !== undefined && value !== "") headers[key] = value;
   }
+
+  const key = getApiKey();
+  if (key) headers["X-API-Key"] = key;
+  if (!headers["X-Request-ID"]) headers["X-Request-ID"] = makeRequestId();
   return headers;
 }
 
@@ -36,74 +37,89 @@ export class ApiClientError extends Error {
   }
 }
 
+function detailMessage(body: unknown, fallback: string): string {
+  if (typeof body === "string" && body.trim()) return body;
+  if (typeof body !== "object" || body === null) return fallback;
+
+  const record = body as Record<string, unknown>;
+  const detail = record.detail;
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "object" && detail !== null) {
+    const detailRecord = detail as Record<string, unknown>;
+    if (typeof detailRecord.message === "string") return detailRecord.message;
+    if (typeof detailRecord.code === "string") return detailRecord.code;
+  }
+  if (typeof record.message === "string") return record.message;
+  return fallback;
+}
+
+async function parseErrorBody(res: Response): Promise<unknown> {
+  const text = await res.text().catch(() => "");
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = await res.text().catch(() => null);
-    }
-    const detail =
-      typeof body === "object" && body !== null && "detail" in body
-        ? String((body as Record<string, unknown>).detail)
-        : res.statusText;
-    throw new ApiClientError(res.status, detail, body);
+    const body = await parseErrorBody(res);
+    throw new ApiClientError(res.status, detailMessage(body, res.statusText), body);
   }
+
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
-export async function get<T>(path: string): Promise<T> {
+export async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method: "GET",
     credentials: "include",
     headers: buildHeaders(),
+    signal,
   });
   return handleResponse<T>(res);
 }
 
-export async function post<T>(path: string, body: unknown): Promise<T> {
+export async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
     credentials: "include",
     headers: buildHeaders(),
     body: JSON.stringify(body),
+    signal,
   });
   return handleResponse<T>(res);
 }
 
-export async function del<T>(path: string): Promise<T> {
+export async function del<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method: "DELETE",
     credentials: "include",
     headers: buildHeaders(),
+    signal,
   });
   return handleResponse<T>(res);
 }
 
-/** Opens a fetch stream and yields raw text lines (for SSE). */
-export async function* streamPost(path: string, body: unknown): AsyncGenerator<string> {
+export async function* streamPost(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
   const res = await fetch(path, {
     method: "POST",
     credentials: "include",
     headers: buildHeaders(),
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!res.ok || !res.body) {
-    let errBody: unknown;
-    try {
-      errBody = await res.json();
-    } catch {
-      errBody = null;
-    }
-    const detail =
-      typeof errBody === "object" &&
-      errBody !== null &&
-      "detail" in errBody
-        ? String((errBody as Record<string, unknown>).detail)
-        : res.statusText;
-    throw new ApiClientError(res.status, detail, errBody);
+    const errBody = await parseErrorBody(res);
+    throw new ApiClientError(res.status, detailMessage(errBody, res.statusText), errBody);
   }
 
   const reader = res.body.getReader();
@@ -120,5 +136,8 @@ export async function* streamPost(path: string, body: unknown): AsyncGenerator<s
       yield line;
     }
   }
+
+  const finalText = decoder.decode();
+  if (finalText) buffer += finalText;
   if (buffer) yield buffer;
 }

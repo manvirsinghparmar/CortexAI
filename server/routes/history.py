@@ -38,6 +38,7 @@ def _require_db_mode() -> None:
 class HistoryEntry(BaseModel):
     id: int
     session_id: Optional[str] = None
+    request_group_id: Optional[str] = None
     timestamp: str
     mode: str
     prompt: str

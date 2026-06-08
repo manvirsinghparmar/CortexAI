@@ -57,11 +57,35 @@
   padding: 5px 8px 5px 10px;
 }
 
+.item :global(.attachment-chip) {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--outline);
+}
+
+.item :global(.is-ready) {
+  background: #2f855a;
+}
+
+.item :global(.is-processing) {
+  background: #b7791f;
+}
+
+.item :global(.is-failed) {
+  background: var(--error);
+}
+
 .fileName {
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status {
+  color: var(--outline);
+  text-transform: capitalize;
 }
 
 .fileSize {

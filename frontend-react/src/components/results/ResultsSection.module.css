@@ -32,11 +32,19 @@
 .singleGrid {
   display: grid;
   align-content: start;
-  height: 100%;
   max-width: 1400px;
   min-height: 100%;
   gap: 18px;
   margin: 0 auto;
+}
+
+.oneTurnGrid {
+  height: 100%;
+}
+
+.multiTurnGrid {
+  height: auto;
+  grid-auto-rows: max-content;
 }
 
 .turn {
@@ -57,6 +65,11 @@
   flex-direction: column;
 }
 
+.constrainedCompareTurn {
+  height: clamp(480px, 62dvh, 620px);
+  min-height: 480px;
+}
+
 .compareGridTranscript {
   flex: 1;
   height: 100%;
@@ -70,6 +83,11 @@
   min-height: 0;
 }
 
+.promptRow {
+  display: grid;
+  flex: 0 0 auto;
+}
+
 .userBubble {
   justify-self: end;
   max-width: min(720px, 92%);
@@ -80,16 +98,14 @@
   padding: 14px 16px;
 }
 
-.userBubble span,
-.comparePrompt span {
+.userBubble span {
   display: block;
   font: 700 11px/14px var(--font-sans);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.userBubble p,
-.comparePrompt p {
+.userBubble p {
   margin: 4px 0 0;
   font: 500 15px/22px var(--font-sans);
 }
@@ -139,25 +155,6 @@
   padding: 5px 8px;
 }
 
-.comparePrompt {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  border: 1px solid rgb(198 198 205 / 35%);
-  border-radius: 8px;
-  background: var(--surface-container-lowest);
-  padding: 14px 16px;
-}
-
-.comparePrompt span {
-  color: var(--outline);
-}
-
-.comparePrompt p {
-  color: var(--on-surface);
-}
-
 .turnAttachments {
   display: flex;
   flex-wrap: wrap;
@@ -174,14 +171,12 @@
   padding: 4px 8px;
 }
 
-.comparePrompt .turnAttachments li {
-  background: var(--surface-container);
-}
-
 .compareSummary {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .compareSummary span {
@@ -189,8 +184,8 @@
   border-radius: 999px;
   background: var(--surface-container-lowest);
   color: var(--on-surface-variant);
-  font: 700 12px/16px var(--font-sans);
-  padding: 6px 10px;
+  font: 700 11px/14px var(--font-sans);
+  padding: 4px 8px;
 }
 
 .jumpButton {
@@ -248,6 +243,10 @@
     height: auto;
   }
 
+  .constrainedCompareTurn {
+    min-height: 0;
+  }
+
   .compareGridTranscript {
     height: auto;
     min-height: 280px;
@@ -262,8 +261,8 @@
     overflow: visible;
   }
 
-  .comparePrompt {
-    display: grid;
+  .compareSummary {
+    justify-content: flex-start;
   }
 }
 

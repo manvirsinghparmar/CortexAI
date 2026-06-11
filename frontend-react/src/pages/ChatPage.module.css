@@ -109,6 +109,7 @@
 
 .composerWrap {
   position: relative;
+  z-index: 10;
   flex-shrink: 0;
   padding: 0 24px 24px;
   background: var(--surface);
@@ -122,32 +123,53 @@
   display: grid;
   max-width: 720px;
   margin: 0 auto;
-  gap: 14px;
+  gap: 10px;
 }
 
 .mobileNewChat {
-  min-height: 44px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--primary);
-  color: var(--on-primary);
+  display: flex;
+  height: 42px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
   cursor: pointer;
-  font: 700 15px/20px var(--font-sans);
+  font: 600 14px/20px var(--font-sans);
+  padding: 0 12px;
+}
+
+.mobileNewChat svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
 }
 
 .mobileHistory input {
   width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--outline-variant);
+  height: 38px;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
-  background: var(--surface-container-lowest);
-  color: var(--on-surface);
-  padding: 0 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font: 500 14px/20px var(--font-sans);
+  outline: none;
+  padding: 0 11px;
+}
+
+.mobileHistory input:focus {
+  border-color: #cbd5e1;
+  box-shadow: 0 0 0 3px rgb(226 232 240 / 65%);
 }
 
 .mobileHistory ul {
   display: grid;
-  gap: 8px;
+  gap: 3px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -160,23 +182,75 @@
 .mobileHistory li button {
   display: grid;
   gap: 4px;
-  border: 1px solid var(--outline-variant);
+  border: 0;
   border-radius: 8px;
-  background: var(--surface-container-lowest);
-  color: var(--on-surface);
+  background: transparent;
+  color: #334155;
   cursor: pointer;
-  padding: 12px;
+  padding: 10px;
   text-align: left;
 }
 
-.mobileHistory span {
+.mobileHistory li button:hover {
+  background: #f1f5f9;
+}
+
+.mobileHistory li .mobileHistoryActive {
+  background: #e8eef7;
+  color: #0f172a;
+  box-shadow: inset 2px 0 #64748b;
+}
+
+.mobileHistoryTop {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #64748b;
+  font: 600 10px/14px var(--font-sans);
+}
+
+.mobileHistoryTop > span {
+  flex: 0 0 auto;
+}
+
+.mobileHistoryTop time {
+  min-width: 0;
   overflow: hidden;
+  color: #94a3b8;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mobileHistory small {
-  color: var(--on-surface-variant);
+.mobileHistoryTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  font: 600 14px/19px var(--font-sans);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mobileHistoryMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: #94a3b8;
+  font: 500 11px/16px var(--font-sans);
+}
+
+.mobileHistoryMeta span {
+  flex: 0 0 auto;
+}
+
+.mobileHistoryMeta .mobileHistoryModel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
@@ -185,7 +259,7 @@
   }
 
   .main {
-    padding-bottom: 64px;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
   }
 
   .mobileTopbar {
@@ -206,6 +280,7 @@
   .canvas {
     overflow: auto;
     padding: 14px;
+    scroll-padding-bottom: 24px;
   }
 
   .composerWrap {
@@ -222,7 +297,7 @@
     grid-template-columns: repeat(3, 1fr);
     border-top: 1px solid var(--outline-variant);
     background: var(--surface-container-lowest);
-    padding: 6px 8px 8px;
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
   }
 
   .mobileNav button {

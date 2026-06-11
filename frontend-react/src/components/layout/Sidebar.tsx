@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { formatHistoryDateTime } from "../../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../../history/historyThreads";
 import { useChatStore } from "../../store/chatStore";
 import { useHistory } from "../../hooks/useHistory";
@@ -50,16 +51,24 @@ export function Sidebar({
         <p>LLM Gateway</p>
       </div>
 
-      <button id="historyNewChatBtn" type="button" className={styles.newChatButton} onClick={startNewChat}>
-        <span aria-hidden="true">+</span>
-        New Chat
-      </button>
+      <div className={styles.primaryAction}>
+        <button
+          id="historyNewChatBtn"
+          type="button"
+          className={styles.newChatButton}
+          onClick={startNewChat}
+        >
+          <Icon name="plus" />
+          <span>New chat</span>
+        </button>
+      </div>
 
       <nav className={styles.nav} aria-label="Workspace">
         <button
           type="button"
           className={mode === "single" ? styles.navItemActive : styles.navItem}
           onClick={() => setMode("single")}
+          aria-current={mode === "single" ? "page" : undefined}
         >
           <Icon name="ask" />
           <span>Ask</span>
@@ -68,6 +77,7 @@ export function Sidebar({
           type="button"
           className={mode === "compare" ? styles.navItemActive : styles.navItem}
           onClick={() => setMode("compare")}
+          aria-current={mode === "compare" ? "page" : undefined}
         >
           <Icon name="compare" />
           <span>Compare</span>
@@ -99,13 +109,22 @@ export function Sidebar({
                 className={thread.sessionId === sessionId ? styles.historyItemActive : undefined}
                 onClick={() => onSelectThread(thread)}
                 title={thread.title}
+                aria-current={thread.sessionId === sessionId ? "page" : undefined}
               >
-                <span>{thread.title}</span>
-                <small>
-                  {formatMode(thread.mode)} / {thread.turnCount} {thread.turnCount === 1 ? "turn" : "turns"}
-                </small>
-                <small>
-                  {thread.providerLabel}:{thread.modelLabel}
+                <span className={styles.historyItemTop}>
+                  <span>{formatMode(thread.mode)}</span>
+                  <time dateTime={thread.latestTimestamp}>
+                    {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
+                  </time>
+                </span>
+                <span className={styles.historyTitle}>{thread.title}</span>
+                <small className={styles.historyMeta}>
+                  <span>
+                    {thread.turnCount}{" "}
+                    {thread.turnCount === 1 ? "turn" : "turns"}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className={styles.historyModel}>{thread.modelLabel}</span>
                 </small>
               </button>
             </li>
@@ -118,6 +137,7 @@ export function Sidebar({
         className={styles.profile}
         onClick={loggedIn ? onLogout : onLogin}
         disabled={!loggedIn && !onLogin}
+        aria-label={loggedIn ? `Sign out ${userLabel}` : onLogin ? "Sign in" : "Guest account"}
       >
         <span className={styles.avatar} aria-hidden="true">
           {(userLabel[0] ?? "G").toUpperCase()}
@@ -137,9 +157,15 @@ function formatMode(mode: HistoryThread["mode"]): string {
   return "Mixed";
 }
 
-function Icon({ name }: { name: "ask" | "compare" }) {
+function Icon({ name }: { name: "plus" | "ask" | "compare" }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
+      {name === "plus" && (
+        <>
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </>
+      )}
       {name === "ask" && (
         <>
           <path d="M4 5h16v10H8l-4 4z" />

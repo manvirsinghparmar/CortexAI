@@ -1,0 +1,126 @@
+.loading {
+  display: grid;
+  width: min(100%, 640px);
+  min-height: 112px;
+  align-content: start;
+  gap: 22px;
+  color: var(--on-surface-variant);
+}
+
+.statusLine {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 10px;
+  font: 600 14px/20px var(--font-sans);
+}
+
+.message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sparkle {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--surface-container-low);
+  color: var(--secondary);
+  animation: sparklePulse 1.8s ease-in-out infinite;
+}
+
+.sparkle svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.skeleton {
+  display: grid;
+  gap: 11px;
+}
+
+.skeleton span {
+  position: relative;
+  display: block;
+  width: 88%;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-container);
+}
+
+.skeleton span:nth-child(2) {
+  width: 64%;
+}
+
+.skeleton span:nth-child(3) {
+  width: 78%;
+}
+
+.skeleton span::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 58%),
+    transparent
+  );
+  content: "";
+  transform: translateX(-100%);
+  animation: skeletonShimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes sparklePulse {
+  0%,
+  100% {
+    opacity: 0.68;
+    transform: scale(0.96);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes skeletonShimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 760px) {
+  .loading {
+    min-height: 104px;
+    gap: 18px;
+    padding-right: 42px;
+  }
+
+  .statusLine {
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .sparkle {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sparkle,
+  .skeleton span::after {
+    animation: none;
+  }
+
+  .skeleton span::after {
+    display: none;
+  }
+}

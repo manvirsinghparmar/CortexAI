@@ -1,8 +1,8 @@
 .root {
   position: relative;
   display: inline-flex;
-  min-width: 174px;
-  max-width: 230px;
+  min-width: 160px;
+  max-width: 200px;
   align-items: center;
 }
 
@@ -19,7 +19,7 @@
 .button {
   display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: 40px;
   align-items: center;
   gap: 9px;
   border: 1px solid var(--outline-variant);
@@ -27,7 +27,7 @@
   background: var(--surface-container-lowest);
   color: var(--on-surface);
   cursor: pointer;
-  padding: 6px 34px 6px 10px;
+  padding: 4px 30px 4px 8px;
   text-align: left;
 }
 
@@ -41,27 +41,6 @@
   border-color: var(--primary);
   outline: 2px solid rgb(0 0 0 / 14%);
   outline-offset: 1px;
-}
-
-.logo,
-.logoFallback {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
-}
-
-.logo {
-  border-radius: 5px;
-  object-fit: contain;
-}
-
-.logoFallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 5px;
-  color: white;
-  font: 700 10px/1 var(--font-sans);
 }
 
 .selectedText,
@@ -79,20 +58,20 @@
 }
 
 .selectedText strong {
-  font: 700 14px/17px var(--font-sans);
+  font: 700 13px/16px var(--font-sans);
   white-space: nowrap;
 }
 
 .selectedText small {
   color: var(--outline);
-  font: 500 11px/14px var(--font-sans);
+  font: 500 10px/13px var(--font-sans);
   white-space: nowrap;
 }
 
 .caret {
   position: absolute;
   top: 50%;
-  right: 13px;
+  right: 11px;
   width: 7px;
   height: 7px;
   border-right: 1.5px solid var(--on-surface-variant);
@@ -196,9 +175,9 @@
 
 @media (max-width: 760px) {
   .root {
-    min-width: min(174px, 100%);
+    min-width: 0;
     max-width: 100%;
-    flex: 1 1 174px;
+    flex: 1 1 0;
   }
 
   .menuCenter {

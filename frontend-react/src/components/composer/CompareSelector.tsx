@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ModelCatalogItem } from "../../types";
 import {
   removeCompareModelKey,
@@ -11,9 +12,15 @@ interface CompareSelectorProps {
   models: ModelCatalogItem[];
   keys: [string, string, string];
   onChange: (index: 0 | 1 | 2, key: string) => void;
+  trailingControls?: ReactNode;
 }
 
-export function CompareSelector({ models, keys, onChange }: CompareSelectorProps) {
+export function CompareSelector({
+  models,
+  keys,
+  onChange,
+  trailingControls,
+}: CompareSelectorProps) {
   const filledCount = keys.filter(Boolean).length;
   const canRemove = filledCount > 2;
   const canAdd = filledCount < 3;
@@ -53,6 +60,8 @@ export function CompareSelector({ models, keys, onChange }: CompareSelectorProps
             />
           ))}
       </div>
+
+      {trailingControls && <div className={styles.trailingControls}>{trailingControls}</div>}
 
       {canAdd && (
         <button

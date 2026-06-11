@@ -282,6 +282,8 @@ export interface ChatTurn {
   mode: ChatMode;
   prompt: string;
   submittedPrompt: string;
+  researchEnabled?: boolean;
+  optimizeEnabled?: boolean;
   attachments: FileUploadResponse[];
   responses: ChatResponse[];
   status: TurnStatus;

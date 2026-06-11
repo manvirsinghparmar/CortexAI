@@ -251,8 +251,15 @@ COMPARE_TARGETS = [
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 - **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
+- **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript. With multiple turns, each comparison remains 480-620px tall, the transcript scrolls vertically, and every model response retains its own internal scrollbar. Mobile remains stacked in natural page flow.
+- **Shared Prompt Presentation**: Compare prompts use the same right-aligned `You` bubble as Ask mode, including attachment and prompt-optimization states. Aggregate Compare totals render separately.
+- **New-Turn Reveal**: Submitting a Compare follow-up always smoothly reveals that new question once, even when the user was viewing an older turn. Streaming response growth does not continuously move the transcript; `Jump to latest` remains user-controlled.
+- **Independent Response Readiness**: Every browser response card shows the shared provider/model logo treatment and owns its own calm loading state. As soon as one model streams text or returns an error, only that card leaves the loading state; slower targets continue showing their source/improvement-aware skeleton.
+- **Compact Compare Composer**: The React composer starts as a single-line prompt, expands only for longer input, and relies on the main Ask/Compare navigation instead of duplicating a mode switch beside Send. On narrow screens, active model chips stay in their options row and scroll horizontally when a third model is added.
+- **Purposeful Empty State**: Before the first turn, Compare mode explains the ask-once, multi-model workflow and the value of comparing accuracy, depth, speed, tone, and usefulness. Three practical examples fill the prompt without submitting or changing the selected models.
+- **Controlled Response Rhythm**: Compare card titles, metadata, paragraphs, Markdown headings, and lists use a restrained type scale and tighter spacing so long model outputs remain readable without excessive vertical gaps.
 
 ---
 
-**Last Updated:** 2026-05-12
+**Last Updated:** 2026-06-11
 **Applies To:** OpenAI Project v2.0+

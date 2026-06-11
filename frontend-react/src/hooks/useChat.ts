@@ -63,6 +63,9 @@ export function useChat() {
           mode: state.mode,
           prompt: rawPrompt,
           submittedPrompt: rawPrompt,
+          researchEnabled:
+            state.mode === "compare" ? state.compareResearchMode : state.researchMode,
+          optimizeEnabled: true,
           attachments,
           responses: [],
           status: "optimizing",
@@ -186,6 +189,8 @@ async function runAskTurn({
       mode: "single",
       prompt,
       submittedPrompt,
+      researchEnabled: state.researchMode,
+      optimizeEnabled: !!optimization,
       attachments,
       responses: [placeholder],
     });
@@ -288,6 +293,8 @@ async function runCompareTurn({
       mode: "compare",
       prompt,
       submittedPrompt,
+      researchEnabled: state.compareResearchMode,
+      optimizeEnabled: !!optimization,
       attachments,
       responses: placeholders,
     });

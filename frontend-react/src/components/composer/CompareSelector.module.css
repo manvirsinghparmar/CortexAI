@@ -1,23 +1,24 @@
 .wrap {
   display: flex;
+  min-width: 0;
+  flex: 1;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
+  gap: 12px;
+  width: auto;
 }
 
 .chips {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-wrap: nowrap;
+  gap: 8px;
 }
 
 .chip {
   position: relative;
   display: inline-flex;
-  min-width: 174px;
-  max-width: 230px;
+  min-width: 160px;
+  max-width: 200px;
   align-items: center;
 }
 
@@ -62,6 +63,12 @@
   white-space: nowrap;
 }
 
+.trailingControls {
+  display: flex;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .addButton svg {
   width: 20px;
   height: 20px;
@@ -78,18 +85,34 @@
 
 @media (max-width: 760px) {
   .wrap {
-    align-items: flex-start;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
     gap: 10px;
-  }
-
-  .chips {
     width: 100%;
   }
 
+  .chips {
+    grid-column: 1 / -1;
+    width: 100%;
+    overflow-x: auto;
+    padding: 2px 2px 4px;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+
   .chip {
-    min-width: min(174px, 100%);
-    max-width: 100%;
-    flex: 1 1 174px;
+    min-width: 150px;
+    max-width: 200px;
+    flex: 1 0 150px;
+    scroll-snap-align: start;
+  }
+
+  .trailingControls {
+    margin-left: 0;
   }
 }

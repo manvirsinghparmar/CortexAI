@@ -51,25 +51,6 @@ export function AttachmentStrip() {
 
   return (
     <div className={styles.strip}>
-      <button
-        type="button"
-        className={styles.addBtn}
-        aria-label="Attach files"
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <Icon />
-      </button>
-
-      <input
-        ref={fileInputRef}
-        id="attachmentInput"
-        type="file"
-        multiple
-        accept={ACCEPTED}
-        className={styles.hiddenInput}
-        onChange={(e) => void handleFiles(e.target.files)}
-      />
-
       {attachments.length > 0 && (
         <ul className={styles.list} aria-live="polite">
           {attachments.map((a) => (
@@ -92,6 +73,25 @@ export function AttachmentStrip() {
           ))}
         </ul>
       )}
+
+      <button
+        type="button"
+        className={styles.addBtn}
+        aria-label="Attach files"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <Icon />
+      </button>
+
+      <input
+        ref={fileInputRef}
+        id="attachmentInput"
+        type="file"
+        multiple
+        accept={ACCEPTED}
+        className={styles.hiddenInput}
+        onChange={(e) => void handleFiles(e.target.files)}
+      />
     </div>
   );
 }

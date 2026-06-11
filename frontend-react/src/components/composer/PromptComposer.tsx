@@ -18,7 +18,6 @@ interface PromptComposerProps {
 export function PromptComposer({ models }: PromptComposerProps) {
   const availableModels = models.length > 0 ? models : DEFAULT_MODELS;
   const mode = useChatStore((s) => s.mode);
-  const setMode = useChatStore((s) => s.setMode);
   const smartMode = useChatStore((s) => s.smartMode);
   const setSmartMode = useChatStore((s) => s.setSmartMode);
   const researchMode = useChatStore((s) => s.researchMode);
@@ -42,8 +41,10 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const resize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+    el.style.height = "0px";
+    const nextHeight = Math.min(Math.max(el.scrollHeight, 44), 160);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, []);
 
   useEffect(() => {
@@ -72,52 +73,35 @@ export function PromptComposer({ models }: PromptComposerProps) {
   };
 
   const showModelDropdown = isModelDropdownVisible(mode, smartMode);
+  const showModelRow = mode === "compare" || showModelDropdown;
 
   return (
-    <div className={`${styles.card} ${mode === "single" ? styles.askCard : ""}`}>
-      <div className={styles.modelRow}>
-        {mode === "compare" ? (
-          <>
+    <div
+      className={`${styles.card} ${
+        mode === "compare" ? styles.compareCard : ""
+      }`}
+    >
+      {showModelRow && (
+        <div className={styles.modelRow}>
+          {mode === "compare" ? (
             <CompareSelector
               models={availableModels}
               keys={compareModelKeys}
               onChange={setCompareModelKey}
             />
-            <FeatureChips
-              compareMode
-              smartMode={false}
-              researchMode={compareResearchMode}
-              optimizeMode={optimizeMode}
-              onSmartToggle={() => undefined}
-              onResearchToggle={setCompareResearchMode}
-              onOptimizeToggle={setOptimizeMode}
+          ) : (
+            <ModelSelector
+              id="singleModel"
+              label="Using"
+              models={availableModels}
+              value={selectedModelKey}
+              onChange={setSelectedModelKey}
             />
-          </>
-        ) : (
-          <>
-            {showModelDropdown && (
-              <ModelSelector
-                id="singleModel"
-                label="Using"
-                models={availableModels}
-                value={selectedModelKey}
-                onChange={setSelectedModelKey}
-              />
-            )}
-            <FeatureChips
-              smartMode={smartMode}
-              researchMode={researchMode}
-              optimizeMode={optimizeMode}
-              onSmartToggle={setSmartMode}
-              onResearchToggle={setResearchMode}
-              onOptimizeToggle={setOptimizeMode}
-            />
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      <div className={styles.inputRow}>
-        <AttachmentStrip />
+      <div className={styles.composerBody}>
         <textarea
           ref={textareaRef}
           id="promptInput"
@@ -130,21 +114,28 @@ export function PromptComposer({ models }: PromptComposerProps) {
           disabled={streaming}
           placeholder={
             mode === "compare"
-              ? "Ask anything to compare models..."
-              : "Describe your technical problem or paste a snippet..."
+              ? "Ask once and compare model responses"
+              : "What would you like help with today?"
           }
         />
 
+        <AttachmentStrip />
+
+        <div className={styles.featureControls}>
+          <FeatureChips
+            compareMode={mode === "compare"}
+            smartMode={mode === "single" ? smartMode : false}
+            researchMode={mode === "compare" ? compareResearchMode : researchMode}
+            optimizeMode={optimizeMode}
+            onSmartToggle={mode === "single" ? setSmartMode : () => undefined}
+            onResearchToggle={
+              mode === "compare" ? setCompareResearchMode : setResearchMode
+            }
+            onOptimizeToggle={setOptimizeMode}
+          />
+        </div>
+
         <div className={styles.actions}>
-          <label className={styles.compareSwitch}>
-            <span>Compare</span>
-            <input
-              type="checkbox"
-              checked={mode === "compare"}
-              onChange={(event) => setMode(event.target.checked ? "compare" : "single")}
-            />
-            <span className={styles.switchTrack} aria-hidden="true" />
-          </label>
           <button
             className={styles.submitButton}
             type="button"

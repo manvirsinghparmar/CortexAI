@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ModelCatalogItem } from "../../types";
 import { getModelPresentation } from "../../config/modelPresentation";
+import { ProviderLogo } from "../shared/ProviderLogo";
 import styles from "./ModelPicker.module.css";
 
 export type ModelPickerPlacement = "up" | "down";
@@ -122,6 +123,7 @@ export function ModelPicker({
           provider={selectedModel.provider}
           logoUrl={selectedMeta.logoUrl}
           color={selectedMeta.color}
+          size={20}
         />
         <span className={styles.selectedText}>
           <strong>{selectedMeta.label}</strong>
@@ -161,6 +163,7 @@ export function ModelPicker({
                   provider={model.provider}
                   logoUrl={meta.logoUrl}
                   color={meta.color}
+                  size={20}
                 />
                 <span className={styles.optionText}>
                   <strong>{meta.label}</strong>
@@ -173,42 +176,6 @@ export function ModelPicker({
         </div>
       )}
     </span>
-  );
-}
-
-function ProviderLogo({
-  provider,
-  logoUrl,
-  color,
-}: {
-  provider: string;
-  logoUrl: string;
-  color: string;
-}) {
-  const [failed, setFailed] = useState(false);
-  if (!logoUrl || failed) {
-    return (
-      <span
-        className={styles.logoFallback}
-        style={{ backgroundColor: color }}
-        aria-hidden="true"
-      >
-        {(provider[0] ?? "M").toUpperCase()}
-      </span>
-    );
-  }
-  return (
-    <img
-      className={styles.logo}
-      src={logoUrl}
-      alt=""
-      width="20"
-      height="20"
-      loading="lazy"
-      decoding="async"
-      aria-hidden="true"
-      onError={() => setFailed(true)}
-    />
   );
 }
 

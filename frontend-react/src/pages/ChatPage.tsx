@@ -5,6 +5,7 @@ import { ResultsSection } from "../components/results/ResultsSection";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { ExampleChips } from "../components/shared/ExampleChips";
 import { Sidebar } from "../components/layout/Sidebar";
+import { formatHistoryDateTime } from "../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
@@ -192,6 +193,7 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
   const historySearch = useChatStore((s) => s.historySearch);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const startNewChat = useChatStore((s) => s.startNewChat);
+  const sessionId = useChatStore((s) => s.sessionId);
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch);
   }, [history, historySearch]);
@@ -199,7 +201,8 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
   return (
     <section className={styles.mobileHistory} aria-label="History">
       <button type="button" className={styles.mobileNewChat} onClick={startNewChat}>
-        New Chat
+        <Icon name="plus" />
+        <span>New chat</span>
       </button>
       <input
         id="mobileHistorySearch"
@@ -211,14 +214,26 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
       <ul>
         {filteredThreads.map((thread) => (
           <li key={thread.key}>
-            <button type="button" onClick={() => onSelectThread(thread)}>
-              <span>{thread.title}</span>
-              <small>
-                {formatHistoryMode(thread.mode)} / {thread.turnCount}{" "}
-                {thread.turnCount === 1 ? "turn" : "turns"}
-              </small>
-              <small>
-                {thread.providerLabel}:{thread.modelLabel}
+            <button
+              type="button"
+              className={thread.sessionId === sessionId ? styles.mobileHistoryActive : ""}
+              onClick={() => onSelectThread(thread)}
+              aria-current={thread.sessionId === sessionId ? "page" : undefined}
+            >
+              <span className={styles.mobileHistoryTop}>
+                <span>{formatHistoryMode(thread.mode)}</span>
+                <time dateTime={thread.latestTimestamp}>
+                  {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
+                </time>
+              </span>
+              <span className={styles.mobileHistoryTitle}>{thread.title}</span>
+              <small className={styles.mobileHistoryMeta}>
+                <span>
+                  {thread.turnCount}{" "}
+                  {thread.turnCount === 1 ? "turn" : "turns"}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>
               </small>
             </button>
           </li>

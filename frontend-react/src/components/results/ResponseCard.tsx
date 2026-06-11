@@ -1,24 +1,44 @@
 import { useMemo, useState } from "react";
 import type { HTMLAttributes, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import { getModelPresentation } from "../../config/modelPresentation";
 import type { ChatResponse } from "../../types";
+import { ProviderLogo } from "../shared/ProviderLogo";
+import {
+  ResponseLoadingState,
+  type ResponseLoadingMode,
+} from "./ResponseLoadingState";
 import styles from "./ResponseCard.module.css";
 
 interface ResponseCardProps {
   response: ChatResponse;
   isStreaming?: boolean;
   slotIndex?: number;
+  compact?: boolean;
+  loadingMode?: ResponseLoadingMode;
+  researchEnabled?: boolean;
+  optimizeEnabled?: boolean;
 }
 
-export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseCardProps) {
-  const [sourcesOpen, setSourcesOpen] = useState(response.web_source_items.length > 0);
+export function ResponseCard({
+  response,
+  isStreaming,
+  slotIndex = 0,
+  compact = false,
+  loadingMode = "ask",
+  researchEnabled = false,
+  optimizeEnabled = false,
+}: ResponseCardProps) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const hasError = !!response.error;
   const softError = response.error?.details?.kind === "transient_capacity";
   const badge = getModelBadge(response.provider, response.model);
+  const modelPresentation = getModelPresentation(response.provider, response.model);
   const totalTokens = response.token_usage.total_tokens;
   const responseText = hasError ? errorMessage(response) : response.text;
+  const showLoading = !hasError && !responseText && !!isStreaming;
   const sourceBaseId = useMemo(() => `cite-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`, [
     response.request_id,
   ]);
@@ -31,13 +51,27 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
 
   return (
     <article
-      className={`${styles.card} ${hasError ? styles.errorCard : ""} ${
+      className={`${styles.card} ${compact ? styles.compact : ""} ${
+        hasError ? styles.errorCard : ""
+      } ${
         softError ? styles.softErrorCard : ""
       }`}
     >
       <header className={styles.header}>
         <div className={styles.titleRow}>
-          <h2>{response.model || response.provider}</h2>
+          <div className={styles.modelHeader}>
+            <ProviderLogo
+              provider={response.provider}
+              logoUrl={modelPresentation.logoUrl}
+              color={modelPresentation.color}
+              size={26}
+              className={styles.modelLogo}
+            />
+            <div className={styles.modelIdentity}>
+              <h2>{modelPresentation.label}</h2>
+              <span>{response.model || response.provider}</span>
+            </div>
+          </div>
           <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
         </div>
         <div className={styles.metaRow}>
@@ -62,6 +96,12 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
             <span aria-hidden="true">!</span>
             {errorMessage(response)}
           </div>
+        ) : showLoading ? (
+          <ResponseLoadingState
+            mode={loadingMode}
+            researchEnabled={researchEnabled}
+            optimizeEnabled={optimizeEnabled}
+          />
         ) : (
           <ReactMarkdown
             components={{
@@ -76,10 +116,10 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
               code: CodeBlock,
             }}
           >
-            {responseText || "Waiting for response..."}
+            {responseText}
           </ReactMarkdown>
         )}
-        {isStreaming && <span className={styles.cursor} aria-hidden="true" />}
+        {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
 
       <footer className={styles.actions}>
@@ -88,13 +128,21 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
           className={styles.actionButton}
           onClick={() => setSourcesOpen((open) => !open)}
           disabled={response.web_source_items.length === 0}
+          aria-label="Resources"
+          title="Resources"
           aria-expanded={sourcesOpen}
           aria-controls={`response-sources-${slotIndex}`}
         >
           <Icon name="resources" />
           <span>Resources</span>
         </button>
-        <button type="button" className={styles.actionButton} onClick={() => void copyResponse()}>
+        <button
+          type="button"
+          className={styles.actionButton}
+          aria-label={copied ? "Copied response" : "Copy response"}
+          title={copied ? "Copied" : "Copy response"}
+          onClick={() => void copyResponse()}
+        >
           <Icon name="copy" />
           <span>{copied ? "Copied" : "Copy"}</span>
         </button>
@@ -102,6 +150,7 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
           type="button"
           className={`${styles.iconOnly} ${feedback === "up" ? styles.selectedAction : ""}`}
           aria-label="Helpful response"
+          title="Helpful response"
           onClick={() => setFeedback(feedback === "up" ? null : "up")}
         >
           <Icon name="thumbUp" />
@@ -110,6 +159,7 @@ export function ResponseCard({ response, isStreaming, slotIndex = 0 }: ResponseC
           type="button"
           className={`${styles.iconOnly} ${feedback === "down" ? styles.selectedAction : ""}`}
           aria-label="Not helpful response"
+          title="Not helpful response"
           onClick={() => setFeedback(feedback === "down" ? null : "down")}
         >
           <Icon name="thumbDown" />

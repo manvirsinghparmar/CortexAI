@@ -266,23 +266,33 @@ Frontend runtime config (`/runtime-config.js`):
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; background history failures do not surface as the primary chat error banner.
-- History sidebar cards render one row per `session_id`, aggregate compact thread metadata, and search across every persisted turn in the session. Token counts are hidden in the sidebar UI.
+- The React sidebar uses a compact light navigation rail with subtle Ask/Compare and current-session states. History renders as borderless rows grouped by `session_id`, shows the latest activity date using legacy-compatible Today/Yesterday/calendar formatting, aggregates compact thread metadata, and searches across every persisted turn; token counts remain hidden.
 - Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - A fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - React Ask and Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` so follow-ups continue the selected thread and New Chat starts a new backend session.
 - React Compare mode uses `/v1/compare/stream`, defaults the `With sources` toggle on for new page sessions, and streams each model response into its own column.
 - On desktop, each React Compare response column has its own vertical response scrollbar while the comparison canvas handles horizontal overflow. Mobile keeps the model cards stacked in normal page flow.
+- A single desktop Compare turn fills the available transcript height. When a session contains multiple turns, each Compare turn stays within a readable 480-620px panel and the main transcript becomes vertically scrollable instead of shrinking response bodies.
+- React Compare renders submitted prompts with the same right-aligned user bubble used by Ask mode. Aggregate result totals remain in a separate compact row, while model cards keep friendly names, exact API model IDs, and compact icon actions.
+- React Ask and Compare use one rounded composer shell with a borderless textarea that starts at one line and auto-grows to a bounded height. Attachments stay above the compact routing controls and fixed-size send action; mode changes remain in the app navigation rather than a redundant composer switch. Compare model selectors stay in the options row and scroll horizontally when a third model exceeds the mobile width.
+- On mobile, the composer keeps 12px side margins, grows upward when attachments are added, preserves the textarea width, and stays clear of the fixed Ask/Compare/History navigation.
 - React file upload uses the current raw-byte `POST /v1/files/upload` contract, polls `GET /v1/files/{file_id}` while uploads are processing, and sends attachment IDs on Ask/Compare requests.
 - Compare response cards use compact footers while the compare summary bar carries aggregate tokens, usage, and success counts.
+- Ask and Compare response headers use the same shared provider-logo and model-presentation resolver as the model picker. Failed or unavailable logo assets retain a provider-initial fallback instead of leaving a blank header.
+- Empty streaming cards render an independent request-aware loading state with a subtle sparkle and skeleton lines. Ask, Compare, source-enabled, and prompt-improved turns use contextual copy, and the loading block disappears when that card receives its first token or error.
 - Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
+- Response sources start collapsed and render only after the user opens the Resources control.
 - Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
 - React response Markdown includes response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, and sanitized provider error states.
 - Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text.
+- Whenever a new Ask or Compare turn is submitted, React performs one smooth reveal of that new turn so the submitted question becomes visible even when the user was viewing an older turn.
 - Streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
-- React frontend uses the Alabaster Minimal workspace shell: fixed left navigation, top Ask/Compare tabs, prompt starter landing, horizontal compare canvas, unified bottom composer, and mobile Ask/Compare/History navigation.
+- React frontend uses the Alabaster Minimal workspace shell: a quiet 272px desktop navigation rail, top Ask/Compare tabs, prompt starter landing, horizontal compare canvas, unified bottom composer, and visually aligned mobile Ask/Compare/History navigation.
+- The empty Ask workspace introduces CortexAI as a place for answers, file analysis, content work, and model comparison, then offers four actionable prompts covering debugging, document summaries, writing refinement, and file analysis. Example selection fills the composer without submitting automatically.
+- The empty Compare workspace explains the ask-once, multi-model workflow and highlights accuracy, depth, speed, tone, and usefulness as comparison dimensions. Three responsive examples cover system design, debugging, and model review; selection fills the Compare composer without changing selected models or submitting.
 - Frontend model selectors fall back to a bundled display catalog when `/v1/models` is unavailable, so local UI controls remain usable while backend/session setup is incomplete.
-- Compare response cards render as full-height model columns with model badges, latency, token metadata, and readable markdown bodies.
-- The composer keeps active compare models as removable chips, exposes Add Model from the same row, and includes the Ask/Compare switch plus send action.
+- Compare response cards render as full-height model columns with model badges, latency, token metadata, and compact readable markdown bodies with restrained headings and list spacing.
+- The composer keeps active compare models as removable chips and exposes Add Model from the same options row without separating the prompt, attachments, feature controls, or send action into independent boxes.
 
 ## Authentication
 

@@ -52,6 +52,23 @@ describe("CompareSelector", () => {
     expect(onChange).toHaveBeenCalledWith(0, "gemini:gemini-2.5-flash");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
+
+  it("keeps optional feature controls inside the compare toolbar", () => {
+    render(
+      <CompareSelector
+        models={models}
+        keys={["openai:gpt-5.1", "claude:claude-sonnet-4-5", ""]}
+        onChange={vi.fn()}
+        trailingControls={<button type="button">Improve</button>}
+      />,
+    );
+
+    const toolbar = screen.getByLabelText("Compare model selectors");
+    expect(within(toolbar).getByRole("button", { name: "Improve" })).toBeInTheDocument();
+    expect(
+      within(toolbar).getByRole("button", { name: "Add model to comparison" }),
+    ).toBeInTheDocument();
+  });
 });
 
 function model(provider: string, name: string): ModelCatalogItem {

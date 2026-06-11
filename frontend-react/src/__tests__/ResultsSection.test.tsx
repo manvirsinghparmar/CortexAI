@@ -1,0 +1,250 @@
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ResultsSection } from "../components/results/ResultsSection";
+import { useChatStore } from "../store/chatStore";
+import type { ChatResponse, ChatTurn } from "../types";
+
+const originalScrollTo = HTMLElement.prototype.scrollTo;
+
+describe("ResultsSection layout states", () => {
+  afterEach(() => {
+    cleanup();
+    useChatStore.getState().startNewChat();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: originalScrollTo,
+    });
+  });
+
+  it("keeps one Compare turn in the full-height transcript layout", () => {
+    setTurns([compareTurn("compare-1", "First comparison")]);
+
+    render(<ResultsSection />);
+
+    const transcriptGrid = screen.getByLabelText("Chat transcript").firstElementChild;
+    const comparison = screen.getByLabelText("Model comparison");
+    expect(transcriptGrid?.className).toContain("oneTurnGrid");
+    expect(comparison.className).not.toContain("constrainedCompareTurn");
+  });
+
+  it("constrains each Compare turn when the transcript contains multiple turns", () => {
+    setTurns([
+      compareTurn("compare-1", "First comparison"),
+      compareTurn("compare-2", "Second comparison"),
+    ]);
+
+    render(<ResultsSection />);
+
+    const transcriptGrid = screen.getByLabelText("Chat transcript").firstElementChild;
+    expect(transcriptGrid?.className).toContain("multiTurnGrid");
+    for (const comparison of screen.getAllByLabelText("Model comparison")) {
+      expect(comparison.className).toContain("constrainedCompareTurn");
+    }
+  });
+
+  it("leaves Ask turns content-sized in a mixed multi-turn transcript", () => {
+    setTurns([
+      askTurn("ask-1", "Ask question"),
+      compareTurn("compare-1", "Compare follow-up"),
+    ]);
+
+    render(<ResultsSection />);
+
+    const askMessage = document.querySelector("#chat-msg-0");
+    const askArticle = askMessage?.closest("article");
+    const comparison = screen.getByLabelText("Model comparison");
+    expect(askArticle?.className).not.toContain("constrainedCompareTurn");
+    expect(comparison.className).toContain("constrainedCompareTurn");
+  });
+
+  it("renders Compare prompts with the same user bubble as Ask prompts", () => {
+    setTurns([
+      askTurn("ask-1", "Ask question"),
+      compareTurn("compare-1", "Compare question"),
+    ]);
+
+    render(<ResultsSection />);
+
+    const askPrompt = screen.getByText("Ask question").closest("div");
+    const comparePrompt = screen.getByText("Compare question").closest("div");
+    expect(askPrompt?.className).toContain("userBubble");
+    expect(comparePrompt?.className).toBe(askPrompt?.className);
+    expect(screen.getAllByText("You")).toHaveLength(2);
+    expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
+  });
+
+  it("keeps Compare loading states independent per model", () => {
+    const turn = compareTurn("compare-streaming", "Compare streaming");
+    turn.status = "streaming";
+    turn.responses = [
+      { ...turn.responses[0]!, text: "GPT has started responding." },
+      { ...turn.responses[1]!, text: "" },
+    ];
+    setTurns([turn]);
+
+    render(<ResultsSection />);
+
+    expect(screen.getByText("GPT has started responding.")).toBeInTheDocument();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Generating response\u2026");
+  });
+
+  it("uses the submitted turn flags for source-enabled Ask loading copy", () => {
+    const turn = askTurn("ask-streaming", "Research this");
+    turn.status = "streaming";
+    turn.researchEnabled = true;
+    turn.responses = [{ ...turn.responses[0]!, text: "" }];
+    setTurns([turn]);
+
+    render(<ResultsSection />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking sources and preparing an answer\u2026",
+    );
+  });
+
+  it.each([
+    ["Ask", askTurn("ask-1", "First Ask"), askTurn("ask-2", "Latest Ask")],
+    [
+      "Compare",
+      compareTurn("compare-1", "First comparison"),
+      compareTurn("compare-2", "Latest comparison"),
+    ],
+  ])("reveals every newly submitted %s turn", async (_, first, latest) => {
+    const scrollTo = mockTranscriptScroll();
+    setTurns([first]);
+    render(<ResultsSection />);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    await settleScrollFollowUp();
+    scrollTo.mockClear();
+
+    act(() => setTurns([first, latest]));
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(document.querySelector(`[data-turn-id="${latest.id}"]`)).toBeInTheDocument();
+  });
+
+  it("does not keep scrolling when the active response grows", async () => {
+    const scrollTo = mockTranscriptScroll();
+    const first = compareTurn("compare-1", "First comparison");
+    const latest = compareTurn("compare-2", "Latest comparison");
+    setTurns([first]);
+    render(<ResultsSection />);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    await settleScrollFollowUp();
+    scrollTo.mockClear();
+
+    act(() => setTurns([first, latest]));
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    await settleScrollFollowUp();
+    scrollTo.mockClear();
+
+    act(() => {
+      useChatStore
+        .getState()
+        .appendTurnResponseText(latest.id, 0, " Additional streamed response text.");
+    });
+    await settleScrollFollowUp();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("reveals a newly submitted turn even when the user was viewing an older turn", async () => {
+    const scrollTo = mockTranscriptScroll();
+    const first = askTurn("ask-1", "First Ask");
+    const latest = askTurn("ask-2", "Latest Ask");
+    setTurns([first]);
+    render(<ResultsSection />);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    await settleScrollFollowUp();
+    scrollTo.mockClear();
+
+    act(() => setTurns([first, latest]));
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(document.querySelector(`[data-turn-id="${latest.id}"]`)).toBeInTheDocument();
+  });
+});
+
+function setTurns(turns: ChatTurn[]) {
+  useChatStore.setState({
+    turns,
+    activeTurnId: turns.at(-1)?.id ?? null,
+    responses: turns.at(-1)?.responses ?? [],
+    streaming: false,
+  });
+}
+
+function compareTurn(id: string, prompt: string): ChatTurn {
+  const responses = [
+    response(`${id}-openai`, "openai", "gpt-5.1"),
+    response(`${id}-claude`, "claude", "claude-sonnet-4-5"),
+  ];
+  return {
+    id,
+    mode: "compare",
+    prompt,
+    submittedPrompt: prompt,
+    attachments: [],
+    responses,
+    status: "complete",
+    createdAt: "2026-06-09T00:00:00.000Z",
+    requestGroupId: `${id}-group`,
+    compareSummary: {
+      request_group_id: `${id}-group`,
+      responses,
+      success_count: 2,
+      error_count: 0,
+      total_tokens: 120,
+      total_cost: 0.002,
+      timestamp: "2026-06-09T00:00:00.000Z",
+    },
+  };
+}
+
+function askTurn(id: string, prompt: string): ChatTurn {
+  return {
+    id,
+    mode: "single",
+    prompt,
+    submittedPrompt: prompt,
+    attachments: [],
+    responses: [response(`${id}-response`, "openai", "gpt-5.1")],
+    status: "complete",
+    createdAt: "2026-06-09T00:00:00.000Z",
+  };
+}
+
+function response(requestId: string, provider: string, model: string): ChatResponse {
+  return {
+    request_id: requestId,
+    text: "A long response remains inside its own scrollable card body.",
+    provider,
+    model,
+    latency_ms: 320,
+    token_usage: {
+      prompt_tokens: 20,
+      completion_tokens: 40,
+      total_tokens: 60,
+    },
+    estimated_cost: 0.001,
+    cost_currency: "USD",
+    web_source_items: [],
+    timestamp: "2026-06-09T00:00:00.000Z",
+  };
+}
+
+function mockTranscriptScroll() {
+  const scrollTo = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  return scrollTo;
+}
+
+async function settleScrollFollowUp() {
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+  });
+}

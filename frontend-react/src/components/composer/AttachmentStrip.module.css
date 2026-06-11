@@ -1,31 +1,32 @@
 .strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  display: contents;
 }
 
 .addBtn {
   display: inline-flex;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
+  grid-column: 1;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
-  color: var(--outline);
+  color: #64748b;
   cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
 }
 
 .addBtn:hover {
-  background: var(--surface-container);
-  color: var(--primary);
+  background: #f1f5f9;
+  color: #0f172a;
 }
 
 .addBtn svg {
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -39,29 +40,35 @@
 
 .list {
   display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
-  gap: 6px;
-  list-style: none;
+  gap: 7px;
   margin: 0;
-  padding: 0;
+  padding: 0 2px 9px;
+  list-style: none;
 }
 
 .item {
   display: flex;
+  max-width: min(100%, 420px);
+  height: 32px;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   border-radius: 999px;
-  background: var(--surface-container);
-  color: var(--on-surface);
+  background: #f1f5f9;
+  color: #334155;
   font: 500 12px/16px var(--font-sans);
-  padding: 5px 8px 5px 10px;
+  padding: 0 8px 0 10px;
 }
 
 .item :global(.attachment-chip) {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
   border-radius: 999px;
-  background: var(--outline);
+  background: #94a3b8;
 }
 
 .item :global(.is-ready) {
@@ -77,30 +84,69 @@
 }
 
 .fileName {
-  max-width: 140px;
+  min-width: 0;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.status,
+.fileSize {
+  flex: 0 0 auto;
+  color: #94a3b8;
+}
+
 .status {
-  color: var(--outline);
   text-transform: capitalize;
 }
 
-.fileSize {
-  color: var(--outline);
-}
-
 .removeBtn {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
   border: 0;
+  border-radius: 999px;
   background: transparent;
-  color: var(--on-surface-variant);
+  color: #64748b;
   cursor: pointer;
-  font: 700 14px/1 var(--font-sans);
+  font: 700 15px/1 var(--font-sans);
   padding: 0;
 }
 
 .removeBtn:hover {
-  color: var(--primary);
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+@media (max-width: 767px) {
+  .list {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .item {
+    max-width: 100%;
+  }
+
+  .fileName {
+    max-width: min(48vw, 180px);
+  }
+
+  .status {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .fileSize {
+    display: none;
+  }
+
+  .fileName {
+    max-width: 58vw;
+  }
 }

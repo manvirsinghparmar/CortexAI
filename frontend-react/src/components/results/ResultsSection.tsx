@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { ResponseCard } from "./ResponseCard";
@@ -7,8 +7,59 @@ import styles from "./ResultsSection.module.css";
 export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
   const sectionRef = useRef<HTMLElement | null>(null);
+  const turnRefs = useRef(new Map<string, HTMLElement>());
+  const previousTurnsRef = useRef({ count: 0, lastId: "" });
+  const hasMultipleTurns = turns.length > 1;
+  const latestTurnId = turns.at(-1)?.id ?? "";
+  const turnCount = turns.length;
+
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    const previousTurns = previousTurnsRef.current;
+    const latestTurnChanged = !!latestTurnId && latestTurnId !== previousTurns.lastId;
+    let frameId: number | null = null;
+    let followUpTimer: number | null = null;
+
+    const revealLatestTurn = () => {
+      if (!section || !latestTurnId) return;
+      const target = turnRefs.current.get(latestTurnId);
+      if (!target) return;
+      const sectionRect = section.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = section.scrollTop + targetRect.top - sectionRect.top;
+      const top = Math.max(0, targetTop);
+      if (typeof section.scrollTo === "function") {
+        section.scrollTo({ top, behavior: "smooth" });
+      } else {
+        section.scrollTop = top;
+      }
+    };
+
+    if (latestTurnChanged) {
+      frameId = window.requestAnimationFrame(revealLatestTurn);
+      followUpTimer = window.setTimeout(revealLatestTurn, 96);
+    }
+
+    previousTurnsRef.current = {
+      count: turnCount,
+      lastId: latestTurnId,
+    };
+
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      if (followUpTimer !== null) window.clearTimeout(followUpTimer);
+    };
+  }, [latestTurnId, turnCount]);
 
   if (turns.length === 0) return null;
+
+  const registerTurn = (turnId: string, node: HTMLElement | null) => {
+    if (node) {
+      turnRefs.current.set(turnId, node);
+    } else {
+      turnRefs.current.delete(turnId);
+    }
+  };
 
   return (
     <section
@@ -17,26 +68,28 @@ export function ResultsSection() {
       aria-live="polite"
       aria-label="Chat transcript"
     >
-      <div className={styles.singleGrid}>
+      <div
+        className={`${styles.singleGrid} ${
+          hasMultipleTurns ? styles.multiTurnGrid : styles.oneTurnGrid
+        }`}
+      >
         {turns.map((turn, turnIndex) =>
           turn.mode === "compare" ? (
-            <CompareTurn key={turn.id} turn={turn} />
+            <CompareTurn
+              key={turn.id}
+              turn={turn}
+              turnIndex={turnIndex}
+              constrained={hasMultipleTurns}
+              registerTurn={registerTurn}
+            />
           ) : (
-            <article key={turn.id} className={`${styles.turn} ${styles.singleTurn}`}>
-              <div
-                id={`chat-msg-${turnIndex}`}
-                className={`${styles.userBubble} ${
-                  turn.optimization ? styles.optimizationBubble : ""
-                }`}
-              >
-                <span>You</span>
-                {turn.optimization ? (
-                  <OptimizationPrompt turn={turn} />
-                ) : (
-                  <p>{turn.prompt || "Analyze the attached file(s)."}</p>
-                )}
-                <TurnAttachments turn={turn} />
-              </div>
+            <article
+              key={turn.id}
+              ref={(node) => registerTurn(turn.id, node)}
+              data-turn-id={turn.id}
+              className={`${styles.turn} ${styles.singleTurn}`}
+            >
+              <TurnPrompt turn={turn} turnIndex={turnIndex} />
               {turn.status !== "optimizing" &&
                 turn.responses.map((response, responseIndex) => (
                   <ResponseCard
@@ -44,6 +97,9 @@ export function ResultsSection() {
                     response={response}
                     isStreaming={turn.status === "streaming"}
                     slotIndex={responseIndex}
+                    loadingMode="ask"
+                    researchEnabled={turn.researchEnabled}
+                    optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
                   />
                 ))}
             </article>
@@ -70,20 +126,27 @@ export function ResultsSection() {
   );
 }
 
-function CompareTurn({ turn }: { turn: ChatTurn }) {
+function CompareTurn({
+  turn,
+  turnIndex,
+  constrained,
+  registerTurn,
+}: {
+  turn: ChatTurn;
+  turnIndex: number;
+  constrained: boolean;
+  registerTurn: (turnId: string, node: HTMLElement | null) => void;
+}) {
   return (
-    <article className={`${styles.turn} ${styles.compareTurn}`} aria-label="Model comparison">
-      <div className={styles.comparePrompt}>
-        <div>
-          <span>Prompt</span>
-          {turn.optimization ? (
-            <OptimizationPrompt turn={turn} />
-          ) : (
-            <p>{turn.prompt || "Analyze the attached file(s)."}</p>
-          )}
-        </div>
-        <TurnAttachments turn={turn} />
-      </div>
+    <article
+      ref={(node) => registerTurn(turn.id, node)}
+      data-turn-id={turn.id}
+      className={`${styles.turn} ${styles.compareTurn} ${
+        constrained ? styles.constrainedCompareTurn : ""
+      }`}
+      aria-label="Model comparison"
+    >
+      <TurnPrompt turn={turn} turnIndex={turnIndex} />
 
       {turn.compareSummary && (
         <div className={`${styles.compareSummary} compare-summary-card`}>
@@ -102,11 +165,36 @@ function CompareTurn({ turn }: { turn: ChatTurn }) {
               response={response}
               isStreaming={turn.status === "streaming" && !response.text && !response.error}
               slotIndex={index}
+              compact
+              loadingMode="compare"
+              researchEnabled={turn.researchEnabled}
+              optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
             />
           ))}
         </div>
       )}
     </article>
+  );
+}
+
+function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) {
+  return (
+    <div className={styles.promptRow}>
+      <div
+        id={`chat-msg-${turnIndex}`}
+        className={`${styles.userBubble} ${
+          turn.optimization ? styles.optimizationBubble : ""
+        }`}
+      >
+        <span>You</span>
+        {turn.optimization ? (
+          <OptimizationPrompt turn={turn} />
+        ) : (
+          <p>{turn.prompt || "Analyze the attached file(s)."}</p>
+        )}
+        <TurnAttachments turn={turn} />
+      </div>
+    </div>
   );
 }
 

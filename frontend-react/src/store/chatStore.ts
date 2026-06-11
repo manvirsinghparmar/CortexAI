@@ -18,6 +18,8 @@ interface BeginTurnInput {
   mode: ChatMode;
   prompt: string;
   submittedPrompt: string;
+  researchEnabled?: boolean;
+  optimizeEnabled?: boolean;
   attachments: FileUploadResponse[];
   responses: ChatResponse[];
   status?: TurnStatus;
@@ -154,6 +156,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       mode: input.mode,
       prompt: input.prompt,
       submittedPrompt: input.submittedPrompt,
+      researchEnabled: input.researchEnabled,
+      optimizeEnabled: input.optimizeEnabled,
       attachments: input.attachments,
       responses: input.responses,
       status: input.status ?? "streaming",

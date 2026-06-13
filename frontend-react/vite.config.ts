@@ -1,6 +1,10 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 const apiProxyTarget = process.env.CORTEX_API_PROXY_TARGET ?? "http://localhost:8000";
 
 export default defineConfig({

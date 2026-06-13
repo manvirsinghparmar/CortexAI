@@ -30,6 +30,7 @@ export function ResponseCard({
   optimizeEnabled = false,
 }: ResponseCardProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const hasError = !!response.error;
@@ -42,6 +43,10 @@ export function ResponseCard({
   const sourceBaseId = useMemo(() => `cite-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`, [
     response.request_id,
   ]);
+  const statsId = useMemo(
+    () => `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+    [response.request_id],
+  );
 
   const copyResponse = async () => {
     await navigator.clipboard?.writeText(responseText || "").catch(() => undefined);
@@ -74,7 +79,23 @@ export function ResponseCard({
           </div>
           <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
         </div>
-        <div className={styles.metaRow}>
+        <button
+          type="button"
+          className={styles.statsToggle}
+          aria-expanded={statsOpen}
+          aria-controls={statsId}
+          onClick={() => setStatsOpen((open) => !open)}
+        >
+          <span>Details</span>
+          <span
+            className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
+            aria-hidden="true"
+          />
+        </button>
+        <div
+          id={statsId}
+          className={`${styles.metaRow} ${statsOpen ? styles.metaRowExpanded : ""}`}
+        >
           <span>
             <Icon name="bolt" />
             {response.latency_ms || 0}ms

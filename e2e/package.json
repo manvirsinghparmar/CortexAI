@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
+    "test:mobile": "playwright test --config playwright.mobile.config.mjs",
+    "test:desktop-ipad": "playwright test --config playwright.desktop-ipad.config.mjs",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:report": "playwright show-report",

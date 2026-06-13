@@ -102,7 +102,7 @@ python run_server.py --reload
 - The empty React Compare workspace explains that one prompt can be reviewed across multiple selected models and frames accuracy, depth, speed, tone, and usefulness as practical comparison dimensions. Its three responsive examples populate the composer without changing model selections or triggering a request.
 - On mobile, attachment chips grow the composer upward without narrowing the textarea or displacing the send action, and the composer remains above the fixed Ask/Compare/History navigation.
 - Frontend Compare selectors keep at least two active models and send only active selected models in compare requests. React prefers `openai:gpt-5.1` plus `claude:claude-sonnet-4-5` initially, and Add Model prefers `deepseek:deepseek-chat`; disabled or missing preferences fall back to distinct enabled catalog models. Remove controls appear with three active models and compact whichever two remain after any slot is removed.
-- React manual Ask and Compare controls render through the same accessible model picker with provider logos, readable model labels, exact model IDs, and active-state highlighting. Compare supplies duplicate-selection prevention and removal behavior; synchronized hidden native selects preserve existing Playwright selectors and `selectOption` flows.
+- React manual Ask and Compare controls render through the same accessible model picker with provider logos, readable model labels, exact model IDs, and active-state highlighting. The listbox uses a viewport-positioned body portal so mobile Compare's horizontally scrollable model row cannot clip it. Compare supplies duplicate-selection prevention and removal behavior; synchronized hidden native selects preserve existing Playwright selectors and `selectOption` flows.
 - Frontend Compare response cards use restrained model headings, compact Markdown paragraph/list spacing, and compact footers; aggregate tokens, usage, and success counts remain in the summary bar.
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
@@ -514,6 +514,13 @@ Run compare orchestrator tests:
 ```bash
 pytest tests/test_multi_compare_mode.py -v
 ```
+
+Run React responsive browser tests without a backend or database:
+```bash
+npm run --prefix e2e test:mobile
+npm run --prefix e2e test:desktop-ipad
+```
+The suites start isolated Vite servers and mock frontend API contracts. Mobile tests cover phone navigation, composer clearance and growth, attachments, Compare model controls, history restoration, and stacked response cards. Desktop/iPad tests cover the desktop shell, iPad breakpoint behavior, model selection, and independent Compare response scrolling.
 
 ---
 

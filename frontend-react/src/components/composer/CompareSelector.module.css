@@ -11,7 +11,59 @@
   display: flex;
   min-width: 0;
   flex-wrap: nowrap;
-  gap: 8px;
+}
+
+.comparisonGroup {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.connector {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 5px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 999px;
+  background: var(--surface-container-lowest);
+  color: var(--on-surface-variant);
+  pointer-events: none;
+}
+
+.connector::before,
+.connector::after {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  width: 6px;
+  height: 1px;
+  background: var(--outline-variant);
+  content: "";
+}
+
+.connector::before {
+  right: 100%;
+}
+
+.connector::after {
+  left: 100%;
+}
+
+.connector svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
 }
 
 .chip {
@@ -99,6 +151,32 @@
     padding: 2px 2px 4px;
     scrollbar-width: none;
     scroll-snap-type: x proximity;
+  }
+
+  .comparisonGroup {
+    scroll-snap-align: start;
+  }
+
+  .connector {
+    width: 16px;
+    height: 20px;
+    flex-basis: 16px;
+    margin: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--outline);
+  }
+
+  .connector::before,
+  .connector::after {
+    display: none;
+  }
+
+  .connector svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.45;
   }
 
   .chips::-webkit-scrollbar {

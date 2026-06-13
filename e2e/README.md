@@ -1,6 +1,6 @@
 # CortexAI Live E2E
 
-This package contains the live full-stack browser suite for CortexAI.
+This package contains the live full-stack browser suite and the frontend-only responsive browser suites for CortexAI.
 
 ## What lives here
 
@@ -23,6 +23,10 @@ Nothing in this folder is used by the API image or the frontend deployment artif
 - `server/run_e2e_server.py`: E2E-only FastAPI bootstrap.
 - `server/fault_injection.py`: request-scoped fallback fault injection for special-path tests.
 - `server/stream_tuning.py`: makes local streaming easier to observe in browser assertions.
+- `responsive/mobile/`: phone-specific navigation, composer, attachment, model-picker, history, and response-layout coverage.
+- `responsive/desktop-ipad/`: desktop and iPad portrait/landscape responsive coverage.
+- `playwright.mobile.config.mjs`: independently runnable mobile suite.
+- `playwright.desktop-ipad.config.mjs`: independently runnable desktop/iPad suite.
 
 ## Setup
 
@@ -38,6 +42,17 @@ npm install --prefix e2e
 npm run --prefix e2e install:browsers
 npm run --prefix e2e test
 ```
+
+The live `test` command requires the E2E database, API key, and provider configuration described above.
+
+Responsive UI suites do not require PostgreSQL, provider keys, or a running backend. They start Vite directly and mock the frontend API contracts:
+
+```bash
+npm run --prefix e2e test:mobile
+npm run --prefix e2e test:desktop-ipad
+```
+
+The mobile suite covers 320px and 390px phone layouts. The desktop/iPad suite covers 1440px desktop, 1024px iPad landscape, and 820px iPad portrait behavior. Each command can be run independently.
 
 Useful variants:
 

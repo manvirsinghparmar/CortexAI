@@ -48,7 +48,7 @@ npm run --prefix frontend-react build
 - Desktop React Compare keeps model headers/actions fixed within equal-height columns and gives each response body an independent vertical scrollbar; the comparison grid owns horizontal overflow. Mobile Compare restores stacked, natural-height cards.
 - A single desktop Compare turn fills the transcript. Multi-turn transcripts use natural grid height plus 480-620px Compare panels so the transcript scrolls instead of distributing one fixed viewport height across every turn. Ask turns remain content-sized.
 - React Ask and Compare share the same right-aligned user-message bubble, including attachment and optimization states. Compare keeps aggregate totals in a separate compact row, shows friendly model labels beside exact API model IDs, and uses compact icon actions.
-- React Ask and Compare share one rounded composer shell: model options sit above a borderless textarea that starts at one line and auto-grows to a bounded height, attachment chips grow upward inside the shell, and compact feature controls plus the fixed-size send action share the bottom row. Mode selection stays in the main navigation, while mobile compare chips scroll horizontally when needed, keep 12px side margins, and clear the fixed bottom navigation.
+- React Ask and Compare share one rounded composer shell: model options sit above a borderless textarea that starts at one line and auto-grows to a bounded height, attachment chips grow upward inside the shell, and compact feature controls plus the fixed-size send action share the bottom row. Compare model chips are separated by decorative opposing-arrows connectors; desktop uses a subtle bordered medallion while mobile uses a narrow borderless glyph. Mode selection stays in the main navigation, while mobile compare chips scroll horizontally when needed, keep 12px side margins, and clear the fixed bottom navigation. The shared model picker renders its fixed-position listbox through a body portal so horizontally scrollable mobile Compare rows cannot clip it.
 - React attachment upload uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` while files process, and sends attachment IDs on Ask/Compare requests.
 - Tavily research uses a deterministic local search-options resolver before provider calls. The resolver fixes retrieval params, may add topic/time/country/domain options when enabled, never rewrites the query, and can be reduced to fixed params with `TAVILY_ENHANCED_SEARCH_ENABLED=false`.
 - Frontend follows the Alabaster Minimal shell: a quiet 272px desktop navigation rail with subtle mode and current-session states, top Ask/Compare tabs, prompt starter landing, horizontal compare canvas, unified composer with active model chips, and visually aligned mobile Ask/Compare/History navigation.
@@ -96,6 +96,10 @@ npm run --prefix frontend-react build
   - `npm run --prefix frontend-react test` when React component logic/tests are touched
 - Full browser E2E:
   - `npm run --prefix e2e test`
+- Frontend-only responsive browser suites:
+  - `npm run --prefix e2e test:mobile`
+  - `npm run --prefix e2e test:desktop-ipad`
+  - These suites start isolated Vite servers and mock frontend API contracts; they do not require PostgreSQL or live provider credentials.
 
 ## Delivery Defaults
 

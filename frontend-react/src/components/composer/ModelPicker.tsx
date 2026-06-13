@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import type { ModelCatalogItem } from "../../types";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { ProviderLogo } from "../shared/ProviderLogo";
@@ -6,6 +14,11 @@ import styles from "./ModelPicker.module.css";
 
 export type ModelPickerPlacement = "up" | "down";
 export type ModelPickerAlignment = "left" | "center" | "right";
+
+const MENU_GAP = 7;
+const MENU_MAX_HEIGHT = 300;
+const MENU_MAX_WIDTH = 380;
+const VIEWPORT_MARGIN = 20;
 
 interface ModelPickerProps {
   id: string;
@@ -41,7 +54,10 @@ export function ModelPicker({
   menuClassName,
 }: ModelPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLSpanElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selectedModel =
     models.find((model) => modelKey(model) === value) ?? modelFromKey(value);
   const selectedMeta = getModelPresentation(
@@ -52,9 +68,86 @@ export function ModelPicker({
   const disabledSet = new Set(disabledKeys);
   const selectedSet = new Set(selectedKeys.filter((key) => key !== value));
 
+  const updateMenuPosition = useCallback(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+
+    const triggerRect = button.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(
+      MENU_MAX_WIDTH,
+      Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2),
+    );
+    const naturalHeight =
+      menuRef.current?.scrollHeight ??
+      Math.min(MENU_MAX_HEIGHT, models.length * 52 + 12);
+    const availableAbove = Math.max(
+      0,
+      triggerRect.top - MENU_GAP - VIEWPORT_MARGIN,
+    );
+    const availableBelow = Math.max(
+      0,
+      viewportHeight - triggerRect.bottom - MENU_GAP - VIEWPORT_MARGIN,
+    );
+    const prefersUp = placement === "up";
+    const openUp = prefersUp
+      ? availableAbove >= Math.min(naturalHeight, MENU_MAX_HEIGHT) ||
+        availableAbove >= availableBelow
+      : !(
+          availableBelow >= Math.min(naturalHeight, MENU_MAX_HEIGHT) ||
+          availableBelow >= availableAbove
+        );
+    const availableHeight = openUp ? availableAbove : availableBelow;
+    const maxHeight = Math.min(MENU_MAX_HEIGHT, availableHeight);
+    const renderedHeight = Math.min(naturalHeight, maxHeight);
+
+    let left =
+      align === "right"
+        ? triggerRect.right - width
+        : align === "center"
+          ? triggerRect.left + triggerRect.width / 2 - width / 2
+          : triggerRect.left;
+    left = Math.min(
+      Math.max(VIEWPORT_MARGIN, left),
+      Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
+    );
+
+    const top = openUp
+      ? triggerRect.top - MENU_GAP - renderedHeight
+      : triggerRect.bottom + MENU_GAP;
+
+    setMenuStyle({
+      top: Math.max(VIEWPORT_MARGIN, top),
+      left,
+      width,
+      maxHeight,
+    });
+  }, [align, models.length, placement]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [isOpen, updateMenuPosition]);
+
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
+        setIsOpen(false);
+      }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setIsOpen(false);
@@ -67,15 +160,7 @@ export function ModelPicker({
     };
   }, []);
 
-  const menuPositionClass = [
-    placement === "down" ? styles.menuDown : styles.menuUp,
-    align === "center"
-      ? styles.menuCenter
-      : align === "right"
-        ? styles.menuRight
-        : styles.menuLeft,
-    menuClassName ?? "",
-  ]
+  const menuClasses = [styles.menu, menuClassName ?? ""]
     .filter(Boolean)
     .join(" ");
 
@@ -104,6 +189,7 @@ export function ModelPicker({
       </select>
 
       <button
+        ref={buttonRef}
         type="button"
         className={`${styles.button} ${buttonClassName ?? ""}`}
         aria-label={`${ariaLabel}: ${selectedMeta.label} (${selectedMeta.model})`}
@@ -132,49 +218,54 @@ export function ModelPicker({
         <span className={styles.caret} aria-hidden="true" />
       </button>
 
-      {isOpen && (
-        <div
-          id={listboxId}
-          className={`${styles.menu} ${menuPositionClass}`}
-          role="listbox"
-          aria-label={listboxLabel}
-        >
-          {models.map((model) => {
-            const key = modelKey(model);
-            const meta = getModelPresentation(model.provider, model.model);
-            const isSelected = key === value;
-            const isDisabled = selectedSet.has(key) || disabledSet.has(key);
-            return (
-              <button
-                key={key}
-                type="button"
-                className={`${styles.option} ${isSelected ? styles.optionActive : ""}`}
-                role="option"
-                aria-selected={isSelected}
-                aria-disabled={isDisabled}
-                disabled={isDisabled}
-                title={`${meta.label}\n${meta.model}`}
-                onClick={() => {
-                  onChange(key);
-                  setIsOpen(false);
-                }}
-              >
-                <ProviderLogo
-                  provider={model.provider}
-                  logoUrl={meta.logoUrl}
-                  color={meta.color}
-                  size={20}
-                />
-                <span className={styles.optionText}>
-                  <strong>{meta.label}</strong>
-                  <small>{meta.model}</small>
-                </span>
-                {isSelected && <CheckIcon />}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {isOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={listboxId}
+            className={menuClasses}
+            style={menuStyle}
+            role="listbox"
+            aria-label={listboxLabel}
+          >
+            {models.map((model) => {
+              const key = modelKey(model);
+              const meta = getModelPresentation(model.provider, model.model);
+              const isSelected = key === value;
+              const isDisabled = selectedSet.has(key) || disabledSet.has(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`${styles.option} ${isSelected ? styles.optionActive : ""}`}
+                  role="option"
+                  aria-selected={isSelected}
+                  aria-disabled={isDisabled}
+                  disabled={isDisabled}
+                  title={`${meta.label}\n${meta.model}`}
+                  onClick={() => {
+                    onChange(key);
+                    setIsOpen(false);
+                  }}
+                >
+                  <ProviderLogo
+                    provider={model.provider}
+                    logoUrl={meta.logoUrl}
+                    color={meta.color}
+                    size={20}
+                  />
+                  <span className={styles.optionText}>
+                    <strong>{meta.label}</strong>
+                    <small>{meta.model}</small>
+                  </span>
+                  {isSelected && <CheckIcon />}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }

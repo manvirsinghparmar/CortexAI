@@ -81,11 +81,9 @@
 }
 
 .menu {
-  position: absolute;
+  position: fixed;
   z-index: 80;
   display: grid;
-  width: min(380px, calc(100vw - 40px));
-  max-height: 300px;
   gap: 2px;
   overflow: auto;
   border: 1px solid var(--outline-variant);
@@ -93,27 +91,6 @@
   background: var(--surface-container-lowest);
   box-shadow: 0 16px 40px rgb(15 23 42 / 18%);
   padding: 6px;
-}
-
-.menuUp {
-  bottom: calc(100% + 7px);
-}
-
-.menuDown {
-  top: calc(100% + 7px);
-}
-
-.menuLeft {
-  left: 0;
-}
-
-.menuCenter {
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.menuRight {
-  right: 0;
 }
 
 .option {
@@ -178,14 +155,5 @@
     min-width: 0;
     max-width: 100%;
     flex: 1 1 0;
-  }
-
-  .menuCenter {
-    left: 0;
-    transform: none;
-  }
-
-  .menuRight {
-    right: 0;
   }
 }

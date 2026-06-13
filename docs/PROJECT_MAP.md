@@ -76,6 +76,10 @@ This map is the quick "where do I change X?" reference for the current API-first
   - `REACT_FRONTEND=true` serves `frontend-react/dist` when `FRONTEND_DIR` is unset.
 - Frontend container boundary: `Dockerfile.frontend` + `nginx.conf`
 - Playwright E2E suite: `e2e/specs/`
+  - Live full-stack browser scenarios: `e2e/specs/`
+  - Frontend-only phone coverage: `e2e/responsive/mobile/`
+  - Frontend-only desktop and iPad coverage: `e2e/responsive/desktop-ipad/`
+  - Independent configs: `e2e/playwright.mobile.config.mjs`, `e2e/playwright.desktop-ipad.config.mjs`
 - Playwright config: `e2e/playwright.config.mjs`
 
 ## CI and Workflows

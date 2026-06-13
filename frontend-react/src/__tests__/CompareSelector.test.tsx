@@ -25,10 +25,41 @@ describe("CompareSelector", () => {
     await user.click(screen.getByRole("button", { name: /Compare model 1:/ }));
     const listbox = screen.getByRole("listbox", { name: "Compare model 1 options" });
 
+    expect(listbox.parentElement).toBe(document.body);
     expect(within(listbox).getByText("GPT-5.1")).toBeInTheDocument();
     expect(within(listbox).getByText("gpt-5.1")).toBeInTheDocument();
     expect(within(listbox).getByText("Claude Sonnet")).toBeInTheDocument();
     expect(listbox.querySelectorAll("img").length).toBeGreaterThan(0);
+  });
+
+  it("renders one decorative connector between each active model", () => {
+    const { rerender } = render(
+      <CompareSelector
+        models={models}
+        keys={["openai:gpt-5.1", "claude:claude-sonnet-4-5", ""]}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByTestId("compare-connector")).toHaveLength(1);
+    expect(screen.getByTestId("compare-connector")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+
+    rerender(
+      <CompareSelector
+        models={models}
+        keys={[
+          "openai:gpt-5.1",
+          "claude:claude-sonnet-4-5",
+          "deepseek:deepseek-chat",
+        ]}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByTestId("compare-connector")).toHaveLength(2);
   });
 
   it("selects a model and disables models already used in another slot", async () => {

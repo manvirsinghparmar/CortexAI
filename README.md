@@ -274,7 +274,7 @@ Frontend runtime config (`/runtime-config.js`):
 - On desktop, each React Compare response column has its own vertical response scrollbar while the comparison canvas handles horizontal overflow. Mobile keeps the model cards stacked in normal page flow.
 - A single desktop Compare turn fills the available transcript height. When a session contains multiple turns, each Compare turn stays within a readable 480-620px panel and the main transcript becomes vertically scrollable instead of shrinking response bodies.
 - React Compare renders submitted prompts with the same right-aligned user bubble used by Ask mode. Aggregate result totals remain in a separate compact row, while model cards keep friendly names, exact API model IDs, and compact icon actions.
-- React Ask and Compare use one rounded composer shell with a borderless textarea that starts at one line and auto-grows to a bounded height. Attachments stay above the compact routing controls and fixed-size send action; mode changes remain in the app navigation rather than a redundant composer switch. Compare model selectors stay in the options row and scroll horizontally when a third model exceeds the mobile width.
+- React Ask and Compare use one rounded composer shell with a borderless textarea that starts at one line and auto-grows to a bounded height. Attachments stay above the compact routing controls and fixed-size send action; mode changes remain in the app navigation rather than a redundant composer switch. Compare model selectors use a subtle opposing-arrows connector between active models: a bordered medallion on desktop and a compact borderless glyph on mobile. The selector row scrolls horizontally rather than compressing model names when a third model exceeds the mobile width. Its shared dropdown is rendered in a viewport-positioned body portal so mobile overflow containers cannot clip model options.
 - On mobile, the composer keeps 12px side margins, grows upward when attachments are added, preserves the textarea width, and stays clear of the fixed Ask/Compare/History navigation.
 - React file upload uses the current raw-byte `POST /v1/files/upload` contract, polls `GET /v1/files/{file_id}` while uploads are processing, and sends attachment IDs on Ask/Compare requests.
 - Compare response cards use compact footers while the compare summary bar carries aggregate tokens, usage, and success counts.
@@ -863,6 +863,13 @@ Run browser E2E suite (Playwright):
 ```bash
 npm run --prefix e2e test
 ```
+
+Run the frontend-only responsive suites independently:
+```bash
+npm run --prefix e2e test:mobile
+npm run --prefix e2e test:desktop-ipad
+```
+These responsive suites start their own Vite server and use mocked frontend API contracts, so they do not require PostgreSQL, provider keys, or the live E2E environment. Mobile coverage exercises 320px and 390px phone behavior; the desktop/iPad suite covers desktop plus iPad portrait and landscape layouts.
 
 Run high-impact UI business scenarios only:
 ```bash

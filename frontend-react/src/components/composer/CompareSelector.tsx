@@ -22,6 +22,9 @@ export function CompareSelector({
   trailingControls,
 }: CompareSelectorProps) {
   const filledCount = keys.filter(Boolean).length;
+  const visibleIndexes = ([0, 1, 2] as const).filter(
+    (index) => keys[index] !== "" || index < 2,
+  );
   const canRemove = filledCount > 2;
   const canAdd = filledCount < 3;
 
@@ -44,11 +47,10 @@ export function CompareSelector({
   return (
     <div className={styles.wrap} aria-label="Compare model selectors">
       <div className={styles.chips}>
-        {([0, 1, 2] as const)
-          .filter((index) => keys[index] !== "" || index < 2)
-          .map((index) => (
+        {visibleIndexes.map((index, visibleIndex) => (
+          <span className={styles.comparisonGroup} key={`${index}-${keys[index] || "empty"}`}>
+            {visibleIndex > 0 && <CompareConnector />}
             <CompareModelSlot
-              key={`${index}-${keys[index] || "empty"}`}
               index={index}
               models={models}
               keys={keys}
@@ -58,7 +60,8 @@ export function CompareSelector({
               }}
               onRemove={() => handleRemoveModel(index)}
             />
-          ))}
+          </span>
+        ))}
       </div>
 
       {trailingControls && <div className={styles.trailingControls}>{trailingControls}</div>}
@@ -76,6 +79,23 @@ export function CompareSelector({
         </button>
       )}
     </div>
+  );
+}
+
+function CompareConnector() {
+  return (
+    <span
+      className={styles.connector}
+      data-testid="compare-connector"
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 20 20">
+        <path d="M3.5 7h11" />
+        <path d="m12 4.5 2.5 2.5L12 9.5" />
+        <path d="M16.5 13h-11" />
+        <path d="m8 10.5-2.5 2.5L8 15.5" />
+      </svg>
+    </span>
   );
 }
 

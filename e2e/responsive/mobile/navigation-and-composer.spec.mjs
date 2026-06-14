@@ -8,13 +8,15 @@ import {
 test("mobile navigation switches between Ask, Compare, and History", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     const mobileNav = page.getByRole("navigation", { name: "Mobile navigation" });
+    const compose = page.getByRole("button", { name: "Start new chat" });
 
     await expect(mobileNav).toBeVisible();
+    await expect(compose).toBeVisible();
     await expect(page.locator("aside[aria-label='Primary navigation']")).toBeHidden();
     await expect(page.locator("#btnSingleMode")).toBeHidden();
     await expect(page.locator("#promptInput")).toHaveAttribute(
         "placeholder",
-        "What would you like help with today?",
+        "Ask anything . . .",
     );
 
     await openMobilePanel(page, "Compare");
@@ -26,11 +28,82 @@ test("mobile navigation switches between Ask, Compare, and History", async ({ re
 
     await openMobilePanel(page, "History");
     await expect(page.getByRole("region", { name: "History" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "History" }).getByText("New chat")).toHaveCount(0);
+    await expect(compose).toBeVisible();
     await expect(page.locator("#promptInput")).toHaveCount(0);
 
     await openMobilePanel(page, "Ask");
     await expect(page.locator("#promptInput")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+});
+
+test("mobile compose action starts a fresh Compare session from History", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await openMobilePanel(page, "History");
+    await page.getByRole("button", { name: /Architecture decision/i }).first().click();
+    await expect(page.locator('article[aria-label="Model comparison"]')).toHaveCount(3);
+
+    await openMobilePanel(page, "History");
+    await page.getByRole("button", { name: "Start new chat" }).click();
+
+    await expect(page.getByRole("region", { name: "History" })).toHaveCount(0);
+    await expect(page.locator('article[aria-label="Model comparison"]')).toHaveCount(0);
+    await expect(page.getByLabel("Compare model selectors")).toBeVisible();
+    await expect(page.locator("#promptInput")).toHaveValue("");
+    await expect(page.locator("#promptInput")).toHaveAttribute(
+        "placeholder",
+        "Ask once and compare model responses",
+    );
+    await expectNoHorizontalOverflow(page);
+});
+
+test("mobile compose action clears an Ask thread while preserving Ask mode", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await openMobilePanel(page, "History");
+    await page.getByRole("button", { name: /Help debug a FastAPI stream/i }).click();
+    await expect(page.getByText("Add a retry strategy")).toBeVisible();
+
+    await page.locator("#promptInput").fill("Unsent follow-up");
+    await page.getByRole("button", { name: "Start new chat" }).click();
+
+    await expect(page.getByText("Add a retry strategy")).toHaveCount(0);
+    await expect(page.locator("#promptInput")).toHaveValue("");
+    await expect(page.locator("#promptInput")).toHaveAttribute(
+        "placeholder",
+        "Ask anything . . .",
+    );
+    await expectNoHorizontalOverflow(page);
+});
+
+test("mobile composer stays borderless with a soft focus state", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    for (const mode of ["Ask", "Compare"]) {
+        await openMobilePanel(page, mode);
+        const textarea = page.locator("#promptInput");
+        const composer = textarea.locator("xpath=../..");
+        const idle = await composer.evaluate(element => {
+            const style = getComputedStyle(element);
+            return {
+                borderColor: style.borderColor,
+                boxShadow: style.boxShadow,
+            };
+        });
+        expect(idle.borderColor).toBe("rgba(0, 0, 0, 0)");
+        expect(idle.boxShadow).not.toBe("none");
+
+        await textarea.focus();
+        const focused = await textarea.evaluate(element => ({
+            outlineStyle: getComputedStyle(element).outlineStyle,
+            boxShadow: getComputedStyle(element).boxShadow,
+            shellShadow: getComputedStyle(element.parentElement?.parentElement).boxShadow,
+        }));
+        expect(focused.outlineStyle).toBe("none");
+        expect(focused.boxShadow).toBe("none");
+        expect(focused.shellShadow).not.toBe(idle.boxShadow);
+        await expectNoHorizontalOverflow(page);
+    }
 });
 
 for (const viewport of [
@@ -69,6 +142,74 @@ test("mobile composer auto-grows and keeps Send accessible", async ({ responsive
     expect(metrics.composerBottom).toBeLessThanOrEqual(metrics.navTop + 1);
     expect(metrics.sendVisible).toBe(true);
     await expectNoHorizontalOverflow(page);
+});
+
+test("small mobile keeps focused feature tooltips inside the viewport", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 320, height: 568 });
+
+    for (const [switchName, tooltipText] of [
+        ["Smart routing", "Gets you the best answer automatically"],
+        ["Research mode", "Uses latest information from the web"],
+        ["Prompt optimization", "Helps you ask better for better results"],
+    ]) {
+        const chip = page.getByRole("switch", { name: switchName });
+        const tooltip = page.locator('[role="tooltip"]').filter({ hasText: tooltipText });
+        await chip.focus();
+        await expect(tooltip).toBeVisible();
+        const bounds = await tooltip.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return {
+                left: rect.left,
+                right: rect.right,
+                viewportWidth: window.innerWidth,
+            };
+        });
+        expect(bounds.left).toBeGreaterThanOrEqual(0);
+        expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+    }
+
+    await openMobilePanel(page, "Compare");
+    const sources = page.getByRole("switch", { name: "Compare with sources" });
+    const sourcesTooltip = page
+        .locator('[role="tooltip"]')
+        .filter({ hasText: "Uses latest information from the web" });
+    await expect(sources).toHaveAttribute(
+        "aria-describedby",
+        await sourcesTooltip.getAttribute("id"),
+    );
+    await expectNoHorizontalOverflow(page);
+});
+
+test("mobile tap toggles a feature chip and shows its tooltip briefly", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const research = page.getByRole("switch", { name: "Research mode" });
+    const tooltip = page
+        .locator('[role="tooltip"]')
+        .filter({ hasText: "Uses latest information from the web" });
+    await expect(research).toHaveAttribute("aria-checked", "false");
+
+    await research.evaluate(element => {
+        element.dispatchEvent(
+            new PointerEvent("pointerup", {
+                bubbles: true,
+                pointerType: "touch",
+            }),
+        );
+        element.click();
+    });
+
+    await expect(research).toHaveAttribute("aria-checked", "true");
+    await expect(tooltip).toHaveAttribute("data-touch-visible", "true");
+    await expect(tooltip).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await expect(tooltip).toHaveAttribute("data-touch-visible", "false", {
+        timeout: 3000,
+    });
+    await expect(tooltip).toBeHidden();
 });
 
 test("mobile attachment chips stay inside the composer without narrowing input", async ({ responsiveApp }) => {

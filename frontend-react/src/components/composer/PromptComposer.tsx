@@ -115,7 +115,7 @@ export function PromptComposer({ models }: PromptComposerProps) {
           placeholder={
             mode === "compare"
               ? "Ask once and compare model responses"
-              : "What would you like help with today?"
+              : "Ask anything . . ."
           }
         />
 

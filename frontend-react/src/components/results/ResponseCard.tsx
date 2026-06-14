@@ -1,6 +1,18 @@
-import { useMemo, useState } from "react";
-import type { HTMLAttributes, ReactNode } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useMemo,
+  useState,
+} from "react";
+import type {
+  ComponentPropsWithoutRef,
+  HTMLAttributes,
+  ReactElement,
+  ReactNode,
+} from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { getModelPresentation } from "../../config/modelPresentation";
 import type { ChatResponse } from "../../types";
 import { ProviderLogo } from "../shared/ProviderLogo";
@@ -104,6 +116,7 @@ export function ResponseCard({
           />
         ) : (
           <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
             components={{
               a: ({ href, children, ...props }) => {
                 const scopedHref = scopedCitationHref(href, sourceBaseId);
@@ -114,6 +127,7 @@ export function ResponseCard({
                 );
               },
               code: CodeBlock,
+              table: MarkdownTable,
             }}
           >
             {responseText}
@@ -182,6 +196,93 @@ export function ResponseCard({
       )}
     </article>
   );
+}
+
+function MarkdownTable({
+  children,
+  ...props
+}: ComponentPropsWithoutRef<"table">) {
+  const headerLabels = tableHeaderLabels(children);
+  const labelledChildren = labelTableCells(children, headerLabels);
+
+  return (
+    <div
+      className={styles.tableWrap}
+      role="region"
+      aria-label="Response table"
+      tabIndex={0}
+    >
+      <table {...props}>{labelledChildren}</table>
+    </div>
+  );
+}
+
+type MarkdownElement = ReactElement<{
+  children?: ReactNode;
+  "data-label"?: string;
+}>;
+
+function isMarkdownElement(
+  value: ReactNode,
+  type: "thead" | "tbody" | "tr" | "th" | "td",
+): value is MarkdownElement {
+  return isValidElement<{ children?: ReactNode }>(value) && value.type === type;
+}
+
+function tableHeaderLabels(children: ReactNode): string[] {
+  const head = Children.toArray(children).find((child) =>
+    isMarkdownElement(child, "thead"),
+  );
+  if (!head || !isMarkdownElement(head, "thead")) return [];
+
+  const row = Children.toArray(head.props.children).find((child) =>
+    isMarkdownElement(child, "tr"),
+  );
+  if (!row || !isMarkdownElement(row, "tr")) return [];
+
+  return Children.toArray(row.props.children)
+    .filter((cell): cell is MarkdownElement => isMarkdownElement(cell, "th"))
+    .map((cell) => textContent(cell.props.children));
+}
+
+function labelTableCells(children: ReactNode, labels: string[]): ReactNode {
+  return Children.map(children, (child) => {
+    if (!isMarkdownElement(child, "tbody")) return child;
+
+    return cloneElement(
+      child,
+      {},
+      Children.map(child.props.children, (row) => {
+        if (!isMarkdownElement(row, "tr")) return row;
+        let cellIndex = 0;
+
+        return cloneElement(
+          row,
+          {},
+          Children.map(row.props.children, (cell) => {
+            if (!isMarkdownElement(cell, "td")) return cell;
+            const label = labels[cellIndex] || `Column ${cellIndex + 1}`;
+            cellIndex += 1;
+            return cloneElement(cell, { "data-label": label });
+          }),
+        );
+      }),
+    );
+  });
+}
+
+function textContent(value: ReactNode): string {
+  return Children.toArray(value)
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return isValidElement<{ children?: ReactNode }>(child)
+        ? textContent(child.props.children)
+        : "";
+    })
+    .join("")
+    .trim();
 }
 
 function CodeBlock({

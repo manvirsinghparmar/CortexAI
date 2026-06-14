@@ -24,7 +24,12 @@ export async function* streamChat(
 
     switch (event.type) {
       case "start":
-        yield { type: "start", session_id: asOptionalString(event.session_id) };
+        yield {
+          type: "start",
+          provider: asOptionalString(event.provider),
+          model: asOptionalString(event.model),
+          session_id: asOptionalString(event.session_id),
+        };
         break;
       case "line":
         yield { type: "delta", text: String(event.text ?? "") };

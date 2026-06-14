@@ -29,11 +29,14 @@
 }
 
 .mobileBrand {
-  border: 0;
-  background: transparent;
   color: var(--primary);
-  cursor: pointer;
   font: 700 22px/28px var(--font-sans);
+}
+
+.mobileHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .tabs {
@@ -124,30 +127,6 @@
   max-width: 720px;
   margin: 0 auto;
   gap: 10px;
-}
-
-.mobileNewChat {
-  display: flex;
-  height: 42px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 10px;
-  border: 1px solid #dbe2ea;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #0f172a;
-  cursor: pointer;
-  font: 600 14px/20px var(--font-sans);
-  padding: 0 12px;
-}
-
-.mobileNewChat svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-width: 1.8;
 }
 
 .mobileHistory input {
@@ -275,6 +254,27 @@
 
   .topbar {
     display: none;
+  }
+
+  .mobileTopbar .iconButton {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+
+  .mobileTopbar .iconButton:hover,
+  .mobileTopbar .iconButton:focus-visible {
+    background: var(--surface-container);
+    color: var(--primary);
+    outline: none;
+  }
+
+  .mobileTopbar .iconButton:active {
+    background: var(--surface-container-high);
+  }
+
+  .mobileTopbar .mobileComposeButton {
+    color: var(--primary);
   }
 
   .canvas {

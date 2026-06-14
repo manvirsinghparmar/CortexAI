@@ -172,17 +172,23 @@ async function runAskTurn({
   optimization?: PromptOptimizationState;
 }) {
   const state = useChatStore.getState();
+  const smartMode = state.smartMode;
   const { provider, model } = parseModelKey(state.selectedModelKey);
   const request: ChatRequest = {
     prompt: submittedPrompt,
-    provider: state.smartMode ? undefined : provider || undefined,
-    model: state.smartMode ? undefined : model || undefined,
-    routing: { smart_mode: state.smartMode, research_mode: state.researchMode },
+    provider: smartMode ? undefined : provider || undefined,
+    model: smartMode ? undefined : model || undefined,
+    routing: { smart_mode: smartMode, research_mode: state.researchMode },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
 
-  const placeholder = makePlaceholderResponse(0, state.smartMode ? "smart" : provider, model, state.sessionId);
+  const placeholder = makePlaceholderResponse(
+    0,
+    smartMode ? "smart" : provider,
+    smartMode ? "Selecting best model" : model,
+    state.sessionId,
+  );
   const activeTurnId =
     turnId ??
     state.beginTurn({
@@ -210,13 +216,28 @@ async function runAskTurn({
   for await (const chunk of streamChat(request, signal)) {
     if (signal.aborted) break;
     const latest = useChatStore.getState();
-    if (chunk.type === "delta" && chunk.text) {
+    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+      const current =
+        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+        latest.responses[0] ??
+        placeholder;
+      latest.updateTurnResponse(activeTurnId, 0, {
+        ...current,
+        provider: chunk.provider ?? current.provider,
+        model: chunk.model ?? current.model,
+      });
+    } else if (chunk.type === "delta" && chunk.text) {
       latest.appendStreamingText(chunk.text);
       latest.appendTurnResponseText(activeTurnId, 0, chunk.text);
     } else if (chunk.type === "metadata" && chunk.metadata) {
       finalResponse = { ...finalResponse, ...chunk.metadata };
       latest.updateTurnResponse(activeTurnId, 0, {
-        ...makePlaceholderResponse(0, provider, model, latest.sessionId),
+        ...makePlaceholderResponse(
+          0,
+          smartMode ? "smart" : provider,
+          smartMode ? "Selecting best model" : model,
+          latest.sessionId,
+        ),
         ...finalResponse,
         text: chunk.metadata.text ?? latest.responses[0]?.text ?? "",
       } as ChatResponse);

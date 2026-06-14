@@ -45,6 +45,36 @@ test("desktop multi-turn Compare keeps readable panels and scrolls the transcrip
     }
 });
 
+test("desktop Compare renders Markdown tables inside each response scroller", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await restoreHistoryThread(page, "Compare deployment options table");
+
+    const tables = page.getByRole("table");
+    await expect(tables).toHaveCount(2);
+    await expect(page.getByRole("columnheader", { name: "Recommendation" }).first()).toBeVisible();
+
+    const metrics = await page
+        .getByRole("region", { name: "Response table" })
+        .first()
+        .evaluate(wrapper => {
+            const table = wrapper.querySelector("table");
+            const header = table?.querySelector("thead");
+            return {
+                overflowX: getComputedStyle(wrapper).overflowX,
+                tableDisplay: table ? getComputedStyle(table).display : "",
+                tableMinWidth: table ? getComputedStyle(table).minWidth : "",
+                headerPosition: header ? getComputedStyle(header).position : "",
+            };
+        });
+
+    expect(metrics.overflowX).toBe("auto");
+    expect(metrics.tableDisplay).toBe("table");
+    expect(metrics.tableMinWidth).toBe("520px");
+    expect(metrics.headerPosition).toBe("static");
+    await expectNoHorizontalOverflow(page);
+});
+
 test("iPad portrait stacks Compare cards in natural page flow", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 820, height: 1180 });

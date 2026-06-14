@@ -141,6 +141,42 @@ test("mobile History search restores a grouped Compare session", async ({ respon
     await expectNoHorizontalOverflow(page);
 });
 
+test("mobile Compare stacks Markdown table rows with visible column labels", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await restoreHistoryThread(page, "Compare deployment options table");
+
+    await expect(page.getByRole("table")).toHaveCount(2);
+    const metrics = await page
+        .getByRole("region", { name: "Response table" })
+        .first()
+        .evaluate(wrapper => {
+            const table = wrapper.querySelector("table");
+            const head = table?.querySelector("thead");
+            const body = table?.querySelector("tbody");
+            const firstCell = table?.querySelector("tbody td");
+            return {
+                wrapperOverflow: getComputedStyle(wrapper).overflowX,
+                tableDisplay: table ? getComputedStyle(table).display : "",
+                headPosition: head ? getComputedStyle(head).position : "",
+                bodyDisplay: body ? getComputedStyle(body).display : "",
+                cellDisplay: firstCell ? getComputedStyle(firstCell).display : "",
+                cellLabel: firstCell?.getAttribute("data-label") ?? "",
+                pseudoLabel: firstCell
+                    ? getComputedStyle(firstCell, "::before").content.replaceAll('"', "")
+                    : "",
+            };
+        });
+
+    expect(metrics.wrapperOverflow).toBe("visible");
+    expect(metrics.tableDisplay).toBe("block");
+    expect(metrics.headPosition).toBe("absolute");
+    expect(metrics.bodyDisplay).toBe("grid");
+    expect(metrics.cellDisplay).toBe("grid");
+    expect(metrics.cellLabel).toBe("Option");
+    expect(metrics.pseudoLabel).toBe("Option");
+    await expectNoHorizontalOverflow(page);
+});
+
 test("mobile multi-turn Compare retains stacked natural-height cards", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await restoreHistoryThread(page, "Architecture decision");

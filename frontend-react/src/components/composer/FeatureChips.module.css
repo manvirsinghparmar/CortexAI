@@ -6,6 +6,12 @@
   gap: 5px;
 }
 
+.chipWrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
 .chip {
   height: 28px;
   flex: 0 0 auto;
@@ -36,6 +42,102 @@
   color: #ffffff;
 }
 
+.tooltip {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(260px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 8px;
+  background: #111827;
+  box-shadow: 0 8px 20px rgb(15 23 42 / 18%);
+  color: #f8fafc;
+  font: 500 12px/17px var(--font-sans);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
+  visibility: hidden;
+}
+
+.tooltip::after {
+  position: absolute;
+  top: 100%;
+  width: 8px;
+  height: 8px;
+  background: #111827;
+  content: "";
+  transform: translateY(-4px) rotate(45deg);
+}
+
+.tooltipStart {
+  left: 0;
+}
+
+.tooltipStart::after {
+  left: 14px;
+}
+
+.tooltipCenter {
+  left: 50%;
+  transform: translate(-50%, 3px);
+}
+
+.tooltipCenter::after {
+  left: calc(50% - 4px);
+}
+
+.tooltipEnd {
+  right: 0;
+}
+
+.tooltipEnd::after {
+  right: 14px;
+}
+
+@media (hover: hover) {
+  .chipWrap:hover .tooltip {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+  }
+
+  .chipWrap:hover .tooltipCenter {
+    transform: translate(-50%, 0);
+  }
+}
+
+.chip:focus-visible + .tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.chip:focus-visible + .tooltipCenter {
+  transform: translate(-50%, 0);
+}
+
+.tooltipVisible {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.tooltipVisible.tooltipCenter {
+  transform: translate(-50%, 0);
+}
+
+@media (max-width: 760px) {
+  .tooltip {
+    max-width: min(180px, calc(100vw - 24px));
+  }
+}
+
 @media (max-width: 359px) {
   .strip {
     gap: 3px;
@@ -45,5 +147,11 @@
     height: 27px;
     font-size: 11px;
     padding: 0 7px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    transition: none;
   }
 }

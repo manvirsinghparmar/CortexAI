@@ -89,7 +89,7 @@ python run_server.py --reload
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
-- The React sidebar uses a compact light navigation rail with subtle mode/current-session states. History shows one borderless row per session, includes the latest activity date using Today/Yesterday/calendar formatting, and retains compact aggregate metadata plus thread-wide search; sidebar token counts are hidden.
+- The React sidebar uses a compact light navigation rail with subtle mode/current-session states. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests.
@@ -98,18 +98,22 @@ python run_server.py --reload
 - One desktop Compare turn fills the available transcript height. Multi-turn sessions keep each Compare panel within 480-620px and scroll the main transcript, preventing model response bodies from collapsing as history grows.
 - React Compare uses the same right-aligned user-message bubble as Ask mode and keeps aggregate totals in a separate compact row. Model cards show a friendly model name with the exact API model ID, use compact icon actions, and reserve most of the column height for response content.
 - React Ask and Compare use one rounded composer shell with a borderless textarea that starts at one line and auto-grows to a bounded height, attachment chips above a compact action row, routing controls, and a fixed-size send action. Mode changes use the app navigation; the composer does not duplicate the Ask/Compare switch. Compare model selectors remain in a compact options row above the textarea and scroll horizontally on narrow screens when needed.
+- The React composer shell keeps a transparent structural border to prevent layout movement and uses soft elevation rather than a visible rectangular outline. Textarea focus suppresses the browser outline and increases the shell shadow on desktop and mobile.
 - The empty React Ask workspace explains the product value across answers, file analysis, content generation, and model comparison. Its four responsive example actions populate the composer for debugging, summarization, writing refinement, and file-analysis tasks without triggering a request.
 - The empty React Compare workspace explains that one prompt can be reviewed across multiple selected models and frames accuracy, depth, speed, tone, and usefulness as practical comparison dimensions. Its three responsive examples populate the composer without changing model selections or triggering a request.
 - On mobile, attachment chips grow the composer upward without narrowing the textarea or displacing the send action, and the composer remains above the fixed Ask/Compare/History navigation.
+- Mobile uses a persistent square-pen header action to start a new session from Ask, Compare, or History. The action cancels active generation, clears the current thread, returns to chat, and preserves the selected mode; the History panel does not render a separate New chat button.
 - Frontend Compare selectors keep at least two active models and send only active selected models in compare requests. React prefers `openai:gpt-5.1` plus `claude:claude-sonnet-4-5` initially, and Add Model prefers `deepseek:deepseek-chat`; disabled or missing preferences fall back to distinct enabled catalog models. Remove controls appear with three active models and compact whichever two remain after any slot is removed.
 - React manual Ask and Compare controls render through the same accessible model picker with provider logos, readable model labels, exact model IDs, and active-state highlighting. The listbox uses a viewport-positioned body portal so mobile Compare's horizontally scrollable model row cannot clip it. Compare supplies duplicate-selection prevention and removal behavior; synchronized hidden native selects preserve existing Playwright selectors and `selectOption` flows.
 - Frontend Compare response cards use restrained model headings, compact Markdown paragraph/list spacing, and compact footers; aggregate tokens, usage, and success counts remain in the summary bar.
+- React composer feature chips provide legacy-compatible explanatory tooltips for Smart, Web/With sources, and Improve in Ask and Compare. The descriptions are associated through `aria-describedby`, open on hover or keyboard focus, and remain viewport-contained on mobile. A touch tap toggles the chip and keeps its tooltip visible for two seconds.
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
+- Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
 - Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
 - Frontend response sources remain collapsed by default and expand only when the user activates Resources.
 - Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
-- React response Markdown renders response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, and sanitized provider error states.
+- React response Markdown renders response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Desktop tables scroll within the response card, while mobile tables stack cells under their column labels.
 - Frontend streaming responses render buffered Markdown progressively for Ask and Compare.
 - Submitting a new Ask or Compare turn always performs one smooth reveal of the new turn, including when the user was viewing an older turn.
 - Frontend streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
@@ -339,7 +343,7 @@ Rules:
 - `error`
 
 Notes:
-- `start` includes `session_id`, `research_mode`, and an initial `web_source_items` array.
+- `start` includes the routed preview `provider` and `model`, plus `session_id`, `research_mode`, and an initial `web_source_items` array. Smart-mode clients should not present the preview as the final selected model.
 - `response_done` includes the full `ChatResponseDTO`, including `session_id` and `web_source_items`.
 - `done` includes the resolved `session_id`.
 - Server logs emit `chat.stream.*` lifecycle events from inside the response body generator, including provider-call start/completion and terminal stream reason.

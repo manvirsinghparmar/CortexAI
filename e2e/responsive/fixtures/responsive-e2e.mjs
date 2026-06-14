@@ -6,6 +6,16 @@ const LONG_RESPONSE = Array.from(
         `Paragraph ${index + 1}: detailed comparison content that must remain readable inside the responsive response layout.`,
 ).join("\n\n");
 
+const TABLE_RESPONSE = [
+    "## Deployment comparison",
+    "",
+    "| Option | Delivery speed | Operational risk | Recommendation |",
+    "| :--- | :---: | :---: | ---: |",
+    "| Managed service | Fast | Low | Preferred |",
+    "| Self-hosted | Moderate | Medium | Use for strict control |",
+    "| Custom platform | Slow | High | Defer |",
+].join("\n");
+
 const MODELS = [
     model("openai", "gpt-5.1", true),
     model("claude", "claude-sonnet-4-5", true),
@@ -158,7 +168,17 @@ function responsiveHistoryEntries() {
             provider: "openai",
             modelName: "gpt-5.1",
         }),
+        historyEntry({
+            id: 3,
+            sessionId: "dense-history-session",
+            timestamp: "2026-06-12T09:30:00Z",
+            prompt: "Plan a multi-region platform migration with strict recovery objectives",
+            response: "Use phased regional cutovers with tested rollback and recovery procedures.",
+            provider: "openai",
+            modelName: "gpt-5.4-mini-enterprise-preview-with-extended-context",
+        }),
         ...compareHistoryEntries(),
+        ...compareTableHistoryEntries(),
     ];
 }
 
@@ -192,6 +212,35 @@ function compareHistoryEntries() {
         }
     }
     return entries;
+}
+
+function compareTableHistoryEntries() {
+    return [
+        historyEntry({
+            id: 30,
+            sessionId: "compare-table-session",
+            requestGroupId: "compare-table-group",
+            timestamp: "2026-06-12T11:00:00Z",
+            mode: "compare",
+            prompt: "Compare deployment options table",
+            response: TABLE_RESPONSE,
+            provider: "openai",
+            modelName: "gpt-5.1",
+            tokens: 640,
+        }),
+        historyEntry({
+            id: 31,
+            sessionId: "compare-table-session",
+            requestGroupId: "compare-table-group",
+            timestamp: "2026-06-12T11:00:01Z",
+            mode: "compare",
+            prompt: "Compare deployment options table",
+            response: TABLE_RESPONSE,
+            provider: "claude",
+            modelName: "claude-sonnet-4-5",
+            tokens: 670,
+        }),
+    ];
 }
 
 function historyEntry({

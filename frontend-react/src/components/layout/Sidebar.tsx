@@ -102,33 +102,35 @@ export function Sidebar({
           aria-label="Search history"
         />
         <ul className={styles.historyList}>
-          {filteredThreads.map((thread) => (
-            <li key={thread.key}>
-              <button
-                type="button"
-                className={thread.sessionId === sessionId ? styles.historyItemActive : undefined}
-                onClick={() => onSelectThread(thread)}
-                title={thread.title}
-                aria-current={thread.sessionId === sessionId ? "page" : undefined}
-              >
-                <span className={styles.historyItemTop}>
-                  <span>{formatMode(thread.mode)}</span>
-                  <time dateTime={thread.latestTimestamp}>
-                    {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
-                  </time>
-                </span>
-                <span className={styles.historyTitle}>{thread.title}</span>
-                <small className={styles.historyMeta}>
-                  <span>
-                    {thread.turnCount}{" "}
-                    {thread.turnCount === 1 ? "turn" : "turns"}
+          {filteredThreads.map((thread) => {
+            const modeLabel = formatMode(thread.mode);
+            const dateLabel =
+              formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable";
+
+            return (
+              <li key={thread.key}>
+                <button
+                  type="button"
+                  className={
+                    thread.sessionId === sessionId ? styles.historyItemActive : undefined
+                  }
+                  data-history-thread={thread.key}
+                  onClick={() => onSelectThread(thread)}
+                  title={thread.title}
+                  aria-label={`${thread.title}. ${modeLabel}, ${dateLabel}`}
+                  aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                >
+                  <span className={styles.historyTitle} data-history-title>
+                    {thread.title}
                   </span>
-                  <span aria-hidden="true">·</span>
-                  <span className={styles.historyModel}>{thread.modelLabel}</span>
-                </small>
-              </button>
-            </li>
-          ))}
+                  <small className={styles.historyMeta}>
+                    <span>{modeLabel}</span>
+                    <time dateTime={thread.latestTimestamp}>{dateLabel}</time>
+                  </small>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </div>
 

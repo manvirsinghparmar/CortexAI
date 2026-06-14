@@ -30,9 +30,17 @@ describe("Sidebar", () => {
       "aria-current",
       "page",
     );
-    expect(
-      screen.getByRole("button", { name: /Quarterly planning/ }),
-    ).toHaveAttribute("aria-current", "page");
+    const activeThread = screen.getByRole("button", { name: /Quarterly planning/ });
+    expect(activeThread).toHaveAttribute("aria-current", "page");
+    expect(activeThread).toHaveAccessibleName(
+      /Quarterly planning\. Ask,/,
+    );
+    expect(activeThread.querySelector("[data-history-title]")).toHaveTextContent(
+      "Quarterly planning",
+    );
+    expect(activeThread.querySelector("small")).toHaveTextContent(/^Ask/);
+    expect(activeThread).not.toHaveTextContent("2 turns");
+    expect(activeThread).not.toHaveTextContent("gpt-5.1");
     const timestamps = [...document.querySelectorAll("time")];
     expect(timestamps).toHaveLength(2);
     expect(

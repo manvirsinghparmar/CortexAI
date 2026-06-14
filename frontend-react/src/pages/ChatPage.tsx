@@ -22,7 +22,7 @@ export function ChatPage() {
   const { models, error: modelsError } = useModels(!authLoading);
   const backendOffline = !!modelsError && !authLoading;
   const { load: loadHistory } = useHistory();
-  const { submit } = useChat();
+  const { submit, cancel } = useChat();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
@@ -54,6 +54,12 @@ export function ChatPage() {
     setMobilePanel("chat");
   };
 
+  const handleStartNewChat = () => {
+    cancel();
+    startNewChat();
+    setMobilePanel("chat");
+  };
+
   return (
     <div className={styles.layout}>
       <Sidebar
@@ -66,24 +72,25 @@ export function ChatPage() {
 
       <main className={styles.main}>
         <header className={styles.mobileTopbar}>
-          <button
-            type="button"
-            className={styles.mobileBrand}
-            onClick={() => {
-              startNewChat();
-              setMobilePanel("chat");
-            }}
-          >
-            CortexAI
-          </button>
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label={loggedIn ? "Account" : "Guest account"}
-            onClick={loggedIn ? logout : login}
-          >
-            <Icon name="account" />
-          </button>
+          <span className={styles.mobileBrand}>CortexAI</span>
+          <div className={styles.mobileHeaderActions}>
+            <button
+              type="button"
+              className={`${styles.iconButton} ${styles.mobileComposeButton}`}
+              aria-label="Start new chat"
+              onClick={handleStartNewChat}
+            >
+              <Icon name="compose" />
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              aria-label={loggedIn ? "Account" : "Guest account"}
+              onClick={loggedIn ? logout : login}
+            >
+              <Icon name="account" />
+            </button>
+          </div>
         </header>
 
         <header className={styles.topbar}>
@@ -192,7 +199,6 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
   const history = useChatStore((s) => s.history);
   const historySearch = useChatStore((s) => s.historySearch);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
-  const startNewChat = useChatStore((s) => s.startNewChat);
   const sessionId = useChatStore((s) => s.sessionId);
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch);
@@ -200,10 +206,6 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
 
   return (
     <section className={styles.mobileHistory} aria-label="History">
-      <button type="button" className={styles.mobileNewChat} onClick={startNewChat}>
-        <Icon name="plus" />
-        <span>New chat</span>
-      </button>
       <input
         id="mobileHistorySearch"
         value={historySearch}
@@ -252,7 +254,7 @@ function formatHistoryMode(mode: HistoryThread["mode"]): string {
 function Icon({
   name,
 }: {
-  name: "account" | "plus" | "ask" | "compare" | "history";
+  name: "account" | "plus" | "compose" | "ask" | "compare" | "history";
 }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -268,6 +270,12 @@ function Icon({
           <circle cx="12" cy="12" r="9" />
           <path d="M12 8v8" />
           <path d="M8 12h8" />
+        </>
+      )}
+      {name === "compose" && (
+        <>
+          <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12.4 14.6a2 2 0 0 1-.9.5l-2.9.9a.5.5 0 0 1-.6-.6l.9-2.9a2 2 0 0 1 .5-.9z" />
         </>
       )}
       {name === "ask" && (

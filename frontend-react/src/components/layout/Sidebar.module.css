@@ -177,7 +177,7 @@
   display: grid;
   align-content: start;
   flex: 1;
-  gap: 3px;
+  gap: 1px;
   margin: 4px -4px 0;
   overflow: auto;
   padding: 0 4px 8px;
@@ -191,13 +191,13 @@
 .historyList button {
   display: grid;
   width: 100%;
-  gap: 4px;
+  gap: 2px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: #334155;
   cursor: pointer;
-  padding: 9px 10px;
+  padding: 6px 8px;
   text-align: left;
   transition:
     background-color 140ms ease,
@@ -215,55 +215,28 @@
   box-shadow: inset 2px 0 #64748b;
 }
 
-.historyItemTop {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: #64748b;
-  font: 600 10px/14px var(--font-sans);
-}
-
-.historyItemTop > span {
-  flex: 0 0 auto;
-}
-
-.historyItemTop time {
-  min-width: 0;
-  overflow: hidden;
-  color: #94a3b8;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .historyTitle {
-  display: -webkit-box;
+  display: block;
+  min-width: 0;
   overflow: hidden;
   font: 600 13px/18px var(--font-sans);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .historyMeta {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 5px;
+  justify-content: space-between;
+  gap: 8px;
   color: #94a3b8;
-  font: 500 11px/16px var(--font-sans);
+  font: 500 10px/14px var(--font-sans);
 }
 
-.historyMeta span {
+.historyMeta time {
   flex: 0 0 auto;
-}
-
-.historyMeta .historyModel {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #94a3b8;
   white-space: nowrap;
 }
 

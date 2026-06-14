@@ -191,6 +191,74 @@
   padding: 10px 14px;
 }
 
+.tableWrap {
+  max-width: 100%;
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid rgb(198 198 205 / 55%);
+  border-radius: 8px;
+  background: var(--surface-container-lowest);
+  scrollbar-width: thin;
+}
+
+.tableWrap:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.tableWrap table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  color: var(--on-surface);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.tableWrap thead {
+  background: var(--surface-container-low);
+}
+
+.tableWrap th,
+.tableWrap td {
+  border-bottom: 1px solid rgb(198 198 205 / 38%);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.tableWrap th {
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tableWrap tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.tableWrap tbody tr:hover {
+  background: var(--surface-container-low);
+}
+
+.tableWrap tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.tableWrap th[align="center"],
+.tableWrap td[align="center"] {
+  text-align: center;
+}
+
+.tableWrap th[align="right"],
+.tableWrap td[align="right"] {
+  text-align: right;
+}
+
+.tableWrap p {
+  margin: 0;
+}
+
 .body code {
   border-radius: 4px;
   background: var(--surface-container);
@@ -438,6 +506,76 @@
   .body {
     font-size: 15px;
     line-height: 23px;
+  }
+
+  .tableWrap {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .tableWrap table,
+  .tableWrap tbody,
+  .tableWrap tr,
+  .tableWrap td {
+    display: block;
+    width: 100%;
+  }
+
+  .tableWrap table {
+    min-width: 0;
+  }
+
+  .tableWrap thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .tableWrap tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .tableWrap tbody tr {
+    overflow: hidden;
+    border: 1px solid rgb(198 198 205 / 55%);
+    border-radius: 8px;
+    background: var(--surface-container-lowest);
+  }
+
+  .tableWrap tbody tr:hover {
+    background: var(--surface-container-lowest);
+  }
+
+  .tableWrap td {
+    display: grid;
+    grid-template-columns: minmax(84px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    border-bottom: 1px solid rgb(198 198 205 / 38%);
+    padding: 9px 11px;
+    text-align: left !important;
+  }
+
+  .tableWrap td::before {
+    color: var(--on-surface-variant);
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+  }
+
+  .tableWrap tbody tr:last-child td {
+    border-bottom: 1px solid rgb(198 198 205 / 38%);
+  }
+
+  .tableWrap tbody tr td:last-child {
+    border-bottom: 0;
   }
 
   .actions {

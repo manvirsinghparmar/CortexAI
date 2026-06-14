@@ -308,6 +308,8 @@ export interface StreamChunk {
   text?: string;
   error?: string;
   metadata?: Partial<ChatResponse>;
+  provider?: string;
+  model?: string;
   session_id?: string;
 }
 

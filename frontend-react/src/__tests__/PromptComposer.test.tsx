@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { DEFAULT_MODELS } from "../config/defaultModels";
@@ -40,6 +47,7 @@ describe("PromptComposer", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("keeps the compact Ask composer controls in one shell", async () => {
@@ -53,16 +61,32 @@ describe("PromptComposer", () => {
     const fileName = screen.getByText("long-mobile-design-reference.pdf");
     const attachButton = screen.getByRole("button", { name: "Attach files" });
     const smartSwitch = screen.getByRole("switch", { name: "Smart routing" });
+    const smartTooltip = screen.getByRole("tooltip", {
+      name: "Gets you the best answer automatically",
+    });
+    const researchTooltip = screen.getByRole("tooltip", {
+      name: "Uses latest information from the web",
+    });
+    const improveTooltip = screen.getByRole("tooltip", {
+      name: "Helps you ask better for better results",
+    });
     const sendButton = screen.getByRole("button", { name: "Send message" });
 
     expect(textarea).toHaveAttribute("rows", "1");
     expect(textarea).toHaveAttribute(
       "placeholder",
-      "What would you like help with today?",
+      "Ask anything . . .",
     );
     expect(card).toContainElement(fileName);
     expect(card).toContainElement(attachButton);
     expect(card).toContainElement(smartSwitch);
+    expect(smartSwitch).toHaveAttribute("aria-describedby", smartTooltip.id);
+    expect(
+      screen.getByRole("switch", { name: "Research mode" }),
+    ).toHaveAttribute("aria-describedby", researchTooltip.id);
+    expect(
+      screen.getByRole("switch", { name: "Prompt optimization" }),
+    ).toHaveAttribute("aria-describedby", improveTooltip.id);
     expect(card).toContainElement(sendButton);
     expect(screen.queryByRole("checkbox", { name: "Compare" })).not.toBeInTheDocument();
     expect(
@@ -86,8 +110,20 @@ describe("PromptComposer", () => {
     expect(useChatStore.getState().mode).toBe("compare");
     expect(screen.getByLabelText("Compare model selectors")).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Smart routing" })).not.toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Compare with sources" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Prompt optimization" })).toBeInTheDocument();
+    const sourcesSwitch = screen.getByRole("switch", { name: "Compare with sources" });
+    const improveSwitch = screen.getByRole("switch", { name: "Prompt optimization" });
+    expect(sourcesSwitch).toHaveAttribute(
+      "aria-describedby",
+      screen.getByRole("tooltip", {
+        name: "Uses latest information from the web",
+      }).id,
+    );
+    expect(improveSwitch).toHaveAttribute(
+      "aria-describedby",
+      screen.getByRole("tooltip", {
+        name: "Helps you ask better for better results",
+      }).id,
+    );
     expect(screen.queryByRole("checkbox", { name: "Compare" })).not.toBeInTheDocument();
 
     const textarea = screen.getByRole("textbox", { name: "Prompt input" });
@@ -99,6 +135,34 @@ describe("PromptComposer", () => {
     expect(textarea).toHaveAttribute("rows", "1");
     expect(card).toContainElement(screen.getByLabelText("Compare model selectors"));
     expect(card).toContainElement(screen.getByRole("button", { name: "Send message" }));
+  });
+
+  it("shows a tapped feature tooltip for two seconds while toggling the chip", () => {
+    vi.useFakeTimers();
+    render(<PromptComposer models={DEFAULT_MODELS} />);
+
+    const researchSwitch = screen.getByRole("switch", { name: "Research mode" });
+    const tooltip = screen.getByRole("tooltip", {
+      name: "Uses latest information from the web",
+    });
+
+    const touchPointerUp = new Event("pointerup", { bubbles: true });
+    Object.defineProperty(touchPointerUp, "pointerType", { value: "touch" });
+    fireEvent(researchSwitch, touchPointerUp);
+    fireEvent.click(researchSwitch);
+
+    expect(researchSwitch).toHaveAttribute("aria-checked", "true");
+    expect(tooltip).toHaveAttribute("data-touch-visible", "true");
+
+    act(() => {
+      vi.advanceTimersByTime(1999);
+    });
+    expect(tooltip).toHaveAttribute("data-touch-visible", "true");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(tooltip).toHaveAttribute("data-touch-visible", "false");
   });
 
   it("auto-grows longer prompts and caps the textarea height", async () => {

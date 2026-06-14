@@ -10,6 +10,11 @@ const PROVIDERS: Record<
   string,
   { label: string; logoUrl: string; color: string }
 > = {
+  smart: {
+    label: "Smart routing",
+    logoUrl: "",
+    color: "#475569",
+  },
   openai: {
     label: "ChatGPT",
     logoUrl: "https://www.google.com/s2/favicons?domain_url=openai.com&sz=64",

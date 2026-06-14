@@ -97,6 +97,37 @@ describe("ResponseCard", () => {
       "Refining prompt and preparing response\u2026",
     );
   });
+
+  it("renders GFM tables with semantic headers and mobile data labels", () => {
+    render(
+      <ResponseCard
+        response={response(
+          false,
+          [
+            "| Area | Risk | Owner |",
+            "| :--- | :---: | ---: |",
+            "| API | Medium | Platform |",
+            "| UI | Low | Product |",
+          ].join("\n"),
+        )}
+      />,
+    );
+
+    const table = screen.getByRole("table");
+    expect(table).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader")).toHaveLength(3);
+    expect(screen.getByRole("columnheader", { name: "Risk" })).toHaveStyle({
+      textAlign: "center",
+    });
+    expect(screen.getByRole("cell", { name: "Platform" })).toHaveAttribute(
+      "data-label",
+      "Owner",
+    );
+    expect(screen.getByRole("region", { name: "Response table" })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
+  });
 });
 
 function response(withSources = false, text = "A compact comparison response."): ChatResponse {

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CompareSelector } from "../components/composer/CompareSelector";
@@ -82,6 +82,23 @@ describe("CompareSelector", () => {
     await user.click(within(listbox).getByRole("option", { name: /Gemini Flash/ }));
     expect(onChange).toHaveBeenCalledWith(0, "gemini:gemini-2.5-flash");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps the synchronized native select usable for mobile model selection", () => {
+    const onChange = vi.fn();
+    render(
+      <CompareSelector
+        models={models}
+        keys={["openai:gpt-5.1", "claude:claude-sonnet-4-5", ""]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(document.querySelector("#compareModel1")!, {
+      target: { value: "gemini:gemini-2.5-flash" },
+    });
+
+    expect(onChange).toHaveBeenCalledWith(0, "gemini:gemini-2.5-flash");
   });
 
   it("keeps optional feature controls inside the compare toolbar", () => {

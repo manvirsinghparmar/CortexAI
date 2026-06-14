@@ -32,6 +32,21 @@ describe("ResponseCard", () => {
     expect(screen.getByRole("button", { name: "Not helpful response" })).toBeInTheDocument();
   });
 
+  it("keeps response stats collapsed behind the mobile Details control by default", () => {
+    render(<ResponseCard response={response()} compact />);
+
+    const details = screen.getByRole("button", { name: "Details" });
+    const stats = document.getElementById(details.getAttribute("aria-controls") ?? "");
+
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(stats?.className).not.toContain("metaRowExpanded");
+
+    fireEvent.click(details);
+
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(stats?.className).toContain("metaRowExpanded");
+  });
+
   it("keeps sources collapsed until the Resources button is clicked", () => {
     render(<ResponseCard response={response(true)} compact />);
 

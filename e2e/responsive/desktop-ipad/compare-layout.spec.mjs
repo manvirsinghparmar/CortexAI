@@ -75,22 +75,33 @@ test("desktop Compare renders Markdown tables inside each response scroller", as
     await expectNoHorizontalOverflow(page);
 });
 
-test("iPad portrait stacks Compare cards in natural page flow", async ({ responsiveApp }) => {
+test("iPad portrait switches one natural-height Compare card at a time", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 820, height: 1180 });
     await restoreHistoryThread(page, "Architecture decision");
 
-    const metrics = await page.evaluate(() => {
-        const firstTurn = document.querySelector('article[aria-label="Model comparison"]');
-        const cards = [...(firstTurn?.querySelectorAll(":scope > div:last-child > article") ?? [])];
-        const rects = cards.map(card => card.getBoundingClientRect());
+    const firstTurn = page.locator('article[aria-label="Model comparison"]').first();
+    const tabs = firstTurn.getByRole("tablist", { name: "Compare model responses" });
+    const claudeTab = tabs.getByRole("tab", { name: "Claude Sonnet" });
+    const panels = firstTurn.locator('[role="tabpanel"]');
+
+    await expect(panels).toHaveCount(2);
+    await expect(panels.nth(0)).toBeVisible();
+    await expect(panels.nth(1)).toBeHidden();
+
+    const activeBodyMetrics = await panels.nth(0).locator("[id^='response-text-']").evaluate(body => {
         return {
-            stacked:
-                rects.length === 2
-                && Math.abs(rects[0].left - rects[1].left) <= 2
-                && rects[1].top > rects[0].bottom,
+            clientHeight: body.clientHeight,
+            scrollHeight: body.scrollHeight,
+            overflowY: getComputedStyle(body).overflowY,
         };
     });
-    expect(metrics.stacked).toBe(true);
+    expect(activeBodyMetrics.clientHeight).toBe(activeBodyMetrics.scrollHeight);
+    expect(activeBodyMetrics.overflowY).toBe("visible");
+
+    await claudeTab.click();
+    await expect(claudeTab).toHaveAttribute("aria-selected", "true");
+    await expect(panels.nth(0)).toBeHidden();
+    await expect(panels.nth(1)).toBeVisible();
     await expectNoHorizontalOverflow(page);
 });

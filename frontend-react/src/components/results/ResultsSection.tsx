@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getModelPresentation } from "../../config/modelPresentation";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { ResponseCard } from "./ResponseCard";
@@ -10,7 +11,7 @@ export function ResultsSection() {
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
   const hasMultipleTurns = turns.length > 1;
-  const latestTurnId = turns.at(-1)?.id ?? "";
+  const latestTurnId = turns[turns.length - 1]?.id ?? "";
   const turnCount = turns.length;
 
   useLayoutEffect(() => {
@@ -137,6 +138,14 @@ function CompareTurn({
   constrained: boolean;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
 }) {
+  const [activeResponseIndex, setActiveResponseIndex] = useState(0);
+
+  useEffect(() => {
+    if (activeResponseIndex >= turn.responses.length) {
+      setActiveResponseIndex(Math.max(0, turn.responses.length - 1));
+    }
+  }, [activeResponseIndex, turn.responses.length]);
+
   return (
     <article
       ref={(node) => registerTurn(turn.id, node)}
@@ -158,20 +167,64 @@ function CompareTurn({
       )}
 
       {turn.status !== "optimizing" && (
-        <div className={`${styles.compareGrid} ${styles.compareGridTranscript}`}>
-          {turn.responses.map((response, index) => (
-            <ResponseCard
-              key={`${turn.id}-${index}-${response.request_id}`}
-              response={response}
-              isStreaming={turn.status === "streaming" && !response.text && !response.error}
-              slotIndex={index}
-              compact
-              loadingMode="compare"
-              researchEnabled={turn.researchEnabled}
-              optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
-            />
-          ))}
-        </div>
+        <>
+          {turn.responses.length > 1 && (
+            <div
+              className={styles.mobileResponseTabs}
+              role="tablist"
+              aria-label="Compare model responses"
+            >
+              {turn.responses.map((response, index) => {
+                const presentation = getModelPresentation(
+                  response.provider,
+                  response.model,
+                );
+                const selected = index === activeResponseIndex;
+                return (
+                  <button
+                    key={`${turn.id}-tab-${response.request_id}`}
+                    type="button"
+                    role="tab"
+                    id={`${turn.id}-response-tab-${index}`}
+                    aria-selected={selected}
+                    aria-controls={`${turn.id}-response-panel-${index}`}
+                    tabIndex={selected ? 0 : -1}
+                    className={selected ? styles.mobileResponseTabActive : undefined}
+                    onClick={() => setActiveResponseIndex(index)}
+                  >
+                    {presentation.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={`${styles.compareGrid} ${styles.compareGridTranscript}`}>
+            {turn.responses.map((response, index) => (
+              <div
+                key={`${turn.id}-${index}-${response.request_id}`}
+                id={`${turn.id}-response-panel-${index}`}
+                role="tabpanel"
+                aria-labelledby={`${turn.id}-response-tab-${index}`}
+                className={`${styles.compareResponsePanel} ${
+                  index === activeResponseIndex ? styles.mobileResponsePanelActive : ""
+                }`}
+              >
+                <ResponseCard
+                  response={response}
+                  isStreaming={
+                    turn.status === "streaming" && !response.text && !response.error
+                  }
+                  slotIndex={index}
+                  compact
+                  loadingMode="compare"
+                  researchEnabled={turn.researchEnabled}
+                  optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                />
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </article>
   );

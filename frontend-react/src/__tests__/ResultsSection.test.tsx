@@ -1,5 +1,4 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResultsSection } from "../components/results/ResultsSection";
 import { useChatStore } from "../store/chatStore";
@@ -28,7 +27,7 @@ describe("ResultsSection layout states", () => {
     expect(comparison.className).not.toContain("constrainedCompareTurn");
   });
 
-  it("constrains each Compare turn when the transcript contains multiple turns", () => {
+  it("keeps every Compare turn in the tall panel grid for multi-turn transcripts", () => {
     setTurns([
       compareTurn("compare-1", "First comparison"),
       compareTurn("compare-2", "Second comparison"),
@@ -39,7 +38,7 @@ describe("ResultsSection layout states", () => {
     const transcriptGrid = screen.getByLabelText("Chat transcript").firstElementChild;
     expect(transcriptGrid?.className).toContain("multiTurnGrid");
     for (const comparison of screen.getAllByLabelText("Model comparison")) {
-      expect(comparison.className).toContain("constrainedCompareTurn");
+      expect(comparison.className).toContain("compareTurn");
     }
   });
 
@@ -55,7 +54,7 @@ describe("ResultsSection layout states", () => {
     const askArticle = askMessage?.closest("article");
     const comparison = screen.getByLabelText("Model comparison");
     expect(askArticle?.className).not.toContain("constrainedCompareTurn");
-    expect(comparison.className).toContain("constrainedCompareTurn");
+    expect(comparison.className).toContain("compareTurn");
   });
 
   it("renders Compare prompts with the same user bubble as Ask prompts", () => {
@@ -90,28 +89,14 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Generating response\u2026");
   });
 
-  it("switches the active mobile Compare response from the model tabs", async () => {
-    const user = userEvent.setup();
+  it("renders all Compare responses together without a model tab switcher", () => {
     setTurns([compareTurn("compare-switcher", "Compare responses")]);
 
     render(<ResultsSection />);
 
-    const gptTab = screen.getByRole("tab", { name: "GPT-5.1" });
-    const claudeTab = screen.getByRole("tab", { name: "Claude Sonnet" });
-    const gptPanel = screen.getByRole("tabpanel", { name: "GPT-5.1" });
-    const claudePanel = screen.getByRole("tabpanel", { name: "Claude Sonnet" });
-
-    expect(gptTab).toHaveAttribute("aria-selected", "true");
-    expect(claudeTab).toHaveAttribute("aria-selected", "false");
-    expect(gptPanel.className).toContain("mobileResponsePanelActive");
-    expect(claudePanel.className).not.toContain("mobileResponsePanelActive");
-
-    await user.click(claudeTab);
-
-    expect(gptTab).toHaveAttribute("aria-selected", "false");
-    expect(claudeTab).toHaveAttribute("aria-selected", "true");
-    expect(gptPanel.className).not.toContain("mobileResponsePanelActive");
-    expect(claudePanel.className).toContain("mobileResponsePanelActive");
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "GPT-5.1 response" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Claude Sonnet response" })).toBeInTheDocument();
   });
 
   it("uses the submitted turn flags for source-enabled Ask loading copy", () => {

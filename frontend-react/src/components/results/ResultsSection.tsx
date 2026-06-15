@@ -11,6 +11,7 @@ export function ResultsSection() {
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
   const hasMultipleTurns = turns.length > 1;
+  const hasCompareTurns = turns.some((turn) => turn.mode === "compare");
   const latestTurnId = turns[turns.length - 1]?.id ?? "";
   const turnCount = turns.length;
 
@@ -72,7 +73,7 @@ export function ResultsSection() {
       <div
         className={`${styles.singleGrid} ${
           hasMultipleTurns ? styles.multiTurnGrid : styles.oneTurnGrid
-        }`}
+        } ${hasCompareTurns ? styles.compareTranscriptGrid : ""}`}
       >
         {turns.map((turn, turnIndex) =>
           turn.mode === "compare" ? (
@@ -80,7 +81,6 @@ export function ResultsSection() {
               key={turn.id}
               turn={turn}
               turnIndex={turnIndex}
-              constrained={hasMultipleTurns}
               registerTurn={registerTurn}
             />
           ) : (
@@ -130,29 +130,24 @@ export function ResultsSection() {
 function CompareTurn({
   turn,
   turnIndex,
-  constrained,
   registerTurn,
 }: {
   turn: ChatTurn;
   turnIndex: number;
-  constrained: boolean;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
 }) {
-  const [activeResponseIndex, setActiveResponseIndex] = useState(0);
-
-  useEffect(() => {
-    if (activeResponseIndex >= turn.responses.length) {
-      setActiveResponseIndex(Math.max(0, turn.responses.length - 1));
-    }
-  }, [activeResponseIndex, turn.responses.length]);
+  const compareGridClass =
+    turn.responses.length >= 3
+      ? styles.compareGridThree
+      : turn.responses.length === 2
+        ? styles.compareGridTwo
+        : styles.compareGridOne;
 
   return (
     <article
       ref={(node) => registerTurn(turn.id, node)}
       data-turn-id={turn.id}
-      className={`${styles.turn} ${styles.compareTurn} ${
-        constrained ? styles.constrainedCompareTurn : ""
-      }`}
+      className={`${styles.turn} ${styles.compareTurn}`}
       aria-label="Model comparison"
     >
       <TurnPrompt turn={turn} turnIndex={turnIndex} />
@@ -167,48 +162,21 @@ function CompareTurn({
       )}
 
       {turn.status !== "optimizing" && (
-        <>
-          {turn.responses.length > 1 && (
-            <div
-              className={styles.mobileResponseTabs}
-              role="tablist"
-              aria-label="Compare model responses"
-            >
-              {turn.responses.map((response, index) => {
-                const presentation = getModelPresentation(
-                  response.provider,
-                  response.model,
-                );
-                const selected = index === activeResponseIndex;
-                return (
-                  <button
-                    key={`${turn.id}-tab-${response.request_id}`}
-                    type="button"
-                    role="tab"
-                    id={`${turn.id}-response-tab-${index}`}
-                    aria-selected={selected}
-                    aria-controls={`${turn.id}-response-panel-${index}`}
-                    tabIndex={selected ? 0 : -1}
-                    className={selected ? styles.mobileResponseTabActive : undefined}
-                    onClick={() => setActiveResponseIndex(index)}
-                  >
-                    {presentation.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div className={`${styles.compareGrid} ${styles.compareGridTranscript}`}>
-            {turn.responses.map((response, index) => (
+        <div
+          className={`${styles.compareGrid} ${styles.compareGridTranscript} ${compareGridClass}`}
+        >
+          {turn.responses.map((response, index) => {
+            const presentation = getModelPresentation(
+              response.provider,
+              response.model,
+            );
+            return (
               <div
                 key={`${turn.id}-${index}-${response.request_id}`}
-                id={`${turn.id}-response-panel-${index}`}
-                role="tabpanel"
-                aria-labelledby={`${turn.id}-response-tab-${index}`}
-                className={`${styles.compareResponsePanel} ${
-                  index === activeResponseIndex ? styles.mobileResponsePanelActive : ""
-                }`}
+                className={styles.compareResponsePanel}
+                role="region"
+                aria-label={`${presentation.label} response`}
+                data-response-panel
               >
                 <ResponseCard
                   response={response}
@@ -222,9 +190,9 @@ function CompareTurn({
                   optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
                 />
               </div>
-            ))}
-          </div>
-        </>
+            );
+          })}
+        </div>
       )}
     </article>
   );

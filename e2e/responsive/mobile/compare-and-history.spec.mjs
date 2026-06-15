@@ -145,11 +145,11 @@ test("mobile Compare stacks Markdown table rows with visible column labels", asy
     const { page } = responsiveApp;
     await restoreHistoryThread(page, "Compare deployment options table");
 
-    const responseTabs = page.getByRole("tablist", { name: "Compare model responses" });
-    await expect(responseTabs).toBeVisible();
-    await expect(page.getByRole("table")).toHaveCount(1);
+    await expect(page.getByRole("tablist")).toHaveCount(0);
+    await expect(page.getByRole("table")).toHaveCount(2);
     const metrics = await page
         .getByRole("region", { name: "Response table" })
+        .first()
         .evaluate(wrapper => {
             const table = wrapper.querySelector("table");
             const head = table?.querySelector("thead");
@@ -175,47 +175,51 @@ test("mobile Compare stacks Markdown table rows with visible column labels", asy
     expect(metrics.cellDisplay).toBe("grid");
     expect(metrics.cellLabel).toBe("Option");
     expect(metrics.pseudoLabel).toBe("Option");
-
-    await responseTabs.getByRole("tab", { name: "Claude Sonnet" }).click();
-    await expect(responseTabs.getByRole("tab", { name: "Claude Sonnet" })).toHaveAttribute(
-        "aria-selected",
-        "true",
-    );
-    await expect(page.getByRole("table")).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
 });
 
-test("mobile multi-turn Compare switches one natural-height response card at a time", async ({ responsiveApp }) => {
+test("mobile multi-turn Compare stacks tall independently scrollable cards", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await restoreHistoryThread(page, "Architecture decision");
 
     const firstTurn = page.locator('article[aria-label="Model comparison"]').first();
-    const tabs = firstTurn.getByRole("tablist", { name: "Compare model responses" });
-    const gptTab = tabs.getByRole("tab", { name: "GPT-5.1" });
-    const claudeTab = tabs.getByRole("tab", { name: "Claude Sonnet" });
-    const panels = firstTurn.locator('[role="tabpanel"]');
+    const panels = firstTurn.locator("[data-response-panel]");
 
     await expect(panels).toHaveCount(2);
-    await expect(gptTab).toHaveAttribute("aria-selected", "true");
     await expect(panels.nth(0)).toBeVisible();
-    await expect(panels.nth(1)).toBeHidden();
+    await expect(panels.nth(1)).toBeVisible();
 
-    const details = panels.nth(0).getByRole("button", { name: "Details" });
+    const details = panels.nth(0).getByRole("button", { name: "Show run details" });
     await expect(details).toHaveAttribute("aria-expanded", "false");
+    await expect(details).not.toContainText("Details");
+    await details.click();
+    const hideDetails = panels.nth(0).getByRole("button", { name: "Hide run details" });
+    await expect(hideDetails).toHaveAttribute("aria-expanded", "true");
+    const runDetails = panels.nth(0).locator('[id^="response-stats-"]');
+    await expect(runDetails).toBeVisible();
+    await expect(runDetails).toContainText("900ms");
+    await expect(runDetails).toContainText("tokens");
 
-    const activeBodyMetrics = await panels.nth(0).locator("[id^='response-text-']").evaluate(body => {
+    const panelMetrics = await panels.evaluateAll(elements => {
+        const rects = elements.map(element => element.getBoundingClientRect());
         return {
-            clientHeight: body.clientHeight,
-            scrollHeight: body.scrollHeight,
-            overflowY: getComputedStyle(body).overflowY,
+            stacked: rects[1].top > rects[0].bottom,
+            heights: rects.map(rect => Math.round(rect.height)),
+            bodies: elements.map(element => {
+                const body = element.querySelector("[id^='response-text-']");
+                return {
+                    clientHeight: body?.clientHeight ?? 0,
+                    scrollHeight: body?.scrollHeight ?? 0,
+                    overflowY: body ? getComputedStyle(body).overflowY : "",
+                };
+            }),
         };
     });
-    expect(activeBodyMetrics.clientHeight).toBe(activeBodyMetrics.scrollHeight);
-    expect(activeBodyMetrics.overflowY).toBe("visible");
-
-    await claudeTab.click();
-    await expect(claudeTab).toHaveAttribute("aria-selected", "true");
-    await expect(panels.nth(0)).toBeHidden();
-    await expect(panels.nth(1)).toBeVisible();
+    expect(panelMetrics.stacked).toBe(true);
+    for (const height of panelMetrics.heights) expect(height).toBeGreaterThanOrEqual(520);
+    for (const body of panelMetrics.bodies) {
+        expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+        expect(body.overflowY).toBe("auto");
+    }
     await expectNoHorizontalOverflow(page);
 });

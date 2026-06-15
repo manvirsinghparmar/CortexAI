@@ -89,21 +89,24 @@ export function ResponseCard({
               <span>{response.model || response.provider}</span>
             </div>
           </div>
-          <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
+          <div className={styles.headerActions}>
+            <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
+            <button
+              type="button"
+              className={styles.statsToggle}
+              aria-label={statsOpen ? "Hide run details" : "Show run details"}
+              title={statsOpen ? "Hide run details" : "Show run details"}
+              aria-expanded={statsOpen}
+              aria-controls={statsId}
+              onClick={() => setStatsOpen((open) => !open)}
+            >
+              <span
+                className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          className={styles.statsToggle}
-          aria-expanded={statsOpen}
-          aria-controls={statsId}
-          onClick={() => setStatsOpen((open) => !open)}
-        >
-          <span>Details</span>
-          <span
-            className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
-            aria-hidden="true"
-          />
-        </button>
         <div
           id={statsId}
           className={`${styles.metaRow} ${statsOpen ? styles.metaRowExpanded : ""}`}
@@ -116,7 +119,11 @@ export function ResponseCard({
             <Icon name="document" />
             {formatTokens(totalTokens)} tokens
           </span>
-          {response.estimated_cost > 0 && <span>${response.estimated_cost.toFixed(5)}</span>}
+          {response.estimated_cost > 0 && (
+            <span>
+              <Icon name="cost" />${response.estimated_cost.toFixed(5)}
+            </span>
+          )}
         </div>
       </header>
 
@@ -385,7 +392,18 @@ function isExternal(href: string | undefined): boolean {
   return !!href && /^https?:\/\//i.test(href);
 }
 
-function Icon({ name }: { name: "bolt" | "document" | "resources" | "copy" | "thumbUp" | "thumbDown" }) {
+function Icon({
+  name,
+}: {
+  name:
+    | "bolt"
+    | "document"
+    | "cost"
+    | "resources"
+    | "copy"
+    | "thumbUp"
+    | "thumbDown";
+}) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       {name === "bolt" && <path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z" />}
@@ -395,6 +413,13 @@ function Icon({ name }: { name: "bolt" | "document" | "resources" | "copy" | "th
           <path d="M14 3v5h4" />
           <path d="M9 13h6" />
           <path d="M9 17h6" />
+        </>
+      )}
+      {name === "cost" && (
+        <>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M15 9.5c-.8-1-1.8-1.5-3.2-1.5-1.5 0-2.8.8-2.8 2s1.1 1.8 3 2c1.9.2 3 1 3 2.1 0 1.2-1.2 2-2.9 2-1.5 0-2.7-.5-3.6-1.6" />
+          <path d="M12 6.5v11" />
         </>
       )}
       {name === "resources" && (

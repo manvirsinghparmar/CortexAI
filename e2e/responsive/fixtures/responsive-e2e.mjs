@@ -179,6 +179,7 @@ function responsiveHistoryEntries() {
         }),
         ...compareHistoryEntries(),
         ...compareTableHistoryEntries(),
+        ...threeModelCompareHistoryEntries(),
     ];
 }
 
@@ -241,6 +242,27 @@ function compareTableHistoryEntries() {
             tokens: 670,
         }),
     ];
+}
+
+function threeModelCompareHistoryEntries() {
+    return [
+        ["openai", "gpt-5.1"],
+        ["claude", "claude-sonnet-4-5"],
+        ["deepseek", "deepseek-chat"],
+    ].map(([provider, modelName], index) =>
+        historyEntry({
+            id: 40 + index,
+            sessionId: "compare-three-model-session",
+            requestGroupId: "compare-three-model-group",
+            timestamp: `2026-06-12T11:30:0${index}Z`,
+            mode: "compare",
+            prompt: "Three model platform comparison",
+            response: LONG_RESPONSE,
+            provider,
+            modelName,
+            tokens: 900 + index * 100,
+        }),
+    );
 }
 
 function historyEntry({

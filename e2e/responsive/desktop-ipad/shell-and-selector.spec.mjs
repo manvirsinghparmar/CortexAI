@@ -22,7 +22,7 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
 
     const sidebar = page.locator("aside[aria-label='Primary navigation']");
     const rows = sidebar.locator("button[data-history-thread]");
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(5);
 
     const rowMetrics = await rows.evaluateAll(elements =>
         elements.map(element => {

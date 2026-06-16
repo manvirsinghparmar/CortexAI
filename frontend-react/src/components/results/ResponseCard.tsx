@@ -113,7 +113,7 @@ export function ResponseCard({
         >
           <span>
             <Icon name="bolt" />
-            {response.latency_ms || 0}ms
+            {formatLatencySeconds(response.latency_ms)}
           </span>
           <span>
             <Icon name="document" />
@@ -373,6 +373,10 @@ function getModelBadge(provider: string, model: string) {
 function formatTokens(tokens: number) {
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k`;
   return tokens.toLocaleString();
+}
+
+function formatLatencySeconds(latencyMs: number) {
+  return `${(Math.max(0, latencyMs) / 1000).toFixed(2)} sec`;
 }
 
 function errorMessage(response: ChatResponse): string {

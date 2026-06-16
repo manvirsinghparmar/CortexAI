@@ -76,11 +76,7 @@ export function PromptComposer({ models }: PromptComposerProps) {
   const showModelRow = mode === "compare" || showModelDropdown;
 
   return (
-    <div
-      className={`${styles.card} ${
-        mode === "compare" ? styles.compareCard : ""
-      }`}
-    >
+    <div className={styles.card}>
       {showModelRow && (
         <div className={styles.modelRow}>
           {mode === "compare" ? (

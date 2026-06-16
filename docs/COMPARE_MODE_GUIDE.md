@@ -251,7 +251,7 @@ COMPARE_TARGETS = [
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 - **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
-- **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript. With multiple turns, each comparison remains 480-620px tall, the transcript scrolls vertically, and every model response retains its own internal scrollbar. Mobile remains stacked in natural page flow.
+- **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript, and desktop/tablet comparisons keep tall visible cards with internal response-body scrolling. Phone-sized mobile uses a segmented model switcher and shows one selected response card at a time in natural page flow.
 - **Shared Prompt Presentation**: Compare prompts use the same right-aligned `You` bubble as Ask mode, including attachment and prompt-optimization states. Aggregate Compare totals render separately.
 - **New-Turn Reveal**: Submitting a Compare follow-up always smoothly reveals that new question once, even when the user was viewing an older turn. Streaming response growth does not continuously move the transcript; `Jump to latest` remains user-controlled.
 - **Independent Response Readiness**: Every browser response card shows the shared provider/model logo treatment and owns its own calm loading state. As soon as one model streams text or returns an error, only that card leaves the loading state; slower targets continue showing their source/improvement-aware skeleton.

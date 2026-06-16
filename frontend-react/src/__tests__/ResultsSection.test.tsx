@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResultsSection } from "../components/results/ResultsSection";
 import { useChatStore } from "../store/chatStore";
@@ -89,14 +90,28 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Generating response\u2026");
   });
 
-  it("renders all Compare responses together without a model tab switcher", () => {
+  it("switches the active mobile Compare response from the model tabs", async () => {
+    const user = userEvent.setup();
     setTurns([compareTurn("compare-switcher", "Compare responses")]);
 
     render(<ResultsSection />);
 
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "GPT-5.1 response" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Claude Sonnet response" })).toBeInTheDocument();
+    const gptTab = screen.getByRole("tab", { name: "GPT-5.1" });
+    const claudeTab = screen.getByRole("tab", { name: "Claude Sonnet" });
+    const gptPanel = screen.getByRole("tabpanel", { name: "GPT-5.1" });
+    const claudePanel = screen.getByRole("tabpanel", { name: "Claude Sonnet" });
+
+    expect(gptTab).toHaveAttribute("aria-selected", "true");
+    expect(claudeTab).toHaveAttribute("aria-selected", "false");
+    expect(gptPanel.className).toContain("mobileResponsePanelActive");
+    expect(claudePanel.className).not.toContain("mobileResponsePanelActive");
+
+    await user.click(claudeTab);
+
+    expect(gptTab).toHaveAttribute("aria-selected", "false");
+    expect(claudeTab).toHaveAttribute("aria-selected", "true");
+    expect(gptPanel.className).not.toContain("mobileResponsePanelActive");
+    expect(claudePanel.className).toContain("mobileResponsePanelActive");
   });
 
   it("uses the submitted turn flags for source-enabled Ask loading copy", () => {

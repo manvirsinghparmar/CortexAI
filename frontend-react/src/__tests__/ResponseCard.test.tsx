@@ -47,7 +47,7 @@ describe("ResponseCard", () => {
     expect(details).toHaveAttribute("aria-expanded", "true");
     expect(details).toHaveAccessibleName("Hide run details");
     expect(stats?.className).toContain("metaRowExpanded");
-    expect(stats).toHaveTextContent("320ms");
+    expect(stats).toHaveTextContent("20.03 sec");
     expect(stats).toHaveTextContent("60 tokens");
     expect(stats).toHaveTextContent("$0.00100");
   });
@@ -157,7 +157,7 @@ function response(withSources = false, text = "A compact comparison response."):
     text,
     provider: "claude",
     model: "claude-sonnet-4-5",
-    latency_ms: 320,
+    latency_ms: 20027,
     token_usage: {
       prompt_tokens: 20,
       completion_tokens: 40,

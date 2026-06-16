@@ -136,12 +136,20 @@ function CompareTurn({
   turnIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
 }) {
+  const [activeResponseIndex, setActiveResponseIndex] = useState(0);
   const compareGridClass =
     turn.responses.length >= 3
       ? styles.compareGridThree
       : turn.responses.length === 2
         ? styles.compareGridTwo
         : styles.compareGridOne;
+  const hasResponseTabs = turn.responses.length > 1;
+
+  useEffect(() => {
+    if (activeResponseIndex >= turn.responses.length) {
+      setActiveResponseIndex(Math.max(0, turn.responses.length - 1));
+    }
+  }, [activeResponseIndex, turn.responses.length]);
 
   return (
     <article
@@ -162,37 +170,76 @@ function CompareTurn({
       )}
 
       {turn.status !== "optimizing" && (
-        <div
-          className={`${styles.compareGrid} ${styles.compareGridTranscript} ${compareGridClass}`}
-        >
-          {turn.responses.map((response, index) => {
-            const presentation = getModelPresentation(
-              response.provider,
-              response.model,
-            );
-            return (
-              <div
-                key={`${turn.id}-${index}-${response.request_id}`}
-                className={styles.compareResponsePanel}
-                role="region"
-                aria-label={`${presentation.label} response`}
-                data-response-panel
-              >
-                <ResponseCard
-                  response={response}
-                  isStreaming={
-                    turn.status === "streaming" && !response.text && !response.error
+        <>
+          {hasResponseTabs && (
+            <div
+              className={styles.mobileResponseTabs}
+              role="tablist"
+              aria-label="Compare model responses"
+            >
+              {turn.responses.map((response, index) => {
+                const presentation = getModelPresentation(
+                  response.provider,
+                  response.model,
+                );
+                const selected = index === activeResponseIndex;
+                return (
+                  <button
+                    key={`${turn.id}-tab-${response.request_id}`}
+                    type="button"
+                    role="tab"
+                    id={`${turn.id}-response-tab-${index}`}
+                    aria-selected={selected}
+                    aria-controls={`${turn.id}-response-panel-${index}`}
+                    tabIndex={selected ? 0 : -1}
+                    className={selected ? styles.mobileResponseTabActive : undefined}
+                    onClick={() => setActiveResponseIndex(index)}
+                  >
+                    {presentation.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div
+            className={`${styles.compareGrid} ${styles.compareGridTranscript} ${compareGridClass}`}
+          >
+            {turn.responses.map((response, index) => {
+              const presentation = getModelPresentation(
+                response.provider,
+                response.model,
+              );
+              return (
+                <div
+                  key={`${turn.id}-${index}-${response.request_id}`}
+                  id={`${turn.id}-response-panel-${index}`}
+                  className={`${styles.compareResponsePanel} ${
+                    index === activeResponseIndex ? styles.mobileResponsePanelActive : ""
+                  }`}
+                  role={hasResponseTabs ? "tabpanel" : "region"}
+                  aria-labelledby={
+                    hasResponseTabs ? `${turn.id}-response-tab-${index}` : undefined
                   }
-                  slotIndex={index}
-                  compact
-                  loadingMode="compare"
-                  researchEnabled={turn.researchEnabled}
-                  optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
-                />
-              </div>
-            );
-          })}
-        </div>
+                  aria-label={hasResponseTabs ? undefined : `${presentation.label} response`}
+                  data-response-panel
+                >
+                  <ResponseCard
+                    response={response}
+                    isStreaming={
+                      turn.status === "streaming" && !response.text && !response.error
+                    }
+                    slotIndex={index}
+                    compact
+                    loadingMode="compare"
+                    researchEnabled={turn.researchEnabled}
+                    optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </article>
   );

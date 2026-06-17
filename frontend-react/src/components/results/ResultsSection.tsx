@@ -91,18 +91,17 @@ export function ResultsSection() {
               className={`${styles.turn} ${styles.singleTurn}`}
             >
               <TurnPrompt turn={turn} turnIndex={turnIndex} />
-              {turn.status !== "optimizing" &&
-                turn.responses.map((response, responseIndex) => (
-                  <ResponseCard
-                    key={response.request_id}
-                    response={response}
-                    isStreaming={turn.status === "streaming"}
-                    slotIndex={responseIndex}
-                    loadingMode="ask"
-                    researchEnabled={turn.researchEnabled}
-                    optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
-                  />
-                ))}
+              {turn.responses.map((response, responseIndex) => (
+                <ResponseCard
+                  key={response.request_id}
+                  response={response}
+                  isStreaming={isResponseLoading(turn, response)}
+                  slotIndex={responseIndex}
+                  loadingMode="ask"
+                  researchEnabled={turn.researchEnabled}
+                  optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                />
+              ))}
             </article>
           ),
         )}
@@ -169,7 +168,7 @@ function CompareTurn({
         </div>
       )}
 
-      {turn.status !== "optimizing" && (
+      {turn.responses.length > 0 && (
         <>
           {hasResponseTabs && (
             <div
@@ -226,9 +225,7 @@ function CompareTurn({
                 >
                   <ResponseCard
                     response={response}
-                    isStreaming={
-                      turn.status === "streaming" && !response.text && !response.error
-                    }
+                    isStreaming={isResponseLoading(turn, response)}
                     slotIndex={index}
                     compact
                     loadingMode="compare"
@@ -243,6 +240,13 @@ function CompareTurn({
       )}
     </article>
   );
+}
+
+function isResponseLoading(turn: ChatTurn, response: ChatTurn["responses"][number]) {
+  if (response.error || response.ui_status === "complete" || response.ui_status === "failed") {
+    return false;
+  }
+  return turn.status === "optimizing" || turn.status === "streaming";
 }
 
 function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) {

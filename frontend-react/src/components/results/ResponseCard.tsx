@@ -2,7 +2,9 @@ import {
   Children,
   cloneElement,
   isValidElement,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -14,7 +16,7 @@ import type {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getModelPresentation } from "../../config/modelPresentation";
-import type { ChatResponse } from "../../types";
+import type { ChatResponse, ResponseRunStatus } from "../../types";
 import { ProviderLogo } from "../shared/ProviderLogo";
 import {
   ResponseLoadingState,
@@ -49,9 +51,19 @@ export function ResponseCard({
   const softError = response.error?.details?.kind === "transient_capacity";
   const badge = getModelBadge(response.provider, response.model);
   const modelPresentation = getModelPresentation(response.provider, response.model);
-  const totalTokens = response.token_usage.total_tokens;
   const responseText = hasError ? errorMessage(response) : response.text;
-  const showLoading = !hasError && !responseText && !!isStreaming;
+  const loadingStatus = resolveLoadingStatus(response, !!isStreaming, hasError);
+  const elapsedMs = useElapsedMs(response.started_at, !!loadingStatus);
+  const totalTokens = validTokenCount(response.token_usage?.total_tokens);
+  const durationMs = validDurationMs(response.latency_ms);
+  const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
+  const isFailed = hasError || response.ui_status === "failed";
+  const hasCost = !loadingStatus && !isFailed && response.estimated_cost > 0;
+  const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
+  const hasMetaContent = !!loadingStatus || isFailed || hasCompletedMetrics || hasCost;
+  const metaPinned = !!loadingStatus || isFailed;
+  const showStatsToggle = hasMetaContent && !metaPinned;
+  const showLoading = !!loadingStatus && !responseText;
   const sourceBaseId = useMemo(() => `cite-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`, [
     response.request_id,
   ]);
@@ -91,40 +103,65 @@ export function ResponseCard({
           </div>
           <div className={styles.headerActions}>
             <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
-            <button
-              type="button"
-              className={styles.statsToggle}
-              aria-label={statsOpen ? "Hide run details" : "Show run details"}
-              title={statsOpen ? "Hide run details" : "Show run details"}
-              aria-expanded={statsOpen}
-              aria-controls={statsId}
-              onClick={() => setStatsOpen((open) => !open)}
-            >
-              <span
-                className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
-                aria-hidden="true"
-              />
-            </button>
+            {showStatsToggle && (
+              <button
+                type="button"
+                className={styles.statsToggle}
+                aria-label={statsOpen ? "Hide run details" : "Show run details"}
+                title={statsOpen ? "Hide run details" : "Show run details"}
+                aria-expanded={statsOpen}
+                aria-controls={statsId}
+                onClick={() => setStatsOpen((open) => !open)}
+              >
+                <span
+                  className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
+                  aria-hidden="true"
+                />
+              </button>
+            )}
           </div>
         </div>
-        <div
-          id={statsId}
-          className={`${styles.metaRow} ${statsOpen ? styles.metaRowExpanded : ""}`}
-        >
-          <span>
-            <Icon name="bolt" />
-            {formatLatencySeconds(response.latency_ms)}
-          </span>
-          <span>
-            <Icon name="document" />
-            {formatTokens(totalTokens)} tokens
-          </span>
-          {response.estimated_cost > 0 && (
-            <span>
-              <Icon name="cost" />${response.estimated_cost.toFixed(5)}
-            </span>
-          )}
-        </div>
+        {hasMetaContent && (
+          <div
+            id={statsId}
+            className={`${styles.metaRow} ${statsOpen ? styles.metaRowExpanded : ""} ${
+              metaPinned ? styles.metaRowPinned : ""
+            } ${loadingStatus ? styles.loadingMetaRow : ""} ${
+              isFailed ? styles.failedMetaRow : ""
+            }`}
+          >
+            {loadingStatus ? (
+              <span className={styles.loadingMeta}>
+                <Icon name="timer" />
+                {formatElapsedClock(elapsedMs)} elapsed · {loadingStatusText(loadingStatus)}
+              </span>
+            ) : isFailed ? (
+              <span className={styles.failedMeta}>
+                Failed after {formatDurationSeconds(failedDurationMs)}
+              </span>
+            ) : (
+              <>
+                {durationMs !== null && (
+                  <span className={styles.metricText}>
+                    <Icon name="bolt" />
+                    {formatDurationSeconds(durationMs)}
+                  </span>
+                )}
+                {totalTokens !== null && (
+                  <span className={styles.metricText}>
+                    <Icon name="document" />
+                    {formatTokens(totalTokens)} tokens
+                  </span>
+                )}
+                {hasCost && (
+                  <span>
+                    <Icon name="cost" />${response.estimated_cost.toFixed(5)}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </header>
 
       <div
@@ -370,13 +407,107 @@ function getModelBadge(provider: string, model: string) {
   return { label: "MODEL", tone: "legacy" as const };
 }
 
+const LOADING_STATUSES = new Set<ResponseRunStatus>([
+  "queued",
+  "optimizing",
+  "requesting",
+  "streaming",
+  "finalizing",
+]);
+
+function resolveLoadingStatus(
+  response: ChatResponse,
+  streaming: boolean,
+  hasError: boolean,
+): ResponseRunStatus | null {
+  if (hasError || response.ui_status === "failed" || response.ui_status === "complete") {
+    return null;
+  }
+  if (!streaming) return null;
+  if (response.ui_status && LOADING_STATUSES.has(response.ui_status)) {
+    return response.ui_status;
+  }
+  return "streaming";
+}
+
+function loadingStatusText(status: ResponseRunStatus) {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "optimizing":
+      return "Refining prompt";
+    case "requesting":
+      return "Connecting to model";
+    case "streaming":
+      return "Generating response";
+    case "finalizing":
+      return "Finalizing";
+    default:
+      return "Generating response";
+  }
+}
+
+function useElapsedMs(startedAt: string | undefined, enabled: boolean) {
+  const fallbackStartedAt = useRef(Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const startedAtMs = parseTimestamp(startedAt) ?? fallbackStartedAt.current;
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [enabled, startedAtMs]);
+
+  return Math.max(0, nowMs - startedAtMs);
+}
+
+function resolveFailedDurationMs(response: ChatResponse, elapsedMs: number) {
+  const latencyMs = validDurationMs(response.latency_ms);
+  if (latencyMs !== null) return latencyMs;
+  const startedAtMs = parseTimestamp(response.started_at);
+  const failedAtMs = parseTimestamp(response.failed_at);
+  if (startedAtMs !== null && failedAtMs !== null) {
+    return Math.max(0, failedAtMs - startedAtMs);
+  }
+  return elapsedMs;
+}
+
+function validDurationMs(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function validTokenCount(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function parseTimestamp(value: string | undefined): number | null {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function formatTokens(tokens: number) {
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k`;
   return tokens.toLocaleString();
 }
 
-function formatLatencySeconds(latencyMs: number) {
-  return `${(Math.max(0, latencyMs) / 1000).toFixed(2)} sec`;
+function formatDurationSeconds(durationMs: number) {
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)} sec`;
+}
+
+function formatElapsedClock(durationMs: number) {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const paddedMinutes = String(minutes).padStart(2, "0");
+  const paddedSeconds = String(seconds).padStart(2, "0");
+  return hours > 0
+    ? `${hours}:${paddedMinutes}:${paddedSeconds}`
+    : `${paddedMinutes}:${paddedSeconds}`;
 }
 
 function errorMessage(response: ChatResponse): string {
@@ -402,6 +533,7 @@ function Icon({
   name:
     | "bolt"
     | "document"
+    | "timer"
     | "cost"
     | "resources"
     | "copy"
@@ -417,6 +549,14 @@ function Icon({
           <path d="M14 3v5h4" />
           <path d="M9 13h6" />
           <path d="M9 17h6" />
+        </>
+      )}
+      {name === "timer" && (
+        <>
+          <circle cx="12" cy="13" r="7" />
+          <path d="M12 13 15 10" />
+          <path d="M9 2h6" />
+          <path d="M12 2v4" />
         </>
       )}
       {name === "cost" && (

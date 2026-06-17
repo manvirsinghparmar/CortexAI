@@ -8,11 +8,10 @@ import type {
   HistoryEntry,
   HistoryThread,
   PromptOptimizationState,
+  ResponseRunStatus,
   TurnStatus,
 } from "../types";
 import { buildTurnsFromHistoryEntries } from "../history/historyThreads";
-
-const emptyUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
 interface BeginTurnInput {
   mode: ChatMode;
@@ -228,19 +227,24 @@ export const useChatStore = create<ChatStoreState>((set) => ({
             : state.streaming,
     })),
   setTurnCompareSummary: (turnId, summary) =>
-    set((state) => ({
-      turns: state.turns.map((turn) =>
-        turn.id === turnId
-          ? {
-              ...turn,
-              requestGroupId: summary.request_group_id,
-              compareSummary: summary,
-              responses: summary.responses,
-            }
-          : turn,
-      ),
-      responses: state.activeTurnId === turnId ? summary.responses : state.responses,
-    })),
+    set((state) => {
+      let activeResponses = state.responses;
+      const turns = state.turns.map((turn) => {
+        if (turn.id !== turnId) return turn;
+        const responses = mergeCompletedResponses(turn.responses, summary.responses);
+        if (state.activeTurnId === turnId) activeResponses = responses;
+        return {
+          ...turn,
+          requestGroupId: summary.request_group_id,
+          compareSummary: { ...summary, responses },
+          responses,
+        };
+      });
+      return {
+        turns,
+        responses: state.activeTurnId === turnId ? activeResponses : state.responses,
+      };
+    }),
   hydrateFromHistoryThread: (thread) => {
     const turns = buildTurnsFromHistoryEntries(thread.entries);
     const latestTurn = turns[turns.length - 1] ?? null;
@@ -303,19 +307,24 @@ export function makePlaceholderResponse(
   provider: string,
   model: string,
   sessionId?: string | null,
+  options: { status?: ResponseRunStatus; startedAt?: string } = {},
 ): ChatResponse {
+  const timestamp = new Date().toISOString();
+  const startedAt = options.startedAt ?? timestamp;
   return {
     request_id: makeId(`pending-${index}`),
     session_id: sessionId ?? undefined,
     text: "",
     provider: provider || "auto",
     model: model || "Working",
-    latency_ms: 0,
-    token_usage: emptyUsage,
+    latency_ms: null,
+    token_usage: null,
     estimated_cost: 0,
     cost_currency: "USD",
     web_source_items: [],
-    timestamp: new Date().toISOString(),
+    timestamp,
+    ui_status: options.status ?? "queued",
+    started_at: startedAt,
   };
 }
 
@@ -340,6 +349,28 @@ function updateResponseState(
     turns,
     responses: state.activeTurnId === turnId ? active?.responses ?? state.responses : state.responses,
   };
+}
+
+function mergeCompletedResponses(
+  existing: ChatResponse[],
+  completed: ChatResponse[],
+): ChatResponse[] {
+  const resolvedAt = new Date().toISOString();
+  return completed.map((response, index) => {
+    const previous = existing[index];
+    const failed = !!response.error;
+    return {
+      ...response,
+      started_at: previous?.started_at ?? response.started_at,
+      completed_at: failed
+        ? response.completed_at ?? previous?.completed_at
+        : response.completed_at ?? previous?.completed_at ?? resolvedAt,
+      failed_at: failed
+        ? response.failed_at ?? previous?.failed_at ?? resolvedAt
+        : response.failed_at,
+      ui_status: failed ? "failed" : "complete",
+    };
+  });
 }
 
 function makeId(prefix = "turn"): string {

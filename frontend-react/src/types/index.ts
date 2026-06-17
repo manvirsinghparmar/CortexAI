@@ -60,6 +60,15 @@ export interface TokenUsage {
   total_tokens: number;
 }
 
+export type ResponseRunStatus =
+  | "queued"
+  | "optimizing"
+  | "requesting"
+  | "streaming"
+  | "finalizing"
+  | "complete"
+  | "failed";
+
 export interface ApiError {
   code: string;
   message: string;
@@ -79,14 +88,18 @@ export interface ChatResponse {
   text: string;
   provider: string;
   model: string;
-  latency_ms: number;
-  token_usage: TokenUsage;
+  latency_ms: number | null;
+  token_usage: TokenUsage | null;
   estimated_cost: number;
   cost_currency: string;
   finish_reason?: string;
   error?: ApiError;
   web_source_items: WebSourceItem[];
   timestamp: string;
+  ui_status?: ResponseRunStatus;
+  started_at?: string;
+  completed_at?: string;
+  failed_at?: string;
 }
 
 export interface CompareResponse {

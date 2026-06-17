@@ -1,9 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResponseCard } from "../components/results/ResponseCard";
 import type { ChatResponse } from "../types";
 
 describe("ResponseCard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows a friendly model name while retaining the exact API model ID", () => {
     const { container } = render(<ResponseCard response={response()} compact />);
 
@@ -47,9 +51,96 @@ describe("ResponseCard", () => {
     expect(details).toHaveAttribute("aria-expanded", "true");
     expect(details).toHaveAccessibleName("Hide run details");
     expect(stats?.className).toContain("metaRowExpanded");
-    expect(stats).toHaveTextContent("20.03 sec");
+    expect(stats).toHaveTextContent("20.0 sec");
     expect(stats).toHaveTextContent("60 tokens");
     expect(stats).toHaveTextContent("$0.00100");
+    expect(stats?.querySelectorAll("svg")).toHaveLength(3);
+  });
+
+  it("shows live elapsed loading meta without placeholder zero metrics", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-09T00:00:08.000Z"));
+    const pending = {
+      ...response(false, ""),
+      latency_ms: null,
+      token_usage: null,
+      estimated_cost: 0,
+      ui_status: "streaming" as const,
+      started_at: "2026-06-09T00:00:00.000Z",
+    };
+
+    render(<ResponseCard response={pending} isStreaming loadingMode="compare" />);
+
+    const header = document.querySelector("header");
+    expect(header).toHaveTextContent("00:08 elapsed · Generating response");
+    expect(header).not.toHaveTextContent("0.00 sec");
+    expect(header).not.toHaveTextContent("0 tokens");
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(header).toHaveTextContent("00:10 elapsed · Generating response");
+  });
+
+  it("formats completed metrics with duration and grouped token count", () => {
+    const completed = {
+      ...response(false, "Completed answer."),
+      latency_ms: 12400,
+      token_usage: {
+        prompt_tokens: 248,
+        completion_tokens: 1000,
+        total_tokens: 1248,
+      },
+      estimated_cost: 0,
+    };
+
+    render(<ResponseCard response={completed} compact />);
+
+    const header = document.querySelector("header");
+    expect(header).toHaveTextContent("12.4 sec");
+    expect(header).toHaveTextContent("1,248 tokens");
+    expect(header?.querySelectorAll("svg")).toHaveLength(2);
+    expect(header).not.toHaveTextContent("1.2k");
+  });
+
+  it("hides the token metric when completed token usage is unavailable", () => {
+    const completed = {
+      ...response(false, "Completed answer."),
+      token_usage: null,
+      estimated_cost: 0,
+    };
+
+    render(<ResponseCard response={completed} compact />);
+
+    const header = document.querySelector("header");
+    expect(header).toHaveTextContent("20.0 sec");
+    expect(header).not.toHaveTextContent("tokens");
+  });
+
+  it("shows failed elapsed time without token metrics", () => {
+    const failed = {
+      ...response(false, ""),
+      latency_ms: null,
+      token_usage: null,
+      estimated_cost: 0,
+      ui_status: "failed" as const,
+      started_at: "2026-06-09T00:00:00.000Z",
+      failed_at: "2026-06-09T00:00:08.200Z",
+      error: {
+        code: "stream_error",
+        message: "Stream disconnected.",
+        provider: "claude",
+        retryable: false,
+        details: {},
+      },
+    };
+
+    render(<ResponseCard response={failed} compact />);
+
+    const header = document.querySelector("header");
+    expect(header).toHaveTextContent("Failed after 8.2 sec");
+    expect(header).not.toHaveTextContent("tokens");
   });
 
   it("keeps sources collapsed until the Resources button is clicked", () => {

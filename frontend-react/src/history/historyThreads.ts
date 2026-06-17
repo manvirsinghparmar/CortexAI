@@ -124,7 +124,10 @@ function buildCompareSummary(
     responses,
     success_count: responses.length - errorCount,
     error_count: errorCount,
-    total_tokens: responses.reduce((sum, response) => sum + response.token_usage.total_tokens, 0),
+    total_tokens: responses.reduce(
+      (sum, response) => sum + finiteNumber(response.token_usage?.total_tokens),
+      0,
+    ),
     total_cost: responses.reduce((sum, response) => sum + response.estimated_cost, 0),
     timestamp,
   };
@@ -138,12 +141,15 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
     text: isError ? "" : entry.response,
     provider: entry.provider,
     model: entry.model,
-    latency_ms: entry.latency_ms ?? 0,
-    token_usage: {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: entry.tokens ?? 0,
-    },
+    latency_ms: finiteNumberOrNull(entry.latency_ms),
+    token_usage:
+      finiteNumberOrNull(entry.tokens) === null
+        ? null
+        : {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: Number(entry.tokens),
+          },
     estimated_cost: entry.cost ?? 0,
     cost_currency: "USD",
     error: isError
@@ -157,6 +163,7 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
       : undefined,
     web_source_items: entry.web_source_items ?? [],
     timestamp: entry.timestamp,
+    ui_status: isError ? "failed" : "complete",
   };
 }
 
@@ -191,6 +198,10 @@ function parseTimestamp(value: string | undefined): number {
 
 function finiteNumber(value: number | undefined): number {
   return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function finiteNumberOrNull(value: number | undefined): number | null {
+  return Number.isFinite(value) ? Number(value) : null;
 }
 
 function distinct(values: string[]): string[] {

@@ -234,7 +234,9 @@ describe("prompt optimization", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Refining your prompt for better results"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 

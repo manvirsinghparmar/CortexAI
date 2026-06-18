@@ -30,7 +30,7 @@ describe("ResponseCard", () => {
   it("keeps compact actions accessible by name", () => {
     render(<ResponseCard response={response()} compact />);
 
-    expect(screen.getByRole("button", { name: "Resources" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Resources" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy response" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Helpful response" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Not helpful response" })).toBeInTheDocument();
@@ -164,17 +164,12 @@ describe("ResponseCard", () => {
     expect(header).not.toHaveTextContent("tokens");
   });
 
-  it("keeps sources collapsed until the Resources button is clicked", () => {
-    render(<ResponseCard response={response(true)} compact />);
+  it("does not render legacy source controls when sources have no inline markers", () => {
+    render(<ResponseCard response={response(true, "A sourced answer without inline refs.")} compact />);
 
-    const resources = screen.getByRole("button", { name: "Resources" });
-    expect(resources).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Resources" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /source:/i })).not.toBeInTheDocument();
     expect(screen.queryByText("CortexAI documentation")).not.toBeInTheDocument();
-
-    fireEvent.click(resources);
-
-    expect(resources).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("CortexAI documentation")).toBeInTheDocument();
   });
 
   it("replaces the loading state as soon as streamed text arrives", () => {

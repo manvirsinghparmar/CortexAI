@@ -578,26 +578,6 @@
   stroke-width: 1.8;
 }
 
-.sources {
-  flex: 0 0 auto;
-  border-top: 1px solid rgb(198 198 205 / 20%);
-  padding: 10px 24px 14px;
-  color: var(--on-surface-variant);
-  font: 500 13px/18px var(--font-sans);
-}
-
-.sources ul {
-  display: grid;
-  gap: 6px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sources a {
-  color: var(--secondary);
-}
-
 .compact .header {
   padding: 16px 18px 14px;
 }
@@ -668,10 +648,6 @@
 
 .compact .actionButton span {
   display: none;
-}
-
-.compact .sources {
-  padding: 8px 24px 12px;
 }
 
 @keyframes blink {

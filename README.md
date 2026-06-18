@@ -285,10 +285,10 @@ Frontend runtime config (`/runtime-config.js`):
 - Ask and Compare response headers use the same shared provider-logo and model-presentation resolver as the model picker. Failed or unavailable logo assets retain a provider-initial fallback instead of leaving a blank header.
 - Empty streaming cards render an independent request-aware loading state with a subtle sparkle and skeleton lines. Ask, Compare, source-enabled, and prompt-improved turns use contextual copy, and the loading block disappears when that card receives its first token or error.
 - Smart Ask pending cards remain model-neutral because the chat stream `start` event contains only a pre-runtime routing preview. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
-- Response card controls render as a minimal icon row for Resources, copy, and feedback actions.
-- Response sources start collapsed and render only after the user opens the Resources control.
+- Response card controls render as a minimal icon row for copy and feedback actions.
+- Response sources render inline as publisher-name citation pills derived from `web_source_items`; grouped markers such as `[1][2][3]` collapse into one pill with a preview card listing each linked source.
 - Response Markdown rendering preserves explicit ordered-list numbering even when numbered items are separated by explanatory text.
-- React response Markdown includes response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Tables stay inside a horizontal response-card scroller on desktop and become labelled stacked rows on mobile.
+- React response Markdown includes inline citation pills with tap/click source previews, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Tables stay inside a horizontal response-card scroller on desktop and become labelled stacked rows on mobile.
 - Streaming Ask and Compare cards progressively render buffered Markdown instead of raw text.
 - Whenever a new Ask or Compare turn is submitted, React performs one smooth reveal of that new turn so the submitted question becomes visible even when the user was viewing an older turn.
 - Streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.
@@ -502,7 +502,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
 - In the browser UI, Compare starts with `With sources` enabled by default and keeps a manual off choice for that page session.
 - Frontend Compare selectors support per-model removal with compact circular controls attached to each selector. Remove controls show only when three models are active; removing any slot compacts the remaining two models, preserving the API's two-target minimum. Request payloads include only active selected models.
-- Frontend Compare response cards hide per-card action label text in side-by-side layouts and keep compact Resources/copy/feedback icons; aggregate tokens, usage, and success counts remain in the summary bar.
+- Frontend Compare response cards hide per-card action label text in side-by-side layouts and keep compact copy/feedback icons; inline citation pills carry source previews, while aggregate tokens, usage, and success counts remain in the summary bar.
 - Frontend Compare selectors appear as removable model chips in the unified composer. React prefers `openai:gpt-5.1` and `claude:claude-sonnet-4-5` for the initial two targets, and Add Model prefers `deepseek:deepseek-chat`; unavailable preferences fall back to distinct enabled catalog models. Request payloads include only active selected models.
 - React manual Ask and Compare model controls share one accessible picker component with provider logo, readable model-family label, exact API model ID, and active highlighting. Compare adds duplicate-option disabling and removal rules through the shared component API. Hidden native selects remain synchronized for browser automation compatibility.
 - Frontend Compare response cards use side-by-side model columns with visible per-card completed duration in seconds and token metadata on desktop; mobile exposes completed metrics through the compact header disclosure and phone-sized Compare switches between model responses with tabs. Loading cards show live elapsed time plus `Queued`, `Refining prompt`, `Connecting to model`, `Generating response`, or `Finalizing`; completed cards keep that same UI-observed elapsed basis when live timestamps are available, and failed cards show elapsed failure time.
@@ -558,7 +558,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 
 Notes:
 - Chat responses now include `session_id`.
-- Chat `response_done` payloads include `web_source_items` for rendered source chips.
+- Chat `response_done` payloads include `web_source_items` for rendered citation pills.
 - Chat `start` and `done` stream events include the active `session_id`.
 - Server logs include `chat.stream.*` body lifecycle events so mid-stream
   disconnects can be distinguished from normal HTTP request completion.

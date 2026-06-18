@@ -45,7 +45,6 @@ export function ResponseCard({
   researchEnabled = false,
   optimizeEnabled = false,
 }: ResponseCardProps) {
-  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
@@ -66,9 +65,6 @@ export function ResponseCard({
   const metaPinned = !!loadingStatus || isFailed;
   const showStatsToggle = hasMetaContent && !metaPinned;
   const showLoading = !!loadingStatus && !responseText;
-  const sourceBaseId = useMemo(() => `cite-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`, [
-    response.request_id,
-  ]);
   const statsId = useMemo(
     () => `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`,
     [response.request_id],
@@ -192,9 +188,8 @@ export function ResponseCard({
                 />
               ),
               a: ({ href, children, ...props }) => {
-                const scopedHref = scopedCitationHref(href, sourceBaseId);
                 return (
-                  <a href={scopedHref} target={isExternal(scopedHref) ? "_blank" : undefined} rel="noreferrer" {...props}>
+                  <a href={href} target={isExternal(href) ? "_blank" : undefined} rel="noreferrer" {...props}>
                     {children}
                   </a>
                 );
@@ -210,19 +205,6 @@ export function ResponseCard({
       </div>
 
       <footer className={styles.actions}>
-        <button
-          type="button"
-          className={styles.actionButton}
-          onClick={() => setSourcesOpen((open) => !open)}
-          disabled={response.web_source_items.length === 0}
-          aria-label="Resources"
-          title="Resources"
-          aria-expanded={sourcesOpen}
-          aria-controls={`response-sources-${slotIndex}`}
-        >
-          <Icon name="resources" />
-          <span>Resources</span>
-        </button>
         <button
           type="button"
           className={styles.actionButton}
@@ -252,21 +234,6 @@ export function ResponseCard({
           <Icon name="thumbDown" />
         </button>
       </footer>
-
-      {sourcesOpen && response.web_source_items.length > 0 && (
-        <div id={`response-sources-${slotIndex}`} className={styles.sources}>
-          <span>Sources</span>
-          <ul>
-            {response.web_source_items.map((source, index) => (
-              <li key={`${source.url}-${index}`} id={`${sourceBaseId}-${index + 1}`}>
-                <a href={source.url} target="_blank" rel="noopener noreferrer">
-                  {source.title || source.url}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </article>
   );
 }
@@ -543,12 +510,6 @@ function citationRefsFromProps(props: CitationMarkdownProps): string {
   return props["data-refs"] ?? props.dataRefs ?? "";
 }
 
-function scopedCitationHref(href: string | undefined, sourceBaseId: string): string | undefined {
-  if (!href?.startsWith("#cite-")) return href;
-  const index = Number(href.match(/(\d+)$/)?.[1] ?? "0");
-  return index > 0 ? `#${sourceBaseId}-${index}` : href;
-}
-
 function isExternal(href: string | undefined): boolean {
   return !!href && /^https?:\/\//i.test(href);
 }
@@ -561,7 +522,6 @@ function Icon({
     | "document"
     | "timer"
     | "cost"
-    | "resources"
     | "copy"
     | "thumbUp"
     | "thumbDown";
@@ -590,13 +550,6 @@ function Icon({
           <circle cx="12" cy="12" r="8" />
           <path d="M15 9.5c-.8-1-1.8-1.5-3.2-1.5-1.5 0-2.8.8-2.8 2s1.1 1.8 3 2c1.9.2 3 1 3 2.1 0 1.2-1.2 2-2.9 2-1.5 0-2.7-.5-3.6-1.6" />
           <path d="M12 6.5v11" />
-        </>
-      )}
-      {name === "resources" && (
-        <>
-          <path d="M5 5h14v14H5z" />
-          <path d="M8 9h8" />
-          <path d="M8 13h5" />
         </>
       )}
       {name === "copy" && (

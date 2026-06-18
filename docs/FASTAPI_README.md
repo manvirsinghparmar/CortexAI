@@ -111,10 +111,10 @@ python run_server.py --reload
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
-- Frontend response card controls render as a minimal icon row for Resources, copy, and feedback actions.
-- Frontend response sources remain collapsed by default and expand only when the user activates Resources.
+- Frontend response card controls render as a minimal icon row for copy and feedback actions.
+- Frontend response sources render inline as publisher-name citation pills derived from `web_source_items`; grouped markers such as `[1][2][3]` collapse into one pill with a preview card listing each linked source.
 - Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
-- React response Markdown renders response-scoped citation markers, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Desktop tables scroll within the response card, while mobile tables stack cells under their column labels.
+- React response Markdown renders inline citation pills with tap/click source previews, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Desktop tables scroll within the response card, while mobile tables stack cells under their column labels.
 - Frontend streaming responses render buffered Markdown progressively for Ask and Compare.
 - Submitting a new Ask or Compare turn always performs one smooth reveal of the new turn, including when the user was viewing an older turn.
 - Frontend streaming responses do not auto-follow generated text as it grows; when the newest content is below the current viewport, `Jump to latest` provides explicit navigation.

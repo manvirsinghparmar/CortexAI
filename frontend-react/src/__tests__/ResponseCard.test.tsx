@@ -230,6 +230,44 @@ describe("ResponseCard", () => {
     );
   });
 
+  it("groups consecutive numeric citations into one structured markdown node", () => {
+    const { container } = render(
+      <ResponseCard
+        response={response(false, "The claim is supported. [1][2] [3]")}
+      />,
+    );
+
+    expect(container.querySelectorAll("cite")).toHaveLength(1);
+    expect(container.querySelector("cite")).toHaveAttribute("data-refs", "1,2,3");
+  });
+
+  it("does not convert citation-looking text inside links or code", () => {
+    const { container } = render(
+      <ResponseCard
+        response={response(
+          false,
+          [
+            "Read [the source](https://example.com/path).",
+            "",
+            "Inline `value [1]` remains code.",
+            "",
+            "```txt",
+            "block [2]",
+            "```",
+          ].join("\n"),
+        )}
+      />,
+    );
+
+    expect(container.querySelector("cite")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "the source" })).toHaveAttribute(
+      "href",
+      "https://example.com/path",
+    );
+    expect(screen.getByText("value [1]")).toBeInTheDocument();
+    expect(screen.getByText("block [2]")).toBeInTheDocument();
+  });
+
   it("renders GFM tables with semantic headers and mobile data labels", () => {
     render(
       <ResponseCard

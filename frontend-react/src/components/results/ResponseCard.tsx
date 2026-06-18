@@ -16,6 +16,7 @@ import type {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getModelPresentation } from "../../config/modelPresentation";
+import { remarkCitations } from "../../markdown/remarkCitations";
 import type { ChatResponse, ResponseRunStatus } from "../../types";
 import { ProviderLogo } from "../shared/ProviderLogo";
 import {
@@ -181,7 +182,7 @@ export function ResponseCard({
           />
         ) : (
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkCitations]}
             components={{
               a: ({ href, children, ...props }) => {
                 const scopedHref = scopedCitationHref(href, sourceBaseId);
@@ -364,7 +365,7 @@ function CodeBlock({
   const code = String(children ?? "").replace(/\n$/, "");
   const language = /language-(\w+)/.exec(className ?? "")?.[1];
 
-  if (inline) {
+  if (inline || !className) {
     return (
       <code className={className} {...props}>
         {children}

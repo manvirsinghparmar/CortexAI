@@ -19,6 +19,7 @@ import { getModelPresentation } from "../../config/modelPresentation";
 import { remarkCitations } from "../../markdown/remarkCitations";
 import type { ChatResponse, ResponseRunStatus } from "../../types";
 import { ProviderLogo } from "../shared/ProviderLogo";
+import { Citation } from "./Citation";
 import {
   ResponseLoadingState,
   type ResponseLoadingMode,
@@ -184,6 +185,12 @@ export function ResponseCard({
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkCitations]}
             components={{
+              cite: (props) => (
+                <Citation
+                  refs={citationRefsFromProps(props as CitationMarkdownProps)}
+                  sources={response.web_source_items}
+                />
+              ),
               a: ({ href, children, ...props }) => {
                 const scopedHref = scopedCitationHref(href, sourceBaseId);
                 return (
@@ -525,6 +532,15 @@ function errorMessage(response: ChatResponse): string {
     return "This model is temporarily busy. Try again shortly or switch to another model.";
   }
   return response.error?.message || response.text || "The model returned an error.";
+}
+
+type CitationMarkdownProps = HTMLAttributes<HTMLElement> & {
+  "data-refs"?: string;
+  dataRefs?: string;
+};
+
+function citationRefsFromProps(props: CitationMarkdownProps): string {
+  return props["data-refs"] ?? props.dataRefs ?? "";
 }
 
 function scopedCitationHref(href: string | undefined, sourceBaseId: string): string | undefined {

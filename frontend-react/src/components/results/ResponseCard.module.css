@@ -217,6 +217,169 @@
   color: var(--secondary);
 }
 
+.citationRoot {
+  position: relative;
+  display: inline-flex;
+  max-width: min(100%, 17rem);
+  margin: 0 2px;
+  vertical-align: baseline;
+}
+
+.citationButton {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 999px;
+  background: var(--surface-container-low);
+  color: var(--secondary);
+  cursor: pointer;
+  font: 700 0.78em/18px var(--font-sans);
+  padding: 2px 8px;
+  vertical-align: baseline;
+}
+
+.citationButton:hover,
+.citationButton[aria-expanded="true"] {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
+.citationButton:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.citationLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citationExternalIcon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.citationPreview {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-container-lowest);
+  box-shadow: var(--shadow-soft);
+  color: var(--on-surface);
+  font: 500 13px/18px var(--font-sans);
+  padding: 10px;
+}
+
+.citationPopover {
+  position: fixed;
+  z-index: 60;
+  top: var(--citation-popover-top, 12px);
+  left: var(--citation-popover-left, 12px);
+  width: min(360px, calc(100vw - 24px));
+  max-height: var(--citation-popover-max-height, 360px);
+  overflow: auto;
+  animation: citation-preview-in 140ms ease;
+}
+
+.citationPreview:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.citationPreviewTitle {
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.citationSourceList {
+  display: grid;
+  gap: 4px;
+}
+
+.citationSourceLink {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border-radius: 7px;
+  color: inherit;
+  padding: 7px;
+  text-decoration: none;
+}
+
+.citationSourceLink:hover {
+  background: var(--surface-container-low);
+}
+
+.citationIconSlot {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+}
+
+.citationFavicon,
+.citationIconFallback {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.citationFavicon {
+  object-fit: contain;
+}
+
+.citationIconFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.citationSourceText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.citationSourceTitle,
+.citationSourcePublisher {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citationSourceTitle {
+  color: var(--on-surface);
+  font-weight: 650;
+}
+
+.citationSourcePublisher {
+  color: var(--outline);
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .body blockquote {
   border-left: 3px solid var(--secondary);
   background: var(--surface-container-low);
@@ -671,6 +834,33 @@
     line-height: 23px;
   }
 
+  .citationRoot {
+    max-width: min(68vw, 17rem);
+  }
+
+  .citationButton {
+    min-height: 30px;
+    padding: 3px 9px;
+  }
+
+  .citationSheetBackdrop {
+    position: fixed;
+    z-index: 80;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: color-mix(in srgb, var(--on-surface) 42%, transparent);
+    padding: 16px 12px;
+  }
+
+  .citationSheet {
+    width: min(440px, 100%);
+    max-height: min(70vh, 560px);
+    overflow: auto;
+    animation: citation-sheet-in 160ms ease;
+  }
+
   .tableWrap {
     overflow: visible;
     border: 0;
@@ -752,5 +942,34 @@
   .metaRow,
   .metaRowExpanded {
     transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .citationPopover,
+  .citationSheet {
+    animation: none;
+  }
+}
+
+@keyframes citation-preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes citation-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

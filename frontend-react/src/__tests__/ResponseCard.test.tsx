@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResponseCard } from "../components/results/ResponseCard";
 import type { ChatResponse } from "../types";
@@ -230,15 +230,16 @@ describe("ResponseCard", () => {
     );
   });
 
-  it("groups consecutive numeric citations into one structured markdown node", () => {
-    const { container } = render(
+  it("groups consecutive numeric citations into one publisher pill", () => {
+    render(
       <ResponseCard
-        response={response(false, "The claim is supported. [1][2] [3]")}
+        response={responseWithSources("The claim is supported. [1][2] [3]")}
       />,
     );
 
-    expect(container.querySelectorAll("cite")).toHaveLength(1);
-    expect(container.querySelector("cite")).toHaveAttribute("data-refs", "1,2,3");
+    expect(
+      screen.getByRole("button", { name: "Sources: NPR and 2 more" }),
+    ).toHaveTextContent("NPR + 2");
   });
 
   it("does not convert citation-looking text inside links or code", () => {
@@ -260,12 +261,76 @@ describe("ResponseCard", () => {
     );
 
     expect(container.querySelector("cite")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /source:/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "the source" })).toHaveAttribute(
       "href",
       "https://example.com/path",
     );
     expect(screen.getByText("value [1]")).toBeInTheDocument();
     expect(screen.getByText("block [2]")).toBeInTheDocument();
+  });
+
+  it("opens citation previews with source links and closes them from keyboard or outside clicks", () => {
+    render(<ResponseCard response={responseWithSources("Supported by reporting. [1][2]")} />);
+
+    const pill = screen.getByRole("button", { name: "Sources: NPR and 1 more" });
+    fireEvent.click(pill);
+
+    const dialog = screen.getByRole("dialog", { name: "Citation sources" });
+    expect(dialog).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("link", { name: /Morning Edition NPR/ }),
+    ).toHaveAttribute("href", "https://www.npr.org/sections/news/");
+    expect(
+      within(dialog).getByRole("link", { name: /World report BBC/ }),
+    ).toHaveAttribute("href", "https://www.bbc.co.uk/news/world");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
+
+    fireEvent.click(pill);
+    expect(screen.getByRole("dialog", { name: "Citation sources" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to a publisher initial when a citation favicon fails", () => {
+    render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Source: NPR" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Citation sources" });
+    const favicon = dialog.querySelector("img");
+    expect(favicon).not.toBeNull();
+    fireEvent.error(favicon!);
+
+    expect(within(dialog).getByText("N")).toBeInTheDocument();
+  });
+
+  it("uses a bottom-sheet citation preview on phone-sized screens", () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(max-width: 760px)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Source: NPR" }));
+
+      expect(screen.getByRole("dialog", { name: "Citation sources" }).className).toContain(
+        "citationSheet",
+      );
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it("renders GFM tables with semantic headers and mobile data labels", () => {
@@ -319,5 +384,16 @@ function response(withSources = false, text = "A compact comparison response."):
       ? [{ title: "CortexAI documentation", url: "https://example.com/cortex" }]
       : [],
     timestamp: "2026-06-09T00:00:00.000Z",
+  };
+}
+
+function responseWithSources(text: string): ChatResponse {
+  return {
+    ...response(false, text),
+    web_source_items: [
+      { title: "Morning Edition", url: "https://www.npr.org/sections/news/" },
+      { title: "World report", url: "https://www.bbc.co.uk/news/world" },
+      { title: "Large language model - Wikipedia", url: "https://en.wikipedia.org/wiki/Large_language_model" },
+    ],
   };
 }

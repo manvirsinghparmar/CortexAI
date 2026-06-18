@@ -318,9 +318,8 @@ function useMediaQuery(query: string): boolean {
 function ExternalLinkIcon() {
   return (
     <svg className={styles.citationExternalIcon} viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M6 4h6v6" />
-      <path d="m5 11 7-7" />
-      <path d="M12 12H4V4h3" />
+      <path d="M6 10.5 10.5 6" />
+      <path d="M6.5 6H11v4.5" />
     </svg>
   );
 }

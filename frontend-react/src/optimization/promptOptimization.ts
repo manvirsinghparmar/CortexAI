@@ -9,7 +9,7 @@ import type {
 
 const CONTEXT_MESSAGE_LIMIT = 10;
 const CONTEXT_MESSAGE_CHARS = 500;
-const CONTEXT_HINT_MAX_CHARS = 2000;
+const CONTEXT_HINT_MAX_CHARS = 4000;
 
 export const OPTIMIZATION_ORIGINAL_NOTE =
   "Your prompt was already clear. CortexAI sent the original version.";
@@ -31,14 +31,14 @@ export function buildOptimizeRequest({
   attachments: FileUploadResponse[];
 }): OptimizeRequest {
   const request: OptimizeRequest = { prompt };
-  if (attachments.length > 0 || !isLikelyFollowUpPrompt(prompt, conversationHistory)) {
-    return request;
-  }
 
   const contextMessages = selectOptimizeContextMessages(conversationHistory);
   if (contextMessages.length === 0) return request;
 
-  const hintPrefix = "Use only to resolve references in the latest prompt:\n";
+  const hintPrefix =
+    attachments.length > 0
+      ? "Use only prior chat text to resolve references in the latest prompt; attached file contents are not included:\n"
+      : "Use only to resolve references in the latest prompt:\n";
   const hintBody = contextMessages
     .map((item, index) => `Recent ${item.role} ${index + 1}: ${item.content}`)
     .join("\n")

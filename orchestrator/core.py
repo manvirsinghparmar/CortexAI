@@ -340,7 +340,10 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         research_mode: str = "auto",
     ) -> dict[str, Any]:
         """Build one optimized/research-injected message payload for a turn."""
-        optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+        optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(
+            prompt,
+            context=context,
+        )
         if opt_metadata.get("optimization_used"):
             logger.debug("Using optimized prompt for request")
 
@@ -399,7 +402,11 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return context.session_id
         return self._generate_session_id(messages)
 
-    def _optimize_prompt_if_enabled(self, prompt: str) -> tuple[str, dict]:
+    def _optimize_prompt_if_enabled(
+        self,
+        prompt: str,
+        context: UserContext | None = None,
+    ) -> tuple[str, dict]:
         """
         Optimize prompt if optimization is enabled.
 
@@ -412,7 +419,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return prompt, {}
 
         try:
-            result = self._prompt_optimizer.optimize_prompt({"prompt": prompt})
+            payload: dict[str, Any] = {"prompt": prompt}
+            if context and context.conversation_history:
+                payload["context"] = {
+                    "session_id": context.session_id,
+                    "conversation_history": context.conversation_history,
+                }
+            result = self._prompt_optimizer.optimize_prompt(payload)
 
             if result.get("error"):
                 logger.warning(f"Prompt optimization failed: {result['error']['message']}")
@@ -1556,7 +1569,10 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
-            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(prompt)
+            optimized_prompt, opt_metadata = self._optimize_prompt_if_enabled(
+                prompt,
+                context=context,
+            )
             if opt_metadata.get("optimization_used"):
                 logger.debug("Using optimized prompt for comparison")
 

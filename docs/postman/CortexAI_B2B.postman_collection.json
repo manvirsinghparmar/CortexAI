@@ -889,7 +889,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact context for follow-up prompts only.\"\n}"
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
             },
             "url": "{{base_url}}/v1/optimize"
           },

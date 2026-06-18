@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { SparkleIcon } from "../common/SparkleIcon";
 import { getModelPresentation } from "../../config/modelPresentation";
+import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { ResponseCard } from "./ResponseCard";
@@ -270,25 +272,13 @@ function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) 
   );
 }
 
-const OPTIMIZATION_PROGRESS = [
-  "Refining your prompt for better results",
-  "Enhancing clarity",
-  "Improving intent",
-  "Preparing optimized version",
-];
+const OPTIMIZATION_LIVE_MESSAGE = "Improving your prompt";
+const OPTIMIZATION_PENDING_MESSAGE = "Improving your prompt\u2026";
 
 function OptimizationPrompt({ turn }: { turn: ChatTurn }) {
   const optimization = turn.optimization!;
   const pending = optimization.status === "pending";
-  const [progressIndex, setProgressIndex] = useState(0);
-
-  useEffect(() => {
-    if (!pending) return;
-    const intervalId = window.setInterval(() => {
-      setProgressIndex((current) => (current + 1) % OPTIMIZATION_PROGRESS.length);
-    }, 1650);
-    return () => window.clearInterval(intervalId);
-  }, [pending]);
+  const reducedMotion = useReducedMotion();
 
   if (pending) {
     return (
@@ -296,29 +286,61 @@ function OptimizationPrompt({ turn }: { turn: ChatTurn }) {
         className={`${styles.optimizationText} optimization-user-text`}
         role="status"
         aria-live="polite"
+        aria-atomic="true"
       >
-        <span className={styles.optimizationMark} aria-hidden="true">
-          *
+        <span className={`${styles.visuallyHidden} optimization-live-message`}>
+          {OPTIMIZATION_LIVE_MESSAGE}
         </span>
-        <span>{OPTIMIZATION_PROGRESS[progressIndex]}</span>
-        <span className={styles.optimizationDots} aria-hidden="true">
-          ...
+        <OptimizationMark animated />
+        <span
+          className={`${styles.optimizationMessage} optimization-visible-message`}
+          aria-hidden="true"
+        >
+          {OPTIMIZATION_PENDING_MESSAGE}
         </span>
+        {!reducedMotion && (
+          <span
+            className={`${styles.optimizationDots} optimization-pending-dots`}
+            aria-hidden="true"
+          >
+            ...
+          </span>
+        )}
       </p>
     );
   }
 
   return (
     <>
-      <p className={`${styles.optimizationText} optimization-user-text`}>
-        {optimization.displayPrompt}
+      <p
+        className={`${styles.optimizationText} ${styles.optimizationReveal} optimization-user-text optimization-reveal`}
+      >
+        <OptimizationMark />
+        <span className={`${styles.optimizationMessage} optimization-result-message`}>
+          {optimization.displayPrompt}
+        </span>
       </p>
       {optimization.note && (
-        <p className={`${styles.optimizationNote} optimization-result-note`}>
+        <p
+          className={`${styles.optimizationNote} ${styles.optimizationReveal} optimization-result-note optimization-reveal`}
+        >
           {optimization.note}
         </p>
       )}
     </>
+  );
+}
+
+function OptimizationMark({ animated = false }: { animated?: boolean }) {
+  return (
+    <span
+      className={`${styles.optimizationMark} optimization-mark ${
+        animated ? styles.optimizationMarkAnimated : ""
+      }`}
+      aria-hidden="true"
+    >
+      <SparkleIcon />
+    </span>
   );
 }
 

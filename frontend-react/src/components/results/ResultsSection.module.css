@@ -147,8 +147,13 @@
 
 .optimizationText {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
+  overflow-wrap: anywhere;
+}
+
+.optimizationMessage {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -162,7 +167,16 @@
   border-radius: 50%;
   background: var(--primary);
   color: var(--on-primary);
-  font: 800 15px/1 var(--font-sans);
+  padding: 4px;
+}
+
+.optimizationMark svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.optimizationMarkAnimated {
   animation: optimizationPulse 1.8s ease-in-out infinite;
 }
 
@@ -175,12 +189,26 @@
 .optimizationNote {
   width: fit-content;
   max-width: 100%;
-  border: 1px solid #cfe8da;
+  border: 1px solid var(--positive-border);
   border-radius: 7px;
-  background: #f3faf6;
-  color: #3f6f5e;
+  background: var(--positive-surface);
+  color: var(--positive-text);
   font: 500 11px/16px var(--font-sans);
   padding: 5px 8px;
+}
+
+.optimizationReveal {
+  animation: optimizationReveal 220ms ease-out both;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .turnAttachments {
@@ -250,6 +278,18 @@
 @media (max-width: 1180px) and (min-width: 901px) {
   .compareGridThree {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@keyframes optimizationReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -360,8 +400,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .optimizationMark,
-  .optimizationDots {
+  .optimizationMarkAnimated,
+  .optimizationDots,
+  .optimizationReveal {
     animation: none;
   }
 }

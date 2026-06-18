@@ -72,6 +72,11 @@ describe("ResponseCard", () => {
     render(<ResponseCard response={pending} isStreaming loadingMode="compare" />);
 
     const header = document.querySelector("header");
+    const stats = header?.querySelector('[id^="response-stats-"]');
+    expect(screen.queryByRole("button", { name: /run details/i })).not.toBeInTheDocument();
+    expect(stats?.className).toContain("metaRowPinned");
+    expect(stats?.className).toContain("loadingMetaRow");
+    expect(header?.firstElementChild?.nextElementSibling).toBe(stats);
     expect(header).toHaveTextContent("00:08 elapsed · Generating response");
     expect(header).not.toHaveTextContent("0.00 sec");
     expect(header).not.toHaveTextContent("0 tokens");
@@ -102,6 +107,22 @@ describe("ResponseCard", () => {
     expect(header).toHaveTextContent("1,248 tokens");
     expect(header?.querySelectorAll("svg")).toHaveLength(2);
     expect(header).not.toHaveTextContent("1.2k");
+  });
+
+  it("uses UI-observed timestamps for completed duration when available", () => {
+    const completed = {
+      ...response(false, "Completed answer."),
+      latency_ms: 1200,
+      started_at: "2026-06-09T00:00:00.000Z",
+      completed_at: "2026-06-09T00:00:08.400Z",
+      estimated_cost: 0,
+    };
+
+    render(<ResponseCard response={completed} compact />);
+
+    const header = document.querySelector("header");
+    expect(header).toHaveTextContent("8.4 sec");
+    expect(header).not.toHaveTextContent("1.2 sec");
   });
 
   it("hides the token metric when completed token usage is unavailable", () => {

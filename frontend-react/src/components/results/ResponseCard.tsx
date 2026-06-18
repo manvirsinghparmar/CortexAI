@@ -55,7 +55,7 @@ export function ResponseCard({
   const loadingStatus = resolveLoadingStatus(response, !!isStreaming, hasError);
   const elapsedMs = useElapsedMs(response.started_at, !!loadingStatus);
   const totalTokens = validTokenCount(response.token_usage?.total_tokens);
-  const durationMs = validDurationMs(response.latency_ms);
+  const durationMs = resolveDisplayDurationMs(response);
   const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
   const isFailed = hasError || response.ui_status === "failed";
   const hasCost = !loadingStatus && !isFailed && response.estimated_cost > 0;
@@ -463,14 +463,23 @@ function useElapsedMs(startedAt: string | undefined, enabled: boolean) {
 }
 
 function resolveFailedDurationMs(response: ChatResponse, elapsedMs: number) {
-  const latencyMs = validDurationMs(response.latency_ms);
-  if (latencyMs !== null) return latencyMs;
   const startedAtMs = parseTimestamp(response.started_at);
   const failedAtMs = parseTimestamp(response.failed_at);
   if (startedAtMs !== null && failedAtMs !== null) {
     return Math.max(0, failedAtMs - startedAtMs);
   }
+  const latencyMs = validDurationMs(response.latency_ms);
+  if (latencyMs !== null) return latencyMs;
   return elapsedMs;
+}
+
+function resolveDisplayDurationMs(response: ChatResponse): number | null {
+  const startedAtMs = parseTimestamp(response.started_at);
+  const completedAtMs = parseTimestamp(response.completed_at);
+  if (startedAtMs !== null && completedAtMs !== null) {
+    return Math.max(0, completedAtMs - startedAtMs);
+  }
+  return validDurationMs(response.latency_ms);
 }
 
 function validDurationMs(value: number | null | undefined): number | null {

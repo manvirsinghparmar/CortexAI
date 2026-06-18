@@ -208,8 +208,36 @@ test("mobile multi-turn Compare switches one natural-height response card at a t
     await expect(hideDetails).toHaveAttribute("aria-expanded", "true");
     const runDetails = panels.nth(0).locator('[id^="response-stats-"]');
     await expect(runDetails).toBeVisible();
-    await expect(runDetails).toContainText("0.90 sec");
+    await expect(runDetails).toContainText("0.9 sec");
     await expect(runDetails).toContainText("tokens");
+    const runDetailsGeometry = await panels.nth(0).evaluate(panel => {
+        const button = panel.querySelector('button[aria-label="Hide run details"]');
+        const header = panel.querySelector("header");
+        const titleRow = header?.firstElementChild;
+        const detailsRow = panel.querySelector('[id^="response-stats-"]');
+        const buttonRect = button?.getBoundingClientRect();
+        const titleRect = titleRow?.getBoundingClientRect();
+        const detailsRect = detailsRow?.getBoundingClientRect();
+        const headerRect = header?.getBoundingClientRect();
+
+        return {
+            detailsBelowTitle:
+                Boolean(titleRect && detailsRect) && detailsRect.top >= titleRect.bottom - 0.5,
+            overlapsToggle:
+                Boolean(buttonRect && detailsRect)
+                && buttonRect.left < detailsRect.right
+                && buttonRect.right > detailsRect.left
+                && buttonRect.top < detailsRect.bottom
+                && buttonRect.bottom > detailsRect.top,
+            detailsWithinHeader:
+                Boolean(headerRect && detailsRect)
+                && detailsRect.left >= headerRect.left - 0.5
+                && detailsRect.right <= headerRect.right + 0.5,
+        };
+    });
+    expect(runDetailsGeometry.detailsBelowTitle).toBe(true);
+    expect(runDetailsGeometry.overlapsToggle).toBe(false);
+    expect(runDetailsGeometry.detailsWithinHeader).toBe(true);
 
     const activeBodyMetrics = await panels.nth(0).locator("[id^='response-text-']").evaluate(body => {
         return {

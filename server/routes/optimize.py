@@ -107,12 +107,12 @@ class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="The raw user prompt to optimize")
     context_hint: str | None = Field(
         default=None,
-        max_length=2000,
+        max_length=4000,
         description="Optional compact conversation hint used only to resolve references in follow-up prompts.",
     )
     context: UserContextRequest | None = Field(
         default=None,
-        description="Optional compact conversation context. The UI sends this only for follow-up-like prompts.",
+        description="Optional compact conversation context used only to resolve references in the latest prompt.",
     )
 
 

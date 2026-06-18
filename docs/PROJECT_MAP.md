@@ -60,6 +60,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
   - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
+  - Shared visual primitives: `frontend-react/src/components/common/`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`

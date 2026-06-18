@@ -64,7 +64,7 @@ describe("prompt optimization", () => {
     ).toEqual({ prompt: "Make this clearer" });
   });
 
-  it("bounds context for a likely follow-up and preserves the active session", () => {
+  it("sends bounded context whenever a thread has history", () => {
     const conversationHistory: ConversationHistoryItem[] = Array.from(
       { length: 12 },
       (_, index) => ({
@@ -85,18 +85,47 @@ describe("prompt optimization", () => {
     expect(
       request.context?.conversation_history?.every((message) => message.content.length <= 500),
     ).toBe(true);
-    expect(request.context_hint?.length).toBeLessThanOrEqual(2000);
+    expect(request.context_hint?.length).toBeLessThanOrEqual(4000);
   });
 
-  it("does not duplicate attachment context into the optimization request", () => {
-    expect(
-      buildOptimizeRequest({
-        prompt: "Summarize that",
-        conversationHistory: [{ role: "assistant", content: "Previous answer" }],
-        context: { session_id: "session-1" },
-        attachments: [attachment()],
-      }),
-    ).toEqual({ prompt: "Summarize that" });
+  it("includes context for natural follow-ups that do not match the old reference classifier", () => {
+    const request = buildOptimizeRequest({
+      prompt: "Write it as a table",
+      conversationHistory: [
+        { role: "user", content: "Compare OpenAI and Claude for legal review." },
+        {
+          role: "assistant",
+          content: "OpenAI is faster. Claude is more cautious with nuanced text.",
+        },
+      ],
+      context: { session_id: "session-1", new_session: false },
+      attachments: [],
+    });
+
+    expect(request.context?.conversation_history).toEqual([
+      { role: "user", content: "Compare OpenAI and Claude for legal review." },
+      {
+        role: "assistant",
+        content: "OpenAI is faster. Claude is more cautious with nuanced text.",
+      },
+    ]);
+    expect(request.context_hint).toContain("Compare OpenAI and Claude");
+  });
+
+  it("keeps attachment contents out while still sending prior chat context", () => {
+    const request = buildOptimizeRequest({
+      prompt: "Summarize that",
+      conversationHistory: [{ role: "assistant", content: "Previous answer" }],
+      context: { session_id: "session-1" },
+      attachments: [attachment()],
+    });
+
+    expect(request.context?.conversation_history).toEqual([
+      { role: "assistant", content: "Previous answer" },
+    ]);
+    expect(request.context_hint).toContain("attached file contents are not included");
+    expect(JSON.stringify(request)).not.toContain("report.pdf");
+    expect(JSON.stringify(request)).not.toContain("file-1");
   });
 
   it("uses the exact optimized prompt as the visible and submitted prompt", () => {
@@ -123,7 +152,7 @@ describe("prompt optimization", () => {
     expect(resolved.optimization.note).toBe(OPTIMIZATION_ORIGINAL_NOTE);
   });
 
-  it("renders optimization progress without a response placeholder", () => {
+  it("renders stable optimization progress without a response placeholder", () => {
     useChatStore.setState({
       turns: [
         turn({
@@ -139,10 +168,37 @@ describe("prompt optimization", () => {
 
     render(<ResultsSection />);
 
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Refining your prompt for better results",
+    expect(screen.getByText("Improving your prompt\u2026")).toHaveAttribute(
+      "aria-hidden",
+      "true",
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Improving your prompt");
+    expect(document.querySelector(".optimization-live-message")).toHaveTextContent(
+      "Improving your prompt",
+    );
+    expect(screen.queryByText("Enhancing clarity")).not.toBeInTheDocument();
     expect(screen.queryByText("Waiting for response...")).not.toBeInTheDocument();
+  });
+
+  it("omits decorative pending dots for reduced-motion users", () => {
+    vi.stubGlobal("matchMedia", createMatchMedia(true));
+    useChatStore.setState({
+      turns: [
+        turn({
+          status: "optimizing",
+          optimization: {
+            status: "pending",
+            originalPrompt: "rough prompt",
+            displayPrompt: "rough prompt",
+          },
+        }),
+      ],
+    });
+
+    render(<ResultsSection />);
+
+    expect(screen.getByText("Improving your prompt\u2026")).toBeInTheDocument();
+    expect(screen.queryByText("...")).not.toBeInTheDocument();
   });
 
   it("renders the fallback note beneath the original prompt", () => {
@@ -161,6 +217,12 @@ describe("prompt optimization", () => {
     expect(screen.getByText("Already clear")).toBeInTheDocument();
     expect(screen.getByText(OPTIMIZATION_ORIGINAL_NOTE)).toHaveClass(
       "optimization-result-note",
+    );
+    expect(screen.getByText("Already clear").closest("p")).toHaveClass(
+      "optimization-reveal",
+    );
+    expect(screen.getByText(OPTIMIZATION_ORIGINAL_NOTE)).toHaveClass(
+      "optimization-reveal",
     );
   });
 
@@ -234,9 +296,7 @@ describe("prompt optimization", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-    expect(
-      await screen.findByText("Refining your prompt for better results"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Improving your prompt\u2026")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -288,4 +348,18 @@ function attachment(): FileUploadResponse {
     created_at: "2026-06-07T00:00:00.000Z",
     deduplicated: false,
   };
+}
+
+function createMatchMedia(matches: boolean) {
+  return (query: string) =>
+    ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList;
 }

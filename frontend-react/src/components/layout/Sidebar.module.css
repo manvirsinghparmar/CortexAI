@@ -8,10 +8,28 @@
   border-right: 1px solid #e5e7eb;
   background: #f8fafc;
   color: #0f172a;
+  overflow: hidden;
+  transition: width 180ms ease;
+}
+
+.sidebarCollapsed {
+  width: 76px;
 }
 
 .brand {
   padding: 20px 20px 16px;
+}
+
+.brandHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brandText {
+  min-width: 0;
 }
 
 .brand h1 {
@@ -25,6 +43,44 @@
   margin: 2px 0 0;
   color: #64748b;
   font: 500 13px/18px var(--font-sans);
+}
+
+.collapseButton {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  margin-top: -2px;
+  padding: 0;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.collapseButton:hover,
+.collapseButton:focus-visible {
+  border-color: #dbe2ea;
+  background: #ffffff;
+  color: #0f172a;
+  outline: none;
+}
+
+.collapseButton svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .primaryAction {
@@ -297,6 +353,52 @@
 .profileText span {
   color: #64748b;
   font: 500 11px/16px var(--font-sans);
+}
+
+.sidebarCollapsed .brand {
+  padding: 18px 12px 14px;
+}
+
+.sidebarCollapsed .brandHeader {
+  justify-content: flex-end;
+}
+
+.sidebarCollapsed .primaryAction,
+.sidebarCollapsed .nav {
+  padding-right: 12px;
+  padding-left: 12px;
+}
+
+.sidebarCollapsed .newChatButton,
+.sidebarCollapsed .navItem,
+.sidebarCollapsed .navItemActive {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.sidebarCollapsed .newChatButton span,
+.sidebarCollapsed .navItem span,
+.sidebarCollapsed .navItemActive span,
+.sidebarCollapsed .profileText {
+  display: none;
+}
+
+.sidebarCollapsed .historyBlock {
+  display: none;
+}
+
+.sidebarCollapsed .profile {
+  justify-content: center;
+  margin: auto 12px 14px;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 
 @media (max-width: 900px) {

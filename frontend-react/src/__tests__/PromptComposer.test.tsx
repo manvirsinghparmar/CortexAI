@@ -24,7 +24,7 @@ describe("PromptComposer", () => {
     useChatStore.setState({
       mode: "single",
       smartMode: true,
-      researchMode: false,
+      researchMode: true,
       compareResearchMode: true,
       optimizeMode: false,
       selectedModelKey: "openai:gpt-5.1",
@@ -61,6 +61,7 @@ describe("PromptComposer", () => {
     const fileName = screen.getByText("long-mobile-design-reference.pdf");
     const attachButton = screen.getByRole("button", { name: "Attach files" });
     const smartSwitch = screen.getByRole("switch", { name: "Smart routing" });
+    const researchSwitch = screen.getByRole("switch", { name: "Research mode" });
     const smartTooltip = screen.getByRole("tooltip", {
       name: "Gets you the best answer automatically",
     });
@@ -81,9 +82,8 @@ describe("PromptComposer", () => {
     expect(card).toContainElement(attachButton);
     expect(card).toContainElement(smartSwitch);
     expect(smartSwitch).toHaveAttribute("aria-describedby", smartTooltip.id);
-    expect(
-      screen.getByRole("switch", { name: "Research mode" }),
-    ).toHaveAttribute("aria-describedby", researchTooltip.id);
+    expect(researchSwitch).toHaveAttribute("aria-checked", "true");
+    expect(researchSwitch).toHaveAttribute("aria-describedby", researchTooltip.id);
     expect(
       screen.getByRole("switch", { name: "Prompt optimization" }),
     ).toHaveAttribute("aria-describedby", improveTooltip.id);
@@ -101,6 +101,22 @@ describe("PromptComposer", () => {
       expect(screen.queryByText("long-mobile-design-reference.pdf")).not.toBeInTheDocument();
     });
     expect(useChatStore.getState().attachments).toEqual([]);
+  });
+
+  it("starts Ask mode with Web enabled and preserves a manual off choice", async () => {
+    const user = userEvent.setup();
+
+    render(<PromptComposer models={DEFAULT_MODELS} />);
+
+    const researchSwitch = screen.getByRole("switch", { name: "Research mode" });
+    expect(researchSwitch).toHaveTextContent("Web");
+    expect(researchSwitch).toHaveAttribute("aria-checked", "true");
+    expect(useChatStore.getState().researchMode).toBe(true);
+
+    await user.click(researchSwitch);
+
+    expect(researchSwitch).toHaveAttribute("aria-checked", "false");
+    expect(useChatStore.getState().researchMode).toBe(false);
   });
 
   it("uses the same shell in Compare mode without a redundant mode switch", () => {
@@ -151,7 +167,7 @@ describe("PromptComposer", () => {
     fireEvent(researchSwitch, touchPointerUp);
     fireEvent.click(researchSwitch);
 
-    expect(researchSwitch).toHaveAttribute("aria-checked", "true");
+    expect(researchSwitch).toHaveAttribute("aria-checked", "false");
     expect(tooltip).toHaveAttribute("data-touch-visible", "true");
 
     act(() => {

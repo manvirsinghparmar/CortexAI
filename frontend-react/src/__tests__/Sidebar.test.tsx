@@ -80,6 +80,46 @@ describe("Sidebar", () => {
     expect(screen.getByText("Quarterly planning")).toBeInTheDocument();
   });
 
+  it("collapses and expands the desktop sidebar while keeping icon actions usable", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+      mode: "single",
+    });
+
+    render(<Sidebar onSelectThread={vi.fn()} />);
+
+    const sidebar = screen.getByLabelText("Primary navigation");
+    expect(sidebar).toHaveAttribute("data-collapsed", "false");
+    expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+
+    expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByRole("textbox", { name: "Search history" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    expect(useChatStore.getState().mode).toBe("compare");
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(useChatStore.getState().sessionId).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
+
+    expect(sidebar).toHaveAttribute("data-collapsed", "false");
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
+  });
+
   it("clears persisted history after confirmation", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockResolvedValue({

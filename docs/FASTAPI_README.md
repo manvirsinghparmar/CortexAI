@@ -89,11 +89,11 @@ python run_server.py --reload
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
-- The React sidebar uses a compact light navigation rail with subtle mode/current-session states. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged.
+- The React sidebar uses a compact light navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
 - React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests.
-- React Compare defaults `With sources` on for new page sessions and streams `/v1/compare/stream` events into per-model response columns.
+- React Ask defaults `Web` on for new page sessions, React Compare defaults `With sources` on, and users can turn either off for the current page session. Compare streams `/v1/compare/stream` events into per-model response columns.
 - React Compare keeps every selected response visible in a responsive grid without horizontal response scrolling on desktop and tablet widths: three columns on wide desktop, two at tablet widths, and stacked tall cards at the app's tablet/mobile shell breakpoint. Phone-sized mobile uses a segmented model switcher and shows one selected response card at a time in natural page flow.
 - Model headers and action footers remain fixed inside each desktop/tablet Compare card while only the answer body scrolls. The transcript reserves bottom breathing room above the persistent composer so the input area does not compress the reading workspace.
 - React Compare uses the same right-aligned user-message bubble as Ask mode and keeps aggregate totals in a separate compact row. Model cards show a friendly model name with the exact API model ID, use compact icon actions, and reserve most of the column height for response content.
@@ -382,7 +382,7 @@ Rules:
 - Compare always uses explicit targets.
 - `routing.smart_mode` is ignored in compare mode by design.
 - With `routing.research_mode=true`, research runs once per compare turn and is shared across all selected targets for fairness.
-- Browser Compare mode sends `routing.research_mode=true` by default because the `With sources` toggle starts on; users can turn it off for the current page session.
+- Browser Ask sends `routing.research_mode=true` by default because the `Web` toggle starts on, and Browser Compare does the same because `With sources` starts on; users can turn either off for the current page session.
 
 Persistence:
 - One `llm_requests` + `llm_responses` row per compare target response.

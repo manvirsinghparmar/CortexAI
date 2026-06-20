@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { formatHistoryDateTime } from "../../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../../history/historyThreads";
 import { useChatStore } from "../../store/chatStore";
@@ -21,6 +21,7 @@ export function Sidebar({
   onLogin,
   onLogout,
 }: SidebarProps) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const history = useChatStore((s) => s.history);
   const setHistory = useChatStore((s) => s.setHistory);
   const historySearch = useChatStore((s) => s.historySearch);
@@ -44,11 +45,36 @@ export function Sidebar({
     setHistory([]);
   };
 
+  const sidebarClassName = isCollapsed
+    ? `${styles.sidebar} ${styles.sidebarCollapsed}`
+    : styles.sidebar;
+  const collapseLabel = isCollapsed ? "Expand sidebar" : "Collapse sidebar";
+
   return (
-    <aside className={styles.sidebar} aria-label="Primary navigation">
+    <aside
+      id="desktopSidebar"
+      className={sidebarClassName}
+      aria-label="Primary navigation"
+      data-collapsed={isCollapsed ? "true" : "false"}
+    >
       <div className={styles.brand}>
-        <h1>CortexAI</h1>
-        <p>LLM Gateway</p>
+        <div className={styles.brandHeader}>
+          <div className={styles.brandText} hidden={isCollapsed}>
+            <h1>CortexAI</h1>
+            <p>LLM Gateway</p>
+          </div>
+          <button
+            type="button"
+            className={styles.collapseButton}
+            onClick={() => setIsCollapsed((current) => !current)}
+            aria-controls="desktopSidebar"
+            aria-expanded={!isCollapsed}
+            aria-label={collapseLabel}
+            title={collapseLabel}
+          >
+            <Icon name={isCollapsed ? "panelOpen" : "panelClose"} />
+          </button>
+        </div>
       </div>
 
       <div className={styles.primaryAction}>
@@ -57,6 +83,8 @@ export function Sidebar({
           type="button"
           className={styles.newChatButton}
           onClick={startNewChat}
+          aria-label="New chat"
+          title={isCollapsed ? "New chat" : undefined}
         >
           <Icon name="plus" />
           <span>New chat</span>
@@ -69,6 +97,8 @@ export function Sidebar({
           className={mode === "single" ? styles.navItemActive : styles.navItem}
           onClick={() => setMode("single")}
           aria-current={mode === "single" ? "page" : undefined}
+          aria-label="Ask"
+          title={isCollapsed ? "Ask" : undefined}
         >
           <Icon name="ask" />
           <span>Ask</span>
@@ -78,13 +108,15 @@ export function Sidebar({
           className={mode === "compare" ? styles.navItemActive : styles.navItem}
           onClick={() => setMode("compare")}
           aria-current={mode === "compare" ? "page" : undefined}
+          aria-label="Compare"
+          title={isCollapsed ? "Compare" : undefined}
         >
           <Icon name="compare" />
           <span>Compare</span>
         </button>
       </nav>
 
-      <div className={styles.historyBlock}>
+      <div className={styles.historyBlock} hidden={isCollapsed}>
         <div className={styles.historyHeader}>
           <span>History</span>
           {history.length > 0 && (
@@ -140,6 +172,7 @@ export function Sidebar({
         onClick={loggedIn ? onLogout : onLogin}
         disabled={!loggedIn && !onLogin}
         aria-label={loggedIn ? `Sign out ${userLabel}` : onLogin ? "Sign in" : "Guest account"}
+        title={isCollapsed ? userLabel : undefined}
       >
         <span className={styles.avatar} aria-hidden="true">
           {(userLabel[0] ?? "G").toUpperCase()}
@@ -159,7 +192,7 @@ function formatMode(mode: HistoryThread["mode"]): string {
   return "Mixed";
 }
 
-function Icon({ name }: { name: "plus" | "ask" | "compare" }) {
+function Icon({ name }: { name: "plus" | "ask" | "compare" | "panelOpen" | "panelClose" }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       {name === "plus" && (
@@ -179,6 +212,20 @@ function Icon({ name }: { name: "plus" | "ask" | "compare" }) {
         <>
           <path d="M5 5h6v14H5z" />
           <path d="M13 5h6v14h-6z" />
+        </>
+      )}
+      {name === "panelClose" && (
+        <>
+          <path d="M4 5h16v14H4z" />
+          <path d="M9 5v14" />
+          <path d="M15 9l-3 3 3 3" />
+        </>
+      )}
+      {name === "panelOpen" && (
+        <>
+          <path d="M4 5h16v14H4z" />
+          <path d="M9 5v14" />
+          <path d="M12 9l3 3-3 3" />
         </>
       )}
     </svg>

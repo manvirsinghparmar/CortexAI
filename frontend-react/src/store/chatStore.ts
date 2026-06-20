@@ -106,7 +106,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
   setMode: (mode) => set({ mode }),
 
   smartMode: true,
-  researchMode: false,
+  researchMode: true,
   compareResearchMode: true,
   optimizeMode: false,
   setSmartMode: (v) => set({ smartMode: v }),

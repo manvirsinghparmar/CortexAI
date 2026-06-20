@@ -68,6 +68,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - History thread grouping and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
+  - Desktop sidebar navigation, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
   - Ask/Compare result rendering: `frontend-react/src/components/results/`
   - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
   - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.

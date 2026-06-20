@@ -16,6 +16,38 @@ test("desktop uses the sidebar and top mode navigation", async ({ responsiveApp 
     await expectNoHorizontalOverflow(page);
 });
 
+test("desktop sidebar collapses to an icon rail and expands again", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const sidebar = page.locator("aside[aria-label='Primary navigation']");
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "false");
+
+    const expandedWidth = await sidebar.evaluate(element => element.getBoundingClientRect().width);
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+
+    await expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    await expect(sidebar.getByRole("textbox", { name: "Search history" })).toBeHidden();
+    await expect.poll(
+        () => sidebar.evaluate(element => element.getBoundingClientRect().width),
+    ).toBeLessThanOrEqual(90);
+    const collapsedWidth = await sidebar.evaluate(element => element.getBoundingClientRect().width);
+    expect(collapsedWidth).toBeLessThan(expandedWidth);
+
+    await sidebar.getByRole("button", { name: "Compare" }).click();
+    await expect(page.locator("#btnCompareMode")).toHaveClass(/activeTab/);
+
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "false");
+    await expect(sidebar.getByRole("textbox", { name: "Search history" })).toBeVisible();
+
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await expect(sidebar).toBeHidden();
+    await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+});
+
 test("desktop history keeps compact title, mode, and date rows", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 520 });

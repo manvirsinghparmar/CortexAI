@@ -189,7 +189,7 @@ test("mobile tap toggles a feature chip and shows its tooltip briefly", async ({
     const tooltip = page
         .locator('[role="tooltip"]')
         .filter({ hasText: "Uses latest information from the web" });
-    await expect(research).toHaveAttribute("aria-checked", "false");
+    await expect(research).toHaveAttribute("aria-checked", "true");
 
     await research.evaluate(element => {
         element.dispatchEvent(
@@ -201,7 +201,7 @@ test("mobile tap toggles a feature chip and shows its tooltip briefly", async ({
         element.click();
     });
 
-    await expect(research).toHaveAttribute("aria-checked", "true");
+    await expect(research).toHaveAttribute("aria-checked", "false");
     await expect(tooltip).toHaveAttribute("data-touch-visible", "true");
     await expect(tooltip).toBeVisible();
     await expectNoHorizontalOverflow(page);

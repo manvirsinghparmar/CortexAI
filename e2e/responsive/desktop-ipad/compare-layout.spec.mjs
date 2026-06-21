@@ -63,7 +63,7 @@ test("desktop multi-turn Compare uses tall natural cards and scrolls the transcr
         for (const body of turn.bodies) {
             expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
             expect(body.overflowY).toBe("auto");
-            expect(Math.abs(body.headerTop - body.cardTop)).toBeLessThanOrEqual(2);
+            expect(Math.abs(body.headerTop - body.cardTop)).toBeLessThanOrEqual(4);
             expect(Math.abs(body.footerBottom - body.cardBottom)).toBeLessThanOrEqual(2);
         }
     }

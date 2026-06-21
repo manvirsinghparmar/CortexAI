@@ -4,6 +4,7 @@ import { getModelPresentation } from "../../config/modelPresentation";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
+import { CortexIcon } from "../shared/CortexIcon";
 import { ResponseCard } from "./ResponseCard";
 import styles from "./ResultsSection.module.css";
 
@@ -121,7 +122,7 @@ export function ResultsSection() {
             })
           }
         >
-          &#8595;
+          <CortexIcon name="scroll-down" />
         </button>
       )}
     </section>
@@ -145,6 +146,7 @@ function CompareTurn({
         ? styles.compareGridTwo
         : styles.compareGridOne;
   const hasResponseTabs = turn.responses.length > 1;
+  const metricHighlights = resolveCompareMetricHighlights(turn.responses);
 
   useEffect(() => {
     if (activeResponseIndex >= turn.responses.length) {
@@ -163,10 +165,18 @@ function CompareTurn({
 
       {turn.compareSummary && (
         <div className={`${styles.compareSummary} compare-summary-card`}>
-          <span>{turn.compareSummary.success_count} succeeded</span>
-          <span>{turn.compareSummary.error_count} errors</span>
-          <span>{turn.compareSummary.total_tokens.toLocaleString()} tokens</span>
-          <span>${turn.compareSummary.total_cost.toFixed(5)}</span>
+          <span className={`${styles.summaryPill} ${styles.summarySuccess}`}>
+            {turn.compareSummary.success_count} succeeded
+          </span>
+          <span className={`${styles.summaryPill} ${styles.summaryNeutral}`}>
+            {turn.compareSummary.error_count} errors
+          </span>
+          <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
+            {turn.compareSummary.total_tokens.toLocaleString()} tok
+          </span>
+          <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
+            ${turn.compareSummary.total_cost.toFixed(5)}
+          </span>
         </div>
       )}
 
@@ -233,6 +243,7 @@ function CompareTurn({
                     loadingMode="compare"
                     researchEnabled={turn.researchEnabled}
                     optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                    compareHighlights={metricHighlights[index]}
                   />
                 </div>
               );
@@ -242,6 +253,51 @@ function CompareTurn({
       )}
     </article>
   );
+}
+
+function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
+  const durations = responses.map((response) =>
+    response.error || response.ui_status === "failed"
+      ? null
+      : responseDurationMs(response),
+  );
+  const costs = responses.map((response) =>
+    response.error || response.ui_status === "failed"
+      ? null
+      : positiveNumber(response.estimated_cost),
+  );
+  const fastestDuration = minMetric(durations);
+  const cheapestCost = minMetric(costs);
+
+  return responses.map((_, index) => ({
+    fastest: fastestDuration !== null && durations[index] === fastestDuration,
+    cheapest: cheapestCost !== null && costs[index] === cheapestCost,
+  }));
+}
+
+function responseDurationMs(response: ChatTurn["responses"][number]) {
+  const startedAtMs = parseTimestamp(response.started_at);
+  const completedAtMs = parseTimestamp(response.completed_at);
+  if (startedAtMs !== null && completedAtMs !== null) {
+    return Math.max(0, completedAtMs - startedAtMs);
+  }
+  return positiveNumber(response.latency_ms);
+}
+
+function positiveNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function minMetric(values: Array<number | null>) {
+  const usableValues = values.filter((value): value is number => value !== null);
+  return usableValues.length > 0 ? Math.min(...usableValues) : null;
+}
+
+function parseTimestamp(value: string | undefined): number | null {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isResponseLoading(turn: ChatTurn, response: ChatTurn["responses"][number]) {

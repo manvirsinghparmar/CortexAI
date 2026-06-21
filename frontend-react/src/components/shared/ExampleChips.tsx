@@ -1,13 +1,17 @@
 import { useChatStore } from "../../store/chatStore";
+import { CortexIcon, type CortexIconName } from "./CortexIcon";
 import styles from "./ExampleChips.module.css";
 
-type ExampleIconName =
+type ExampleIconName = Extract<
+  CortexIconName,
   | "debug"
-  | "document"
-  | "write"
+  | "summarize"
+  | "rewrite"
   | "analyze"
   | "compare"
-  | "review";
+  | "find-solution"
+  | "review"
+>;
 
 interface PromptExample {
   prompt: string;
@@ -21,11 +25,11 @@ const ASK_EXAMPLES = [
   },
   {
     prompt: "Summarize this document into key takeaways",
-    icon: "document" as const,
+    icon: "summarize" as const,
   },
   {
     prompt: "Rewrite this email to sound more professional",
-    icon: "write" as const,
+    icon: "rewrite" as const,
   },
   {
     prompt: "Analyze this file and highlight important findings",
@@ -40,7 +44,7 @@ const COMPARE_EXAMPLES = [
   },
   {
     prompt: "Find the strongest solution for this bug",
-    icon: "debug" as const,
+    icon: "find-solution" as const,
   },
   {
     prompt: "Review this answer from multiple models",
@@ -118,7 +122,7 @@ function WorkspaceLanding({
               onClick={() => onPick(example.prompt)}
             >
               <span className={styles.exampleIcon}>
-                <Icon name={example.icon} />
+                <CortexIcon name={example.icon} />
               </span>
               <span>{example.prompt}</span>
             </button>
@@ -126,58 +130,5 @@ function WorkspaceLanding({
         </div>
       </section>
     </div>
-  );
-}
-
-function Icon({ name }: { name: ExampleIconName }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {name === "debug" && (
-        <>
-          <path d="M9 9h6v8a3 3 0 0 1-6 0V9Z" />
-          <path d="M10 5h4" />
-          <path d="M12 5v4" />
-          <path d="M5 12h4" />
-          <path d="M15 12h4" />
-        </>
-      )}
-      {name === "document" && (
-        <>
-          <path d="M6 3h8l4 4v14H6z" />
-          <path d="M14 3v5h5" />
-          <path d="M9 12h6" />
-          <path d="M9 16h6" />
-        </>
-      )}
-      {name === "write" && (
-        <>
-          <path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z" />
-          <path d="m14 7 3 3" />
-        </>
-      )}
-      {name === "analyze" && (
-        <>
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="m15.5 15.5 4 4" />
-          <path d="M8 11h5" />
-          <path d="M10.5 8.5v5" />
-        </>
-      )}
-      {name === "compare" && (
-        <>
-          <path d="M4 5h6v14H4z" />
-          <path d="M14 5h6v14h-6z" />
-          <path d="M7 9h1" />
-          <path d="M16 9h1" />
-        </>
-      )}
-      {name === "review" && (
-        <>
-          <path d="M4 5h16v11H8l-4 4z" />
-          <path d="M8 9h8" />
-          <path d="M8 12h5" />
-        </>
-      )}
-    </svg>
   );
 }

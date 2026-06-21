@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./AccountMenu.module.css";
 
 interface AccountMenuProps {
@@ -77,7 +78,7 @@ export function AccountMenu({
           if (showMenu) setOpen(true);
         }}
       >
-        <AccountIcon />
+        <CortexIcon name="user" />
       </button>
 
       {showMenu && open && (
@@ -96,15 +97,5 @@ export function AccountMenu({
         </div>
       )}
     </div>
-  );
-}
-
-function AccountIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="8" r="3.5" />
-      <path d="M5 20a7 7 0 0 1 14 0" />
-      <circle cx="12" cy="12" r="10" />
-    </svg>
   );
 }

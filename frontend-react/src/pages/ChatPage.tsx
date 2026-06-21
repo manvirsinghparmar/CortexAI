@@ -4,6 +4,7 @@ import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { ExampleChips } from "../components/shared/ExampleChips";
+import { CortexIcon } from "../components/shared/CortexIcon";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
 import { formatHistoryDateTime } from "../history/historyDate";
@@ -14,9 +15,16 @@ import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
 import { useChatStore } from "../store/chatStore";
 import type { ChatMode, HistoryThread } from "../types";
+import brandMarkUrl from "../assets/brand/brand-mark.svg";
 import styles from "./ChatPage.module.css";
 
 type MobilePanel = "chat" | "history";
+
+interface MobileHistoryDateGroup {
+  key: string;
+  label: string;
+  threads: HistoryThread[];
+}
 
 export function ChatPage() {
   const { whoAmI, cognitoConfig, loading: authLoading, loggedIn, login, logout } = useAuth();
@@ -84,7 +92,10 @@ export function ChatPage() {
 
       <main className={styles.main}>
         <header className={styles.mobileTopbar}>
-          <span className={styles.mobileBrand}>CortexAI</span>
+          <span className={styles.mobileBrand}>
+            <img src={brandMarkUrl} alt="" aria-hidden="true" />
+            <span>CortexAI</span>
+          </span>
           <div className={styles.mobileHeaderActions}>
             <button
               type="button"
@@ -92,7 +103,7 @@ export function ChatPage() {
               aria-label="Start new chat"
               onClick={handleStartNewChat}
             >
-              <Icon name="compose" />
+              <CortexIcon name="new-chat" />
             </button>
             <AccountMenu
               authEnabled={authEnabled}
@@ -124,7 +135,7 @@ export function ChatPage() {
           </nav>
           <div className={styles.topActions} aria-label="Workspace actions">
             <button type="button" className={styles.iconButton} aria-label="New chat" onClick={startNewChat}>
-              <Icon name="plus" />
+              <CortexIcon name="plus" />
             </button>
             <AccountMenu
               authEnabled={authEnabled}
@@ -169,7 +180,9 @@ export function ChatPage() {
             className={mobilePanel === "chat" && mode === "single" ? styles.mobileNavActive : ""}
             onClick={() => handleMobileMode("single")}
           >
-            <Icon name="ask" />
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="ask" />
+            </span>
             <span>Ask</span>
           </button>
           <button
@@ -177,7 +190,9 @@ export function ChatPage() {
             className={mobilePanel === "chat" && mode === "compare" ? styles.mobileNavActive : ""}
             onClick={() => handleMobileMode("compare")}
           >
-            <Icon name="compare" />
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="compare" />
+            </span>
             <span>Compare</span>
           </button>
           <button
@@ -185,7 +200,9 @@ export function ChatPage() {
             className={mobilePanel === "history" ? styles.mobileNavActive : ""}
             onClick={() => setMobilePanel("history")}
           >
-            <Icon name="history" />
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="history" />
+            </span>
             <span>History</span>
           </button>
         </nav>
@@ -211,41 +228,59 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch);
   }, [history, historySearch]);
+  const historyGroups = useMemo(() => {
+    return groupMobileHistoryThreads(filteredThreads);
+  }, [filteredThreads]);
 
   return (
     <section className={styles.mobileHistory} aria-label="History">
-      <input
-        id="mobileHistorySearch"
-        value={historySearch}
-        onChange={(event) => setHistorySearch(event.target.value)}
-        placeholder="Search history"
-        aria-label="Search history"
-      />
-      <ul>
-        {filteredThreads.map((thread) => (
-          <li key={thread.key}>
-            <button
-              type="button"
-              className={thread.sessionId === sessionId ? styles.mobileHistoryActive : ""}
-              onClick={() => onSelectThread(thread)}
-              aria-current={thread.sessionId === sessionId ? "page" : undefined}
-            >
-              <span className={styles.mobileHistoryTop}>
-                <span>{formatHistoryMode(thread.mode)}</span>
-                <time dateTime={thread.latestTimestamp}>
-                  {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
-                </time>
-              </span>
-              <span className={styles.mobileHistoryTitle}>{thread.title}</span>
-              <small className={styles.mobileHistoryMeta}>
-                <span>
-                  {thread.turnCount}{" "}
-                  {thread.turnCount === 1 ? "turn" : "turns"}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>
-              </small>
-            </button>
+      <div className={styles.mobileHistorySearch}>
+        <CortexIcon name="search" />
+        <input
+          id="mobileHistorySearch"
+          value={historySearch}
+          onChange={(event) => setHistorySearch(event.target.value)}
+          placeholder="Search history"
+          aria-label="Search history"
+        />
+      </div>
+      <ul className={styles.mobileHistoryGroups}>
+        {historyGroups.map((group) => (
+          <li key={group.key} className={styles.mobileHistoryGroup}>
+            <span className={styles.mobileHistoryGroupLabel}>{group.label}</span>
+            <ul className={styles.mobileHistoryList}>
+              {group.threads.map((thread) => (
+                <li key={thread.key}>
+                  <button
+                    type="button"
+                    className={thread.sessionId === sessionId ? styles.mobileHistoryActive : ""}
+                    onClick={() => onSelectThread(thread)}
+                    aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                  >
+                    <span className={styles.mobileHistoryTop}>
+                      <span
+                        className={styles.mobileHistoryMode}
+                        data-mode={thread.mode}
+                      >
+                        {formatHistoryMode(thread.mode)}
+                      </span>
+                      <time dateTime={thread.latestTimestamp}>
+                        {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
+                      </time>
+                    </span>
+                    <span className={styles.mobileHistoryTitle}>{thread.title}</span>
+                    <small className={styles.mobileHistoryMeta}>
+                      <span>
+                        {thread.turnCount}{" "}
+                        {thread.turnCount === 1 ? "turn" : "turns"}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>
+                    </small>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </li>
         ))}
       </ul>
@@ -259,46 +294,50 @@ function formatHistoryMode(mode: HistoryThread["mode"]): string {
   return "Mixed";
 }
 
-function Icon({
-  name,
-}: {
-  name: "plus" | "compose" | "ask" | "compare" | "history";
-}) {
+function groupMobileHistoryThreads(threads: HistoryThread[]): MobileHistoryDateGroup[] {
+  const groups: MobileHistoryDateGroup[] = [];
+
+  for (const thread of threads) {
+    const label = formatMobileHistoryGroupLabel(thread.latestTimestamp);
+    const groupKey = label;
+    const group = groups.find((candidate) => candidate.key === groupKey);
+
+    if (group) {
+      group.threads.push(thread);
+    } else {
+      groups.push({
+        key: groupKey,
+        label,
+        threads: [thread],
+      });
+    }
+  }
+
+  return groups;
+}
+
+function formatMobileHistoryGroupLabel(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+
+  const today = new Date();
+  if (isSameLocalDate(date, today)) return "Today";
+
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (isSameLocalDate(date, yesterday)) return "Yesterday";
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function isSameLocalDate(left: Date, right: Date): boolean {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {name === "plus" && (
-        <>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 8v8" />
-          <path d="M8 12h8" />
-        </>
-      )}
-      {name === "compose" && (
-        <>
-          <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-          <path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12.4 14.6a2 2 0 0 1-.9.5l-2.9.9a.5.5 0 0 1-.6-.6l.9-2.9a2 2 0 0 1 .5-.9z" />
-        </>
-      )}
-      {name === "ask" && (
-        <>
-          <path d="M4 5h16v10H8l-4 4z" />
-          <path d="M9 9h6" />
-          <path d="M9 12h4" />
-        </>
-      )}
-      {name === "compare" && (
-        <>
-          <path d="M5 5h6v14H5z" />
-          <path d="M13 5h6v14h-6z" />
-        </>
-      )}
-      {name === "history" && (
-        <>
-          <path d="M3 12a9 9 0 1 0 3-6.7" />
-          <path d="M3 4v5h5" />
-          <path d="M12 7v5l3 2" />
-        </>
-      )}
-    </svg>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
   );
 }

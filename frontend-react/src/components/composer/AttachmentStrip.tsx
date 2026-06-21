@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { uploadFile, deleteFile, fetchFileStatus } from "../../api/files";
+import { CortexIcon } from "../shared/CortexIcon";
 import { useChatStore } from "../../store/chatStore";
 import styles from "./AttachmentStrip.module.css";
 
@@ -80,7 +81,7 @@ export function AttachmentStrip() {
         aria-label="Attach files"
         onClick={() => fileInputRef.current?.click()}
       >
-        <Icon />
+        <CortexIcon name="attach" />
       </button>
 
       <input
@@ -93,13 +94,5 @@ export function AttachmentStrip() {
         onChange={(e) => void handleFiles(e.target.files)}
       />
     </div>
-  );
-}
-
-function Icon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m21.4 11.6-8.9 8.9a5.3 5.3 0 0 1-7.5-7.5l9.2-9.2a3.6 3.6 0 0 1 5.1 5.1l-9.2 9.2a1.9 1.9 0 0 1-2.7-2.7l8.5-8.5" />
-    </svg>
   );
 }

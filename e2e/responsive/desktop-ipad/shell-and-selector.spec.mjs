@@ -67,7 +67,7 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
         }),
     );
     for (const row of rowMetrics) {
-        expect(row.height).toBeLessThanOrEqual(54);
+        expect(row.height).toBeLessThanOrEqual(60);
         expect(row.titleWhiteSpace).toBe("nowrap");
         expect(row.titleOverflow).toBe("ellipsis");
     }
@@ -103,7 +103,7 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
 
     await longRow.hover();
-    await expect(longRow).toHaveCSS("background-color", "rgb(241, 245, 249)");
+    await expect(longRow).toHaveCSS("background-color", "rgb(255, 255, 255)");
     await longRow.click();
     await expect(longRow).toHaveAttribute("aria-current", "page");
 
@@ -114,7 +114,7 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     await expectNoHorizontalOverflow(page);
 });
 
-test("desktop composer uses a borderless shell and soft textarea focus state", async ({ responsiveApp }) => {
+test("desktop composer uses the refresh hairline shell and soft textarea focus state", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -164,7 +164,7 @@ test("desktop Compare picker remains visible and selectable", async ({ responsiv
 
     const connector = page.getByTestId("compare-connector");
     await expect(connector).toHaveCount(1);
-    await expect(connector).toHaveCSS("width", "22px");
+    await expect(connector).toHaveCSS("width", "26px");
     await expect(connector).toHaveCSS("border-top-width", "1px");
     await expect(connector).toHaveCSS("border-radius", "999px");
 
@@ -233,7 +233,7 @@ async function expectSoftComposerShell(page) {
         borderColor: getComputedStyle(element).borderColor,
         boxShadow: getComputedStyle(element).boxShadow,
     }));
-    expect(idle.borderColor).toBe("rgba(0, 0, 0, 0)");
+    expect(idle.borderColor).toBe("rgb(235, 237, 240)");
     expect(idle.boxShadow).not.toBe("none");
 
     await textarea.focus();

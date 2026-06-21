@@ -289,6 +289,39 @@ describe("ResponseCard", () => {
     expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
   });
 
+  it("opens the citation external icon as a direct source link", () => {
+    render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
+
+    expect(
+      screen.getByRole("link", { name: "Open NPR source in a new tab" }),
+    ).toHaveAttribute("href", "https://www.npr.org/sections/news/");
+  });
+
+  it("normalizes source links that arrive without a URL scheme", () => {
+    render(
+      <ResponseCard
+        response={{
+          ...response(false, "Supported by reporting. [1]"),
+          web_source_items: [
+            { title: "Bare source", url: "example.com/report" },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Open Example source in a new tab" }),
+    ).toHaveAttribute("href", "https://example.com/report");
+
+    fireEvent.click(screen.getByRole("button", { name: "Source: Example" }));
+    expect(
+      within(screen.getByRole("dialog", { name: "Citation sources" })).getByRole(
+        "link",
+        { name: /Bare source/ },
+      ),
+    ).toHaveAttribute("href", "https://example.com/report");
+  });
+
   it("falls back to a publisher initial when a citation favicon fails", () => {
     render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
 

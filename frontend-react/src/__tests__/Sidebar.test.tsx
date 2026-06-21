@@ -38,7 +38,7 @@ describe("Sidebar", () => {
     expect(activeThread.querySelector("[data-history-title]")).toHaveTextContent(
       "Quarterly planning",
     );
-    expect(activeThread.querySelector("small")).toHaveTextContent(/^Ask/);
+    expect(activeThread.querySelector("small")).toHaveTextContent(/^ASK/);
     expect(activeThread).not.toHaveTextContent("2 turns");
     expect(activeThread).not.toHaveTextContent("gpt-5.1");
     const timestamps = [...document.querySelectorAll("time")];

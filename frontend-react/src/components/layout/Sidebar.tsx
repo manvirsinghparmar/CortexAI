@@ -4,6 +4,8 @@ import { buildHistoryThreads, filterHistoryThreads } from "../../history/history
 import { useChatStore } from "../../store/chatStore";
 import { useHistory } from "../../hooks/useHistory";
 import type { HistoryThread, WhoAmIResponse } from "../../types";
+import { CortexIcon } from "../shared/CortexIcon";
+import brandMarkUrl from "../../assets/brand/brand-mark.svg";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
@@ -12,6 +14,12 @@ interface SidebarProps {
   loggedIn?: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
+}
+
+interface HistoryDateGroup {
+  key: string;
+  label: string;
+  threads: HistoryThread[];
 }
 
 export function Sidebar({
@@ -35,9 +43,12 @@ export function Sidebar({
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(0, 20);
   }, [history, historySearch]);
+  const historyGroups = useMemo(() => groupHistoryThreads(filteredThreads), [filteredThreads]);
 
   const userLabel = whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest");
   const planLabel = whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
+  const sessionLabel = sessionId ? formatSessionId(sessionId) : userLabel;
+  const sessionStatus = sessionId || loggedIn ? "Session active" : planLabel;
 
   const handleClearAll = async () => {
     if (!window.confirm("Clear chat history?")) return;
@@ -59,9 +70,12 @@ export function Sidebar({
     >
       <div className={styles.brand}>
         <div className={styles.brandHeader}>
-          <div className={styles.brandText} hidden={isCollapsed}>
-            <h1>CortexAI</h1>
-            <p>LLM Gateway</p>
+          <div className={styles.brandLockup}>
+            <img className={styles.brandMark} src={brandMarkUrl} alt="" aria-hidden="true" />
+            <div className={styles.brandText} hidden={isCollapsed}>
+              <h1>CortexAI</h1>
+              <p>LLM GATEWAY</p>
+            </div>
           </div>
           <button
             type="button"
@@ -72,7 +86,7 @@ export function Sidebar({
             aria-label={collapseLabel}
             title={collapseLabel}
           >
-            <Icon name={isCollapsed ? "panelOpen" : "panelClose"} />
+            <CortexIcon name={isCollapsed ? "expand-sidebar" : "collapse-sidebar"} />
           </button>
         </div>
       </div>
@@ -86,8 +100,11 @@ export function Sidebar({
           aria-label="New chat"
           title={isCollapsed ? "New chat" : undefined}
         >
-          <Icon name="plus" />
+          <CortexIcon name="new-chat" />
           <span>New chat</span>
+          <span className={styles.commandChip} aria-hidden="true">
+            ⌘K
+          </span>
         </button>
       </div>
 
@@ -100,7 +117,7 @@ export function Sidebar({
           aria-label="Ask"
           title={isCollapsed ? "Ask" : undefined}
         >
-          <Icon name="ask" />
+          <CortexIcon name="ask" />
           <span>Ask</span>
         </button>
         <button
@@ -111,7 +128,7 @@ export function Sidebar({
           aria-label="Compare"
           title={isCollapsed ? "Compare" : undefined}
         >
-          <Icon name="compare" />
+          <CortexIcon name="compare" />
           <span>Compare</span>
         </button>
       </nav>
@@ -125,44 +142,66 @@ export function Sidebar({
             </button>
           )}
         </div>
-        <input
-          id="historySearch"
-          className={styles.historySearch}
-          value={historySearch}
-          onChange={(event) => setHistorySearch(event.target.value)}
-          placeholder="Search history"
-          aria-label="Search history"
-        />
+        <div className={styles.historySearchWrap}>
+          <CortexIcon name="search" />
+          <input
+            id="historySearch"
+            className={styles.historySearch}
+            value={historySearch}
+            onChange={(event) => setHistorySearch(event.target.value)}
+            placeholder="Search history"
+            aria-label="Search history"
+          />
+        </div>
         <ul className={styles.historyList}>
-          {filteredThreads.map((thread) => {
-            const modeLabel = formatMode(thread.mode);
-            const dateLabel =
-              formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable";
+          {historyGroups.map((group) => (
+            <li key={group.key} className={styles.historyGroup}>
+              <div className={styles.historyGroupLabel}>{group.label}</div>
+              <ul className={styles.historyGroupItems}>
+                {group.threads.map((thread) => {
+                  const modeLabel = formatMode(thread.mode);
+                  const timeLabel = formatHistoryTime(thread.latestTimestamp);
+                  const dateTimeLabel = formatHistoryDateTime(thread.latestTimestamp);
+                  const modeClassName = [
+                    styles.modeTag,
+                    thread.mode === "compare"
+                      ? styles.modeTagCompare
+                      : thread.mode === "single"
+                        ? styles.modeTagAsk
+                        : styles.modeTagMixed,
+                  ].join(" ");
 
-            return (
-              <li key={thread.key}>
-                <button
-                  type="button"
-                  className={
-                    thread.sessionId === sessionId ? styles.historyItemActive : undefined
-                  }
-                  data-history-thread={thread.key}
-                  onClick={() => onSelectThread(thread)}
-                  title={thread.title}
-                  aria-label={`${thread.title}. ${modeLabel}, ${dateLabel}`}
-                  aria-current={thread.sessionId === sessionId ? "page" : undefined}
-                >
-                  <span className={styles.historyTitle} data-history-title>
-                    {thread.title}
-                  </span>
-                  <small className={styles.historyMeta}>
-                    <span>{modeLabel}</span>
-                    <time dateTime={thread.latestTimestamp}>{dateLabel}</time>
-                  </small>
-                </button>
-              </li>
-            );
-          })}
+                  return (
+                    <li key={thread.key}>
+                      <button
+                        type="button"
+                        className={
+                          thread.sessionId === sessionId ? styles.historyItemActive : undefined
+                        }
+                        data-history-thread={thread.key}
+                        onClick={() => onSelectThread(thread)}
+                        title={thread.title}
+                        aria-label={`${thread.title}. ${modeLabel}, ${
+                          dateTimeLabel || "Date unavailable"
+                        }`}
+                        aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                      >
+                        <span className={styles.historyTitle} data-history-title>
+                          {thread.title}
+                        </span>
+                        <small className={styles.historyMeta}>
+                          <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
+                          <time dateTime={thread.latestTimestamp}>
+                            {timeLabel || "Date unavailable"}
+                          </time>
+                        </small>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          ))}
         </ul>
       </div>
 
@@ -174,12 +213,12 @@ export function Sidebar({
         aria-label={loggedIn ? `Sign out ${userLabel}` : onLogin ? "Sign in" : "Guest account"}
         title={isCollapsed ? userLabel : undefined}
       >
-        <span className={styles.avatar} aria-hidden="true">
-          {(userLabel[0] ?? "G").toUpperCase()}
+        <span className={styles.sessionDot} aria-hidden="true">
+          <span />
         </span>
         <span className={styles.profileText}>
-          <strong>{userLabel}</strong>
-          <span>{planLabel}</span>
+          <strong>{sessionLabel}</strong>
+          <span>{sessionStatus}</span>
         </span>
       </button>
     </aside>
@@ -192,42 +231,56 @@ function formatMode(mode: HistoryThread["mode"]): string {
   return "Mixed";
 }
 
-function Icon({ name }: { name: "plus" | "ask" | "compare" | "panelOpen" | "panelClose" }) {
+function groupHistoryThreads(threads: HistoryThread[]): HistoryDateGroup[] {
+  const groups = new Map<string, HistoryDateGroup>();
+
+  for (const thread of threads) {
+    const label = formatHistoryGroupLabel(thread.latestTimestamp);
+    const key = label || "unknown";
+    const group = groups.get(key) ?? { key, label: label || "Date unavailable", threads: [] };
+    group.threads.push(thread);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()];
+}
+
+function formatHistoryGroupLabel(value: string, now = new Date()): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+
+  const date = new Date(timestamp);
+  if (isSameLocalDate(date, now)) return "Today";
+
+  const options: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+  };
+  if (date.getFullYear() !== now.getFullYear()) options.year = "numeric";
+
+  return date.toLocaleDateString(undefined, options);
+}
+
+function formatHistoryTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function isSameLocalDate(left: Date, right: Date): boolean {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {name === "plus" && (
-        <>
-          <path d="M12 5v14" />
-          <path d="M5 12h14" />
-        </>
-      )}
-      {name === "ask" && (
-        <>
-          <path d="M4 5h16v10H8l-4 4z" />
-          <path d="M9 9h6" />
-          <path d="M9 12h4" />
-        </>
-      )}
-      {name === "compare" && (
-        <>
-          <path d="M5 5h6v14H5z" />
-          <path d="M13 5h6v14h-6z" />
-        </>
-      )}
-      {name === "panelClose" && (
-        <>
-          <path d="M4 5h16v14H4z" />
-          <path d="M9 5v14" />
-          <path d="M15 9l-3 3 3 3" />
-        </>
-      )}
-      {name === "panelOpen" && (
-        <>
-          <path d="M4 5h16v14H4z" />
-          <path d="M9 5v14" />
-          <path d="M12 9l3 3-3 3" />
-        </>
-      )}
-    </svg>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
   );
+}
+
+function formatSessionId(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= 14) return normalized;
+  return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
 }

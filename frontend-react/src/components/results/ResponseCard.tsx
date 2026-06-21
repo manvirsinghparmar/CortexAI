@@ -9,6 +9,7 @@ import {
 } from "react";
 import type {
   ComponentPropsWithoutRef,
+  CSSProperties,
   HTMLAttributes,
   ReactElement,
   ReactNode,
@@ -18,6 +19,7 @@ import remarkGfm from "remark-gfm";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { remarkCitations } from "../../markdown/remarkCitations";
 import type { ChatResponse, ResponseRunStatus } from "../../types";
+import { CortexIcon } from "../shared/CortexIcon";
 import { ProviderLogo } from "../shared/ProviderLogo";
 import { Citation } from "./Citation";
 import {
@@ -34,6 +36,10 @@ interface ResponseCardProps {
   loadingMode?: ResponseLoadingMode;
   researchEnabled?: boolean;
   optimizeEnabled?: boolean;
+  compareHighlights?: {
+    fastest?: boolean;
+    cheapest?: boolean;
+  };
 }
 
 export function ResponseCard({
@@ -44,6 +50,7 @@ export function ResponseCard({
   loadingMode = "ask",
   researchEnabled = false,
   optimizeEnabled = false,
+  compareHighlights,
 }: ResponseCardProps) {
   const [statsOpen, setStatsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -52,6 +59,7 @@ export function ResponseCard({
   const softError = response.error?.details?.kind === "transient_capacity";
   const badge = getModelBadge(response.provider, response.model);
   const modelPresentation = getModelPresentation(response.provider, response.model);
+  const accent = resolveProviderAccent(response.provider, slotIndex);
   const responseText = hasError ? errorMessage(response) : response.text;
   const loadingStatus = resolveLoadingStatus(response, !!isStreaming, hasError);
   const elapsedMs = useElapsedMs(response.started_at, !!loadingStatus);
@@ -78,6 +86,7 @@ export function ResponseCard({
 
   return (
     <article
+      style={responseCardStyle(accent)}
       className={`${styles.card} ${compact ? styles.compact : ""} ${
         hasError ? styles.errorCard : ""
       } ${
@@ -87,13 +96,15 @@ export function ResponseCard({
       <header className={styles.header}>
         <div className={styles.titleRow}>
           <div className={styles.modelHeader}>
-            <ProviderLogo
-              provider={response.provider}
-              logoUrl={modelPresentation.logoUrl}
-              color={modelPresentation.color}
-              size={26}
-              className={styles.modelLogo}
-            />
+            <span className={styles.modelTile}>
+              <ProviderLogo
+                provider={response.provider}
+                logoUrl={modelPresentation.logoUrl}
+                color={modelPresentation.color}
+                size={24}
+                className={styles.modelLogo}
+              />
+            </span>
             <div className={styles.modelIdentity}>
               <h2>{modelPresentation.label}</h2>
               <span>{response.model || response.provider}</span>
@@ -129,31 +140,45 @@ export function ResponseCard({
             }`}
           >
             {loadingStatus ? (
-              <span className={styles.loadingMeta}>
-                <Icon name="timer" />
+              <span className={`${styles.metricPill} ${styles.loadingMeta}`}>
+                <CortexIcon name="latency" />
                 {formatElapsedClock(elapsedMs)} elapsed · {loadingStatusText(loadingStatus)}
               </span>
             ) : isFailed ? (
-              <span className={styles.failedMeta}>
+              <span className={`${styles.metricPill} ${styles.failedMeta}`}>
                 Failed after {formatDurationSeconds(failedDurationMs)}
               </span>
             ) : (
               <>
                 {durationMs !== null && (
-                  <span className={styles.metricText}>
-                    <Icon name="bolt" />
+                  <span
+                    className={`${styles.metricPill} ${styles.metricText} ${
+                      compareHighlights?.fastest ? styles.metricHighlight : ""
+                    }`}
+                  >
+                    <CortexIcon name="latency" />
                     {formatDurationSeconds(durationMs)}
+                    {compareHighlights?.fastest && (
+                      <span className={styles.metricTag}>Fastest</span>
+                    )}
                   </span>
                 )}
                 {totalTokens !== null && (
-                  <span className={styles.metricText}>
-                    <Icon name="document" />
+                  <span className={`${styles.metricPill} ${styles.metricText}`}>
+                    <CortexIcon name="tokens" />
                     {formatTokens(totalTokens)} tokens
                   </span>
                 )}
                 {hasCost && (
-                  <span>
-                    <Icon name="cost" />${response.estimated_cost.toFixed(5)}
+                  <span
+                    className={`${styles.metricPill} ${
+                      compareHighlights?.cheapest ? styles.metricHighlight : ""
+                    }`}
+                  >
+                    <CortexIcon name="cost" />${response.estimated_cost.toFixed(5)}
+                    {compareHighlights?.cheapest && (
+                      <span className={styles.metricTag}>Cheapest</span>
+                    )}
                   </span>
                 )}
               </>
@@ -205,34 +230,58 @@ export function ResponseCard({
       </div>
 
       <footer className={styles.actions}>
-        <button
-          type="button"
-          className={styles.actionButton}
-          aria-label={copied ? "Copied response" : "Copy response"}
-          title={copied ? "Copied" : "Copy response"}
-          onClick={() => void copyResponse()}
-        >
-          <Icon name="copy" />
-          <span>{copied ? "Copied" : "Copy"}</span>
-        </button>
-        <button
-          type="button"
-          className={`${styles.iconOnly} ${feedback === "up" ? styles.selectedAction : ""}`}
-          aria-label="Helpful response"
-          title="Helpful response"
-          onClick={() => setFeedback(feedback === "up" ? null : "up")}
-        >
-          <Icon name="thumbUp" />
-        </button>
-        <button
-          type="button"
-          className={`${styles.iconOnly} ${feedback === "down" ? styles.selectedAction : ""}`}
-          aria-label="Not helpful response"
-          title="Not helpful response"
-          onClick={() => setFeedback(feedback === "down" ? null : "down")}
-        >
-          <Icon name="thumbDown" />
-        </button>
+        <div className={styles.actionGroup}>
+          <button
+            type="button"
+            className={styles.actionButton}
+            aria-label={copied ? "Copied response" : "Copy response"}
+            title={copied ? "Copied" : "Copy response"}
+            onClick={() => void copyResponse()}
+          >
+            <CortexIcon name="copy" />
+            <span>{copied ? "Copied" : "Copy"}</span>
+          </button>
+          <button
+            type="button"
+            className={styles.actionButton}
+            aria-label="Regenerate response"
+            title="Regenerate response"
+            disabled
+          >
+            <CortexIcon name="regenerate" />
+            <span>Regenerate</span>
+          </button>
+          <button
+            type="button"
+            className={styles.actionButton}
+            aria-label="Branch response"
+            title="Branch response"
+            disabled
+          >
+            <CortexIcon name="branch" />
+            <span>Branch</span>
+          </button>
+        </div>
+        <div className={styles.rateGroup}>
+          <button
+            type="button"
+            className={`${styles.iconOnly} ${feedback === "up" ? styles.selectedAction : ""}`}
+            aria-label="Helpful response"
+            title="Helpful response"
+            onClick={() => setFeedback(feedback === "up" ? null : "up")}
+          >
+            <CortexIcon name="thumb-up" />
+          </button>
+          <button
+            type="button"
+            className={`${styles.iconOnly} ${feedback === "down" ? styles.selectedAction : ""}`}
+            aria-label="Not helpful response"
+            title="Not helpful response"
+            onClick={() => setFeedback(feedback === "down" ? null : "down")}
+          >
+            <CortexIcon name="thumb-down" />
+          </button>
+        </div>
       </footer>
     </article>
   );
@@ -372,14 +421,90 @@ function CodeBlock({
 
 function getModelBadge(provider: string, model: string) {
   const value = `${provider} ${model}`.toLowerCase();
+  if (value.includes("smart")) return { label: "SMART · MODEL", tone: "advanced" as const };
   if (value.includes("gemini")) return { label: "FASTEST", tone: "fastest" as const };
   if (value.includes("grok") || value.includes("xai")) return { label: "RAW", tone: "raw" as const };
   if (value.includes("claude") || value.includes("anthropic")) {
     return { label: "ADVANCED", tone: "advanced" as const };
   }
   if (value.includes("deepseek")) return { label: "DEEP", tone: "deep" as const };
-  if (value.includes("smart")) return { label: "ROUTED", tone: "advanced" as const };
   return { label: "MODEL", tone: "legacy" as const };
+}
+
+interface ProviderAccent {
+  color: string;
+  soft: string;
+  rail: string;
+}
+
+type ResponseCardStyle = CSSProperties & {
+  "--response-provider-color": string;
+  "--response-provider-soft": string;
+  "--response-provider-rail": string;
+};
+
+const PROVIDER_ACCENTS: Record<string, ProviderAccent> = {
+  smart: {
+    color: "var(--cx-accent)",
+    soft: "var(--cx-accent-soft)",
+    rail: "linear-gradient(90deg, var(--cx-accent), #8B8BF0)",
+  },
+  openai: {
+    color: "var(--cx-prov-a)",
+    soft: "var(--cx-prov-a-soft)",
+    rail: "var(--cx-prov-a)",
+  },
+  claude: {
+    color: "var(--cx-prov-b)",
+    soft: "var(--cx-prov-b-soft)",
+    rail: "var(--cx-prov-b)",
+  },
+  anthropic: {
+    color: "var(--cx-prov-b)",
+    soft: "var(--cx-prov-b-soft)",
+    rail: "var(--cx-prov-b)",
+  },
+  deepseek: {
+    color: "var(--cx-prov-c)",
+    soft: "var(--cx-prov-c-soft)",
+    rail: "var(--cx-prov-c)",
+  },
+  gemini: {
+    color: "var(--cx-prov-d)",
+    soft: "var(--cx-prov-d-soft)",
+    rail: "var(--cx-prov-d)",
+  },
+  grok: {
+    color: "var(--cx-prov-graphite)",
+    soft: "var(--cx-prov-graphite-soft)",
+    rail: "var(--cx-prov-graphite)",
+  },
+  xai: {
+    color: "var(--cx-prov-graphite)",
+    soft: "var(--cx-prov-graphite-soft)",
+    rail: "var(--cx-prov-graphite)",
+  },
+};
+
+const SLOT_ACCENTS: ProviderAccent[] = [
+  PROVIDER_ACCENTS.openai,
+  PROVIDER_ACCENTS.claude,
+  PROVIDER_ACCENTS.deepseek,
+  PROVIDER_ACCENTS.gemini,
+  PROVIDER_ACCENTS.grok,
+];
+
+function resolveProviderAccent(provider: string, slotIndex: number): ProviderAccent {
+  const normalized = provider.trim().toLowerCase();
+  return PROVIDER_ACCENTS[normalized] ?? SLOT_ACCENTS[slotIndex % SLOT_ACCENTS.length]!;
+}
+
+function responseCardStyle(accent: ProviderAccent): ResponseCardStyle {
+  return {
+    "--response-provider-color": accent.color,
+    "--response-provider-soft": accent.soft,
+    "--response-provider-rail": accent.rail,
+  };
 }
 
 const LOADING_STATUSES = new Set<ResponseRunStatus>([
@@ -512,64 +637,4 @@ function citationRefsFromProps(props: CitationMarkdownProps): string {
 
 function isExternal(href: string | undefined): boolean {
   return !!href && /^https?:\/\//i.test(href);
-}
-
-function Icon({
-  name,
-}: {
-  name:
-    | "bolt"
-    | "document"
-    | "timer"
-    | "cost"
-    | "copy"
-    | "thumbUp"
-    | "thumbDown";
-}) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {name === "bolt" && <path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z" />}
-      {name === "document" && (
-        <>
-          <path d="M7 3h7l4 4v14H7z" />
-          <path d="M14 3v5h4" />
-          <path d="M9 13h6" />
-          <path d="M9 17h6" />
-        </>
-      )}
-      {name === "timer" && (
-        <>
-          <circle cx="12" cy="13" r="7" />
-          <path d="M12 13 15 10" />
-          <path d="M9 2h6" />
-          <path d="M12 2v4" />
-        </>
-      )}
-      {name === "cost" && (
-        <>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M15 9.5c-.8-1-1.8-1.5-3.2-1.5-1.5 0-2.8.8-2.8 2s1.1 1.8 3 2c1.9.2 3 1 3 2.1 0 1.2-1.2 2-2.9 2-1.5 0-2.7-.5-3.6-1.6" />
-          <path d="M12 6.5v11" />
-        </>
-      )}
-      {name === "copy" && (
-        <>
-          <path d="M8 8h11v11H8z" />
-          <path d="M5 16V5h11" />
-        </>
-      )}
-      {name === "thumbUp" && (
-        <>
-          <path d="M7 10v10" />
-          <path d="M11 10 13 4a2 2 0 0 1 2 2v4h5l-2 10H9a2 2 0 0 1-2-2v-8z" />
-        </>
-      )}
-      {name === "thumbDown" && (
-        <>
-          <path d="M7 14V4" />
-          <path d="M11 14 13 20a2 2 0 0 0 2-2v-4h5L18 4H9a2 2 0 0 0-2 2v8z" />
-        </>
-      )}
-    </svg>
-  );
 }

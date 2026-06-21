@@ -1,9 +1,25 @@
 .strip {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
+}
+
+.sourcesOnlyStrip,
+.improveOnlyStrip {
+  gap: 0;
+}
+
+.segmentedGroup {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--cx-hairline) 78%, transparent);
+  border-radius: 11px;
+  background: var(--cx-surface-3);
+  padding: 3px;
 }
 
 .chipWrap {
@@ -13,33 +29,78 @@
 }
 
 .chip {
-  height: 28px;
+  display: inline-flex;
+  height: 32px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 0;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: #64748b;
+  border-radius: 9px;
+  color: var(--cx-ink-600);
   cursor: pointer;
-  font: 600 12px/16px var(--font-sans);
-  padding: 0 9px;
+  font: 700 12px/16px var(--font-sans);
+  padding: 0 11px;
   transition:
-    background-color 140ms ease,
-    color 140ms ease;
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+  white-space: nowrap;
+}
+
+.chip svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.segmentChip {
+  background: transparent;
+}
+
+.solidChip {
+  border: 1px solid transparent;
+  background: #0B1220;
+  color: #ffffff;
+  box-shadow: var(--cx-shadow-sm);
+}
+
+.ghostChip {
+  border: 1px solid transparent;
+  background: var(--cx-surface-3);
+  color: var(--cx-ink-600);
 }
 
 .chip:hover {
-  background: #e2e8f0;
-  color: #0f172a;
+  color: var(--cx-ink-900);
+  transform: translateY(-1px);
+}
+
+.segmentChip:hover,
+.ghostChip:hover {
+  background: color-mix(in srgb, var(--cx-surface-2) 72%, var(--cx-surface));
+}
+
+.solidChip:hover {
+  background: #111827;
+  color: #ffffff;
 }
 
 .active {
-  background: #0f172a;
+  background: #0B1220;
   color: #ffffff;
+  box-shadow: var(--cx-shadow-sm);
 }
 
 .active:hover {
-  background: #1e293b;
+  background: #111827;
   color: #ffffff;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
 }
 
 .tooltip {
@@ -49,12 +110,12 @@
   width: max-content;
   max-width: min(260px, calc(100vw - 24px));
   padding: 8px 10px;
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--cx-hairline) 52%, transparent);
+  border-radius: var(--cx-r-md);
   background: #111827;
-  box-shadow: 0 8px 20px rgb(15 23 42 / 18%);
+  box-shadow: var(--cx-shadow-pop);
   color: #f8fafc;
-  font: 500 12px/17px var(--font-sans);
+  font: 600 12px/17px var(--font-sans);
   opacity: 0;
   pointer-events: none;
   transform: translateY(3px);
@@ -133,25 +194,56 @@
 }
 
 @media (max-width: 760px) {
+  .strip {
+    gap: 6px;
+  }
+
   .tooltip {
     max-width: min(180px, calc(100vw - 24px));
   }
 }
 
+@media (max-width: 430px) {
+  .chip {
+    height: 30px;
+    gap: 5px;
+    padding: 0 9px;
+  }
+
+  .chip svg {
+    width: 14px;
+    height: 14px;
+    flex-basis: 14px;
+  }
+}
+
 @media (max-width: 359px) {
   .strip {
-    gap: 3px;
+    gap: 4px;
+  }
+
+  .segmentedGroup {
+    gap: 1px;
+    padding: 2px;
   }
 
   .chip {
-    height: 27px;
     font-size: 11px;
-    padding: 0 7px;
+    padding: 0 6px;
+  }
+
+  .ghostChip svg {
+    display: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chip,
   .tooltip {
     transition: none;
+  }
+
+  .chip:hover {
+    transform: none;
   }
 }

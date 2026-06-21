@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEventHandler } from "react";
 import { forwardRef, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { WebSourceItem } from "../../types";
 import { faviconUrl, publisherName } from "../../utils/sourceMeta";
+import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./ResponseCard.module.css";
 
 interface CitationProps {
@@ -119,6 +120,7 @@ export function Citation({ refs, sources }: CitationProps) {
       ? `Sources: ${firstPublisher} and ${extraCount} more`
       : `Source: ${firstPublisher}`;
   const previewId = `${citationId}-preview`;
+  const firstSourceHref = externalSourceHref(citedSources[0].url);
 
   const toggleOpen = () => {
     setOpen((current) => {
@@ -143,8 +145,22 @@ export function Citation({ refs, sources }: CitationProps) {
         onClick={toggleOpen}
       >
         <span className={styles.citationLabel}>{label}</span>
-        <ExternalLinkIcon />
       </button>
+      <a
+        className={styles.citationExternalLink}
+        href={firstSourceHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${firstPublisher} source in a new tab`}
+        title={`Open ${firstPublisher}`}
+      >
+        <CortexIcon
+          name="external-link"
+          className={styles.citationExternalIcon}
+          size={13}
+          strokeWidth={2.2}
+        />
+      </a>
       {open &&
         (smallScreen ? (
           <span
@@ -213,7 +229,7 @@ const CitationPreview = forwardRef<HTMLSpanElement, CitationPreviewProps>(functi
           <a
             key={`${source.url}-${index}`}
             className={styles.citationSourceLink}
-            href={source.url}
+            href={externalSourceHref(source.url)}
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -251,6 +267,14 @@ function resolveCitedSources(refs: string, sources: WebSourceItem[]): WebSourceI
     .filter((ref) => Number.isInteger(ref) && ref > 0)
     .map((ref) => sources[ref - 1])
     .filter((source): source is WebSourceItem => !!source);
+}
+
+function externalSourceHref(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "#";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("//")) return `https:${trimmed}`;
+  return `https://${trimmed.replace(/^\/+/, "")}`;
 }
 
 function resolvePopoverPosition(rect: DOMRect | undefined): PopoverPosition {
@@ -313,13 +337,4 @@ function useMediaQuery(query: string): boolean {
   }, [query]);
 
   return matches;
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg className={styles.citationExternalIcon} viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M6 10.5 10.5 6" />
-      <path d="M6.5 6H11v4.5" />
-    </svg>
-  );
 }

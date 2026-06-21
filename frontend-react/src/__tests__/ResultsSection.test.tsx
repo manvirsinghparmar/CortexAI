@@ -90,6 +90,43 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Generating response\u2026");
   });
 
+  it("renders the Compare run summary with fastest and cheapest metric tags", () => {
+    const turn = compareTurn("compare-metrics", "Compare metrics");
+    turn.responses = [
+      response("compare-metrics-openai", "openai", "gpt-5.1", {
+        latency_ms: 640,
+        estimated_cost: 0.0018,
+      }),
+      response("compare-metrics-claude", "claude", "claude-sonnet-4-5", {
+        latency_ms: 320,
+        estimated_cost: 0.0024,
+      }),
+      response("compare-metrics-deepseek", "deepseek", "deepseek-chat", {
+        latency_ms: 510,
+        estimated_cost: 0.0005,
+      }),
+    ];
+    turn.compareSummary = {
+      request_group_id: "compare-metrics-group",
+      responses: turn.responses,
+      success_count: 3,
+      error_count: 0,
+      total_tokens: 300,
+      total_cost: 0.0047,
+      timestamp: "2026-06-09T00:00:00.000Z",
+    };
+    setTurns([turn]);
+
+    render(<ResultsSection />);
+
+    expect(screen.getByText("3 succeeded")).toBeInTheDocument();
+    expect(screen.getByText("0 errors")).toBeInTheDocument();
+    expect(screen.getByText("300 tok")).toBeInTheDocument();
+    expect(screen.getByText("$0.00470")).toBeInTheDocument();
+    expect(screen.getByText("Fastest").parentElement).toHaveTextContent("0.3 sec");
+    expect(screen.getByText("Cheapest").parentElement).toHaveTextContent("$0.00050");
+  });
+
   it("switches the active mobile Compare response from the model tabs", async () => {
     const user = userEvent.setup();
     setTurns([compareTurn("compare-switcher", "Compare responses")]);
@@ -241,7 +278,12 @@ function askTurn(id: string, prompt: string): ChatTurn {
   };
 }
 
-function response(requestId: string, provider: string, model: string): ChatResponse {
+function response(
+  requestId: string,
+  provider: string,
+  model: string,
+  overrides: Partial<ChatResponse> = {},
+): ChatResponse {
   return {
     request_id: requestId,
     text: "A long response remains inside its own scrollable card body.",
@@ -257,6 +299,7 @@ function response(requestId: string, provider: string, model: string): ChatRespo
     cost_currency: "USD",
     web_source_items: [],
     timestamp: "2026-06-09T00:00:00.000Z",
+    ...overrides,
   };
 }
 

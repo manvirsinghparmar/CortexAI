@@ -116,7 +116,7 @@ test("small mobile keeps the Compare connector inside the model scroller", async
     });
 
     expect(metrics.ordered).toBe(true);
-    expect(metrics.connectorWidth).toBe(16);
+    expect(metrics.connectorWidth).toBe(18);
     expect(metrics.overflowX).toBe("auto");
     expect(metrics.scrollWidth).toBeGreaterThan(metrics.clientWidth);
     await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();

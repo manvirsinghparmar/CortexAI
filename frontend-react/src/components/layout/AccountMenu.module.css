@@ -9,27 +9,25 @@
   height: 32px;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: var(--cx-r-lg);
   background: transparent;
-  color: var(--on-surface-variant);
+  color: var(--cx-ink-500);
   cursor: pointer;
 }
 
 .accountButton:hover,
 .accountButton:focus-visible,
 .accountButton[aria-expanded="true"] {
-  color: var(--primary);
+  border-color: var(--cx-hairline);
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-900);
   outline: none;
 }
 
 .accountButton svg {
-  width: 24px;
-  height: 24px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
+  width: 18px;
+  height: 18px;
 }
 
 .menu {
@@ -38,10 +36,10 @@
   top: calc(100% + 8px);
   right: 0;
   min-width: 128px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 16px 32px rgb(15 23 42 / 14%);
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-md);
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-pop);
   padding: 6px;
 }
 
@@ -53,7 +51,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #0f172a;
+  color: var(--cx-ink-900);
   cursor: pointer;
   font: 600 13px/18px var(--font-sans);
   padding: 0 10px;
@@ -63,21 +61,23 @@
 
 .menuItem:hover,
 .menuItem:focus-visible {
-  background: #f1f5f9;
+  background: var(--cx-surface-2);
   outline: none;
 }
 
 @media (max-width: 900px) {
   .accountButton {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
+    width: 32px;
+    height: 32px;
+    border-color: var(--cx-hairline);
+    border-radius: 9px;
+    background: var(--cx-surface);
   }
 
   .accountButton:hover,
   .accountButton:focus-visible,
   .accountButton[aria-expanded="true"] {
-    background: var(--surface-container);
-    color: var(--primary);
+    background: var(--cx-surface-2);
+    color: var(--cx-accent);
   }
 }

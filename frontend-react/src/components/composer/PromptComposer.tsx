@@ -9,6 +9,7 @@ import { isModelDropdownVisible } from "../../hooks/useSmartRouting";
 import type { ModelCatalogItem } from "../../types";
 import { DEFAULT_MODELS } from "../../config/defaultModels";
 import { resolveCompareModelKeys } from "../../config/compareDefaults";
+import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./PromptComposer.module.css";
 
 interface PromptComposerProps {
@@ -74,6 +75,15 @@ export function PromptComposer({ models }: PromptComposerProps) {
 
   const showModelDropdown = isModelDropdownVisible(mode, smartMode);
   const showModelRow = mode === "compare" || showModelDropdown;
+  const featureChipProps = {
+    compareMode: mode === "compare",
+    smartMode: mode === "single" ? smartMode : false,
+    researchMode: mode === "compare" ? compareResearchMode : researchMode,
+    optimizeMode,
+    onSmartToggle: mode === "single" ? setSmartMode : () => undefined,
+    onResearchToggle: mode === "compare" ? setCompareResearchMode : setResearchMode,
+    onOptimizeToggle: setOptimizeMode,
+  };
 
   return (
     <div className={styles.card}>
@@ -84,6 +94,13 @@ export function PromptComposer({ models }: PromptComposerProps) {
               models={availableModels}
               keys={compareModelKeys}
               onChange={setCompareModelKey}
+              trailingControls={
+                <FeatureChips
+                  {...featureChipProps}
+                  compareMode
+                  variant="sourcesOnly"
+                />
+              }
             />
           ) : (
             <ModelSelector
@@ -119,40 +136,24 @@ export function PromptComposer({ models }: PromptComposerProps) {
 
         <div className={styles.featureControls}>
           <FeatureChips
-            compareMode={mode === "compare"}
-            smartMode={mode === "single" ? smartMode : false}
-            researchMode={mode === "compare" ? compareResearchMode : researchMode}
-            optimizeMode={optimizeMode}
-            onSmartToggle={mode === "single" ? setSmartMode : () => undefined}
-            onResearchToggle={
-              mode === "compare" ? setCompareResearchMode : setResearchMode
-            }
-            onOptimizeToggle={setOptimizeMode}
+            {...featureChipProps}
+            variant={mode === "compare" ? "improveOnly" : "default"}
           />
         </div>
 
         <div className={styles.actions}>
           <button
-            className={styles.submitButton}
+            className={`${styles.submitButton} ${streaming ? styles.stopButton : ""}`}
             type="button"
             aria-label={streaming ? "Stop" : "Send message"}
             id="submitBtn"
             onClick={() => (streaming ? cancel() : void submit())}
             disabled={!streaming && !prompt.trim() && attachments.length === 0}
           >
-            {streaming ? <span className={styles.stopIcon} /> : <SendIcon />}
+            <CortexIcon name={streaming ? "stop" : "send"} />
           </button>
         </div>
       </div>
     </div>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 12h13" />
-      <path d="m13 6 6 6-6 6" />
-    </svg>
   );
 }

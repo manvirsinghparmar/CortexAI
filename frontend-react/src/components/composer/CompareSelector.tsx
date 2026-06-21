@@ -5,6 +5,7 @@ import {
   resolveAddedCompareModelKey,
 } from "../../config/compareDefaults";
 import { getModelPresentation } from "../../config/modelPresentation";
+import { CortexIcon } from "../shared/CortexIcon";
 import { ModelPicker } from "./ModelPicker";
 import styles from "./CompareSelector.module.css";
 
@@ -64,8 +65,6 @@ export function CompareSelector({
         ))}
       </div>
 
-      {trailingControls && <div className={styles.trailingControls}>{trailingControls}</div>}
-
       {canAdd && (
         <button
           id="compareAddModelBtn"
@@ -74,10 +73,12 @@ export function CompareSelector({
           onClick={handleAddModel}
           aria-label="Add model to comparison"
         >
-          <AddIcon />
-          <span>Add Model</span>
+          <CortexIcon name="plus" />
+          <span>Add model</span>
         </button>
       )}
+
+      {trailingControls && <div className={styles.trailingControls}>{trailingControls}</div>}
     </div>
   );
 }
@@ -89,12 +90,7 @@ function CompareConnector() {
       data-testid="compare-connector"
       aria-hidden="true"
     >
-      <svg viewBox="0 0 20 20">
-        <path d="M3.5 7h11" />
-        <path d="m12 4.5 2.5 2.5L12 9.5" />
-        <path d="M16.5 13h-11" />
-        <path d="m8 10.5-2.5 2.5L8 15.5" />
-      </svg>
+      <CortexIcon name="swap" />
     </span>
   );
 }
@@ -165,14 +161,4 @@ function modelFromKey(key: string): Pick<ModelCatalogItem, "provider" | "model">
     provider: key.slice(0, separator),
     model: key.slice(separator + 1),
   };
-}
-
-function AddIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 8v8" />
-      <path d="M8 12h8" />
-    </svg>
-  );
 }

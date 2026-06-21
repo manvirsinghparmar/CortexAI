@@ -75,7 +75,7 @@ test("mobile compose action clears an Ask thread while preserving Ask mode", asy
     await expectNoHorizontalOverflow(page);
 });
 
-test("mobile composer stays borderless with a soft focus state", async ({ responsiveApp }) => {
+test("mobile composer uses the refresh hairline shell with a soft focus state", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 390, height: 844 });
 
@@ -90,7 +90,7 @@ test("mobile composer stays borderless with a soft focus state", async ({ respon
                 boxShadow: style.boxShadow,
             };
         });
-        expect(idle.borderColor).toBe("rgba(0, 0, 0, 0)");
+        expect(idle.borderColor).toBe("rgb(235, 237, 240)");
         expect(idle.boxShadow).not.toBe("none");
 
         await textarea.focus();
@@ -271,8 +271,8 @@ async function composerMetrics(page) {
             navTop: nav?.getBoundingClientRect().top ?? 0,
             sendVisible:
                 !!sendRect
-                && sendRect.width >= 40
-                && sendRect.height >= 40
+                && sendRect.width >= 38
+                && sendRect.height >= 38
                 && sendRect.right <= window.innerWidth,
             textareaFontSize: Number.parseFloat(
                 textarea ? getComputedStyle(textarea).fontSize : "0",

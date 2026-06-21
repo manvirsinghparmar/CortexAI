@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import type { ModelCatalogItem } from "../../types";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { ProviderLogo } from "../shared/ProviderLogo";
+import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./ModelPicker.module.css";
 
 export type ModelPickerPlacement = "up" | "down";
@@ -259,7 +260,9 @@ export function ModelPicker({
                     <strong>{meta.label}</strong>
                     <small>{meta.model}</small>
                   </span>
-                  {isSelected && <CheckIcon />}
+                  {isSelected && (
+                    <CortexIcon name="check" className={styles.checkIcon} />
+                  )}
                 </button>
               );
             })}
@@ -281,12 +284,4 @@ function modelFromKey(key: string): Pick<ModelCatalogItem, "provider" | "model">
     provider: key.slice(0, separator),
     model: key.slice(separator + 1),
   };
-}
-
-function CheckIcon() {
-  return (
-    <svg className={styles.checkIcon} viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m6 12 4 4 8-8" />
-    </svg>
-  );
 }

@@ -145,6 +145,9 @@ python run_server.py --reload
 - `GET /v1/byok/status`
 - `DELETE /v1/byok?provider=<provider-id>`
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
+- `GET /v1/auth/cognito-config`
+- `POST /v1/auth/dev-login`
+- `POST /v1/auth/logout`
 
 ### History response contract
 
@@ -191,6 +194,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
 - Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped startup endpoints (`/v1/providers`, `/v1/models`, `/v1/history`) so Ask/Compare selectors and the history sidebar hydrate immediately in local development.
+- The React top-right account icon opens a menu with Cognito `Sign in` when available and `Log off` as a session-clear fallback, including when the icon is still labelled `Guest account`. Log off clears the local session cookie through `/v1/auth/logout`, resets the active React chat/history state, then follows the Cognito Hosted UI `logoutUrl` when available.
 - Response is sent with no-cache headers so config changes apply immediately.
 
 React/Vite frontend notes:

@@ -21,15 +21,45 @@ export async function devLogin(token?: string): Promise<{ session_id: string }> 
   return res.json() as Promise<{ session_id: string }>;
 }
 
+export function cognitoClientId(config: CognitoConfig): string {
+  return (config.client_id ?? config.clientId ?? "").trim();
+}
+
+export function cognitoRedirectUri(config: CognitoConfig): string {
+  return (config.redirect_uri ?? config.redirectUri ?? "").trim();
+}
+
+function defaultCognitoRedirectUri(): string {
+  return `${window.location.origin}/auth`;
+}
+
+export function cognitoLogoutUrl(config: CognitoConfig): string {
+  return (config.logout_url ?? config.logoutUrl ?? "").trim();
+}
+
 export function buildCognitoLoginUrl(config: CognitoConfig): string {
-  if (!config.enabled || !config.domain || !config.client_id || !config.redirect_uri) {
+  const clientId = cognitoClientId(config);
+  const redirectUri = cognitoRedirectUri(config) || defaultCognitoRedirectUri();
+  if (!config.enabled || !config.domain || !clientId || !redirectUri) {
     throw new Error("Cognito is not fully configured");
   }
   const params = new URLSearchParams({
     response_type: "code",
-    client_id: config.client_id,
-    redirect_uri: config.redirect_uri,
+    client_id: clientId,
+    redirect_uri: redirectUri,
     scope: "openid email profile",
   });
   return `${config.domain}/oauth2/authorize?${params.toString()}`;
+}
+
+export function buildCognitoLogoutUrl(config: CognitoConfig): string {
+  const logoutUrl = cognitoLogoutUrl(config);
+  if (!config.enabled || !logoutUrl) {
+    throw new Error("Cognito logout is not configured");
+  }
+  const redirectUri = cognitoRedirectUri(config) || defaultCognitoRedirectUri();
+  const separator = logoutUrl.includes("?") ? "&" : "?";
+  return `${logoutUrl}${separator}response_type=code&scope=email+openid&redirect_uri=${encodeURIComponent(
+    redirectUri,
+  )}`;
 }

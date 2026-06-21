@@ -378,6 +378,7 @@ Response includes:
 - `GET /v1/admin/request-groups/{request_group_id}/failed-attempts`
 - `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
 - `POST /v1/auth/dev-login` (local-development helper; gated by env flags)
+- `POST /v1/auth/logout` (clears the session cookie)
 
 ### Cognito (Gmail) sign-in
 
@@ -389,8 +390,8 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_CLIENT_ID` – App client ID
    - `COGNITO_REGION` – AWS region
    - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
-   - `COGNITO_REDIRECT_URI` – (optional) Callback URL; defaults to current origin + pathname
-3. **Frontend**: Load the app; if Cognito is enabled, a "Sign in with Google" button appears. After sign-in, the bearer token is stored and sent as `Authorization: Bearer <token>` on API requests. Sessions/history are tied to the authenticated user identity.
+   - `COGNITO_REDIRECT_URI` – (optional) Callback URL; React falls back to same-origin `/auth`
+3. **Frontend**: Load the app; the React top-right account icon opens an account menu. Cognito guests can `Sign in`, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
 
 `/v1/models` now includes attachment capability metadata per model:
 - `supports_image_input`

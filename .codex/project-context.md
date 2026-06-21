@@ -25,6 +25,7 @@ npm run --prefix frontend-react build
 - Session-scoped routes (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`, `/v1/providers`, `/v1/models`, `/v1/optimize`, `/v1/history*`) reject API-key-only auth.
 - Local dev can mint session cookies via `POST /v1/auth/dev-login` only when `ENABLE_DEV_SESSION_LOGIN=true` (blocked in production-like envs).
 - Frontend startup waits for Cognito/local dev-session bootstrap before session-scoped startup fetches so Ask/Compare model selectors and the history sidebar can hydrate from `/v1/providers`, `/v1/models`, and `/v1/history`.
+- React auth actions live in the top-right account icon menu. Keep `Log off` available as a session-clear fallback even when the icon is labelled `Guest account`; it clears the API session cookie, resets active React chat/history state, and redirects to the Cognito Hosted UI logout URL when `/v1/auth/cognito-config` provides one.
 - In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
 - `run_app.py` is the local full-app runner: it starts FastAPI with `SERVE_FRONTEND=false`, launches the React/Vite dev server, and passes `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE` so Vite and runtime config point to the selected API host/port.
 - The full-app runner preflights both ports before starting children and must terminate full process trees on Windows so failed startup cannot orphan Vite.

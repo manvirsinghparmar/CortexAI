@@ -4,6 +4,7 @@ import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { ExampleChips } from "../components/shared/ExampleChips";
+import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
 import { formatHistoryDateTime } from "../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../history/historyThreads";
@@ -30,6 +31,8 @@ export function ChatPage() {
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
   const startNewChat = useChatStore((s) => s.startNewChat);
+  const setHistory = useChatStore((s) => s.setHistory);
+  const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const authEnabled = cognitoConfig?.enabled ?? false;
 
   useEffect(() => {
@@ -60,6 +63,15 @@ export function ChatPage() {
     setMobilePanel("chat");
   };
 
+  const handleLogout = () => {
+    cancel();
+    startNewChat();
+    setHistory([]);
+    setHistorySearch("");
+    setMobilePanel("chat");
+    void logout();
+  };
+
   return (
     <div className={styles.layout}>
       <Sidebar
@@ -67,7 +79,7 @@ export function ChatPage() {
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
-        onLogout={authEnabled ? logout : undefined}
+        onLogout={authEnabled ? handleLogout : undefined}
       />
 
       <main className={styles.main}>
@@ -82,14 +94,12 @@ export function ChatPage() {
             >
               <Icon name="compose" />
             </button>
-            <button
-              type="button"
-              className={styles.iconButton}
-              aria-label={loggedIn ? "Account" : "Guest account"}
-              onClick={loggedIn ? logout : login}
-            >
-              <Icon name="account" />
-            </button>
+            <AccountMenu
+              authEnabled={authEnabled}
+              loggedIn={loggedIn}
+              onLogin={authEnabled ? login : undefined}
+              onLogout={handleLogout}
+            />
           </div>
         </header>
 
@@ -116,14 +126,12 @@ export function ChatPage() {
             <button type="button" className={styles.iconButton} aria-label="New chat" onClick={startNewChat}>
               <Icon name="plus" />
             </button>
-            <button
-              type="button"
-              className={styles.iconButton}
-              aria-label={loggedIn ? "Account" : "Guest account"}
-              onClick={loggedIn ? logout : login}
-            >
-              <Icon name="account" />
-            </button>
+            <AccountMenu
+              authEnabled={authEnabled}
+              loggedIn={loggedIn}
+              onLogin={authEnabled ? login : undefined}
+              onLogout={handleLogout}
+            />
           </div>
         </header>
 
@@ -254,17 +262,10 @@ function formatHistoryMode(mode: HistoryThread["mode"]): string {
 function Icon({
   name,
 }: {
-  name: "account" | "plus" | "compose" | "ask" | "compare" | "history";
+  name: "plus" | "compose" | "ask" | "compare" | "history";
 }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      {name === "account" && (
-        <>
-          <circle cx="12" cy="8" r="3.5" />
-          <path d="M5 20a7 7 0 0 1 14 0" />
-          <circle cx="12" cy="12" r="10" />
-        </>
-      )}
       {name === "plus" && (
         <>
           <circle cx="12" cy="12" r="9" />

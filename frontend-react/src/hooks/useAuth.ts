@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchCognitoConfig, fetchWhoAmI, buildCognitoLoginUrl } from "../api/auth";
+import {
+  fetchCognitoConfig,
+  fetchWhoAmI,
+  buildCognitoLoginUrl,
+  buildCognitoLogoutUrl,
+} from "../api/auth";
 import type { CognitoConfig, WhoAmIResponse } from "../types";
 
 interface AuthState {
@@ -73,12 +78,20 @@ export function useAuth() {
   }, [state]);
 
   const logout = useCallback(async () => {
+    const { cognitoConfig } = state;
     try {
       await fetch("/v1/auth/logout", { method: "POST", credentials: "include" });
     } finally {
       setState((prev) => ({ ...prev, whoAmI: null, loggedIn: false }));
+      if (cognitoConfig?.enabled) {
+        try {
+          window.location.href = buildCognitoLogoutUrl(cognitoConfig);
+        } catch {
+          window.location.reload();
+        }
+      }
     }
-  }, []);
+  }, [state]);
 
   return {
     ...state,

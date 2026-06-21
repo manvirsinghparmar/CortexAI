@@ -210,9 +210,13 @@ export interface FileUploadResponse {
 export interface CognitoConfig {
   enabled: boolean;
   client_id?: string;
+  clientId?: string;
   domain?: string;
   region?: string;
   redirect_uri?: string;
+  redirectUri?: string;
+  logout_url?: string;
+  logoutUrl?: string;
 }
 
 export interface WhoAmIBaseline {

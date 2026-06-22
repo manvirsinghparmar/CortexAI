@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchHistory } from "../api/history";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
@@ -35,6 +35,8 @@ export function ChatPage() {
   const { submit, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
+  const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const streaming = useChatStore((s) => s.streaming);
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
   const hydrateFromHistoryThread = useChatStore((s) => s.hydrateFromHistoryThread);
@@ -48,6 +50,13 @@ export function ChatPage() {
   useEffect(() => {
     if (!authLoading) void loadHistory();
   }, [authLoading, loadHistory]);
+
+  // Collapse the composer sheet on mobile as soon as the user submits
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (streaming && !prevStreamingRef.current) setComposerCollapsed(true);
+    prevStreamingRef.current = streaming;
+  }, [streaming]);
 
   const handleSelectHistoryThread = async (thread: HistoryThread) => {
     try {
@@ -175,9 +184,44 @@ export function ChatPage() {
         </div>
 
         {mobilePanel === "chat" && (
-          <div className={styles.composerWrap}>
-            <PromptComposer models={models} />
-          </div>
+          <>
+            {/* Dim backdrop — mobile only, shown when sheet is open */}
+            <div
+              className={`${styles.composerBackdrop} ${!composerCollapsed ? styles.composerBackdropVisible : ""}`}
+              role="presentation"
+              onClick={() => setComposerCollapsed(true)}
+            />
+
+            {/* Composer: inline on desktop, fixed sheet overlay on mobile */}
+            <div
+              className={styles.composerWrap}
+              data-collapsed={composerCollapsed}
+            >
+              {/* Handle + collapse chevron — mobile sheet header */}
+              <div className={styles.composerSheetHeader} aria-hidden="true">
+                <div className={styles.composerSheetHandle} />
+                <button
+                  type="button"
+                  className={styles.composerSheetClose}
+                  aria-label="Collapse composer"
+                  onClick={() => setComposerCollapsed(true)}
+                >
+                  <CortexIcon name="chevron-down" size={18} />
+                </button>
+              </div>
+              <PromptComposer models={models} />
+            </div>
+
+            {/* Mobile FAB — shown when composer is collapsed */}
+            <button
+              type="button"
+              className={`${styles.composerFab} ${composerCollapsed ? styles.composerFabVisible : ""}`}
+              aria-label="Open composer"
+              onClick={() => setComposerCollapsed(false)}
+            >
+              <CortexIcon name="new-chat" size={22} />
+            </button>
+          </>
         )}
 
         <nav className={styles.mobileNav} aria-label="Mobile navigation">

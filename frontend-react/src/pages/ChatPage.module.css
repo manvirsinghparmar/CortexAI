@@ -124,6 +124,44 @@
   background: var(--cx-canvas);
 }
 
+/* Mobile-only elements — hidden on desktop */
+.composerBackdrop {
+  display: none;
+}
+
+.composerSheetHeader {
+  display: none;
+}
+
+.composerSheetHandle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--cx-hairline);
+}
+
+.composerSheetClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cx-ink-400);
+  cursor: pointer;
+}
+
+.composerSheetClose:hover {
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-700);
+}
+
+.composerFab {
+  display: none;
+}
+
 .mobileNav {
   display: none;
 }
@@ -347,13 +385,84 @@
   .canvas {
     overflow: auto;
     padding: 16px 16px 0;
-    scroll-padding-bottom: 206px;
+    /* Only need to clear the bottom nav (64px), not the composer — it's now an overlay */
+    scroll-padding-bottom: 80px;
   }
 
+  /* Fixed bottom-sheet overlay — replaces the inline flex slot on mobile */
   .composerWrap {
-    border-top: 1px solid var(--cx-hairline-soft);
+    position: fixed;
+    z-index: 24;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    border-top: 0;
+    border-radius: 20px 20px 0 0;
     background: var(--cx-surface);
-    padding: 11px 16px 10px;
+    box-shadow: 0 -6px 40px rgb(0 0 0 / 14%);
+    padding: 0 16px calc(env(safe-area-inset-bottom) + 14px);
+  }
+
+  /* Collapsed: hide the sheet entirely; FAB takes over */
+  .composerWrap[data-collapsed="true"] {
+    display: none;
+  }
+
+  /* Dim backdrop shown when sheet is open */
+  .composerBackdropVisible {
+    position: fixed;
+    inset: 0;
+    z-index: 23;
+    display: block;
+    background: color-mix(in srgb, #000 45%, transparent);
+    backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
+  }
+
+  /* Sheet drag-handle + close row */
+  .composerSheetHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0 8px;
+  }
+
+  /* Floating Action Button — above the mobile nav, shown when collapsed */
+  .composerFab {
+    position: fixed;
+    z-index: 22;
+    right: 20px;
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    width: 52px;
+    height: 52px;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--cx-accent);
+    color: #fff;
+    cursor: pointer;
+    box-shadow:
+      0 4px 14px color-mix(in srgb, var(--cx-accent) 50%, transparent),
+      0 2px 6px rgb(0 0 0 / 12%);
+    transition:
+      transform 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .composerFab:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 6px 20px color-mix(in srgb, var(--cx-accent) 55%, transparent),
+      0 3px 8px rgb(0 0 0 / 14%);
+  }
+
+  .composerFab:active {
+    transform: translateY(0);
+  }
+
+  .composerFabVisible {
+    display: inline-flex;
   }
 
   .mobileNav {
@@ -426,7 +535,11 @@
   }
 
   .composerWrap {
-    padding: 11px 16px 10px;
+    padding: 0 12px calc(env(safe-area-inset-bottom) + 12px);
+  }
+
+  .composerFab {
+    right: 16px;
   }
 
   .mobileNav {

@@ -459,6 +459,9 @@
 
 @media (max-width: 760px) {
   .mobileResponseTabs {
+    position: sticky;
+    top: 8px;
+    z-index: 10;
     display: flex;
     width: 100%;
     min-width: 0;
@@ -467,6 +470,7 @@
     border-radius: 11px;
     background: var(--cx-surface-3);
     padding: 3px;
+    box-shadow: 0 2px 12px rgb(0 0 0 / 10%);
   }
 
   .mobileResponseTabs button {

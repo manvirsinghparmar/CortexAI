@@ -35,7 +35,7 @@
   z-index: 30;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 128px;
+  min-width: 168px;
   border: 1px solid var(--cx-hairline);
   border-radius: var(--cx-r-md);
   background: var(--cx-surface);
@@ -43,11 +43,21 @@
   padding: 6px;
 }
 
+.menu::before {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 8px;
+  content: "";
+}
+
 .menuItem {
   display: flex;
   width: 100%;
   min-height: 36px;
   align-items: center;
+  gap: 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -59,10 +69,22 @@
   white-space: nowrap;
 }
 
+.menuItem svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--cx-ink-500);
+}
+
 .menuItem:hover,
 .menuItem:focus-visible {
   background: var(--cx-surface-2);
   outline: none;
+}
+
+.menuItem:hover svg,
+.menuItem:focus-visible svg {
+  color: var(--cx-ink-900);
 }
 
 @media (max-width: 900px) {

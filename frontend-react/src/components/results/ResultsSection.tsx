@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SparkleIcon } from "../common/SparkleIcon";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
+import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
@@ -10,6 +11,7 @@ import styles from "./ResultsSection.module.css";
 
 export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
+  const { regenerate } = useChat();
   const sectionRef = useRef<HTMLElement | null>(null);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
@@ -85,6 +87,7 @@ export function ResultsSection() {
               turn={turn}
               turnIndex={turnIndex}
               registerTurn={registerTurn}
+              onRegenerate={regenerate}
             />
           ) : (
             <article
@@ -103,6 +106,7 @@ export function ResultsSection() {
                   loadingMode="ask"
                   researchEnabled={turn.researchEnabled}
                   optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                  onRegenerate={() => void regenerate(turn.id, responseIndex)}
                 />
               ))}
             </article>
@@ -133,10 +137,12 @@ function CompareTurn({
   turn,
   turnIndex,
   registerTurn,
+  onRegenerate,
 }: {
   turn: ChatTurn;
   turnIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
+  onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
 }) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
   const compareGridClass =
@@ -243,6 +249,7 @@ function CompareTurn({
                     loadingMode="compare"
                     researchEnabled={turn.researchEnabled}
                     optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                    onRegenerate={() => void onRegenerate(turn.id, index)}
                     compareHighlights={metricHighlights[index]}
                   />
                 </div>
@@ -308,38 +315,51 @@ function isResponseLoading(turn: ChatTurn, response: ChatTurn["responses"][numbe
 }
 
 function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) {
+  const [originalVisible, setOriginalVisible] = useState(false);
+  const optimization = turn.optimization;
+  const promptText = optimization
+    ? optimization.displayPrompt
+    : turn.prompt || "Analyze the attached file(s).";
+
   return (
     <div className={styles.promptRow}>
-      <div
-        id={`chat-msg-${turnIndex}`}
-        className={`${styles.userBubble} ${
-          turn.optimization ? styles.optimizationBubble : ""
-        }`}
-      >
-        <span>You</span>
-        {turn.optimization ? (
-          <OptimizationPrompt turn={turn} />
-        ) : (
-          <p>{turn.prompt || "Analyze the attached file(s)."}</p>
+      <div className={styles.promptGroup}>
+        <div id={`chat-msg-${turnIndex}`} className={styles.userBubble}>
+          <span className={styles.userLabel}>You</span>
+          <p className={styles.userPromptText}>{promptText}</p>
+          <TurnAttachments turn={turn} />
+        </div>
+        {optimization && (
+          <OptimizationStatus
+            optimization={optimization}
+            originalVisible={originalVisible}
+            onViewOriginal={() => setOriginalVisible(true)}
+          />
         )}
-        <TurnAttachments turn={turn} />
       </div>
     </div>
   );
 }
 
 const OPTIMIZATION_LIVE_MESSAGE = "Improving your prompt";
-const OPTIMIZATION_PENDING_MESSAGE = "Improving your prompt\u2026";
+const OPTIMIZATION_PENDING_MESSAGE = "Improving your prompt";
 
-function OptimizationPrompt({ turn }: { turn: ChatTurn }) {
-  const optimization = turn.optimization!;
+function OptimizationStatus({
+  optimization,
+  originalVisible,
+  onViewOriginal,
+}: {
+  optimization: NonNullable<ChatTurn["optimization"]>;
+  originalVisible: boolean;
+  onViewOriginal: () => void;
+}) {
   const pending = optimization.status === "pending";
   const reducedMotion = useReducedMotion();
 
   if (pending) {
     return (
-      <p
-        className={`${styles.optimizationText} optimization-user-text`}
+      <div
+        className={`${styles.optimizationStatus} ${styles.optimizationStatusPending}`}
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -362,28 +382,64 @@ function OptimizationPrompt({ turn }: { turn: ChatTurn }) {
             ...
           </span>
         )}
-      </p>
+      </div>
     );
   }
 
-  return (
-    <>
-      <p
-        className={`${styles.optimizationText} ${styles.optimizationReveal} optimization-user-text optimization-reveal`}
-      >
-        <OptimizationMark />
-        <span className={`${styles.optimizationMessage} optimization-result-message`}>
-          {optimization.displayPrompt}
-        </span>
-      </p>
-      {optimization.note && (
-        <p
-          className={`${styles.optimizationNote} ${styles.optimizationReveal} optimization-result-note optimization-reveal`}
+  if (optimization.status === "optimized") {
+    return (
+      <div className={styles.optimizationStatusStack}>
+        <div
+          className={`${styles.optimizationStatus} ${styles.optimizationStatusOptimized} ${styles.optimizationReveal} optimization-reveal`}
         >
-          {optimization.note}
-        </p>
-      )}
-    </>
+          <OptimizationMark />
+          <span className="optimization-result-message">Prompt optimized</span>
+          {!originalVisible && (
+            <button
+              type="button"
+              className={styles.optimizationToggle}
+              aria-expanded={originalVisible}
+              onClick={onViewOriginal}
+            >
+              View original
+            </button>
+          )}
+        </div>
+        {originalVisible && (
+          <p
+            className={`${styles.optimizationOriginalText} ${styles.optimizationReveal} optimization-reveal`}
+          >
+            {optimization.originalPrompt}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (optimization.status === "kept_original") {
+    return (
+      <div
+        className={`${styles.optimizationStatus} ${styles.optimizationStatusClear} ${styles.optimizationReveal} optimization-result-note optimization-reveal`}
+      >
+        <span className={styles.optimizationCheck} aria-hidden="true">
+          <CortexIcon name="check" />
+        </span>
+        <span>Already clear — sent as-is</span>
+      </div>
+    );
+  }
+
+  if (optimization.status === "cancelled") {
+    return null;
+  }
+
+  return (
+    <div
+      className={`${styles.optimizationStatus} ${styles.optimizationStatusOptimized} ${styles.optimizationReveal} optimization-reveal`}
+    >
+      <OptimizationMark />
+      <span className="optimization-result-message">{optimization.displayPrompt}</span>
+    </div>
   );
 }
 

@@ -36,6 +36,7 @@ interface ResponseCardProps {
   loadingMode?: ResponseLoadingMode;
   researchEnabled?: boolean;
   optimizeEnabled?: boolean;
+  onRegenerate?: () => void;
   compareHighlights?: {
     fastest?: boolean;
     cheapest?: boolean;
@@ -50,6 +51,7 @@ export function ResponseCard({
   loadingMode = "ask",
   researchEnabled = false,
   optimizeEnabled = false,
+  onRegenerate,
   compareHighlights,
 }: ResponseCardProps) {
   const [statsOpen, setStatsOpen] = useState(false);
@@ -73,6 +75,7 @@ export function ResponseCard({
   const metaPinned = !!loadingStatus || isFailed;
   const showStatsToggle = hasMetaContent && !metaPinned;
   const showLoading = !!loadingStatus && !responseText;
+  const showRegenerate = !!onRegenerate && !loadingStatus;
   const statsId = useMemo(
     () => `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`,
     [response.request_id],
@@ -157,16 +160,19 @@ export function ResponseCard({
                     }`}
                   >
                     <CortexIcon name="latency" />
-                    {formatDurationSeconds(durationMs)}
+                    {formatMetricDurationSeconds(durationMs)}
                     {compareHighlights?.fastest && (
-                      <span className={styles.metricTag}>Fastest</span>
+                      <span className={`${styles.winnerLabel} winner-label`}>
+                        {" "}
+                        &middot; Fastest
+                      </span>
                     )}
                   </span>
                 )}
                 {totalTokens !== null && (
                   <span className={`${styles.metricPill} ${styles.metricText}`}>
                     <CortexIcon name="tokens" />
-                    {formatTokens(totalTokens)} tokens
+                    {formatTokens(totalTokens)} tok
                   </span>
                 )}
                 {hasCost && (
@@ -175,9 +181,12 @@ export function ResponseCard({
                       compareHighlights?.cheapest ? styles.metricHighlight : ""
                     }`}
                   >
-                    <CortexIcon name="cost" />${response.estimated_cost.toFixed(5)}
+                    <CortexIcon name="cost" />${formatCost(response.estimated_cost)}
                     {compareHighlights?.cheapest && (
-                      <span className={styles.metricTag}>Cheapest</span>
+                      <span className={`${styles.winnerLabel} winner-label`}>
+                        {" "}
+                        &middot; Cheapest
+                      </span>
                     )}
                   </span>
                 )}
@@ -241,26 +250,18 @@ export function ResponseCard({
             <CortexIcon name="copy" />
             <span>{copied ? "Copied" : "Copy"}</span>
           </button>
-          <button
-            type="button"
-            className={styles.actionButton}
-            aria-label="Regenerate response"
-            title="Regenerate response"
-            disabled
-          >
-            <CortexIcon name="regenerate" />
-            <span>Regenerate</span>
-          </button>
-          <button
-            type="button"
-            className={styles.actionButton}
-            aria-label="Branch response"
-            title="Branch response"
-            disabled
-          >
-            <CortexIcon name="branch" />
-            <span>Branch</span>
-          </button>
+          {showRegenerate && (
+            <button
+              type="button"
+              className={styles.actionButton}
+              aria-label="Regenerate response"
+              title="Regenerate response"
+              onClick={onRegenerate}
+            >
+              <CortexIcon name="regenerate" />
+              <span>Regenerate</span>
+            </button>
+          )}
         </div>
         <div className={styles.rateGroup}>
           <button
@@ -603,8 +604,16 @@ function formatTokens(tokens: number) {
   return tokens.toLocaleString();
 }
 
+function formatMetricDurationSeconds(durationMs: number) {
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)}s`;
+}
+
 function formatDurationSeconds(durationMs: number) {
   return `${(Math.max(0, durationMs) / 1000).toFixed(1)} sec`;
+}
+
+function formatCost(cost: number) {
+  return cost.toFixed(4);
 }
 
 function formatElapsedClock(durationMs: number) {

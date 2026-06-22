@@ -41,5 +41,20 @@ Do it in this order, one PR-sized step at a time (stop after each for review):
    model switcher for answers, docked composer sheet, streaming skeleton + stop
    (filled square) state, scroll-to-latest FAB.
 
+## Fixes in this revision (apply these — they address bugs in the current build)
+- **Metric strip clipping** (timing/cost trimmed, esp. mobile): keep the strip on
+  a **single packed line** (`display:flex; gap:6px`, pills `white-space:nowrap`,
+  no `space-between`), value-only with abbreviated units (`tok`, `1.7s`,
+  `$0.0107`). Mark the winning pill with a green tint. Keep the `· Fastest` /
+  `· Cheapest` label **inside the winning pill but desktop-only** — wrap it in a
+  `.winner-label` span and `display:none` it under the mobile breakpoint
+  (`@media (max-width:640px)`). Desktop has room for the word; mobile shows the
+  value alone (green tint still flags the winner). See "Metric strip" in README §4.
+  Apply to desktop Compare columns, the Ask answer card, and mobile.
+- **Prompt-optimization states** (new — see README §8): the `YOU` bubble must not
+  uppercase or truncate the prompt body. Implement the 3 states (improving /
+  optimized / already-clear) with the status shown as a pill **below** the bubble,
+  sentence-case. This fixes the "IMPROVING YOUR PROMPT… …" rendering.
+
 Match the hex values, radii, and shadow tokens exactly. Ask me before adding any
 new copy, sections, or content not present in the reference.

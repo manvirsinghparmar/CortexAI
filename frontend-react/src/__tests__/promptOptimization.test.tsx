@@ -152,7 +152,7 @@ describe("prompt optimization", () => {
     expect(resolved.optimization.note).toBe(OPTIMIZATION_ORIGINAL_NOTE);
   });
 
-  it("renders stable optimization progress without a response placeholder", () => {
+  it("renders stable optimization progress below the unchanged user prompt", () => {
     useChatStore.setState({
       turns: [
         turn({
@@ -168,11 +168,15 @@ describe("prompt optimization", () => {
 
     render(<ResultsSection />);
 
-    expect(screen.getByText("Improving your prompt\u2026")).toHaveAttribute(
+    const bubble = document.querySelector("#chat-msg-0");
+    expect(bubble).toHaveTextContent("rough prompt");
+    expect(bubble).not.toHaveTextContent("Improving your prompt");
+    expect(document.querySelector(".optimization-visible-message")).toHaveAttribute(
       "aria-hidden",
       "true",
     );
     expect(screen.getByRole("status")).toHaveTextContent("Improving your prompt");
+    expect(screen.getByRole("status").closest("#chat-msg-0")).toBeNull();
     expect(document.querySelector(".optimization-live-message")).toHaveTextContent(
       "Improving your prompt",
     );
@@ -197,11 +201,13 @@ describe("prompt optimization", () => {
 
     render(<ResultsSection />);
 
-    expect(screen.getByText("Improving your prompt\u2026")).toBeInTheDocument();
+    expect(document.querySelector(".optimization-visible-message")).toHaveTextContent(
+      "Improving your prompt",
+    );
     expect(screen.queryByText("...")).not.toBeInTheDocument();
   });
 
-  it("renders the fallback note beneath the original prompt", () => {
+  it("renders the already-clear status beneath the original prompt", () => {
     useChatStore.setState({
       turns: [
         turn({
@@ -215,15 +221,37 @@ describe("prompt optimization", () => {
     render(<ResultsSection />);
 
     expect(screen.getByText("Already clear")).toBeInTheDocument();
-    expect(screen.getByText(OPTIMIZATION_ORIGINAL_NOTE)).toHaveClass(
-      "optimization-result-note",
-    );
-    expect(screen.getByText("Already clear").closest("p")).toHaveClass(
-      "optimization-reveal",
-    );
-    expect(screen.getByText(OPTIMIZATION_ORIGINAL_NOTE)).toHaveClass(
-      "optimization-reveal",
-    );
+    const clearStatus = screen.getByText("Already clear — sent as-is").closest("div");
+    expect(clearStatus).toHaveClass("optimization-result-note");
+    expect(clearStatus).toHaveClass("optimization-reveal");
+  });
+
+  it("renders optimized prompt status below the sent prompt and reveals the original", () => {
+    useChatStore.setState({
+      turns: [
+        turn({
+          prompt: "rough prompt",
+          submittedPrompt: "Clear, specific prompt",
+          optimization: {
+            status: "optimized",
+            originalPrompt: "rough prompt",
+            displayPrompt: "Clear, specific prompt",
+          },
+        }),
+      ],
+    });
+
+    render(<ResultsSection />);
+
+    const bubble = document.querySelector("#chat-msg-0");
+    expect(bubble).toHaveTextContent("Clear, specific prompt");
+    expect(bubble).not.toHaveTextContent("Prompt optimized");
+    expect(screen.getByText("Prompt optimized").closest("#chat-msg-0")).toBeNull();
+    expect(screen.queryByText("rough prompt")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+
+    expect(screen.getByText("rough prompt")).toBeInTheDocument();
   });
 
   it("keeps Improve available in Compare mode", () => {
@@ -296,7 +324,11 @@ describe("prompt optimization", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-    expect(await screen.findByText("Improving your prompt\u2026")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.querySelector(".optimization-visible-message")).toHaveTextContent(
+        "Improving your prompt",
+      );
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 

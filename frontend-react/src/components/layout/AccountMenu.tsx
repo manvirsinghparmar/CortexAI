@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { CortexIcon } from "../shared/CortexIcon";
+import { CortexIcon, type CortexIconName } from "../shared/CortexIcon";
+import type { AppTheme } from "../../hooks/useTheme";
 import styles from "./AccountMenu.module.css";
 
 interface AccountMenuProps {
@@ -7,6 +8,17 @@ interface AccountMenuProps {
   loggedIn: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
+  theme?: AppTheme;
+  onToggleTheme?: () => void;
+}
+
+type AccountMenuActionKey = "login" | "logout" | "theme";
+
+interface AccountMenuAction {
+  key: AccountMenuActionKey;
+  label: string;
+  ariaLabel?: string;
+  icon?: CortexIconName;
 }
 
 export function AccountMenu({
@@ -14,17 +26,65 @@ export function AccountMenu({
   loggedIn,
   onLogin,
   onLogout,
+  theme,
+  onToggleTheme,
 }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const canLogin = authEnabled && !!onLogin;
   const canLogout = !!onLogout;
-  const menuActions = [
-    ...(!loggedIn && canLogin ? [{ key: "login", label: "Sign in" }] : []),
-    ...(canLogout ? [{ key: "logout", label: "Log off" }] : []),
-  ] as const;
+  const canToggleTheme = !!theme && !!onToggleTheme;
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  const menuActions: AccountMenuAction[] = [];
+  if (!loggedIn && canLogin) {
+    menuActions.push({ key: "login", label: "Sign in" });
+  }
+  if (canToggleTheme) {
+    menuActions.push({
+      key: "theme",
+      label: nextTheme === "dark" ? "Dark theme" : "Light theme",
+      ariaLabel: `Switch to ${nextTheme} theme`,
+      icon: nextTheme === "dark" ? "moon" : "sun",
+    });
+  }
+  if (canLogout) {
+    menuActions.push({ key: "logout", label: "Log off" });
+  }
   const showMenu = menuActions.length > 0;
   const buttonLabel = loggedIn ? "Account" : "Guest account";
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current === null) return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+
+  const openMenu = () => {
+    clearCloseTimer();
+    if (showMenu) setOpen(true);
+  };
+
+  const closeMenu = () => {
+    clearCloseTimer();
+    setOpen(false);
+  };
+
+  const scheduleCloseMenu = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      closeTimerRef.current = null;
+    }, 160);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -32,11 +92,11 @@ export function AccountMenu({
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && rootRef.current?.contains(target)) return;
-      setOpen(false);
+      closeMenu();
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") closeMenu();
     };
 
     document.addEventListener("pointerdown", handlePointerDown);
@@ -47,10 +107,12 @@ export function AccountMenu({
     };
   }, [open]);
 
-  const handleAction = (action: (typeof menuActions)[number]["key"]) => {
-    setOpen(false);
+  const handleAction = (action: AccountMenuActionKey) => {
+    closeMenu();
     if (action === "logout") {
       onLogout?.();
+    } else if (action === "theme") {
+      onToggleTheme?.();
     } else {
       onLogin?.();
     }
@@ -60,11 +122,11 @@ export function AccountMenu({
     <div
       ref={rootRef}
       className={styles.accountMenu}
-      onMouseEnter={() => showMenu && setOpen(true)}
+      onMouseEnter={openMenu}
       onMouseLeave={(event) => {
         const nextTarget = event.relatedTarget;
-        if (nextTarget instanceof Node && !rootRef.current?.contains(nextTarget)) {
-          setOpen(false);
+        if (!(nextTarget instanceof Node) || !rootRef.current?.contains(nextTarget)) {
+          scheduleCloseMenu();
         }
       }}
     >
@@ -82,16 +144,23 @@ export function AccountMenu({
       </button>
 
       {showMenu && open && (
-        <div className={styles.menu} role="menu" aria-label="Account menu">
+        <div
+          className={styles.menu}
+          role="menu"
+          aria-label="Account menu"
+          onMouseEnter={openMenu}
+        >
           {menuActions.map((action) => (
             <button
               key={action.key}
               type="button"
               role="menuitem"
               className={styles.menuItem}
+              aria-label={action.ariaLabel}
               onClick={() => handleAction(action.key)}
             >
-              {action.label}
+              {action.icon && <CortexIcon name={action.icon} />}
+              <span>{action.label}</span>
             </button>
           ))}
         </div>

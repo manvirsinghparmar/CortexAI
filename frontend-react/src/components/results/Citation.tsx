@@ -1,5 +1,14 @@
 import type { CSSProperties, MouseEventHandler } from "react";
-import { forwardRef, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import type { WebSourceItem } from "../../types";
 import { faviconUrl, publisherName } from "../../utils/sourceMeta";
 import { CortexIcon } from "../shared/CortexIcon";
@@ -33,6 +42,8 @@ interface CitationPreviewProps {
   className: string;
   style?: CSSProperties;
   onClick?: MouseEventHandler<HTMLSpanElement>;
+  onMouseEnter?: MouseEventHandler<HTMLSpanElement>;
+  onMouseLeave?: MouseEventHandler<HTMLSpanElement>;
 }
 
 export function Citation({ refs, sources }: CitationProps) {
@@ -40,6 +51,7 @@ export function Citation({ refs, sources }: CitationProps) {
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLSpanElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const [open, setOpen] = useState(false);
   const [failedFavicons, setFailedFavicons] = useState<Set<string>>(() => new Set());
   const [position, setPosition] = useState<PopoverPosition>(() => ({
@@ -51,10 +63,22 @@ export function Citation({ refs, sources }: CitationProps) {
   const citedSources = useMemo(() => resolveCitedSources(refs, sources), [refs, sources]);
 
   useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!open) return undefined;
 
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !dialogRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -86,7 +110,7 @@ export function Citation({ refs, sources }: CitationProps) {
     return () => window.removeEventListener(CITATION_OPEN_EVENT, onOpen);
   }, [citationId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open || smallScreen) return undefined;
 
     const updatePosition = () => {
@@ -103,10 +127,10 @@ export function Citation({ refs, sources }: CitationProps) {
   }, [open, smallScreen]);
 
   useEffect(() => {
-    if (open) {
+    if (open && smallScreen) {
       window.setTimeout(() => dialogRef.current?.focus(), 0);
     }
-  }, [open]);
+  }, [open, smallScreen]);
 
   if (citedSources.length === 0) {
     return null;
@@ -122,7 +146,30 @@ export function Citation({ refs, sources }: CitationProps) {
   const previewId = `${citationId}-preview`;
   const firstSourceHref = externalSourceHref(citedSources[0].url);
 
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const openPreview = () => {
+    clearCloseTimer();
+    window.dispatchEvent(new CustomEvent(CITATION_OPEN_EVENT, { detail: citationId }));
+    setOpen(true);
+  };
+
+  const scheduleDesktopClose = () => {
+    if (smallScreen) return;
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      closeTimerRef.current = null;
+    }, 90);
+  };
+
   const toggleOpen = () => {
+    if (!smallScreen) return;
     setOpen((current) => {
       const next = !current;
       if (next) {
@@ -132,8 +179,56 @@ export function Citation({ refs, sources }: CitationProps) {
     });
   };
 
+  const handleDesktopMouseEnter: MouseEventHandler<HTMLSpanElement> = () => {
+    if (!smallScreen) openPreview();
+  };
+
+  const handleDesktopMouseLeave: MouseEventHandler<HTMLSpanElement> = () => {
+    scheduleDesktopClose();
+  };
+
+  const preview = open ? (
+    smallScreen ? (
+      <span
+        className={styles.citationSheetBackdrop}
+        onClick={() => setOpen(false)}
+      >
+        <CitationPreview
+          id={previewId}
+          ref={dialogRef}
+          sources={citedSources}
+          failedFavicons={failedFavicons}
+          onFaviconError={(url) => {
+            setFailedFavicons((current) => new Set(current).add(url));
+          }}
+          className={`${styles.citationPreview} ${styles.citationSheet}`}
+          onClick={(event) => event.stopPropagation()}
+        />
+      </span>
+    ) : (
+      <CitationPreview
+        id={previewId}
+        ref={dialogRef}
+        sources={citedSources}
+        failedFavicons={failedFavicons}
+        onFaviconError={(url) => {
+          setFailedFavicons((current) => new Set(current).add(url));
+        }}
+        className={`${styles.citationPreview} ${styles.citationPopover}`}
+        style={popoverStyle(position)}
+        onMouseEnter={clearCloseTimer}
+        onMouseLeave={scheduleDesktopClose}
+      />
+    )
+  ) : null;
+
   return (
-    <span ref={rootRef} className={styles.citationRoot}>
+    <span
+      ref={rootRef}
+      className={`${styles.citationRoot} ${open ? styles.citationRootOpen : ""}`}
+      onMouseEnter={handleDesktopMouseEnter}
+      onMouseLeave={handleDesktopMouseLeave}
+    >
       <button
         ref={buttonRef}
         type="button"
@@ -161,37 +256,9 @@ export function Citation({ refs, sources }: CitationProps) {
           strokeWidth={2.2}
         />
       </a>
-      {open &&
-        (smallScreen ? (
-          <span
-            className={styles.citationSheetBackdrop}
-            onClick={() => setOpen(false)}
-          >
-            <CitationPreview
-              id={previewId}
-              ref={dialogRef}
-              sources={citedSources}
-              failedFavicons={failedFavicons}
-              onFaviconError={(url) => {
-                setFailedFavicons((current) => new Set(current).add(url));
-              }}
-              className={`${styles.citationPreview} ${styles.citationSheet}`}
-              onClick={(event) => event.stopPropagation()}
-            />
-          </span>
-        ) : (
-          <CitationPreview
-            id={previewId}
-            ref={dialogRef}
-            sources={citedSources}
-            failedFavicons={failedFavicons}
-            onFaviconError={(url) => {
-              setFailedFavicons((current) => new Set(current).add(url));
-            }}
-            className={`${styles.citationPreview} ${styles.citationPopover}`}
-            style={popoverStyle(position)}
-          />
-        ))}
+      {preview && typeof document !== "undefined"
+        ? createPortal(preview, document.body)
+        : null}
     </span>
   );
 }
@@ -205,6 +272,8 @@ const CitationPreview = forwardRef<HTMLSpanElement, CitationPreviewProps>(functi
     className,
     style,
     onClick,
+    onMouseEnter,
+    onMouseLeave,
   },
   ref,
 ) {
@@ -218,6 +287,8 @@ const CitationPreview = forwardRef<HTMLSpanElement, CitationPreviewProps>(functi
     className={className}
     style={style}
     onClick={onClick}
+    onMouseEnter={onMouseEnter}
+    onMouseLeave={onMouseLeave}
   >
     <span className={styles.citationPreviewTitle}>Sources</span>
     <span className={styles.citationSourceList}>

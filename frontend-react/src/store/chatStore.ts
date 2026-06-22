@@ -63,6 +63,11 @@ interface ChatStoreState {
   activeTurnId: string | null;
   beginTurn: (input: BeginTurnInput) => string;
   prepareTurnForStreaming: (turnId: string, input: PrepareTurnInput) => void;
+  prepareTurnResponseForStreaming: (
+    turnId: string,
+    index: number,
+    response: ChatResponse,
+  ) => void;
   setTurnOptimization: (turnId: string, optimization: PromptOptimizationState) => void;
   updateTurnResponse: (turnId: string, index: number, response: ChatResponse) => void;
   appendTurnResponseText: (
@@ -198,6 +203,23 @@ export const useChatStore = create<ChatStoreState>((set) => ({
         responses: state.activeTurnId === turnId ? input.responses : state.responses,
         streaming: true,
         streamingText: "",
+      };
+    }),
+  prepareTurnResponseForStreaming: (turnId, index, response) =>
+    set((state) => {
+      const updated = updateResponseState(state, turnId, index, () => response);
+      return {
+        ...updated,
+        activeTurnId: turnId,
+        turns: updated.turns.map((turn) =>
+          turn.id === turnId ? { ...turn, status: "streaming" as const } : turn,
+        ),
+        responses:
+          updated.turns.find((turn) => turn.id === turnId)?.responses ??
+          updated.responses,
+        streaming: true,
+        streamingText: "",
+        error: null,
       };
     }),
   setTurnOptimization: (turnId, optimization) =>
@@ -341,13 +363,40 @@ function updateResponseState(
     const responses = [...turn.responses];
     const current = responses[index] ?? makePlaceholderResponse(index, "", "", undefined);
     responses[index] = updater(current);
-    return { ...turn, responses };
+    return {
+      ...turn,
+      responses,
+      compareSummary: turn.compareSummary
+        ? summarizeCompareResponses(turn.compareSummary, responses)
+        : turn.compareSummary,
+    };
   });
 
   const active = turns.find((turn) => turn.id === state.activeTurnId);
   return {
     turns,
     responses: state.activeTurnId === turnId ? active?.responses ?? state.responses : state.responses,
+  };
+}
+
+function summarizeCompareResponses(
+  previousSummary: CompareResponse,
+  responses: ChatResponse[],
+): CompareResponse {
+  const completed = responses.filter((response) => response.ui_status === "complete");
+  return {
+    ...previousSummary,
+    responses,
+    success_count: completed.filter((response) => !response.error).length,
+    error_count: responses.filter((response) => !!response.error).length,
+    total_tokens: responses.reduce(
+      (total, response) => total + (response.token_usage?.total_tokens ?? 0),
+      0,
+    ),
+    total_cost: responses.reduce(
+      (total, response) => total + (response.estimated_cost || 0),
+      0,
+    ),
   };
 }
 

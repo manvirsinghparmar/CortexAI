@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResponseCard } from "../components/results/ResponseCard";
 import type { ChatResponse } from "../types";
@@ -28,12 +28,24 @@ describe("ResponseCard", () => {
   });
 
   it("keeps compact actions accessible by name", () => {
-    render(<ResponseCard response={response()} compact />);
+    const onRegenerate = vi.fn();
+    render(<ResponseCard response={response()} compact onRegenerate={onRegenerate} />);
 
     expect(screen.queryByRole("button", { name: "Resources" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy response" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate response" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Branch response" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Helpful response" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Not helpful response" })).toBeInTheDocument();
+  });
+
+  it("keeps Ask card icon actions accessible without adding branch", () => {
+    const onRegenerate = vi.fn();
+    render(<ResponseCard response={response()} onRegenerate={onRegenerate} />);
+
+    expect(screen.getByRole("button", { name: "Copy response" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate response" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Branch response" })).not.toBeInTheDocument();
   });
 
   it("keeps response stats collapsed behind the integrated run-details control", () => {
@@ -51,9 +63,9 @@ describe("ResponseCard", () => {
     expect(details).toHaveAttribute("aria-expanded", "true");
     expect(details).toHaveAccessibleName("Hide run details");
     expect(stats?.className).toContain("metaRowExpanded");
-    expect(stats).toHaveTextContent("20.0 sec");
-    expect(stats).toHaveTextContent("60 tokens");
-    expect(stats).toHaveTextContent("$0.00100");
+    expect(stats).toHaveTextContent("20.0s");
+    expect(stats).toHaveTextContent("60 tok");
+    expect(stats).toHaveTextContent("$0.0010");
     expect(stats?.querySelectorAll("svg")).toHaveLength(3);
   });
 
@@ -78,7 +90,7 @@ describe("ResponseCard", () => {
     expect(stats?.className).toContain("loadingMetaRow");
     expect(header?.firstElementChild?.nextElementSibling).toBe(stats);
     expect(header).toHaveTextContent("00:08 elapsed · Generating response");
-    expect(header).not.toHaveTextContent("0.00 sec");
+    expect(header).not.toHaveTextContent("0.0s");
     expect(header).not.toHaveTextContent("0 tokens");
 
     act(() => {
@@ -103,8 +115,8 @@ describe("ResponseCard", () => {
     render(<ResponseCard response={completed} compact />);
 
     const header = document.querySelector("header");
-    expect(header).toHaveTextContent("12.4 sec");
-    expect(header).toHaveTextContent("1,248 tokens");
+    expect(header).toHaveTextContent("12.4s");
+    expect(header).toHaveTextContent("1,248 tok");
     expect(header?.querySelectorAll("svg")).toHaveLength(2);
     expect(header).not.toHaveTextContent("1.2k");
   });
@@ -121,8 +133,8 @@ describe("ResponseCard", () => {
     render(<ResponseCard response={completed} compact />);
 
     const header = document.querySelector("header");
-    expect(header).toHaveTextContent("8.4 sec");
-    expect(header).not.toHaveTextContent("1.2 sec");
+    expect(header).toHaveTextContent("8.4s");
+    expect(header).not.toHaveTextContent("1.2s");
   });
 
   it("hides the token metric when completed token usage is unavailable", () => {
@@ -135,7 +147,7 @@ describe("ResponseCard", () => {
     render(<ResponseCard response={completed} compact />);
 
     const header = document.querySelector("header");
-    expect(header).toHaveTextContent("20.0 sec");
+    expect(header).toHaveTextContent("20.0s");
     expect(header).not.toHaveTextContent("tokens");
   });
 
@@ -265,13 +277,20 @@ describe("ResponseCard", () => {
     expect(screen.getByText("block [2]")).toBeInTheDocument();
   });
 
-  it("opens citation previews with source links and closes them from keyboard or outside clicks", () => {
+  it("opens desktop citation previews on hover and closes them when hover leaves", () => {
+    vi.useFakeTimers();
     render(<ResponseCard response={responseWithSources("Supported by reporting. [1][2]")} />);
 
     const pill = screen.getByRole("button", { name: "Sources: NPR and 1 more" });
+    const root = citationRootFor(pill);
+
     fireEvent.click(pill);
+    expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(root);
 
     const dialog = screen.getByRole("dialog", { name: "Citation sources" });
+    expect(root.className).toContain("citationRootOpen");
     expect(dialog).toBeInTheDocument();
     expect(
       within(dialog).getByRole("link", { name: /Morning Edition NPR/ }),
@@ -283,10 +302,47 @@ describe("ResponseCard", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
 
-    fireEvent.click(pill);
+    fireEvent.mouseEnter(root);
     expect(screen.getByRole("dialog", { name: "Citation sources" })).toBeInTheDocument();
-    fireEvent.pointerDown(document.body);
+    fireEvent.pointerDown(
+      within(screen.getByRole("dialog", { name: "Citation sources" })).getByRole(
+        "link",
+        { name: /Morning Edition NPR/ },
+      ),
+    );
+    expect(screen.getByRole("dialog", { name: "Citation sources" })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(root);
+    act(() => {
+      vi.advanceTimersByTime(90);
+    });
     expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
+  });
+
+  it("anchors the desktop citation preview from a body portal near the hovered pill", async () => {
+    render(<ResponseCard response={responseWithSources("Supported by reporting. [1][2]")} />);
+
+    const pill = screen.getByRole("button", { name: "Sources: NPR and 1 more" });
+    vi.spyOn(pill, "getBoundingClientRect").mockReturnValue({
+      x: 240,
+      y: 120,
+      left: 240,
+      top: 120,
+      right: 306,
+      bottom: 144,
+      width: 66,
+      height: 24,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(citationRootFor(pill));
+
+    const dialog = await screen.findByRole("dialog", { name: "Citation sources" });
+    expect(dialog.parentElement).toBe(document.body);
+    await waitFor(() => {
+      expect(dialog.style.getPropertyValue("--citation-popover-left")).toBe("240px");
+      expect(dialog.style.getPropertyValue("--citation-popover-top")).toBe("152px");
+    });
   });
 
   it("opens the citation external icon as a direct source link", () => {
@@ -313,7 +369,7 @@ describe("ResponseCard", () => {
       screen.getByRole("link", { name: "Open Example source in a new tab" }),
     ).toHaveAttribute("href", "https://example.com/report");
 
-    fireEvent.click(screen.getByRole("button", { name: "Source: Example" }));
+    fireEvent.mouseEnter(citationRootFor(screen.getByRole("button", { name: "Source: Example" })));
     expect(
       within(screen.getByRole("dialog", { name: "Citation sources" })).getByRole(
         "link",
@@ -325,7 +381,7 @@ describe("ResponseCard", () => {
   it("falls back to a publisher initial when a citation favicon fails", () => {
     render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Source: NPR" }));
+    fireEvent.mouseEnter(citationRootFor(screen.getByRole("button", { name: "Source: NPR" })));
 
     const dialog = screen.getByRole("dialog", { name: "Citation sources" });
     const favicon = dialog.querySelector("img");
@@ -335,29 +391,25 @@ describe("ResponseCard", () => {
     expect(within(dialog).getByText("N")).toBeInTheDocument();
   });
 
-  it("uses a bottom-sheet citation preview on phone-sized screens", () => {
-    const originalMatchMedia = window.matchMedia;
-    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: query === "(max-width: 760px)",
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }));
+  it("keeps mobile citation previews on tap as a bottom sheet", () => {
+    const restoreMatchMedia = mockMatchMedia(true);
 
     try {
       render(<ResponseCard response={responseWithSources("Supported by reporting. [1]")} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Source: NPR" }));
+      const pill = screen.getByRole("button", { name: "Source: NPR" });
+      fireEvent.mouseEnter(citationRootFor(pill));
+      expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
 
-      expect(screen.getByRole("dialog", { name: "Citation sources" }).className).toContain(
-        "citationSheet",
-      );
+      fireEvent.click(pill);
+
+      const dialog = screen.getByRole("dialog", { name: "Citation sources" });
+      expect(dialog.className).toContain("citationSheet");
+
+      fireEvent.click(dialog.parentElement!);
+      expect(screen.queryByRole("dialog", { name: "Citation sources" })).not.toBeInTheDocument();
     } finally {
-      window.matchMedia = originalMatchMedia;
+      restoreMatchMedia();
     }
   });
 
@@ -423,5 +475,28 @@ function responseWithSources(text: string): ChatResponse {
       { title: "World report", url: "https://www.bbc.co.uk/news/world" },
       { title: "Large language model - Wikipedia", url: "https://en.wikipedia.org/wiki/Large_language_model" },
     ],
+  };
+}
+
+function citationRootFor(pill: HTMLElement): HTMLElement {
+  const root = pill.parentElement;
+  if (!root) throw new Error("Citation pill root was not rendered");
+  return root;
+}
+
+function mockMatchMedia(matchesSmallScreen: boolean): () => void {
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: query === "(max-width: 760px)" ? matchesSmallScreen : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+  return () => {
+    window.matchMedia = originalMatchMedia;
   };
 }

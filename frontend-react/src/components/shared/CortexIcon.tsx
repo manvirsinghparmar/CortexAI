@@ -18,6 +18,7 @@ export type CortexIconName =
   | "history"
   | "improve"
   | "latency"
+  | "moon"
   | "new-chat"
   | "plus"
   | "regenerate"
@@ -30,6 +31,7 @@ export type CortexIconName =
   | "sources"
   | "stop"
   | "summarize"
+  | "sun"
   | "swap"
   | "thumb-down"
   | "thumb-up"
@@ -142,6 +144,15 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
         <>
           <circle cx="12" cy="8" r="3.4" />
           <path d="M5 20a7 7 0 0 1 14 0" />
+        </>
+      );
+    case "moon":
+      return <path d="M20 15.6A8.5 8.5 0 0 1 8.4 4a7 7 0 1 0 11.6 11.6z" />;
+    case "sun":
+      return (
+        <>
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 2.8v2M12 19.2v2M4.8 4.8l1.4 1.4M17.8 17.8l1.4 1.4M2.8 12h2M19.2 12h2M4.8 19.2l1.4-1.4M17.8 6.2l1.4-1.4" />
         </>
       );
     case "latency":

@@ -68,7 +68,8 @@ One family: 24×24 grid, **1.75 stroke**, round caps/joins, `fill:none`,
 board. Set: ask, compare, new-chat, history, search, collapse, user, latency,
 tokens, cost, attach, smart, web, sources, improve, send, stop, copy, regenerate,
 branch, thumb-up/down, debug, summarize, rewrite, analyze, find-solution, review,
-plus, chevron-down, swap, scroll-down, external-link.
+plus, chevron-down, swap, scroll-down, external-link, **theme** (appearance
+toggle; `sun`/`moon` alternates included).
 **Provider glyphs are original placeholders — swap in each vendor's official logo.**
 
 ### Radii & shadows
@@ -121,11 +122,31 @@ model-picker docked at bottom.
   "0 errors", "NN,NNN tok", "$X" (mono chips).
 - **3 columns** (`grid 1fr 1fr 1fr`, gap 14px). Each column = surface card with a
   3px provider rail, header (glyph tile 30px + name + mono id + routing badge),
-  an **aligned metric strip** (latency / tokens / cost; the fastest highlighted
-  green, the cheapest cost highlighted green), then the answer with numbered or
+  a **metric strip** (see "Metric strip" below), then the answer with numbered or
   bulleted lists and source chips.
 - Docked composer with the **model-picker row**: model pill ⇄ (swap icon) model
   pill + dashed "Add model"; "With sources" (ink) + send.
+
+### Metric strip (latency / tokens / cost) — winner label is desktop-only
+Each card shows three mono pills: latency, tokens, cost. Rules:
+- **Single line, packed tight** (`display:flex; gap:6px`, pills
+  `white-space:nowrap`). Don't space the pills apart (no `justify-content:
+  space-between`) — left-pack them; the leftover room is what lets the winner
+  word fit on desktop. Value only + abbreviated units (`tok`, `1.7s`, `$0.0107`).
+- The **winning pill gets a green tint** (success-soft bg + success-text) in every
+  viewport — this alone marks "best" and needs no words.
+- The **`· Fastest` / `· Cheapest` label lives inside the winning pill, but is
+  shown on desktop only.** On mobile (≤ the app's phone breakpoint) hide the
+  label so the pill shows the value alone:
+  ```html
+  <span class="metric winner">$0.0023<span class="winner-label"> · Cheapest</span></span>
+  ```
+  ```css
+  @media (max-width: 640px) { .winner-label { display: none; } }
+  ```
+  Desktop columns are wide enough to show the word; mobile cards stay compact with
+  value-only pills (green tint still flags the winner). This is the fix: the word
+  never causes overflow because it's removed exactly where space is tight.
 
 ### 5. History (mobile shown; desktop reuses the sidebar list)
 Search field, then grouped cards: mode chip + timestamp, title (up to 2 lines),
@@ -153,6 +174,25 @@ nav** (Ask · Compare · History; active = accent text + accent-soft–filled ic
   "Queued" chip, "Checking sources…" line, **3 skeleton bars**; a **scroll-to-
   latest FAB** (ink circle, scroll-down icon) above the composer; the send button
   becomes a **Stop** button (ink square, white rounded inner square).
+
+### 8. Prompt optimization states (the "Improve" flow)
+The app optimizes the user's prompt before sending. This has **three states** the
+first cut missed — and they must not break the `YOU` bubble. Core rules:
+**never uppercase or truncate the prompt body** (only the small `YOU` eyebrow is
+uppercased), and show optimization status **outside** the bubble.
+1. **Improving (pending)** — show the user's prompt in the bubble (sentence/normal
+   case), and a right-aligned **status pill below the bubble**: sparkle icon +
+   "Improving your prompt" + animated dots. Accent-soft bg. Not inside the bubble.
+2. **Optimized (rewritten)** — the bubble shows the *sent* (improved) prompt; below
+   it a quiet chip: sparkle + "Prompt optimized" + a "View original" toggle that
+   reveals what the user typed.
+3. **Already clear (kept)** — if no change is made, replace the status with a green
+   confirmation chip: check icon + "Already clear — sent as-is".
+⚠️ Bug seen in the build: the bubble rendered the prompt UPPERCASED and truncated
+("IMPROVING YOUR PROMPT… …"). Cause = applying the eyebrow's `text-transform:
+uppercase` / a fixed-width truncation to the body, and putting the status text
+inside the bubble. Keep body text normal-case, full (wrap, no clamp), and move
+status to the pill below.
 
 ---
 

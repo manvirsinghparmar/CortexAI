@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountMenu } from "../components/layout/AccountMenu";
@@ -6,6 +6,7 @@ import { AccountMenu } from "../components/layout/AccountMenu";
 describe("AccountMenu", () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -47,6 +48,37 @@ describe("AccountMenu", () => {
     });
   });
 
+  it("keeps the menu open while moving from the account icon to the submenu", () => {
+    vi.useFakeTimers();
+    render(<AccountMenu authEnabled loggedIn onLogout={vi.fn()} />);
+
+    const root = screen.getByRole("button", { name: "Account" }).parentElement!;
+    fireEvent.mouseEnter(root);
+
+    const menu = screen.getByRole("menu", { name: "Account menu" });
+    expect(screen.getByRole("menuitem", { name: "Log off" })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(root, { relatedTarget: document.body });
+    expect(screen.getByRole("menu", { name: "Account menu" })).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    fireEvent.mouseEnter(menu);
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(screen.getByRole("menu", { name: "Account menu" })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(root, { relatedTarget: document.body });
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
+  });
+
   it("shows Sign in for Cognito guests", async () => {
     const user = userEvent.setup();
     const onLogin = vi.fn();
@@ -85,6 +117,57 @@ describe("AccountMenu", () => {
     await user.click(screen.getByRole("menuitem", { name: "Log off" }));
     expect(onLogout).toHaveBeenCalledTimes(1);
     expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("shows the theme switch action inside the account menu", async () => {
+    const user = userEvent.setup();
+    const onLogout = vi.fn();
+    const onToggleTheme = vi.fn();
+
+    render(
+      <AccountMenu
+        authEnabled
+        loggedIn
+        onLogout={onLogout}
+        theme="light"
+        onToggleTheme={onToggleTheme}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Account" }));
+
+    const themeAction = screen.getByRole("menuitem", { name: "Switch to dark theme" });
+    expect(themeAction).toHaveTextContent("Dark theme");
+    expect(screen.getByRole("menuitem", { name: "Log off" })).toBeInTheDocument();
+
+    await user.click(themeAction);
+
+    expect(onToggleTheme).toHaveBeenCalledTimes(1);
+    expect(onLogout).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
+  });
+
+  it("updates the theme switch label for dark mode", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <AccountMenu
+        authEnabled={false}
+        loggedIn={false}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+
+    const accountButton = screen.getByRole("button", { name: "Guest account" });
+    expect(accountButton).toHaveAttribute("aria-haspopup", "menu");
+
+    await user.click(accountButton);
+
+    const themeAction = screen.getByRole("menuitem", { name: "Switch to light theme" });
+    expect(themeAction).toHaveTextContent("Light theme");
+    expect(screen.queryByRole("menuitem", { name: "Sign in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Log off" })).not.toBeInTheDocument();
   });
 
   it("shows Log off for guest account states when Cognito sign-in is unavailable", async () => {

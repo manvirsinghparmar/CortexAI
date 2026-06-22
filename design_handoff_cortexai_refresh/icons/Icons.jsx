@@ -24,6 +24,17 @@ export const History = (p) => <S {...p}><path d="M3.5 9a8.5 8.5 0 1 1 .3 5"/><pa
 export const Search = (p) => <S {...p}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></S>;
 export const CollapseSidebar = (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/><path d="M15.5 10l-2 2 2 2"/></S>;
 export const User = (p) => <S {...p}><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0"/></S>;
+/* Appearance / theme toggle — half-filled "contrast" circle. The filled half
+   uses fill:currentColor; works in either theme. */
+export const Theme = ({ size = 20, ...p }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
+  </svg>
+);
+export const Sun = (p) => <S {...p}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></S>;
+export const Moon = (p) => <S {...p}><path d="M20 14.5A8 8 0 1 1 9.5 4a6.3 6.3 0 0 0 10.5 10.5z"/></S>;
 
 /* ---- Metrics ---- */
 export const Latency = (p) => <S {...p}><path d="M13 3 5 13h5l-1 8 8-11h-5z"/></S>;

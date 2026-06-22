@@ -123,8 +123,12 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByText("0 errors")).toBeInTheDocument();
     expect(screen.getByText("300 tok")).toBeInTheDocument();
     expect(screen.getByText("$0.00470")).toBeInTheDocument();
-    expect(screen.getByText("Fastest").parentElement).toHaveTextContent("0.3 sec");
-    expect(screen.getByText("Cheapest").parentElement).toHaveTextContent("$0.00050");
+    const fastestLabel = screen.getByText(/Fastest/);
+    const cheapestLabel = screen.getByText(/Cheapest/);
+    expect(fastestLabel).toHaveClass("winner-label");
+    expect(fastestLabel.parentElement).toHaveTextContent("0.3s");
+    expect(cheapestLabel).toHaveClass("winner-label");
+    expect(cheapestLabel.parentElement).toHaveTextContent("$0.0005");
   });
 
   it("switches the active mobile Compare response from the model tabs", async () => {

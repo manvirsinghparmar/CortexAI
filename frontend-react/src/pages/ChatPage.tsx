@@ -13,6 +13,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
+import { useTheme } from "../hooks/useTheme";
 import { useChatStore } from "../store/chatStore";
 import type { ChatMode, HistoryThread } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
@@ -32,6 +33,7 @@ export function ChatPage() {
   const backendOffline = !!modelsError && !authLoading;
   const { load: loadHistory } = useHistory();
   const { submit, cancel } = useChat();
+  const { theme, toggleTheme } = useTheme();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
@@ -110,6 +112,8 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              theme={theme}
+              onToggleTheme={toggleTheme}
             />
           </div>
         </header>
@@ -142,6 +146,8 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              theme={theme}
+              onToggleTheme={toggleTheme}
             />
           </div>
         </header>

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import { ApiClientError } from "../api/client";
 import { streamChat } from "../api/chat";
 import { streamCompare } from "../api/compare";
@@ -19,6 +19,7 @@ import type {
   ChatRequest,
   ChatResponse,
   ChatTurn,
+  CompareTargetRequest,
   CompareRequest,
   ConversationHistoryItem,
   FileUploadResponse,
@@ -27,9 +28,9 @@ import type {
   UserContextRequest,
 } from "../types";
 
-export function useChat() {
-  const abortRef = useRef<AbortController | null>(null);
+let activeAbortController: AbortController | null = null;
 
+export function useChat() {
   const submit = useCallback(async () => {
     const state = useChatStore.getState();
     const rawPrompt = state.prompt.trim();
@@ -40,9 +41,7 @@ export function useChat() {
       return;
     }
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const controller = beginRequestController();
 
     state.setError(null);
     state.setStreamingText("");
@@ -117,6 +116,7 @@ export function useChat() {
           turnId,
           optimization,
           startedAt: requestStartedAt,
+          clearComposer: true,
         });
       } else {
         await runAskTurn({
@@ -129,6 +129,7 @@ export function useChat() {
           turnId,
           optimization,
           startedAt: requestStartedAt,
+          clearComposer: true,
         });
       }
     } catch (err: unknown) {
@@ -142,12 +143,62 @@ export function useChat() {
       latest.setError(message);
       latest.setStreaming(false);
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
+      clearRequestController(controller);
+    }
+  }, []);
+
+  const regenerate = useCallback(async (turnId: string, responseIndex = 0) => {
+    const state = useChatStore.getState();
+    const sourceTurn = state.turns.find((turn) => turn.id === turnId);
+    const sourceResponse = sourceTurn?.responses[responseIndex];
+    const prompt = (sourceTurn?.submittedPrompt || sourceTurn?.prompt || "").trim();
+
+    if (!sourceTurn || !sourceResponse || !prompt) return;
+
+    const requestStartedAt = new Date().toISOString();
+    const attachmentItems = toAttachmentItems(sourceTurn.attachments);
+    const conversationHistory = buildRegenerationConversationHistory(state.turns, turnId);
+    const context = buildContext({
+      sessionId: state.sessionId,
+      pendingNewSession: state.pendingNewSession,
+      conversationHistory,
+    });
+    const target = responseToExplicitTarget(sourceResponse);
+    const controller = beginRequestController();
+
+    state.setError(null);
+    state.setStreamingText("");
+
+    try {
+      await runRegenerateResponse({
+        turnId,
+        responseIndex,
+        submittedPrompt: prompt,
+        context,
+        attachmentItems,
+        signal: controller.signal,
+        startedAt: requestStartedAt,
+        targetOverride: target,
+        researchEnabledOverride: !!sourceTurn.researchEnabled,
+      });
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      const latest = useChatStore.getState();
+      const message = toFriendlyError(err);
+      if (latest.activeTurnId) {
+        markTurnResponsesFailed(latest.activeTurnId, message);
+        latest.setTurnStatus(latest.activeTurnId, "error");
+      }
+      latest.setError(message);
+      latest.setStreaming(false);
+    } finally {
+      clearRequestController(controller);
     }
   }, []);
 
   const cancel = useCallback(() => {
-    abortRef.current?.abort();
+    activeAbortController?.abort();
+    activeAbortController = null;
     const state = useChatStore.getState();
     if (state.activeTurnId) {
       const activeTurn = state.turns.find((turn) => turn.id === state.activeTurnId);
@@ -162,7 +213,7 @@ export function useChat() {
     state.setStreaming(false);
   }, []);
 
-  return { submit, cancel };
+  return { submit, regenerate, cancel };
 }
 
 async function runAskTurn({
@@ -175,6 +226,9 @@ async function runAskTurn({
   turnId,
   optimization,
   startedAt,
+  targetOverride,
+  researchEnabledOverride,
+  clearComposer,
 }: {
   prompt: string;
   submittedPrompt: string;
@@ -185,15 +239,21 @@ async function runAskTurn({
   turnId?: string;
   optimization?: PromptOptimizationState;
   startedAt: string;
+  targetOverride?: Partial<CompareTargetRequest>;
+  researchEnabledOverride?: boolean;
+  clearComposer: boolean;
 }) {
   const state = useChatStore.getState();
-  const smartMode = state.smartMode;
-  const { provider, model } = parseModelKey(state.selectedModelKey);
+  const selected = parseModelKey(state.selectedModelKey);
+  const provider = targetOverride?.provider ?? selected.provider;
+  const model = targetOverride?.model ?? selected.model;
+  const smartMode = targetOverride?.provider ? false : state.smartMode;
+  const researchEnabled = researchEnabledOverride ?? state.researchMode;
   const request: ChatRequest = {
     prompt: submittedPrompt,
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
-    routing: { smart_mode: smartMode, research_mode: state.researchMode },
+    routing: { smart_mode: smartMode, research_mode: researchEnabled },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -211,7 +271,7 @@ async function runAskTurn({
       mode: "single",
       prompt,
       submittedPrompt,
-      researchEnabled: state.researchMode,
+      researchEnabled,
       optimizeEnabled: !!optimization,
       attachments,
       responses: [placeholder],
@@ -224,8 +284,10 @@ async function runAskTurn({
       optimization,
     });
   } else {
-    state.setPrompt("");
-    state.clearAttachments();
+    if (clearComposer) {
+      state.setPrompt("");
+      state.clearAttachments();
+    }
   }
 
   let finalResponse: Partial<ChatResponse> = {};
@@ -312,6 +374,7 @@ async function runCompareTurn({
   turnId,
   optimization,
   startedAt,
+  clearComposer,
 }: {
   prompt: string;
   submittedPrompt: string;
@@ -322,6 +385,7 @@ async function runCompareTurn({
   turnId?: string;
   optimization?: PromptOptimizationState;
   startedAt: string;
+  clearComposer: boolean;
 }) {
   const state = useChatStore.getState();
   const activeKeys = state.compareModelKeys.filter(Boolean);
@@ -335,6 +399,7 @@ async function runCompareTurn({
     const { provider, model } = parseModelKey(key);
     return { provider, model: model || undefined };
   });
+  const researchEnabled = state.compareResearchMode;
   const placeholders = targets.map((target, index) =>
     makePlaceholderResponse(index, target.provider, target.model ?? "", state.sessionId, {
       startedAt,
@@ -343,7 +408,7 @@ async function runCompareTurn({
   const request: CompareRequest = {
     prompt: submittedPrompt,
     targets,
-    routing: { smart_mode: false, research_mode: state.compareResearchMode },
+    routing: { smart_mode: false, research_mode: researchEnabled },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -354,7 +419,7 @@ async function runCompareTurn({
       mode: "compare",
       prompt,
       submittedPrompt,
-      researchEnabled: state.compareResearchMode,
+      researchEnabled,
       optimizeEnabled: !!optimization,
       attachments,
       responses: placeholders,
@@ -367,8 +432,10 @@ async function runCompareTurn({
       optimization,
     });
   } else {
-    state.setPrompt("");
-    state.clearAttachments();
+    if (clearComposer) {
+      state.setPrompt("");
+      state.clearAttachments();
+    }
   }
 
   for await (const chunk of streamCompare(request, signal)) {
@@ -411,6 +478,115 @@ async function runCompareTurn({
   const latest = useChatStore.getState();
   if (!signal.aborted) {
     latest.setTurnStatus(activeTurnId, "complete");
+    latest.setStreaming(false);
+    await refreshHistory();
+  }
+}
+
+async function runRegenerateResponse({
+  turnId,
+  responseIndex,
+  submittedPrompt,
+  context,
+  attachmentItems,
+  signal,
+  startedAt,
+  targetOverride,
+  researchEnabledOverride,
+}: {
+  turnId: string;
+  responseIndex: number;
+  submittedPrompt: string;
+  context: UserContextRequest;
+  attachmentItems: AttachmentRequestItem[];
+  signal: AbortSignal;
+  startedAt: string;
+  targetOverride?: Partial<CompareTargetRequest>;
+  researchEnabledOverride?: boolean;
+}) {
+  const state = useChatStore.getState();
+  const selected = parseModelKey(state.selectedModelKey);
+  const provider = targetOverride?.provider ?? selected.provider;
+  const model = targetOverride?.model ?? selected.model;
+  const smartMode = targetOverride?.provider ? false : state.smartMode;
+  const researchEnabled = researchEnabledOverride ?? state.researchMode;
+  const request: ChatRequest = {
+    prompt: submittedPrompt,
+    provider: smartMode ? undefined : provider || undefined,
+    model: smartMode ? undefined : model || undefined,
+    routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
+    context,
+  };
+
+  const placeholder = makePlaceholderResponse(
+    responseIndex,
+    smartMode ? "smart" : provider,
+    smartMode ? "Selecting best model" : model,
+    state.sessionId,
+    { startedAt },
+  );
+  state.prepareTurnResponseForStreaming(turnId, responseIndex, placeholder);
+
+  let finalResponse: Partial<ChatResponse> = {};
+  for await (const chunk of streamChat(request, signal)) {
+    if (signal.aborted) break;
+    const latest = useChatStore.getState();
+    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        provider: chunk.provider ?? current.provider,
+        model: chunk.model ?? current.model,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "start") {
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "delta" && chunk.text) {
+      latest.appendTurnResponseText(turnId, responseIndex, chunk.text, {
+        ui_status: "streaming",
+      });
+    } else if (chunk.type === "metadata" && chunk.metadata) {
+      finalResponse = { ...finalResponse, ...chunk.metadata };
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        ...finalResponse,
+        text: chunk.metadata.text ?? current.text,
+        started_at: current.started_at ?? startedAt,
+        ui_status: finalResponse.error ? "failed" : "finalizing",
+        failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
+      } as ChatResponse);
+    } else if (chunk.type === "done") {
+      if (chunk.session_id) latest.setSessionId(chunk.session_id);
+      break;
+    } else if (chunk.type === "error") {
+      throw new Error(chunk.error ?? "Stream error");
+    }
+  }
+
+  const latest = useChatStore.getState();
+  if (!signal.aborted) {
+    const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+    const completedAt = new Date().toISOString();
+    const completedResponse = {
+      ...current,
+      ...finalResponse,
+      text: finalResponse.text ?? current.text,
+      session_id: finalResponse.session_id ?? latest.sessionId ?? current.session_id,
+      started_at: current.started_at ?? startedAt,
+      completed_at: finalResponse.error ? current.completed_at : completedAt,
+      failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
+      ui_status: finalResponse.error ? "failed" : "complete",
+    } as ChatResponse;
+    latest.updateTurnResponse(turnId, responseIndex, completedResponse);
+    const resolvedSession = completedResponse.session_id;
+    if (resolvedSession) latest.setSessionId(resolvedSession);
+    latest.setTurnStatus(turnId, "complete");
     latest.setStreaming(false);
     await refreshHistory();
   }
@@ -571,4 +747,35 @@ function getDetailRecord(body: unknown): Record<string, unknown> | null {
   if (typeof body !== "object" || body === null) return null;
   const detail = (body as Record<string, unknown>).detail;
   return typeof detail === "object" && detail !== null ? (detail as Record<string, unknown>) : null;
+}
+
+function beginRequestController(): AbortController {
+  activeAbortController?.abort();
+  const controller = new AbortController();
+  activeAbortController = controller;
+  return controller;
+}
+
+function clearRequestController(controller: AbortController) {
+  if (activeAbortController === controller) activeAbortController = null;
+}
+
+function buildRegenerationConversationHistory(
+  turns: ChatTurn[],
+  turnId: string,
+): ConversationHistoryItem[] {
+  const turnIndex = turns.findIndex((turn) => turn.id === turnId);
+  return buildConversationHistory(turnIndex >= 0 ? turns.slice(0, turnIndex) : turns);
+}
+
+function responseToExplicitTarget(response: ChatResponse): Partial<CompareTargetRequest> {
+  const provider = response.provider.trim().toLowerCase();
+  const model = response.model.trim();
+  const nonConcreteProviders = new Set(["", "auto", "smart", "unknown"]);
+  const nonConcreteModels = new Set(["", "working", "selecting best model", "unknown"]);
+
+  if (nonConcreteProviders.has(provider) || nonConcreteModels.has(model.trim().toLowerCase())) {
+    return {};
+  }
+  return { provider, model };
 }

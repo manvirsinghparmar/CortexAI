@@ -30,7 +30,7 @@
    - add migration in `db/migrations/`
    - reflect schema in `db/tables.py` and `db/repository.py`
 5. Update UI/e2e surfaces (if user-visible):
-   - `frontend/` updates
+   - `frontend/` updates for legacy UI or `frontend-react/` updates for React UI
    - `e2e/` assertions for the new flow
 6. Update documentation and examples:
    - `README.md`
@@ -42,6 +42,7 @@
 - Contract/regression tests for touched routes.
 - `python -m pytest -q`
 - `python scripts/release_gate.py` for pre-handoff confidence.
+- `npm run --prefix frontend-react build` when React UI is touched.
 - `npm run --prefix e2e test` when end-user flow or streaming UX changed.
 
 ## Done Criteria

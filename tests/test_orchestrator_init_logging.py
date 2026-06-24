@@ -1,5 +1,6 @@
 import logging
 
+from models.user_context import UserContext
 import orchestrator.core as core_module
 
 
@@ -89,3 +90,44 @@ def test_prompt_optimizer_auto_initializes_only_with_orchestrator_flag(monkeypat
 
     assert isinstance(orchestrator._prompt_optimizer, FakePromptOptimizer)
     assert orchestrator._prompt_optimizer.provider == "openai"
+
+
+def test_orchestrator_prompt_optimizer_receives_conversation_context(monkeypatch):
+    seen_payload = {}
+
+    class FakePromptOptimizer:
+        def __init__(self, *, provider):
+            self.provider = provider
+
+        def optimize_prompt(self, payload):
+            seen_payload.update(payload)
+            return {
+                "optimized_prompt": "Turn the OpenAI and Claude comparison into a table.",
+                "steps": ["used conversation context"],
+                "metrics": {},
+            }
+
+    _disable_research_init(monkeypatch)
+    monkeypatch.setenv("ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_PROVIDER", "openai")
+    monkeypatch.setattr(core_module, "PromptOptimizer", FakePromptOptimizer)
+
+    orchestrator = core_module.CortexOrchestrator()
+    context = UserContext(
+        session_id="session-1",
+        conversation_history=[
+            {"role": "user", "content": "Compare OpenAI and Claude."},
+            {"role": "assistant", "content": "OpenAI is faster. Claude is more cautious."},
+        ],
+    )
+
+    prepared = orchestrator.prepare_messages_for_turn(
+        prompt="Write it as a table",
+        context=context,
+        research_mode="off",
+    )
+
+    assert seen_payload["prompt"] == "Write it as a table"
+    assert seen_payload["context"]["session_id"] == "session-1"
+    assert seen_payload["context"]["conversation_history"] == context.conversation_history
+    assert prepared["prompt"] == "Turn the OpenAI and Claude comparison into a table."

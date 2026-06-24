@@ -4,6 +4,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Runtime Entrypoints
 
+- Full local app runner: `run_app.py`
 - API server: `run_server.py`
 - Main FastAPI app wiring: `server/app.py`
 - Frontend runtime config renderer: `server/frontend_runtime_config.py` (`GET /runtime-config.js`)
@@ -54,7 +55,34 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Static frontend shell and behavior: `frontend/index.html`, `frontend/app.js`, `frontend/style.css`
 - Response rendering enhancement assets: `frontend/llm-response.js`, `frontend/llm-response.css`
 - Static-only hosting config example: `frontend/runtime-config.example.js`
+- Legacy static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
+- React/Vite frontend: `frontend-react/`
+  - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
+  - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
+  - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
+  - Shared visual primitives: `frontend-react/src/components/common/`
+  - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
+  - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
+  - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
+  - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
+  - History thread grouping and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`
+  - Transcript/session state: `frontend-react/src/store/chatStore.ts`
+  - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
+  - Top-right Cognito account menu: `frontend-react/src/components/layout/AccountMenu.tsx`
+  - Desktop sidebar navigation, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
+  - Ask/Compare result rendering: `frontend-react/src/components/results/`
+  - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
+  - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.
+  - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
+- Frontend selection in FastAPI: `server/app.py`
+  - `FRONTEND_DIR` explicitly selects the static directory to mount.
+  - `REACT_FRONTEND=true` serves `frontend-react/dist` when `FRONTEND_DIR` is unset.
+- Frontend container boundary: `Dockerfile.frontend` + `nginx.conf`
 - Playwright E2E suite: `e2e/specs/`
+  - Live full-stack browser scenarios: `e2e/specs/`
+  - Frontend-only phone coverage: `e2e/responsive/mobile/`
+  - Frontend-only desktop and iPad coverage: `e2e/responsive/desktop-ipad/`
+  - Independent configs: `e2e/playwright.mobile.config.mjs`, `e2e/playwright.desktop-ipad.config.mjs`
 - Playwright config: `e2e/playwright.config.mjs`
 
 ## CI and Workflows
@@ -73,7 +101,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Update `server/routes/`
   2. Update `server/schemas/`
   3. Add/adjust tests
-  4. Update `README.md` and related docs
+
+- Change React history behavior:
+  1. Keep `/v1/history` row-level persistence semantics in `server/routes/history.py` and `db/repository.py`.
+  2. Update session/thread normalization in `frontend-react/src/history/historyThreads.ts`.
+  3. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.
+  4. Cover Ask session grouping and Compare `request_group_id` grouping in React and API tests.
+  5. Update `README.md` and related docs
 
 - Change routing behavior:
   1. Update files in `orchestrator/`
@@ -100,6 +134,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Correlate CloudFront/WAF logs with `request_id`/`X-Amz-Cf-Id`
   3. Use upload (`upload.*`) and research (`research.*`) event families for root cause
 
+- Change React frontend behavior:
+  1. Update `frontend-react/src/`
+  2. Keep npm dependencies in `frontend-react/package.json` and `frontend-react/package-lock.json`
+  3. Validate with `npm run --prefix frontend-react build`
+  4. For FastAPI-hosted React, build first and set `FRONTEND_DIR` to `frontend-react/dist`
+  5. Update `README.md` / `docs/FASTAPI_README.md` if setup, runtime config, or deployment assumptions change
+
 ---
 
-Last updated: 2026-05-23
+Last updated: 2026-06-07

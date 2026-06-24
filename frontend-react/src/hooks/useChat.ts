@@ -1,0 +1,781 @@
+import { useCallback } from "react";
+import { ApiClientError } from "../api/client";
+import { streamChat } from "../api/chat";
+import { streamCompare } from "../api/compare";
+import { fetchHistory } from "../api/history";
+import { optimizePrompt } from "../api/optimize";
+import {
+  buildOptimizeRequest,
+  cancelledOptimization,
+  pendingOptimization,
+  resolveOptimizationFailure,
+  resolveOptimizationResponse,
+} from "../optimization/promptOptimization";
+import { makePlaceholderResponse, useChatStore } from "../store/chatStore";
+import { parseModelKey } from "./useSmartRouting";
+import type {
+  ApiError,
+  AttachmentRequestItem,
+  ChatRequest,
+  ChatResponse,
+  ChatTurn,
+  CompareTargetRequest,
+  CompareRequest,
+  ConversationHistoryItem,
+  FileUploadResponse,
+  PromptOptimizationState,
+  ResponseRunStatus,
+  UserContextRequest,
+} from "../types";
+
+let activeAbortController: AbortController | null = null;
+
+export function useChat() {
+  const submit = useCallback(async () => {
+    const state = useChatStore.getState();
+    const rawPrompt = state.prompt.trim();
+    const attachments = [...state.attachments];
+    if (!rawPrompt && attachments.length === 0) return;
+    if (state.mode === "compare" && state.compareModelKeys.filter(Boolean).length < 2) {
+      state.setError("Select at least two models to compare.");
+      return;
+    }
+
+    const controller = beginRequestController();
+
+    state.setError(null);
+    state.setStreamingText("");
+
+    let finalPrompt = rawPrompt;
+    let turnId: string | undefined;
+    let optimization: PromptOptimizationState | undefined;
+    const requestStartedAt = new Date().toISOString();
+    const attachmentItems = toAttachmentItems(attachments);
+    const conversationHistory = buildConversationHistory(state.turns);
+    const context = buildContext({
+      sessionId: state.sessionId,
+      pendingNewSession: state.pendingNewSession,
+      conversationHistory,
+    });
+
+    try {
+      if (state.optimizeMode && rawPrompt) {
+        optimization = pendingOptimization(rawPrompt);
+        turnId = state.beginTurn({
+          mode: state.mode,
+          prompt: rawPrompt,
+          submittedPrompt: rawPrompt,
+          researchEnabled:
+            state.mode === "compare" ? state.compareResearchMode : state.researchMode,
+          optimizeEnabled: true,
+          attachments,
+          responses: buildPlaceholdersForCurrentMode(
+            state,
+            requestStartedAt,
+            "optimizing",
+          ),
+          status: "optimizing",
+          optimization,
+        });
+        state.setPrompt("");
+        state.clearAttachments();
+
+        try {
+          const optimized = await optimizePrompt(
+            buildOptimizeRequest({
+              prompt: rawPrompt,
+              conversationHistory,
+              context,
+              attachments,
+            }),
+            controller.signal,
+          );
+          if (controller.signal.aborted) return;
+          const resolved = resolveOptimizationResponse(optimized, rawPrompt);
+          finalPrompt = resolved.finalPrompt;
+          optimization = resolved.optimization;
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          console.warn("Prompt optimization failed; continuing with original prompt", err);
+          const resolved = resolveOptimizationFailure(rawPrompt);
+          finalPrompt = resolved.finalPrompt;
+          optimization = resolved.optimization;
+        }
+
+        useChatStore.getState().setTurnOptimization(turnId, optimization);
+      }
+
+      if (state.mode === "compare") {
+        await runCompareTurn({
+          prompt: finalPrompt,
+          submittedPrompt: finalPrompt,
+          context,
+          attachmentItems,
+          attachments,
+          signal: controller.signal,
+          turnId,
+          optimization,
+          startedAt: requestStartedAt,
+          clearComposer: true,
+        });
+      } else {
+        await runAskTurn({
+          prompt: finalPrompt,
+          submittedPrompt: finalPrompt,
+          context,
+          attachmentItems,
+          attachments,
+          signal: controller.signal,
+          turnId,
+          optimization,
+          startedAt: requestStartedAt,
+          clearComposer: true,
+        });
+      }
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      const latest = useChatStore.getState();
+      const message = toFriendlyError(err);
+      if (latest.activeTurnId) {
+        markTurnResponsesFailed(latest.activeTurnId, message);
+        latest.setTurnStatus(latest.activeTurnId, "error");
+      }
+      latest.setError(message);
+      latest.setStreaming(false);
+    } finally {
+      clearRequestController(controller);
+    }
+  }, []);
+
+  const regenerate = useCallback(async (turnId: string, responseIndex = 0) => {
+    const state = useChatStore.getState();
+    const sourceTurn = state.turns.find((turn) => turn.id === turnId);
+    const sourceResponse = sourceTurn?.responses[responseIndex];
+    const prompt = (sourceTurn?.submittedPrompt || sourceTurn?.prompt || "").trim();
+
+    if (!sourceTurn || !sourceResponse || !prompt) return;
+
+    const requestStartedAt = new Date().toISOString();
+    const attachmentItems = toAttachmentItems(sourceTurn.attachments);
+    const conversationHistory = buildRegenerationConversationHistory(state.turns, turnId);
+    const context = buildContext({
+      sessionId: state.sessionId,
+      pendingNewSession: state.pendingNewSession,
+      conversationHistory,
+    });
+    const target = responseToExplicitTarget(sourceResponse);
+    const controller = beginRequestController();
+
+    state.setError(null);
+    state.setStreamingText("");
+
+    try {
+      await runRegenerateResponse({
+        turnId,
+        responseIndex,
+        submittedPrompt: prompt,
+        context,
+        attachmentItems,
+        signal: controller.signal,
+        startedAt: requestStartedAt,
+        targetOverride: target,
+        researchEnabledOverride: !!sourceTurn.researchEnabled,
+      });
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      const latest = useChatStore.getState();
+      const message = toFriendlyError(err);
+      if (latest.activeTurnId) {
+        markTurnResponsesFailed(latest.activeTurnId, message);
+        latest.setTurnStatus(latest.activeTurnId, "error");
+      }
+      latest.setError(message);
+      latest.setStreaming(false);
+    } finally {
+      clearRequestController(controller);
+    }
+  }, []);
+
+  const cancel = useCallback(() => {
+    activeAbortController?.abort();
+    activeAbortController = null;
+    const state = useChatStore.getState();
+    if (state.activeTurnId) {
+      const activeTurn = state.turns.find((turn) => turn.id === state.activeTurnId);
+      if (activeTurn?.status === "optimizing" && activeTurn.optimization) {
+        state.setTurnOptimization(
+          state.activeTurnId,
+          cancelledOptimization(activeTurn.optimization.originalPrompt),
+        );
+      }
+      state.setTurnStatus(state.activeTurnId, "cancelled");
+    }
+    state.setStreaming(false);
+  }, []);
+
+  return { submit, regenerate, cancel };
+}
+
+async function runAskTurn({
+  prompt,
+  submittedPrompt,
+  context,
+  attachmentItems,
+  attachments,
+  signal,
+  turnId,
+  optimization,
+  startedAt,
+  targetOverride,
+  researchEnabledOverride,
+  clearComposer,
+}: {
+  prompt: string;
+  submittedPrompt: string;
+  context: UserContextRequest;
+  attachmentItems: AttachmentRequestItem[];
+  attachments: FileUploadResponse[];
+  signal: AbortSignal;
+  turnId?: string;
+  optimization?: PromptOptimizationState;
+  startedAt: string;
+  targetOverride?: Partial<CompareTargetRequest>;
+  researchEnabledOverride?: boolean;
+  clearComposer: boolean;
+}) {
+  const state = useChatStore.getState();
+  const selected = parseModelKey(state.selectedModelKey);
+  const provider = targetOverride?.provider ?? selected.provider;
+  const model = targetOverride?.model ?? selected.model;
+  const smartMode = targetOverride?.provider ? false : state.smartMode;
+  const researchEnabled = researchEnabledOverride ?? state.researchMode;
+  const request: ChatRequest = {
+    prompt: submittedPrompt,
+    provider: smartMode ? undefined : provider || undefined,
+    model: smartMode ? undefined : model || undefined,
+    routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
+    context,
+  };
+
+  const placeholder = makePlaceholderResponse(
+    0,
+    smartMode ? "smart" : provider,
+    smartMode ? "Selecting best model" : model,
+    state.sessionId,
+    { startedAt },
+  );
+  const activeTurnId =
+    turnId ??
+    state.beginTurn({
+      mode: "single",
+      prompt,
+      submittedPrompt,
+      researchEnabled,
+      optimizeEnabled: !!optimization,
+      attachments,
+      responses: [placeholder],
+    });
+  if (turnId) {
+    state.prepareTurnForStreaming(turnId, {
+      prompt,
+      submittedPrompt,
+      responses: [placeholder],
+      optimization,
+    });
+  } else {
+    if (clearComposer) {
+      state.setPrompt("");
+      state.clearAttachments();
+    }
+  }
+
+  let finalResponse: Partial<ChatResponse> = {};
+  for await (const chunk of streamChat(request, signal)) {
+    if (signal.aborted) break;
+    const latest = useChatStore.getState();
+    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+      const current =
+        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+        latest.responses[0] ??
+        placeholder;
+      latest.updateTurnResponse(activeTurnId, 0, {
+        ...current,
+        provider: chunk.provider ?? current.provider,
+        model: chunk.model ?? current.model,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "start") {
+      const current =
+        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+        latest.responses[0] ??
+        placeholder;
+      latest.updateTurnResponse(activeTurnId, 0, {
+        ...current,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "delta" && chunk.text) {
+      latest.appendStreamingText(chunk.text);
+      latest.appendTurnResponseText(activeTurnId, 0, chunk.text, {
+        ui_status: "streaming",
+      });
+    } else if (chunk.type === "metadata" && chunk.metadata) {
+      finalResponse = { ...finalResponse, ...chunk.metadata };
+      const current =
+        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+        latest.responses[0] ??
+        placeholder;
+      latest.updateTurnResponse(activeTurnId, 0, {
+        ...current,
+        ...finalResponse,
+        text: chunk.metadata.text ?? latest.responses[0]?.text ?? "",
+        started_at: current.started_at ?? startedAt,
+        ui_status: finalResponse.error ? "failed" : "finalizing",
+        failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
+      } as ChatResponse);
+    } else if (chunk.type === "done") {
+      if (chunk.session_id) latest.setSessionId(chunk.session_id);
+      break;
+    } else if (chunk.type === "error") {
+      throw new Error(chunk.error ?? "Stream error");
+    }
+  }
+
+  const latest = useChatStore.getState();
+  if (!signal.aborted) {
+    const current = latest.responses[0] ?? placeholder;
+    const completedAt = new Date().toISOString();
+    const completedResponse = {
+      ...current,
+      ...finalResponse,
+      text: finalResponse.text ?? current.text,
+      session_id: finalResponse.session_id ?? latest.sessionId ?? current.session_id,
+      started_at: current.started_at ?? startedAt,
+      completed_at: finalResponse.error ? current.completed_at : completedAt,
+      failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
+      ui_status: finalResponse.error ? "failed" : "complete",
+    } as ChatResponse;
+    latest.updateTurnResponse(activeTurnId, 0, completedResponse);
+    const resolvedSession = completedResponse.session_id;
+    if (resolvedSession) latest.setSessionId(resolvedSession);
+    latest.setTurnStatus(activeTurnId, "complete");
+    latest.setStreaming(false);
+    await refreshHistory();
+  }
+}
+
+async function runCompareTurn({
+  prompt,
+  submittedPrompt,
+  context,
+  attachmentItems,
+  attachments,
+  signal,
+  turnId,
+  optimization,
+  startedAt,
+  clearComposer,
+}: {
+  prompt: string;
+  submittedPrompt: string;
+  context: UserContextRequest;
+  attachmentItems: AttachmentRequestItem[];
+  attachments: FileUploadResponse[];
+  signal: AbortSignal;
+  turnId?: string;
+  optimization?: PromptOptimizationState;
+  startedAt: string;
+  clearComposer: boolean;
+}) {
+  const state = useChatStore.getState();
+  const activeKeys = state.compareModelKeys.filter(Boolean);
+  if (activeKeys.length < 2) {
+    state.setError("Select at least two models to compare.");
+    state.setStreaming(false);
+    return;
+  }
+
+  const targets = activeKeys.map((key) => {
+    const { provider, model } = parseModelKey(key);
+    return { provider, model: model || undefined };
+  });
+  const researchEnabled = state.compareResearchMode;
+  const placeholders = targets.map((target, index) =>
+    makePlaceholderResponse(index, target.provider, target.model ?? "", state.sessionId, {
+      startedAt,
+    }),
+  );
+  const request: CompareRequest = {
+    prompt: submittedPrompt,
+    targets,
+    routing: { smart_mode: false, research_mode: researchEnabled },
+    attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
+    context,
+  };
+
+  const activeTurnId =
+    turnId ??
+    state.beginTurn({
+      mode: "compare",
+      prompt,
+      submittedPrompt,
+      researchEnabled,
+      optimizeEnabled: !!optimization,
+      attachments,
+      responses: placeholders,
+    });
+  if (turnId) {
+    state.prepareTurnForStreaming(turnId, {
+      prompt,
+      submittedPrompt,
+      responses: placeholders,
+      optimization,
+    });
+  } else {
+    if (clearComposer) {
+      state.setPrompt("");
+      state.clearAttachments();
+    }
+  }
+
+  for await (const chunk of streamCompare(request, signal)) {
+    if (signal.aborted) break;
+    const latest = useChatStore.getState();
+    const index = chunk.index ?? 0;
+    if (chunk.type === "response_start") {
+      const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
+      latest.updateTurnResponse(activeTurnId, index, {
+        ...current,
+        provider: chunk.provider ?? latest.responses[index]?.provider ?? targets[index]?.provider ?? "",
+        model: chunk.model ?? latest.responses[index]?.model ?? targets[index]?.model ?? "",
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "delta" && chunk.text) {
+      latest.appendTurnResponseText(activeTurnId, index, chunk.text, {
+        ui_status: "streaming",
+      });
+    } else if (chunk.type === "response_done" && chunk.response) {
+      const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
+      const completedAt = new Date().toISOString();
+      const failed = !!chunk.response.error;
+      latest.updateTurnResponse(activeTurnId, index, {
+        ...current,
+        ...chunk.response,
+        started_at: current.started_at ?? startedAt,
+        completed_at: failed ? current.completed_at : completedAt,
+        failed_at: failed ? current.failed_at ?? completedAt : current.failed_at,
+        ui_status: failed ? "failed" : "complete",
+      });
+    } else if (chunk.type === "done") {
+      if (chunk.compare) latest.setTurnCompareSummary(activeTurnId, chunk.compare);
+      if (chunk.session_id) latest.setSessionId(chunk.session_id);
+      break;
+    } else if (chunk.type === "error") {
+      throw new Error(chunk.error ?? "Compare stream error");
+    }
+  }
+
+  const latest = useChatStore.getState();
+  if (!signal.aborted) {
+    latest.setTurnStatus(activeTurnId, "complete");
+    latest.setStreaming(false);
+    await refreshHistory();
+  }
+}
+
+async function runRegenerateResponse({
+  turnId,
+  responseIndex,
+  submittedPrompt,
+  context,
+  attachmentItems,
+  signal,
+  startedAt,
+  targetOverride,
+  researchEnabledOverride,
+}: {
+  turnId: string;
+  responseIndex: number;
+  submittedPrompt: string;
+  context: UserContextRequest;
+  attachmentItems: AttachmentRequestItem[];
+  signal: AbortSignal;
+  startedAt: string;
+  targetOverride?: Partial<CompareTargetRequest>;
+  researchEnabledOverride?: boolean;
+}) {
+  const state = useChatStore.getState();
+  const selected = parseModelKey(state.selectedModelKey);
+  const provider = targetOverride?.provider ?? selected.provider;
+  const model = targetOverride?.model ?? selected.model;
+  const smartMode = targetOverride?.provider ? false : state.smartMode;
+  const researchEnabled = researchEnabledOverride ?? state.researchMode;
+  const request: ChatRequest = {
+    prompt: submittedPrompt,
+    provider: smartMode ? undefined : provider || undefined,
+    model: smartMode ? undefined : model || undefined,
+    routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
+    context,
+  };
+
+  const placeholder = makePlaceholderResponse(
+    responseIndex,
+    smartMode ? "smart" : provider,
+    smartMode ? "Selecting best model" : model,
+    state.sessionId,
+    { startedAt },
+  );
+  state.prepareTurnResponseForStreaming(turnId, responseIndex, placeholder);
+
+  let finalResponse: Partial<ChatResponse> = {};
+  for await (const chunk of streamChat(request, signal)) {
+    if (signal.aborted) break;
+    const latest = useChatStore.getState();
+    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        provider: chunk.provider ?? current.provider,
+        model: chunk.model ?? current.model,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "start") {
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        ui_status: "requesting",
+      });
+    } else if (chunk.type === "delta" && chunk.text) {
+      latest.appendTurnResponseText(turnId, responseIndex, chunk.text, {
+        ui_status: "streaming",
+      });
+    } else if (chunk.type === "metadata" && chunk.metadata) {
+      finalResponse = { ...finalResponse, ...chunk.metadata };
+      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+      latest.updateTurnResponse(turnId, responseIndex, {
+        ...current,
+        ...finalResponse,
+        text: chunk.metadata.text ?? current.text,
+        started_at: current.started_at ?? startedAt,
+        ui_status: finalResponse.error ? "failed" : "finalizing",
+        failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
+      } as ChatResponse);
+    } else if (chunk.type === "done") {
+      if (chunk.session_id) latest.setSessionId(chunk.session_id);
+      break;
+    } else if (chunk.type === "error") {
+      throw new Error(chunk.error ?? "Stream error");
+    }
+  }
+
+  const latest = useChatStore.getState();
+  if (!signal.aborted) {
+    const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+    const completedAt = new Date().toISOString();
+    const completedResponse = {
+      ...current,
+      ...finalResponse,
+      text: finalResponse.text ?? current.text,
+      session_id: finalResponse.session_id ?? latest.sessionId ?? current.session_id,
+      started_at: current.started_at ?? startedAt,
+      completed_at: finalResponse.error ? current.completed_at : completedAt,
+      failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
+      ui_status: finalResponse.error ? "failed" : "complete",
+    } as ChatResponse;
+    latest.updateTurnResponse(turnId, responseIndex, completedResponse);
+    const resolvedSession = completedResponse.session_id;
+    if (resolvedSession) latest.setSessionId(resolvedSession);
+    latest.setTurnStatus(turnId, "complete");
+    latest.setStreaming(false);
+    await refreshHistory();
+  }
+}
+
+function buildContext({
+  sessionId,
+  pendingNewSession,
+  conversationHistory,
+}: {
+  sessionId: string | null;
+  pendingNewSession: boolean;
+  conversationHistory: ConversationHistoryItem[];
+}): UserContextRequest {
+  return {
+    session_id: pendingNewSession ? undefined : sessionId ?? undefined,
+    conversation_history: conversationHistory.length > 0 ? conversationHistory : undefined,
+    new_session: pendingNewSession || !sessionId,
+  };
+}
+
+type ChatStateSnapshot = ReturnType<typeof useChatStore.getState>;
+
+function buildPlaceholdersForCurrentMode(
+  state: ChatStateSnapshot,
+  startedAt: string,
+  status: ResponseRunStatus,
+): ChatResponse[] {
+  if (state.mode === "compare") {
+    return state.compareModelKeys.filter(Boolean).map((key, index) => {
+      const { provider, model } = parseModelKey(key);
+      return makePlaceholderResponse(index, provider, model, state.sessionId, {
+        startedAt,
+        status,
+      });
+    });
+  }
+
+  const { provider, model } = parseModelKey(state.selectedModelKey);
+  return [
+    makePlaceholderResponse(
+      0,
+      state.smartMode ? "smart" : provider,
+      state.smartMode ? "Selecting best model" : model,
+      state.sessionId,
+      { startedAt, status },
+    ),
+  ];
+}
+
+function getTurnResponse(
+  state: ChatStateSnapshot,
+  turnId: string,
+  index: number,
+  fallback?: ChatResponse,
+): ChatResponse {
+  return (
+    state.turns.find((turn) => turn.id === turnId)?.responses[index] ??
+    state.responses[index] ??
+    fallback ??
+    makePlaceholderResponse(index, "", "", state.sessionId)
+  );
+}
+
+function markTurnResponsesFailed(turnId: string, message: string) {
+  const state = useChatStore.getState();
+  const turn = state.turns.find((item) => item.id === turnId);
+  if (!turn) return;
+
+  const failedAt = new Date().toISOString();
+  const responses =
+    turn.responses.length > 0
+      ? turn.responses
+      : [makePlaceholderResponse(0, "auto", "Working", state.sessionId)];
+
+  responses.forEach((response, index) => {
+    if (response.ui_status === "complete" || response.ui_status === "failed") return;
+    state.updateTurnResponse(turnId, index, {
+      ...response,
+      text: "",
+      error: response.error ?? makeUiError(response, message),
+      ui_status: "failed",
+      failed_at: failedAt,
+      started_at: response.started_at ?? failedAt,
+    });
+  });
+}
+
+function makeUiError(response: ChatResponse, message: string): ApiError {
+  return {
+    code: "stream_error",
+    message,
+    provider: response.provider,
+    retryable: false,
+    details: {},
+  };
+}
+
+export function buildConversationHistory(turns: ChatTurn[]): ConversationHistoryItem[] {
+  const messages: ConversationHistoryItem[] = [];
+  for (const turn of turns) {
+    if (
+      turn.status === "streaming" ||
+      turn.status === "optimizing" ||
+      turn.status === "cancelled"
+    ) {
+      continue;
+    }
+    const prompt = turn.submittedPrompt || turn.prompt;
+    if (prompt) messages.push({ role: "user", content: prompt });
+    const responseText = turn.responses
+      .map((response) => response.text)
+      .filter(Boolean)
+      .join("\n\n");
+    if (responseText) messages.push({ role: "assistant", content: responseText });
+  }
+  return messages.slice(-10);
+}
+
+function toAttachmentItems(attachments: FileUploadResponse[]): AttachmentRequestItem[] {
+  return attachments.map((attachment) => ({
+    file_id: attachment.file_id,
+    usage_role: "primary",
+    transform_mode: "auto",
+  }));
+}
+
+async function refreshHistory() {
+  const state = useChatStore.getState();
+  try {
+    const entries = await fetchHistory(500);
+    state.setHistory(entries);
+  } catch (err) {
+    console.warn("History refresh failed", err);
+  }
+}
+
+function toFriendlyError(err: unknown): string {
+  if (err instanceof DOMException && err.name === "AbortError") return "Request cancelled.";
+  if (err instanceof ApiClientError) {
+    const detail = getDetailRecord(err.body);
+    const code = typeof detail?.code === "string" ? detail.code : "";
+    if (err.status === 403 && code === "session_auth_required") {
+      return "Your session is not ready. Sign in or enable the local dev session, then try again.";
+    }
+    if (code === "attachments_require_db") {
+      return "Attachments require the database-backed backend. Start the full app with PostgreSQL enabled.";
+    }
+    if (code === "no_attachment_compatible_provider") {
+      return "The selected model cannot use the attached files. Switch models or remove the attachment.";
+    }
+    return err.message;
+  }
+  return err instanceof Error ? err.message : "An unexpected error occurred.";
+}
+
+function getDetailRecord(body: unknown): Record<string, unknown> | null {
+  if (typeof body !== "object" || body === null) return null;
+  const detail = (body as Record<string, unknown>).detail;
+  return typeof detail === "object" && detail !== null ? (detail as Record<string, unknown>) : null;
+}
+
+function beginRequestController(): AbortController {
+  activeAbortController?.abort();
+  const controller = new AbortController();
+  activeAbortController = controller;
+  return controller;
+}
+
+function clearRequestController(controller: AbortController) {
+  if (activeAbortController === controller) activeAbortController = null;
+}
+
+function buildRegenerationConversationHistory(
+  turns: ChatTurn[],
+  turnId: string,
+): ConversationHistoryItem[] {
+  const turnIndex = turns.findIndex((turn) => turn.id === turnId);
+  return buildConversationHistory(turnIndex >= 0 ? turns.slice(0, turnIndex) : turns);
+}
+
+function responseToExplicitTarget(response: ChatResponse): Partial<CompareTargetRequest> {
+  const provider = response.provider.trim().toLowerCase();
+  const model = response.model.trim();
+  const nonConcreteProviders = new Set(["", "auto", "smart", "unknown"]);
+  const nonConcreteModels = new Set(["", "working", "selecting best model", "unknown"]);
+
+  if (nonConcreteProviders.has(provider) || nonConcreteModels.has(model.trim().toLowerCase())) {
+    return {};
+  }
+  return { provider, model };
+}

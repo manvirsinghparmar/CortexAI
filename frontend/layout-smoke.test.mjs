@@ -504,37 +504,35 @@ test("history thread selection scrolls to the bottom of restored messages", () =
 });
 
 test("new streaming turns reveal only from latest position and do not auto-follow streamed text", () => {
-    assert.match(appJs, /function syncJumpToLatestDuringStream\(\) \{/);
+    assert.match(appJs, /function syncStreamViewportDuringStream\(\) \{/);
     assert.match(appJs, /const shouldRevealLatest = el\.resultsSection\.classList\.contains\("hidden"\) \|\| isNearStreamingBottom\(\);/);
     assert.match(appJs, /if \(shouldRevealLatest\) \{[\s\S]*scheduleScrollResultsToBottom\(\{ behavior: "smooth", followUpDelayMs: 96 \}\);/);
     assert.match(appJs, /function appendStreamLine\(index, text\) \{[\s\S]*renderStreamingMarkdown\(key\);/);
-    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
+    assert.match(appJs, /function renderStreamingMarkdown\(index\) \{[\s\S]*syncStreamViewportDuringStream\(\);/);
     assert.match(appJs, /setStreamAutoScrollPaused\(!streamState\.shouldRevealLatest && !isNearStreamingBottom\(\)\);/);
     assert.match(appJs, /streamAutoScrollEnabled = true;/);
-    const syncStart = appJs.indexOf("function syncJumpToLatestDuringStream()");
+    const syncStart = appJs.indexOf("function syncStreamViewportDuringStream()");
     const syncEnd = appJs.indexOf("function finishStreamingViewportControls", syncStart);
     assert.ok(syncStart > 0);
     assert.ok(syncEnd > syncStart);
     assert.doesNotMatch(appJs.slice(syncStart, syncEnd), /scrollResultsToBottom/);
 });
 
-test("streaming exposes jump control when latest content is below the viewport", () => {
-    assert.match(html, /id="jumpToLatestBtn"/);
-    assert.match(html, /class="jump-to-latest hidden"/);
-    assert.match(html, /aria-label="Jump to latest"/);
-    assert.match(html, /title="Jump to latest"/);
-    assert.match(html, /<span aria-hidden="true">&darr;<\/span>/);
-    assert.match(styleCss, /\.jump-to-latest \{[\s\S]*position:\s*fixed;[\s\S]*bottom:\s*128px;[\s\S]*z-index:\s*340;[\s\S]*width:\s*38px;[\s\S]*height:\s*38px;/);
+test("streaming keeps the floating jump control removed", () => {
+    assert.doesNotMatch(html, /id="jumpToLatestBtn"/);
+    assert.doesNotMatch(html, /class="jump-to-latest/);
+    assert.doesNotMatch(html, /aria-label="Jump to latest"/);
+    assert.doesNotMatch(styleCss, /\.jump-to-latest\b/);
+    assert.doesNotMatch(appJs, /jumpToLatestBtn/);
+    assert.doesNotMatch(appJs, /updateJumpToLatestVisibility/);
     assert.match(appJs, /let streamAutoScrollPausedByUser = false;/);
     assert.match(appJs, /const STREAM_USER_SCROLL_INTENT_MS = 900;/);
     assert.match(appJs, /function markStreamUserScrollIntent\(event = null\) \{/);
     assert.match(appJs, /function isNearStreamingBottom\(\) \{[\s\S]*isDocumentNearBottom\(\) && isResultsSectionNearBottom\(\);/);
     assert.match(appJs, /function handleUserScrollDuringStream\(\) \{[\s\S]*streamScrollProgrammatic && !hasRecentStreamUserScrollIntent\(\)[\s\S]*const latestBelowViewport = !isNearStreamingBottom\(\);[\s\S]*setStreamAutoScrollPaused\(latestBelowViewport\);/);
-    assert.match(appJs, /function updateJumpToLatestVisibility\(\) \{[\s\S]*streamAutoScrollEnabled && streamAutoScrollPausedByUser/);
     assert.match(appJs, /window\.addEventListener\("wheel", markStreamUserScrollIntent, \{ passive: true \}\);/);
-    assert.match(appJs, /el\.jumpToLatestBtn\.addEventListener\("click", \(\) => \{[\s\S]*setStreamAutoScrollPaused\(false\);[\s\S]*scrollResultsToBottom\("smooth"\);/);
     assert.match(appJs, /function finishStreamingViewportControls\(\) \{[\s\S]*if \(!streamAutoScrollPausedByUser\) \{/);
-    assert.match(appJs, /function renderCompareSummary\(data\) \{[\s\S]*syncJumpToLatestDuringStream\(\);/);
+    assert.match(appJs, /function renderCompareSummary\(data\) \{[\s\S]*syncStreamViewportDuringStream\(\);/);
 });
 
 test("historical transcripts render persisted web source citations", () => {

@@ -508,6 +508,83 @@ class TestOptimizationFlow:
         assert "Latest user prompt to rewrite" in user_message
         assert mock_client.get_completion.call_count == 1
 
+    def test_structured_context_is_preferred_over_context_hint(self):
+        mock_client = Mock()
+        mock_response = UnifiedResponse(
+            request_id="test-structured-context",
+            text=json.dumps(
+                {
+                    "optimized_prompt": "Turn the OpenAI and Claude comparison into a table.",
+                    "steps": ["Resolved the table request from structured context"],
+                }
+            ),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=500,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = mock_response
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        result = optimizer.optimize_prompt(
+            {
+                "prompt": "Write it as a table",
+                "context_hint": "Stale topic: asteroid mining.",
+                "context": {
+                    "session_id": "session-1",
+                    "conversation_history": [
+                        {"role": "user", "content": "Compare OpenAI and Claude."},
+                        {
+                            "role": "assistant",
+                            "content": "OpenAI is faster. Claude is more cautious.",
+                        },
+                    ],
+                },
+                "max_retries": 1,
+            }
+        )
+
+        assert result["optimized_prompt"] == "Turn the OpenAI and Claude comparison into a table."
+        sent_messages = mock_client.get_completion.call_args.kwargs["messages"]
+        user_message = sent_messages[1]["content"]
+        assert "Compare OpenAI and Claude" in user_message
+        assert "OpenAI is faster" in user_message
+        assert "Stale topic" not in user_message
+
+    def test_context_hint_accepts_four_thousand_characters(self):
+        mock_client = Mock()
+        mock_response = UnifiedResponse(
+            request_id="test-large-context-hint",
+            text=json.dumps({"optimized_prompt": "Rewrite the latest prompt clearly."}),
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=500,
+            token_usage=TokenUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
+            estimated_cost=0.001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+        mock_client.get_completion.return_value = mock_response
+
+        optimizer = PromptOptimizer(provider="openai", client=mock_client)
+        optimizer.optimize_prompt(
+            {
+                "prompt": "Rewrite it",
+                "context_hint": "h" * 4500,
+                "max_retries": 1,
+            }
+        )
+
+        sent_messages = mock_client.get_completion.call_args.kwargs["messages"]
+        user_message = sent_messages[1]["content"]
+        assert "h" * 4000 in user_message
+        assert "h" * 4001 not in user_message
+
     def test_placeholder_output_is_rejected_and_returns_original(self):
         mock_client = Mock()
         original = "give me the detailed range"

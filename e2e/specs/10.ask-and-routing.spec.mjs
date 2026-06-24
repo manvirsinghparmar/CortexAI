@@ -212,6 +212,7 @@ test("improve flow shows optimization status and sends optimized prompt", async 
     expect(optimizeRequestBody?.prompt).toBe(rawPrompt);
     expect(optimizeRequestBody?.context_hint).toBeUndefined();
     expect(chatRequestBody).toBeNull();
+    await expect(page.locator("[id^='response-text-']")).toHaveCount(nextIndex);
 
     releaseOptimize();
 

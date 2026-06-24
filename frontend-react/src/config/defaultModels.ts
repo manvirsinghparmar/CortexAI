@@ -1,0 +1,40 @@
+import type { ModelCatalogItem } from "../types";
+
+export const DEFAULT_MODELS: ModelCatalogItem[] = [
+  {
+    provider: "openai",
+    model: "gpt-5.1",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["preferred-compare"],
+    enabled: true,
+    supports_image_input: true,
+    supported_attachment_mime_types: [],
+  },
+  {
+    provider: "claude",
+    model: "claude-sonnet-4-5",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["preferred-compare"],
+    enabled: true,
+    supports_image_input: true,
+    supported_attachment_mime_types: [],
+  },
+  {
+    provider: "deepseek",
+    model: "deepseek-chat",
+    tier: "frontier",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128000,
+    tags: ["preferred-compare-add"],
+    enabled: true,
+    supports_image_input: false,
+    supported_attachment_mime_types: [],
+  },
+];

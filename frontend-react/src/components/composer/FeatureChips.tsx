@@ -87,7 +87,7 @@ export function FeatureChips({
       ariaLabel={compareMode ? "Compare with sources" : "Research mode"}
       touchTooltipId={touchTooltipId}
       onTouchTooltip={showTouchTooltip}
-      tone={variant === "sourcesOnly" ? "solid" : "segment"}
+      tone={variant === "sourcesOnly" ? "ghost" : "segment"}
     />
   ) : null;
 
@@ -131,7 +131,7 @@ interface ChipProps {
   tooltipAlign: "start" | "center" | "end";
   touchTooltipId: string | null;
   onTouchTooltip: (tooltipId: string) => void;
-  tone: "segment" | "solid" | "ghost";
+  tone: "segment" | "ghost";
   id?: string;
 }
 

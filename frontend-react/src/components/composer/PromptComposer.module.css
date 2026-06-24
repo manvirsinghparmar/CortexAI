@@ -157,11 +157,12 @@
     overflow: visible;
     border-radius: 18px 18px 0 0;
     padding: 10px 12px;
+    animation: mobileModelRowIn 220ms ease both;
   }
 
   .composerBody {
-    grid-template-columns: 36px minmax(0, 1fr) 40px;
-    column-gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 11px;
     padding: 11px;
   }
 
@@ -174,16 +175,24 @@
   }
 
   .submitButton {
-    width: 40px;
-    height: 40px;
-    flex-basis: 40px;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 999px;
+    box-shadow: 0 6px 14px -6px rgba(91, 91, 214, .7);
+  }
+
+  .submitButton svg {
+    width: 18px;
+    height: 18px;
+    transform: rotate(-90deg);
   }
 }
 
 @media (max-width: 430px) {
   .composerBody {
-    grid-template-columns: 34px minmax(0, 1fr) 40px;
-    column-gap: 7px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 10px;
     padding: 10px;
   }
 
@@ -194,23 +203,37 @@
 
 @media (max-width: 359px) {
   .composerBody {
-    grid-template-columns: 32px minmax(0, 1fr) 38px;
-    column-gap: 6px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 9px;
     padding-right: 8px;
     padding-left: 8px;
   }
 
   .submitButton {
-    width: 38px;
-    height: 38px;
-    flex-basis: 38px;
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+}
+
+@keyframes mobileModelRowIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .card,
+  .modelRow,
   .submitButton {
     transition: none;
+    animation: none;
   }
 
   .submitButton:hover:not(:disabled) {

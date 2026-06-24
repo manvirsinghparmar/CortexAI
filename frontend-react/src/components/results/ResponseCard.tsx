@@ -3,7 +3,6 @@ import {
   cloneElement,
   isValidElement,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -54,7 +53,6 @@ export function ResponseCard({
   onRegenerate,
   compareHighlights,
 }: ResponseCardProps) {
-  const [statsOpen, setStatsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const hasError = !!response.error;
@@ -73,13 +71,9 @@ export function ResponseCard({
   const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
   const hasMetaContent = !!loadingStatus || isFailed || hasCompletedMetrics || hasCost;
   const metaPinned = !!loadingStatus || isFailed;
-  const showStatsToggle = hasMetaContent && !metaPinned;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
-  const statsId = useMemo(
-    () => `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`,
-    [response.request_id],
-  );
+  const statsId = `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
   const copyResponse = async () => {
     await navigator.clipboard?.writeText(responseText || "").catch(() => undefined);
@@ -115,30 +109,14 @@ export function ResponseCard({
           </div>
           <div className={styles.headerActions}>
             <span className={`${styles.badge} ${styles[badge.tone]}`}>{badge.label}</span>
-            {showStatsToggle && (
-              <button
-                type="button"
-                className={styles.statsToggle}
-                aria-label={statsOpen ? "Hide run details" : "Show run details"}
-                title={statsOpen ? "Hide run details" : "Show run details"}
-                aria-expanded={statsOpen}
-                aria-controls={statsId}
-                onClick={() => setStatsOpen((open) => !open)}
-              >
-                <span
-                  className={`${styles.statsCaret} ${statsOpen ? styles.statsCaretOpen : ""}`}
-                  aria-hidden="true"
-                />
-              </button>
-            )}
           </div>
         </div>
         {hasMetaContent && (
           <div
             id={statsId}
-            className={`${styles.metaRow} ${statsOpen ? styles.metaRowExpanded : ""} ${
-              metaPinned ? styles.metaRowPinned : ""
-            } ${loadingStatus ? styles.loadingMetaRow : ""} ${
+            className={`${styles.metaRow} ${metaPinned ? styles.metaRowPinned : ""} ${
+              loadingStatus ? styles.loadingMetaRow : ""
+            } ${
               isFailed ? styles.failedMetaRow : ""
             }`}
           >

@@ -74,6 +74,48 @@ describe("ResultsSection layout states", () => {
     expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["Ask", askTurn("ask-optimizing", "Improve this Ask prompt"), 1],
+    ["Compare", compareTurn("compare-optimizing", "Improve this Compare prompt"), 2],
+  ])(
+    "hides %s response UI until prompt optimization finishes",
+    (_, turn, expectedResponseCards) => {
+      turn.status = "optimizing";
+      turn.optimizeEnabled = true;
+      turn.optimization = {
+        status: "pending",
+        originalPrompt: turn.prompt,
+        displayPrompt: turn.prompt,
+      };
+      setTurns([turn]);
+
+      render(<ResultsSection />);
+
+      const turnElement = document.querySelector(`[data-turn-id="${turn.id}"]`);
+      expect(screen.getByRole("status")).toHaveTextContent("Improving your prompt");
+      expect(turnElement?.querySelectorAll("article")).toHaveLength(0);
+      expect(screen.queryByRole("tablist", { name: "Compare model responses" }))
+        .not.toBeInTheDocument();
+      expect(document.querySelector(".compare-summary-card")).not.toBeInTheDocument();
+
+      act(() => {
+        useChatStore.getState().setTurnOptimization(turn.id, {
+          status: "optimized",
+          originalPrompt: turn.prompt,
+          displayPrompt: `Optimized: ${turn.prompt}`,
+        });
+        useChatStore.getState().setTurnStatus(turn.id, "streaming");
+      });
+
+      expect(screen.getByText("Prompt optimized")).toBeInTheDocument();
+      expect(turnElement?.querySelectorAll("article")).toHaveLength(expectedResponseCards);
+      if (turn.mode === "compare") {
+        expect(screen.getByRole("tablist", { name: "Compare model responses" }))
+          .toBeInTheDocument();
+      }
+    },
+  );
+
   it("keeps Compare loading states independent per model", () => {
     const turn = compareTurn("compare-streaming", "Compare streaming");
     turn.status = "streaming";
@@ -88,6 +130,7 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByText("GPT has started responding.")).toBeInTheDocument();
     expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(screen.getByRole("status")).toHaveTextContent("Generating response\u2026");
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
   });
 
   it("renders the Compare run summary with fastest and cheapest metric tags", () => {
@@ -167,6 +210,7 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Checking sources and preparing an answer\u2026",
     );
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
   });
 
   it.each([

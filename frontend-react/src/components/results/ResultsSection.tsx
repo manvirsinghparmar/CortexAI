@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SparkleIcon } from "../common/SparkleIcon";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
@@ -6,6 +6,7 @@ import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
+import { ProviderLogo } from "../shared/ProviderLogo";
 import { ResponseCard } from "./ResponseCard";
 import styles from "./ResultsSection.module.css";
 
@@ -97,38 +98,23 @@ export function ResultsSection() {
               className={`${styles.turn} ${styles.singleTurn}`}
             >
               <TurnPrompt turn={turn} turnIndex={turnIndex} />
-              {turn.responses.map((response, responseIndex) => (
-                <ResponseCard
-                  key={response.request_id}
-                  response={response}
-                  isStreaming={isResponseLoading(turn, response)}
-                  slotIndex={responseIndex}
-                  loadingMode="ask"
-                  researchEnabled={turn.researchEnabled}
-                  optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
-                  onRegenerate={() => void regenerate(turn.id, responseIndex)}
-                />
-              ))}
+              {!shouldHideResponsesForOptimization(turn) &&
+                turn.responses.map((response, responseIndex) => (
+                  <ResponseCard
+                    key={response.request_id}
+                    response={response}
+                    isStreaming={isResponseLoading(turn, response)}
+                    slotIndex={responseIndex}
+                    loadingMode="ask"
+                    researchEnabled={turn.researchEnabled}
+                    optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+                    onRegenerate={() => void regenerate(turn.id, responseIndex)}
+                  />
+                ))}
             </article>
           ),
         )}
       </div>
-      {turns.some((turn) => turn.status === "streaming") && (
-        <button
-          type="button"
-          className={styles.jumpButton}
-          aria-label="Jump to latest"
-          title="Jump to latest"
-          onClick={() =>
-            sectionRef.current?.scrollTo({
-              top: sectionRef.current.scrollHeight,
-              behavior: "smooth",
-            })
-          }
-        >
-          <CortexIcon name="scroll-down" />
-        </button>
-      )}
     </section>
   );
 }
@@ -145,13 +131,17 @@ function CompareTurn({
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
 }) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
+  const [responseTabsStuck, setResponseTabsStuck] = useState(false);
+  const responseTabsRef = useRef<HTMLDivElement | null>(null);
+  const responseTabsSentinelRef = useRef<HTMLDivElement | null>(null);
   const compareGridClass =
     turn.responses.length >= 3
       ? styles.compareGridThree
       : turn.responses.length === 2
         ? styles.compareGridTwo
         : styles.compareGridOne;
-  const hasResponseTabs = turn.responses.length > 1;
+  const responsesVisible = !shouldHideResponsesForOptimization(turn);
+  const hasResponseTabs = responsesVisible && turn.responses.length > 1;
   const metricHighlights = resolveCompareMetricHighlights(turn.responses);
 
   useEffect(() => {
@@ -159,6 +149,43 @@ function CompareTurn({
       setActiveResponseIndex(Math.max(0, turn.responses.length - 1));
     }
   }, [activeResponseIndex, turn.responses.length]);
+
+  useEffect(() => {
+    if (!hasResponseTabs) {
+      setResponseTabsStuck(false);
+      return;
+    }
+
+    const tabs = responseTabsRef.current;
+    const sentinel = responseTabsSentinelRef.current;
+    const scrollRoot = tabs?.closest(
+      'section[aria-label="Chat transcript"]',
+    ) as HTMLElement | null;
+    if (!tabs || !sentinel || !scrollRoot) return;
+
+    let frameId: number | null = null;
+    const updateStuckState = () => {
+      frameId = null;
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      const tabsTop = tabs.getBoundingClientRect().top;
+      const sentinelTop = sentinel.getBoundingClientRect().top;
+      const stuck = sentinelTop < rootTop + 8 && tabsTop <= rootTop + 10;
+      setResponseTabsStuck((current) => (current === stuck ? current : stuck));
+    };
+    const scheduleUpdate = () => {
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(updateStuckState);
+    };
+
+    scheduleUpdate();
+    scrollRoot.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      scrollRoot.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [hasResponseTabs, turn.id]);
 
   return (
     <article
@@ -169,7 +196,7 @@ function CompareTurn({
     >
       <TurnPrompt turn={turn} turnIndex={turnIndex} />
 
-      {turn.compareSummary && (
+      {responsesVisible && turn.compareSummary && (
         <div className={`${styles.compareSummary} compare-summary-card`}>
           <span className={`${styles.summaryPill} ${styles.summarySuccess}`}>
             {turn.compareSummary.success_count} succeeded
@@ -186,37 +213,69 @@ function CompareTurn({
         </div>
       )}
 
-      {turn.responses.length > 0 && (
+      {responsesVisible && turn.responses.length > 0 && (
         <>
           {hasResponseTabs && (
-            <div
-              className={styles.mobileResponseTabs}
-              role="tablist"
-              aria-label="Compare model responses"
-            >
-              {turn.responses.map((response, index) => {
-                const presentation = getModelPresentation(
-                  response.provider,
-                  response.model,
-                );
-                const selected = index === activeResponseIndex;
-                return (
-                  <button
-                    key={`${turn.id}-tab-${response.request_id}`}
-                    type="button"
-                    role="tab"
-                    id={`${turn.id}-response-tab-${index}`}
-                    aria-selected={selected}
-                    aria-controls={`${turn.id}-response-panel-${index}`}
-                    tabIndex={selected ? 0 : -1}
-                    className={selected ? styles.mobileResponseTabActive : undefined}
-                    onClick={() => setActiveResponseIndex(index)}
-                  >
-                    {presentation.label}
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div
+                ref={responseTabsSentinelRef}
+                className={styles.mobileResponseTabsSentinel}
+                aria-hidden="true"
+              />
+              <div
+                ref={responseTabsRef}
+                className={`${styles.mobileResponseTabs} ${
+                  responseTabsStuck ? styles.mobileResponseTabsStuck : ""
+                }`}
+                role="tablist"
+                aria-label="Compare model responses"
+              >
+                {turn.responses.map((response, index) => {
+                  const presentation = getModelPresentation(
+                    response.provider,
+                    response.model,
+                  );
+                  const selected = index === activeResponseIndex;
+                  const tone = responseSwitcherTone(response.provider, presentation.color);
+                  const tabStyle = {
+                    "--response-tab-accent": tone.accent,
+                    "--response-tab-soft": tone.soft,
+                  } as CSSProperties;
+                  return (
+                    <button
+                      key={`${turn.id}-tab-${response.request_id}`}
+                      type="button"
+                      role="tab"
+                      id={`${turn.id}-response-tab-${index}`}
+                      aria-selected={selected}
+                      aria-controls={`${turn.id}-response-panel-${index}`}
+                      tabIndex={selected ? 0 : -1}
+                      className={selected ? styles.mobileResponseTabActive : undefined}
+                      style={tabStyle}
+                      onClick={() => setActiveResponseIndex(index)}
+                    >
+                      <span className={styles.mobileResponseTabIcon}>
+                        <ProviderLogo
+                          provider={response.provider}
+                          logoUrl={presentation.logoUrl}
+                          color={presentation.color}
+                          size={13}
+                        />
+                      </span>
+                      <span className={styles.mobileResponseTabLabel}>
+                        {presentation.label}
+                      </span>
+                      {selected && (
+                        <span
+                          className={styles.mobileResponseTabDot}
+                          aria-hidden="true"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
           )}
 
           <div
@@ -282,6 +341,17 @@ function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
   }));
 }
 
+function responseSwitcherTone(providerRaw: string, fallbackColor: string) {
+  const provider = providerRaw.trim().toLowerCase();
+  if (provider === "claude") {
+    return { accent: "#e07a4d", soft: "#fbeee6" };
+  }
+  if (provider === "openai") {
+    return { accent: "#5b5bd6", soft: "#eef0fb" };
+  }
+  return { accent: fallbackColor || "#5b5bd6", soft: "#eef0f2" };
+}
+
 function responseDurationMs(response: ChatTurn["responses"][number]) {
   const startedAtMs = parseTimestamp(response.started_at);
   const completedAtMs = parseTimestamp(response.completed_at);
@@ -312,6 +382,14 @@ function isResponseLoading(turn: ChatTurn, response: ChatTurn["responses"][numbe
     return false;
   }
   return turn.status === "optimizing" || turn.status === "streaming";
+}
+
+function shouldHideResponsesForOptimization(turn: ChatTurn) {
+  return (
+    turn.status === "optimizing" ||
+    turn.optimization?.status === "pending" ||
+    turn.optimization?.status === "cancelled"
+  );
 }
 
 function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) {

@@ -147,6 +147,25 @@ test("mobile Compare stacks Markdown table rows with visible column labels", asy
 
     const responseTabs = page.getByRole("tablist", { name: "Compare model responses" });
     await expect(responseTabs).toBeVisible();
+    const switcherChrome = await responseTabs.evaluate(element => {
+        const active = element.querySelector('[aria-selected="true"]');
+        const icon = active?.children[0];
+        const dot = active?.children[2];
+        return {
+            background: getComputedStyle(element).backgroundColor,
+            borderRadius: getComputedStyle(element).borderRadius,
+            activeBackground: active ? getComputedStyle(active).backgroundColor : "",
+            iconBackground: icon ? getComputedStyle(icon).backgroundColor : "",
+            dotBackground: dot ? getComputedStyle(dot).backgroundColor : "",
+            dotWidth: dot ? dot.getBoundingClientRect().width : 0,
+        };
+    });
+    expect(switcherChrome.background).toBe("rgb(244, 245, 247)");
+    expect(switcherChrome.borderRadius).toBe("12px");
+    expect(switcherChrome.activeBackground).toBe("rgb(255, 255, 255)");
+    expect(switcherChrome.iconBackground).toBe("rgb(238, 240, 251)");
+    expect(switcherChrome.dotBackground).toBe("rgb(91, 91, 214)");
+    expect(switcherChrome.dotWidth).toBe(6);
     await expect(page.getByRole("table")).toHaveCount(1);
     const metrics = await page
         .getByRole("region", { name: "Response table" })
@@ -181,6 +200,18 @@ test("mobile Compare stacks Markdown table rows with visible column labels", asy
         "aria-selected",
         "true",
     );
+    const claudeChrome = await responseTabs
+        .getByRole("tab", { name: "Claude Sonnet" })
+        .evaluate(element => {
+            const icon = element.children[0];
+            const dot = element.children[2];
+            return {
+                iconBackground: icon ? getComputedStyle(icon).backgroundColor : "",
+                dotBackground: dot ? getComputedStyle(dot).backgroundColor : "",
+            };
+        });
+    expect(claudeChrome.iconBackground).toBe("rgb(251, 238, 230)");
+    expect(claudeChrome.dotBackground).toBe("rgb(224, 122, 77)");
     await expect(page.getByRole("table")).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
 });
@@ -199,23 +230,49 @@ test("mobile multi-turn Compare switches one natural-height response card at a t
     await expect(gptTab).toHaveAttribute("aria-selected", "true");
     await expect(panels.nth(0)).toBeVisible();
     await expect(panels.nth(1)).toBeHidden();
+    const initialActiveTabLeft = await gptTab.evaluate(
+        element => element.getBoundingClientRect().left,
+    );
+    await page.locator('section[aria-label="Chat transcript"]').evaluate(element => {
+        element.scrollTop = 260;
+        element.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect
+        .poll(async () => tabs.evaluate(element => element.className))
+        .toContain("mobileResponseTabsStuck");
+    await expect
+        .poll(async () => tabs.evaluate(element => getComputedStyle(element).boxShadow))
+        .not.toBe("none");
+    await expect
+        .poll(async () => Math.abs(
+            (await gptTab.evaluate(element => element.getBoundingClientRect().left))
+            - initialActiveTabLeft,
+        ))
+        .toBeLessThanOrEqual(0.5);
 
-    const details = panels.nth(0).getByRole("button", { name: "Show run details" });
-    await expect(details).toHaveAttribute("aria-expanded", "false");
-    await expect(details).not.toContainText("Details");
-    await details.click();
-    const hideDetails = panels.nth(0).getByRole("button", { name: "Hide run details" });
-    await expect(hideDetails).toHaveAttribute("aria-expanded", "true");
+    await page.locator('section[aria-label="Chat transcript"]').evaluate(element => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect
+        .poll(async () => tabs.evaluate(element => element.className))
+        .not.toContain("mobileResponseTabsStuck");
+    await expect
+        .poll(async () => Math.abs(
+            (await gptTab.evaluate(element => element.getBoundingClientRect().left))
+            - initialActiveTabLeft,
+        ))
+        .toBeLessThanOrEqual(0.5);
+
+    await expect(panels.nth(0).getByRole("button", { name: /run details/i })).toHaveCount(0);
     const runDetails = panels.nth(0).locator('[id^="response-stats-"]');
     await expect(runDetails).toBeVisible();
-    await expect(runDetails).toContainText("0.9 sec");
-    await expect(runDetails).toContainText("tokens");
+    await expect(runDetails).toContainText("0.9s");
+    await expect(runDetails).toContainText("tok");
     const runDetailsGeometry = await panels.nth(0).evaluate(panel => {
-        const button = panel.querySelector('button[aria-label="Hide run details"]');
         const header = panel.querySelector("header");
         const titleRow = header?.firstElementChild;
         const detailsRow = panel.querySelector('[id^="response-stats-"]');
-        const buttonRect = button?.getBoundingClientRect();
         const titleRect = titleRow?.getBoundingClientRect();
         const detailsRect = detailsRow?.getBoundingClientRect();
         const headerRect = header?.getBoundingClientRect();
@@ -223,12 +280,6 @@ test("mobile multi-turn Compare switches one natural-height response card at a t
         return {
             detailsBelowTitle:
                 Boolean(titleRect && detailsRect) && detailsRect.top >= titleRect.bottom - 0.5,
-            overlapsToggle:
-                Boolean(buttonRect && detailsRect)
-                && buttonRect.left < detailsRect.right
-                && buttonRect.right > detailsRect.left
-                && buttonRect.top < detailsRect.bottom
-                && buttonRect.bottom > detailsRect.top,
             detailsWithinHeader:
                 Boolean(headerRect && detailsRect)
                 && detailsRect.left >= headerRect.left - 0.5
@@ -236,7 +287,6 @@ test("mobile multi-turn Compare switches one natural-height response card at a t
         };
     });
     expect(runDetailsGeometry.detailsBelowTitle).toBe(true);
-    expect(runDetailsGeometry.overlapsToggle).toBe(false);
     expect(runDetailsGeometry.detailsWithinHeader).toBe(true);
 
     const activeBodyMetrics = await panels.nth(0).locator("[id^='response-text-']").evaluate(body => {
@@ -255,3 +305,63 @@ test("mobile multi-turn Compare switches one natural-height response card at a t
     await expect(panels.nth(1)).toBeVisible();
     await expectNoHorizontalOverflow(page);
 });
+
+test("mobile Compare response actions stay above the docked follow-up composer", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await restoreHistoryThread(page, "Architecture decision");
+
+    await expectResponseActionsClearDock(page);
+    await expectNoHorizontalOverflow(page);
+});
+
+async function expectResponseActionsClearDock(page) {
+    const transcript = page.locator('section[aria-label="Chat transcript"]');
+    const dock = page.getByRole("button", { name: "Open follow-up composer" });
+
+    await expect(dock).toBeVisible();
+    await transcript.evaluate(element => {
+        element.scrollTop = element.scrollHeight;
+    });
+
+    for (const name of [
+        "Copy response",
+        "Regenerate response",
+        "Helpful response",
+        "Not helpful response",
+    ]) {
+        await expect(page.getByRole("button", { name }).last()).toBeVisible();
+    }
+
+    const metrics = await page.evaluate(() => {
+        const isVisible = element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const dockRect = document
+            .querySelector('button[aria-label="Open follow-up composer"]')
+            ?.getBoundingClientRect();
+        const copyButtons = Array.from(document.querySelectorAll('button[aria-label="Copy response"]'))
+            .filter(isVisible);
+        const footerRect = copyButtons.at(-1)?.closest("footer")?.getBoundingClientRect();
+        const buttonRects = [
+            "Copy response",
+            "Regenerate response",
+            "Helpful response",
+            "Not helpful response",
+        ].map(name => {
+            const button = Array.from(document.querySelectorAll(`button[aria-label="${name}"]`))
+                .filter(isVisible)
+                .at(-1);
+            return button?.getBoundingClientRect();
+        });
+        return {
+            dockTop: dockRect?.top ?? 0,
+            footerBottom: footerRect?.bottom ?? Number.POSITIVE_INFINITY,
+            allButtonsAboveDock: buttonRects.every(rect => Boolean(rect) && rect.bottom <= (dockRect?.top ?? 0) - 8),
+        };
+    });
+
+    expect(metrics.footerBottom).toBeLessThanOrEqual(metrics.dockTop - 8);
+    expect(metrics.allButtonsAboveDock).toBe(true);
+}

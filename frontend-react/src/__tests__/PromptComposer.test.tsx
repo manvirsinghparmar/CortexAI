@@ -76,7 +76,7 @@ describe("PromptComposer", () => {
     expect(textarea).toHaveAttribute("rows", "1");
     expect(textarea).toHaveAttribute(
       "placeholder",
-      "Ask anything . . .",
+      "Ask anything…",
     );
     expect(card).toContainElement(fileName);
     expect(card).toContainElement(attachButton);

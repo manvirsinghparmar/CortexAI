@@ -48,21 +48,12 @@ describe("ResponseCard", () => {
     expect(screen.queryByRole("button", { name: "Branch response" })).not.toBeInTheDocument();
   });
 
-  it("keeps response stats collapsed behind the integrated run-details control", () => {
+  it("shows completed response stats without a run-details disclosure control", () => {
     render(<ResponseCard response={response()} compact />);
 
-    const details = screen.getByRole("button", { name: "Show run details" });
-    const stats = document.getElementById(details.getAttribute("aria-controls") ?? "");
+    const stats = document.querySelector('[id^="response-stats-"]');
 
-    expect(details).toHaveAttribute("aria-expanded", "false");
-    expect(details).not.toHaveTextContent("Details");
-    expect(stats?.className).not.toContain("metaRowExpanded");
-
-    fireEvent.click(details);
-
-    expect(details).toHaveAttribute("aria-expanded", "true");
-    expect(details).toHaveAccessibleName("Hide run details");
-    expect(stats?.className).toContain("metaRowExpanded");
+    expect(screen.queryByRole("button", { name: /run details/i })).not.toBeInTheDocument();
     expect(stats).toHaveTextContent("20.0s");
     expect(stats).toHaveTextContent("60 tok");
     expect(stats).toHaveTextContent("$0.0010");
@@ -343,6 +334,45 @@ describe("ResponseCard", () => {
       expect(dialog.style.getPropertyValue("--citation-popover-left")).toBe("240px");
       expect(dialog.style.getPropertyValue("--citation-popover-top")).toBe("152px");
     });
+  });
+
+  it("keeps a lower-page Ask citation preview adjacent to the hovered pill", async () => {
+    const previewRectSpy = vi
+      .spyOn(HTMLSpanElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        x: 240,
+        y: 12,
+        left: 240,
+        top: 12,
+        right: 600,
+        bottom: 136,
+        width: 360,
+        height: 124,
+        toJSON: () => ({}),
+      } as DOMRect);
+    render(<ResponseCard response={responseWithSources("Supported by reporting. [1][2]")} />);
+
+    const pill = screen.getByRole("button", { name: "Sources: NPR and 1 more" });
+    vi.spyOn(pill, "getBoundingClientRect").mockReturnValue({
+      x: 240,
+      y: 720,
+      left: 240,
+      top: 720,
+      right: 306,
+      bottom: 744,
+      width: 66,
+      height: 24,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(citationRootFor(pill));
+
+    const dialog = await screen.findByRole("dialog", { name: "Citation sources" });
+    await waitFor(() => {
+      expect(dialog.style.getPropertyValue("--citation-popover-top")).toBe("588px");
+      expect(dialog.style.getPropertyValue("--citation-popover-max-height")).toBe("360px");
+    });
+    previewRectSpy.mockRestore();
   });
 
   it("opens the citation external icon as a direct source link", () => {

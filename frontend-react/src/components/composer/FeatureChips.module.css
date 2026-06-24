@@ -59,13 +59,6 @@
   background: transparent;
 }
 
-.solidChip {
-  border: 1px solid transparent;
-  background: #0B1220;
-  color: #ffffff;
-  box-shadow: var(--cx-shadow-sm);
-}
-
 .ghostChip {
   border: 1px solid transparent;
   background: var(--cx-surface-3);
@@ -82,20 +75,18 @@
   background: color-mix(in srgb, var(--cx-surface-2) 72%, var(--cx-surface));
 }
 
-.solidChip:hover {
-  background: #111827;
-  color: #ffffff;
-}
-
 .active {
-  background: #0B1220;
-  color: #ffffff;
-  box-shadow: var(--cx-shadow-sm);
+  background: var(--cx-feature-active-bg);
+  color: var(--cx-feature-active-fg);
+  box-shadow:
+    inset 0 0 0 1px var(--cx-feature-active-ring),
+    0 0 0 2px color-mix(in srgb, var(--cx-feature-active-ring) 18%, transparent),
+    var(--cx-shadow-sm);
 }
 
 .active:hover {
-  background: #111827;
-  color: #ffffff;
+  background: var(--cx-feature-active-hover);
+  color: var(--cx-feature-active-fg);
 }
 
 .chip:focus-visible {

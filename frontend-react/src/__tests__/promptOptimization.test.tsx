@@ -329,12 +329,16 @@ describe("prompt optimization", () => {
         "Improving your prompt",
       );
     });
+    expect(document.querySelector("[data-turn-id]")?.querySelectorAll("article"))
+      .toHaveLength(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => {
       expect(screen.getByText("Optimization stopped.")).toBeInTheDocument();
     });
+    expect(document.querySelector("[data-turn-id]")?.querySelectorAll("article"))
+      .toHaveLength(0);
     expect(useChatStore.getState().streaming).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/optimize");

@@ -114,7 +114,16 @@ export function Citation({ refs, sources }: CitationProps) {
     if (!open || smallScreen) return undefined;
 
     const updatePosition = () => {
-      setPosition(resolvePopoverPosition(buttonRef.current?.getBoundingClientRect()));
+      const preview = dialogRef.current;
+      const previewHeight = preview
+        ? Math.max(preview.scrollHeight, preview.getBoundingClientRect().height)
+        : undefined;
+      setPosition(
+        resolvePopoverPosition(
+          buttonRef.current?.getBoundingClientRect(),
+          previewHeight,
+        ),
+      );
     };
 
     updatePosition();
@@ -348,9 +357,13 @@ function externalSourceHref(url: string): string {
   return `https://${trimmed.replace(/^\/+/, "")}`;
 }
 
-function resolvePopoverPosition(rect: DOMRect | undefined): PopoverPosition {
+function resolvePopoverPosition(
+  rect: DOMRect | undefined,
+  previewHeight: number | undefined,
+): PopoverPosition {
   const margin = 12;
   const gap = 8;
+  const maxPreviewHeight = 360;
   const width = Math.min(360, window.innerWidth - margin * 2);
 
   if (!rect) {
@@ -362,16 +375,20 @@ function resolvePopoverPosition(rect: DOMRect | undefined): PopoverPosition {
   }
 
   const left = clamp(rect.left, margin, window.innerWidth - width - margin);
-  const belowHeight = window.innerHeight - rect.bottom - margin - gap;
-  const aboveHeight = rect.top - margin - gap;
+  const belowHeight = Math.max(0, window.innerHeight - rect.bottom - margin - gap);
+  const aboveHeight = Math.max(0, rect.top - margin - gap);
+  const desiredHeight = Math.min(
+    maxPreviewHeight,
+    previewHeight && previewHeight > 0 ? previewHeight : maxPreviewHeight,
+  );
 
-  if (belowHeight < 220 && aboveHeight > belowHeight) {
-    const preferredHeight = Math.min(360, aboveHeight);
-    const top = Math.max(margin, rect.top - preferredHeight - gap);
+  if (belowHeight < desiredHeight && aboveHeight >= belowHeight) {
+    const maxHeight = Math.max(1, Math.min(maxPreviewHeight, aboveHeight));
+    const renderedHeight = Math.min(desiredHeight, maxHeight);
     return {
       left,
-      top,
-      maxHeight: Math.max(160, rect.top - top - gap),
+      top: Math.max(margin, rect.top - renderedHeight - gap),
+      maxHeight,
     };
   }
 
@@ -379,7 +396,7 @@ function resolvePopoverPosition(rect: DOMRect | undefined): PopoverPosition {
   return {
     left,
     top,
-    maxHeight: Math.max(160, window.innerHeight - top - margin),
+    maxHeight: Math.max(1, Math.min(maxPreviewHeight, belowHeight)),
   };
 }
 

@@ -60,15 +60,19 @@
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: var(--on-surface-variant);
+  color: var(--cx-ink-600);
   cursor: pointer;
   font: 500 16px/24px var(--font-sans);
   padding: 20px 0 14px;
 }
 
+.tab:hover {
+  color: var(--cx-ink-900);
+}
+
 .activeTab {
-  border-bottom-color: var(--primary);
-  color: var(--primary);
+  border-bottom-color: var(--cx-accent);
+  color: var(--cx-ink-900);
   font-weight: 700;
 }
 
@@ -158,7 +162,7 @@
   color: var(--cx-ink-700);
 }
 
-.composerFab {
+.composerDock {
   display: none;
 }
 
@@ -338,6 +342,7 @@
   }
 
   .main {
+    --mobile-response-actions-clearance: calc(148px + env(safe-area-inset-bottom));
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
   }
 
@@ -385,8 +390,7 @@
   .canvas {
     overflow: auto;
     padding: 16px 16px 0;
-    /* Only need to clear the bottom nav (64px), not the composer — it's now an overlay */
-    scroll-padding-bottom: 80px;
+    scroll-padding-bottom: var(--mobile-response-actions-clearance);
   }
 
   /* Fixed bottom-sheet overlay — replaces the inline flex slot on mobile */
@@ -394,24 +398,38 @@
     position: fixed;
     z-index: 24;
     right: 0;
-    bottom: 0;
+    bottom: calc(65px + env(safe-area-inset-bottom));
     left: 0;
     border-top: 0;
     border-radius: 20px 20px 0 0;
     background: var(--cx-surface);
     box-shadow: 0 -6px 40px rgb(0 0 0 / 14%);
     padding: 0 16px calc(env(safe-area-inset-bottom) + 14px);
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease,
+      visibility 0s linear;
+    visibility: visible;
   }
 
-  /* Collapsed: hide the sheet entirely; FAB takes over */
+  /* Collapsed: park the sheet off-canvas; the dock pill remains visible. */
   .composerWrap[data-collapsed="true"] {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(calc(100% + 18px));
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease,
+      visibility 0s linear 220ms;
+    visibility: hidden;
   }
 
   /* Dim backdrop shown when sheet is open */
   .composerBackdropVisible {
     position: fixed;
-    inset: 0;
+    inset: 0 0 calc(64px + env(safe-area-inset-bottom));
     z-index: 23;
     display: block;
     background: color-mix(in srgb, #000 45%, transparent);
@@ -427,42 +445,154 @@
     padding: 10px 0 8px;
   }
 
-  /* Floating Action Button — above the mobile nav, shown when collapsed */
-  .composerFab {
+  .composerSheetHandle {
+    width: 38px;
+  }
+
+  /* Docked composer pill above the mobile nav, shown when collapsed. */
+  .composerDock {
     position: fixed;
     z-index: 22;
-    right: 20px;
-    bottom: calc(72px + env(safe-area-inset-bottom));
-    width: 52px;
-    height: 52px;
+    right: 14px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    left: 14px;
+    display: flex;
+    min-height: 52px;
     align-items: center;
+    gap: 11px;
     justify-content: center;
-    border: 0;
-    border-radius: 50%;
-    background: var(--cx-accent);
-    color: #fff;
+    border: 1px solid #e7eaee;
+    border-radius: 15px;
+    background: #fff;
+    color: #0b1220;
     cursor: pointer;
     box-shadow:
-      0 4px 14px color-mix(in srgb, var(--cx-accent) 50%, transparent),
-      0 2px 6px rgb(0 0 0 / 12%);
+      0 1px 2px rgba(15, 23, 42, .05),
+      0 12px 28px -18px rgba(15, 23, 42, .45);
+    padding: 7px 7px 7px 13px;
+    text-align: left;
     transition:
       transform 160ms ease,
       box-shadow 160ms ease;
   }
 
-  .composerFab:hover {
-    transform: translateY(-2px);
+  .composerDock:hover,
+  .composerDock:focus-visible {
+    outline: none;
     box-shadow:
-      0 6px 20px color-mix(in srgb, var(--cx-accent) 55%, transparent),
-      0 3px 8px rgb(0 0 0 / 14%);
+      0 1px 2px rgba(15, 23, 42, .07),
+      0 16px 32px -18px rgba(15, 23, 42, .5);
+    transform: translateY(-1px);
   }
 
-  .composerFab:active {
+  .composerDock:active {
     transform: translateY(0);
   }
 
-  .composerFabVisible {
+  .composerDockContext {
     display: inline-flex;
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
+  .dockContextChip {
+    display: inline-flex;
+    max-width: 112px;
+    min-height: 28px;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #eef0f2;
+    color: #64748b;
+    font: 700 12px/1 var(--font-sans);
+    padding: 4px 9px 4px 5px;
+    white-space: nowrap;
+  }
+
+  .dockContextChip > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dockSmartChip {
+    background: #eef0fb;
+    color: #5b5bd6;
+    padding-left: 7px;
+  }
+
+  .dockContextIcon,
+  .dockModelIcon {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: #fff;
+  }
+
+  .dockContextIcon {
+    background: transparent;
+  }
+
+  .dockContextIcon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .dockAvatarStack {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    padding-left: 1px;
+  }
+
+  .dockAvatar {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #fff;
+    border-radius: 999px;
+    background: #eef0f2;
+    overflow: hidden;
+  }
+
+  .dockAvatar + .dockAvatar {
+    margin-left: -9px;
+  }
+
+  .composerDockPlaceholder {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: #9aa3b0;
+    font: 600 14px/20px var(--font-sans);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composerDockSend {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #5b5bd6;
+    box-shadow: 0 6px 14px -6px rgba(91, 91, 214, .7);
+    color: #fff;
+  }
+
+  .composerDockSend svg {
+    width: 18px;
+    height: 18px;
+    transform: rotate(-90deg);
   }
 
   .mobileNav {
@@ -538,8 +668,9 @@
     padding: 0 12px calc(env(safe-area-inset-bottom) + 12px);
   }
 
-  .composerFab {
-    right: 16px;
+  .composerDock {
+    right: 12px;
+    left: 12px;
   }
 
   .mobileNav {

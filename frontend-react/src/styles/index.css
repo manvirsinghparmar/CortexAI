@@ -18,6 +18,10 @@
   --cx-accent-hover: #4F4FCC;
   --cx-accent-soft: #EEF0FB;
   --cx-accent-border: #E3E6F7;
+  --cx-feature-active-bg: #0B1220;
+  --cx-feature-active-hover: #111827;
+  --cx-feature-active-fg: #FFFFFF;
+  --cx-feature-active-ring: transparent;
 
   --cx-success: #16A34A;
   --cx-success-text: #15803D;
@@ -108,6 +112,10 @@
   --cx-accent-hover: #9C9CF5;
   --cx-accent-soft: #1D1D33;
   --cx-accent-border: #2A2A45;
+  --cx-feature-active-bg: #343467;
+  --cx-feature-active-hover: #40407B;
+  --cx-feature-active-fg: #FFFFFF;
+  --cx-feature-active-ring: #8B8BF0;
 
   --cx-success: #22C55E;
   --cx-success-text: #86EFAC;

@@ -2,6 +2,7 @@ import {
     expect,
     expectNoHorizontalOverflow,
     openMobilePanel,
+    restoreHistoryThread,
     test,
 } from "../fixtures/responsive-e2e.mjs";
 
@@ -16,7 +17,7 @@ test("mobile navigation switches between Ask, Compare, and History", async ({ re
     await expect(page.locator("#btnSingleMode")).toBeHidden();
     await expect(page.locator("#promptInput")).toHaveAttribute(
         "placeholder",
-        "Ask anything . . .",
+        "Ask anything…",
     );
 
     await openMobilePanel(page, "Compare");
@@ -62,7 +63,10 @@ test("mobile compose action clears an Ask thread while preserving Ask mode", asy
     await openMobilePanel(page, "History");
     await page.getByRole("button", { name: /Help debug a FastAPI stream/i }).click();
     await expect(page.getByText("Add a retry strategy")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open follow-up composer" })).toBeVisible();
 
+    await page.getByRole("button", { name: "Open follow-up composer" }).click();
+    await expect(page.locator("#promptInput")).toBeVisible();
     await page.locator("#promptInput").fill("Unsent follow-up");
     await page.getByRole("button", { name: "Start new chat" }).click();
 
@@ -70,8 +74,40 @@ test("mobile compose action clears an Ask thread while preserving Ask mode", asy
     await expect(page.locator("#promptInput")).toHaveValue("");
     await expect(page.locator("#promptInput")).toHaveAttribute(
         "placeholder",
-        "Ask anything . . .",
+        "Ask anything…",
     );
+    await expectNoHorizontalOverflow(page);
+});
+
+test("mobile docked follow-up composer opens and closes on answer screens", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await restoreHistoryThread(page, "Help debug a FastAPI stream");
+
+    const dock = page.getByRole("button", { name: "Open follow-up composer" });
+    await expect(dock).toBeVisible();
+    await expect(dock).toContainText("Smart");
+    await expect(dock).toContainText("Ask a follow-up…");
+    await expect(page.getByRole("button", { name: "Open composer" })).toHaveCount(0);
+    await expect(page.locator("#promptInput")).not.toBeVisible();
+
+    await dock.click();
+    const promptInput = page.locator("#promptInput");
+    await expect(promptInput).toBeVisible();
+    await expect(promptInput).toBeFocused();
+    await page.keyboard.type("Typed without a second tap");
+    await expect(promptInput).toHaveValue("Typed without a second tap");
+
+    await page.mouse.click(24, 160);
+    await expect(dock).toBeVisible();
+    await expect(page.locator("#promptInput")).not.toBeVisible();
+    await expectNoHorizontalOverflow(page);
+});
+
+test("mobile Ask response actions stay above the docked follow-up composer", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await restoreHistoryThread(page, "Help debug a FastAPI stream");
+
+    await expectResponseActionsClearDock(page);
     await expectNoHorizontalOverflow(page);
 });
 
@@ -83,6 +119,12 @@ test("mobile composer uses the refresh hairline shell with a soft focus state", 
         await openMobilePanel(page, mode);
         const textarea = page.locator("#promptInput");
         const composer = textarea.locator("xpath=../..");
+        await page.evaluate(() => {
+            if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        });
+        await expect
+            .poll(async () => composer.evaluate(element => getComputedStyle(element).borderColor))
+            .toBe("rgb(235, 237, 240)");
         const idle = await composer.evaluate(element => {
             const style = getComputedStyle(element);
             return {
@@ -271,8 +313,8 @@ async function composerMetrics(page) {
             navTop: nav?.getBoundingClientRect().top ?? 0,
             sendVisible:
                 !!sendRect
-                && sendRect.width >= 38
-                && sendRect.height >= 38
+                && sendRect.width >= 36
+                && sendRect.height >= 36
                 && sendRect.right <= window.innerWidth,
             textareaFontSize: Number.parseFloat(
                 textarea ? getComputedStyle(textarea).fontSize : "0",
@@ -280,4 +322,56 @@ async function composerMetrics(page) {
             textareaHeight: textareaRect?.height ?? 0,
         };
     });
+}
+
+async function expectResponseActionsClearDock(page) {
+    const transcript = page.locator('section[aria-label="Chat transcript"]');
+    const dock = page.getByRole("button", { name: "Open follow-up composer" });
+
+    await expect(dock).toBeVisible();
+    await transcript.evaluate(element => {
+        element.scrollTop = element.scrollHeight;
+    });
+
+    for (const name of [
+        "Copy response",
+        "Regenerate response",
+        "Helpful response",
+        "Not helpful response",
+    ]) {
+        await expect(page.getByRole("button", { name }).last()).toBeVisible();
+    }
+
+    const metrics = await page.evaluate(() => {
+        const isVisible = element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const dockRect = document
+            .querySelector('button[aria-label="Open follow-up composer"]')
+            ?.getBoundingClientRect();
+        const copyButtons = Array.from(document.querySelectorAll('button[aria-label="Copy response"]'))
+            .filter(isVisible);
+        const footerRect = copyButtons.at(-1)?.closest("footer")?.getBoundingClientRect();
+        const buttonRects = [
+            "Copy response",
+            "Regenerate response",
+            "Helpful response",
+            "Not helpful response",
+        ].map(name => {
+            const button = Array.from(document.querySelectorAll(`button[aria-label="${name}"]`))
+                .filter(isVisible)
+                .at(-1);
+            return button?.getBoundingClientRect();
+        });
+        return {
+            dockTop: dockRect?.top ?? 0,
+            footerBottom: footerRect?.bottom ?? Number.POSITIVE_INFINITY,
+            allButtonsAboveDock: buttonRects.every(rect => Boolean(rect) && rect.bottom <= (dockRect?.top ?? 0) - 8),
+        };
+    });
+
+    expect(metrics.footerBottom).toBeLessThanOrEqual(metrics.dockTop - 8);
+    expect(metrics.allButtonsAboveDock).toBe(true);
 }

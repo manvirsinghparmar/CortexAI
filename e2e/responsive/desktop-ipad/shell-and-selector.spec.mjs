@@ -157,6 +157,149 @@ test("desktop feature chips show accessible tooltips in Ask and Compare", async 
     await expectNoHorizontalOverflow(page);
 });
 
+test("dark theme gives enabled Ask feature chips a distinct accent state", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.getByRole("button", { name: "Account" }).click();
+    await page.getByRole("menuitem", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    const switches = [
+        page.getByRole("switch", { name: "Smart routing" }),
+        page.getByRole("switch", { name: "Research mode" }),
+        page.getByRole("switch", { name: "Prompt optimization" }),
+    ];
+    for (const featureSwitch of switches) {
+        if ((await featureSwitch.getAttribute("aria-checked")) !== "true") {
+            await featureSwitch.click();
+        }
+        await page.getByRole("heading", { level: 2 }).hover();
+        await expect(featureSwitch).toHaveCSS("background-color", "rgb(52, 52, 103)");
+        await expect(featureSwitch).toHaveCSS("color", "rgb(255, 255, 255)");
+        await expect(featureSwitch).toHaveCSS("box-shadow", /rgb\(139, 139, 240\)/);
+    }
+
+    await switches[0].click();
+    await expect(switches[0]).not.toHaveCSS("background-color", "rgb(52, 52, 103)");
+    await expect(switches[0]).not.toHaveCSS("color", "rgb(255, 255, 255)");
+});
+
+test("dark theme keeps the top Ask and Compare tabs legible", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.getByRole("button", { name: "Account" }).click();
+    await page.getByRole("menuitem", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    const modeNavigation = page.getByRole("navigation", { name: "Chat mode" });
+    const askTab = modeNavigation.getByRole("button", { name: "Ask" });
+    const compareTab = modeNavigation.getByRole("button", { name: "Compare" });
+
+    await expect(askTab).toHaveCSS("color", "rgb(241, 243, 246)");
+    await expect(askTab).toHaveCSS("border-bottom-color", "rgb(139, 139, 240)");
+    await expect(compareTab).toHaveCSS("color", "rgb(174, 182, 194)");
+
+    await compareTab.click();
+    await expect(compareTab).toHaveCSS("color", "rgb(241, 243, 246)");
+    await expect(compareTab).toHaveCSS("border-bottom-color", "rgb(139, 139, 240)");
+    await expect(askTab).toHaveCSS("color", "rgb(174, 182, 194)");
+});
+
+test("Compare sources and Improve use the same styling for matching states", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator("#btnCompareMode").click();
+
+    const sources = page.getByRole("switch", { name: "Compare with sources" });
+    const improve = page.getByRole("switch", { name: "Prompt optimization" });
+    const promptInput = page.locator("#promptInput");
+
+    await sources.click();
+    await promptInput.hover();
+    await expectMatchingChipStyles(sources, improve);
+
+    await sources.click();
+    await improve.click();
+    await promptInput.hover();
+    await expectMatchingChipStyles(sources, improve);
+
+    await page.getByRole("button", { name: "Account" }).click();
+    await page.getByRole("menuitem", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expectMatchingChipStyles(sources, improve);
+
+    await sources.click();
+    await improve.click();
+    await promptInput.hover();
+    await expectMatchingChipStyles(sources, improve);
+});
+
+test("Improve keeps response cards hidden until optimization resolves", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    let releaseOptimization;
+    const optimizationGate = new Promise(resolve => {
+        releaseOptimization = resolve;
+    });
+    await page.route("**/v1/optimize", async route => {
+        await optimizationGate;
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                original_prompt: "rough browser prompt",
+                optimized_prompt: "Clear browser prompt",
+                was_optimized: true,
+                server_optimization_enabled: true,
+                optimization_status: "optimized",
+            }),
+        });
+    });
+    await page.route("**/v1/chat/stream", route => route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/x-ndjson" },
+        body: [
+            JSON.stringify({ type: "start", provider: "openai", model: "gpt-5.1" }),
+            JSON.stringify({ type: "line", text: "Optimized browser answer." }),
+            JSON.stringify({
+                type: "response_done",
+                response: {
+                    provider: "openai",
+                    model: "gpt-5.1",
+                    text: "Optimized browser answer.",
+                    latency_ms: 300,
+                    estimated_cost: 0.001,
+                    token_usage: {
+                        prompt_tokens: 10,
+                        completion_tokens: 10,
+                        total_tokens: 20,
+                    },
+                    web_source_items: [],
+                },
+            }),
+            JSON.stringify({ type: "done", session_id: "optimized-session" }),
+            "",
+        ].join("\n"),
+    }));
+
+    await page.getByRole("switch", { name: "Prompt optimization" }).click();
+    await page.locator("#promptInput").fill("rough browser prompt");
+    await page.locator("#submitBtn").click();
+
+    const pendingTurn = page.locator("[data-turn-id]").last();
+    await expect(pendingTurn.getByRole("status")).toContainText("Improving your prompt");
+    await expect(pendingTurn.locator("article")).toHaveCount(0);
+    await expect(page.getByRole("tablist", { name: "Compare model responses" })).toHaveCount(0);
+
+    releaseOptimization();
+
+    await expect(pendingTurn.locator("article")).toHaveCount(1);
+    await expect(pendingTurn).toContainText("Optimized browser answer.");
+});
+
 test("desktop Compare picker remains visible and selectable", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -224,6 +367,26 @@ async function expectChipTooltip(page, switchName, tooltipText) {
     await chip.hover();
     await expect(tooltip).toBeVisible();
     await expect(tooltip).toHaveCSS("opacity", "1");
+}
+
+async function chipVisualStyle(chip) {
+    return chip.evaluate(element => {
+        const style = getComputedStyle(element);
+        return {
+            backgroundColor: style.backgroundColor,
+            borderColor: style.borderColor,
+            boxShadow: style.boxShadow,
+            color: style.color,
+        };
+    });
+}
+
+async function expectMatchingChipStyles(first, second) {
+    await expect.poll(async () => {
+        const firstStyle = await chipVisualStyle(first);
+        const secondStyle = await chipVisualStyle(second);
+        return JSON.stringify(firstStyle) === JSON.stringify(secondStyle);
+    }).toBe(true);
 }
 
 async function expectSoftComposerShell(page) {

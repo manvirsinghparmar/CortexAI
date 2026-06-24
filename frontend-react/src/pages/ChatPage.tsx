@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { fetchHistory } from "../api/history";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { ExampleChips } from "../components/shared/ExampleChips";
 import { CortexIcon } from "../components/shared/CortexIcon";
+import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
+import { DEFAULT_MODELS } from "../config/defaultModels";
+import { getModelPresentation } from "../config/modelPresentation";
 import { formatHistoryDateTime } from "../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
@@ -15,7 +19,7 @@ import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
 import { useTheme } from "../hooks/useTheme";
 import { useChatStore } from "../store/chatStore";
-import type { ChatMode, HistoryThread } from "../types";
+import type { ChatMode, HistoryThread, ModelCatalogItem } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
 import styles from "./ChatPage.module.css";
 
@@ -45,7 +49,10 @@ export function ChatPage() {
   const startNewChat = useChatStore((s) => s.startNewChat);
   const setHistory = useChatStore((s) => s.setHistory);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
+  const hasTurns = useChatStore((s) => s.turns.length > 0);
   const authEnabled = cognitoConfig?.enabled ?? false;
+  const showComposerSheet = !composerCollapsed;
+  const showComposerBackdrop = showComposerSheet && hasTurns;
 
   useEffect(() => {
     if (!authLoading) void loadHistory();
@@ -58,6 +65,10 @@ export function ChatPage() {
     prevStreamingRef.current = streaming;
   }, [streaming]);
 
+  useEffect(() => {
+    if (!hasTurns) setComposerCollapsed(false);
+  }, [hasTurns]);
+
   const handleSelectHistoryThread = async (thread: HistoryThread) => {
     try {
       const entries = thread.sessionId
@@ -66,6 +77,7 @@ export function ChatPage() {
       const completeThread = buildHistoryThreads(entries)[0] ?? thread;
       hydrateFromHistoryThread(completeThread);
       setMobilePanel("chat");
+      setComposerCollapsed(true);
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");
     }
@@ -74,12 +86,25 @@ export function ChatPage() {
   const handleMobileMode = (nextMode: ChatMode) => {
     setMode(nextMode);
     setMobilePanel("chat");
+    setComposerCollapsed(hasTurns);
   };
 
   const handleStartNewChat = () => {
     cancel();
     startNewChat();
     setMobilePanel("chat");
+    setComposerCollapsed(false);
+  };
+
+  const handleOpenMobileComposer = () => {
+    flushSync(() => setComposerCollapsed(false));
+
+    const promptInput = document.getElementById("promptInput");
+    if (!(promptInput instanceof HTMLTextAreaElement) || promptInput.disabled) return;
+
+    promptInput.focus({ preventScroll: true });
+    const cursorPosition = promptInput.value.length;
+    promptInput.setSelectionRange(cursorPosition, cursorPosition);
   };
 
   const handleLogout = () => {
@@ -88,6 +113,7 @@ export function ChatPage() {
     setHistory([]);
     setHistorySearch("");
     setMobilePanel("chat");
+    setComposerCollapsed(false);
     void logout();
   };
 
@@ -187,7 +213,7 @@ export function ChatPage() {
           <>
             {/* Dim backdrop — mobile only, shown when sheet is open */}
             <div
-              className={`${styles.composerBackdrop} ${!composerCollapsed ? styles.composerBackdropVisible : ""}`}
+              className={`${styles.composerBackdrop} ${showComposerBackdrop ? styles.composerBackdropVisible : ""}`}
               role="presentation"
               onClick={() => setComposerCollapsed(true)}
             />
@@ -212,15 +238,13 @@ export function ChatPage() {
               <PromptComposer models={models} />
             </div>
 
-            {/* Mobile FAB — shown when composer is collapsed */}
-            <button
-              type="button"
-              className={`${styles.composerFab} ${composerCollapsed ? styles.composerFabVisible : ""}`}
-              aria-label="Open composer"
-              onClick={() => setComposerCollapsed(false)}
-            >
-              <CortexIcon name="new-chat" size={22} />
-            </button>
+            {/* Docked mobile composer pill, shown when the sheet is collapsed */}
+            {composerCollapsed && (
+              <MobileComposerDock
+                models={models}
+                onOpen={handleOpenMobileComposer}
+              />
+            )}
           </>
         )}
 
@@ -268,6 +292,133 @@ function BackendBanner() {
       FastAPI backend at port 8000.
     </div>
   );
+}
+
+function MobileComposerDock({
+  models,
+  onOpen,
+}: {
+  models: ModelCatalogItem[];
+  onOpen: () => void;
+}) {
+  const availableModels = models.length > 0 ? models : DEFAULT_MODELS;
+  const mode = useChatStore((s) => s.mode);
+  const smartMode = useChatStore((s) => s.smartMode);
+  const selectedModelKey = useChatStore((s) => s.selectedModelKey);
+  const compareModelKeys = useChatStore((s) => s.compareModelKeys);
+
+  return (
+    <button
+      type="button"
+      className={styles.composerDock}
+      aria-label="Open follow-up composer"
+      onClick={onOpen}
+    >
+      <span className={styles.composerDockContext}>
+        {mode === "single" && smartMode ? (
+          <span className={`${styles.dockContextChip} ${styles.dockSmartChip}`}>
+            <span className={styles.dockContextIcon} aria-hidden="true">
+              <CortexIcon name="smart" size={14} />
+            </span>
+            <span>Smart</span>
+          </span>
+        ) : mode === "single" ? (
+          <ModelDockChip modelKey={selectedModelKey} models={availableModels} />
+        ) : (
+          <CompareDockChip modelKeys={compareModelKeys} models={availableModels} />
+        )}
+      </span>
+      <span className={styles.composerDockPlaceholder}>Ask a follow-up…</span>
+      <span className={styles.composerDockSend} aria-hidden="true">
+        <CortexIcon name="send" size={18} />
+      </span>
+    </button>
+  );
+}
+
+function ModelDockChip({
+  modelKey,
+  models,
+}: {
+  modelKey: string;
+  models: ModelCatalogItem[];
+}) {
+  const model = resolveDockModel(modelKey, models, 0);
+  const meta = getModelPresentation(model.provider, model.model);
+
+  return (
+    <span className={styles.dockContextChip}>
+      <span className={styles.dockModelIcon}>
+        <ProviderLogo
+          provider={model.provider}
+          logoUrl={meta.logoUrl}
+          color={meta.color}
+          size={14}
+        />
+      </span>
+      <span>{meta.label}</span>
+    </span>
+  );
+}
+
+function CompareDockChip({
+  modelKeys,
+  models,
+}: {
+  modelKeys: [string, string, string];
+  models: ModelCatalogItem[];
+}) {
+  const stackModels = modelKeys
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((key, index) => resolveDockModel(key, models, index));
+
+  while (stackModels.length < 2 && models[stackModels.length]) {
+    stackModels.push(models[stackModels.length]!);
+  }
+
+  return (
+    <span className={styles.dockContextChip}>
+      <span className={styles.dockAvatarStack} aria-hidden="true">
+        {stackModels.map((model, index) => {
+          const meta = getModelPresentation(model.provider, model.model);
+          return (
+            <span
+              key={`${model.provider}:${model.model}:${index}`}
+              className={styles.dockAvatar}
+            >
+              <ProviderLogo
+                provider={model.provider}
+                logoUrl={meta.logoUrl}
+                color={meta.color}
+                size={16}
+              />
+            </span>
+          );
+        })}
+      </span>
+      <span>Compare</span>
+    </span>
+  );
+}
+
+function resolveDockModel(
+  key: string,
+  models: ModelCatalogItem[],
+  fallbackIndex: number,
+): Pick<ModelCatalogItem, "provider" | "model"> {
+  const found = models.find((candidate) => `${candidate.provider}:${candidate.model}` === key);
+  if (found) return found;
+
+  const separator = key.indexOf(":");
+  if (separator >= 0) {
+    return {
+      provider: key.slice(0, separator),
+      model: key.slice(separator + 1),
+    };
+  }
+
+  return models[fallbackIndex] ?? models[0] ?? DEFAULT_MODELS[0]!;
 }
 
 function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThread) => void }) {

@@ -2560,9 +2560,12 @@ def delete_llm_history_entry(db: Session, user_id: UUID, entry_id: int) -> bool:
     return bool(result.rowcount and result.rowcount > 0)
 
 
-def clear_llm_history(db: Session, user_id: UUID) -> int:
+def clear_llm_history(db: Session, user_id: UUID, session_id: str | None = None) -> int:
     """
-    Clear all history entries for a user from llm/routing audit tables.
+    Clear history entries for a user from llm/routing audit tables.
+
+    When session_id is provided, only entries in that user-visible thread are
+    deleted. Invalid session IDs are treated as an empty match.
     """
     from db.tables import get_table
 
@@ -2571,7 +2574,24 @@ def clear_llm_history(db: Session, user_id: UUID) -> int:
     routing_decisions = get_table("routing_decisions")
     routing_attempts = get_table("routing_attempts")
 
-    user_request_ids_subq = select(llm_requests.c.id).where(llm_requests.c.user_id == user_id)
+    filters = [llm_requests.c.user_id == user_id]
+    req_cols = {col.name for col in llm_requests.columns}
+    if session_id:
+        if "session_id" not in req_cols:
+            return 0
+        parsed_session_id = coerce_uuid(session_id)
+        if parsed_session_id is None:
+            return 0
+        session_text = str(parsed_session_id).lower()
+        session_col_text = func.lower(cast(llm_requests.c.session_id, String))
+        filters.append(
+            or_(
+                session_col_text == session_text,
+                func.replace(session_col_text, "-", "") == parsed_session_id.hex.lower(),
+            )
+        )
+
+    user_request_ids_subq = select(llm_requests.c.id).where(and_(*filters))
     decision_ids_subq = select(routing_decisions.c.id).where(
         routing_decisions.c.llm_request_id.in_(user_request_ids_subq)
     )
@@ -2579,7 +2599,7 @@ def clear_llm_history(db: Session, user_id: UUID) -> int:
     db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
     db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id.in_(user_request_ids_subq)))
     db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id.in_(user_request_ids_subq)))
-    deleted = db.execute(delete(llm_requests).where(llm_requests.c.user_id == user_id))
+    deleted = db.execute(delete(llm_requests).where(and_(*filters)))
     return int(deleted.rowcount or 0)
 
 

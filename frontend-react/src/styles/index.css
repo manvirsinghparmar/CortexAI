@@ -25,8 +25,10 @@
 
   --cx-success: #16A34A;
   --cx-success-text: #15803D;
-  --cx-success-soft: #EEFAF2;
-  --cx-success-border: #D6F0E0;
+  --cx-success-soft: #ECFAF1;
+  --cx-success-border: #BBE9CB;
+  --cx-danger: #DC2626;
+  --cx-danger-soft: #FDEAEA;
   --cx-warn-text: #B45309;
   --cx-warn-soft: #FEF3E2;
 

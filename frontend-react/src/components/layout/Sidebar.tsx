@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { formatHistoryDateTime } from "../../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../../history/historyThreads";
+import { normalizeSessionId } from "../../session/activeSession";
 import { useChatStore } from "../../store/chatStore";
 import { useHistory } from "../../hooks/useHistory";
 import type { HistoryThread, WhoAmIResponse } from "../../types";
@@ -30,15 +31,16 @@ export function Sidebar({
   onLogout,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [confirmingDeleteKey, setConfirmingDeleteKey] = useState<string | null>(null);
+  const deleteConfirmTimerRef = useRef<number | null>(null);
   const history = useChatStore((s) => s.history);
-  const setHistory = useChatStore((s) => s.setHistory);
   const historySearch = useChatStore((s) => s.historySearch);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const sessionId = useChatStore((s) => s.sessionId);
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
   const startNewChat = useChatStore((s) => s.startNewChat);
-  const { clear } = useHistory();
+  const { clear, removeThread } = useHistory();
 
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(0, 20);
@@ -50,10 +52,69 @@ export function Sidebar({
   const sessionLabel = sessionId ? formatSessionId(sessionId) : userLabel;
   const sessionStatus = sessionId || loggedIn ? "Session active" : planLabel;
 
+  useEffect(() => {
+    return () => {
+      if (deleteConfirmTimerRef.current !== null) {
+        window.clearTimeout(deleteConfirmTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showDeleteConfirm = (threadKey: string) => {
+    if (deleteConfirmTimerRef.current !== null) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+    setConfirmingDeleteKey(threadKey);
+    deleteConfirmTimerRef.current = window.setTimeout(() => {
+      setConfirmingDeleteKey((current) => (current === threadKey ? null : current));
+      deleteConfirmTimerRef.current = null;
+    }, 3000);
+  };
+
+  const clearDeleteConfirm = () => {
+    if (deleteConfirmTimerRef.current !== null) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteKey(null);
+  };
+
   const handleClearAll = async () => {
-    if (!window.confirm("Clear chat history?")) return;
-    await clear(sessionId ?? undefined);
-    setHistory([]);
+    const scopedSessionId = normalizeSessionId(sessionId);
+    const message = scopedSessionId ? "Clear this chat?" : "Clear all chat history?";
+    if (!window.confirm(message)) return;
+
+    const cleared = await clear(scopedSessionId ?? undefined);
+    if (cleared && scopedSessionId) {
+      startNewChat();
+    }
+  };
+
+  const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>, thread: HistoryThread) => {
+    event.stopPropagation();
+    showDeleteConfirm(thread.key);
+  };
+
+  const handleConfirmDeleteThread = async (
+    event: MouseEvent<HTMLButtonElement>,
+    thread: HistoryThread,
+  ) => {
+    event.stopPropagation();
+    clearDeleteConfirm();
+
+    const deleted = await removeThread(thread);
+    if (
+      deleted &&
+      normalizeSessionId(thread.sessionId) &&
+      normalizeSessionId(thread.sessionId) === normalizeSessionId(sessionId)
+    ) {
+      startNewChat();
+    }
+  };
+
+  const handleCancelDelete = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    clearDeleteConfirm();
   };
 
   const sidebarClassName = isCollapsed
@@ -171,31 +232,71 @@ export function Sidebar({
                         : styles.modeTagMixed,
                   ].join(" ");
 
+                  const isConfirmingDelete = confirmingDeleteKey === thread.key;
+
                   return (
-                    <li key={thread.key}>
-                      <button
-                        type="button"
-                        className={
-                          thread.sessionId === sessionId ? styles.historyItemActive : undefined
-                        }
-                        data-history-thread={thread.key}
-                        onClick={() => onSelectThread(thread)}
-                        title={thread.title}
-                        aria-label={`${thread.title}. ${modeLabel}, ${
-                          dateTimeLabel || "Date unavailable"
-                        }`}
-                        aria-current={thread.sessionId === sessionId ? "page" : undefined}
-                      >
-                        <span className={styles.historyTitle} data-history-title>
-                          {thread.title}
-                        </span>
-                        <small className={styles.historyMeta}>
-                          <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
-                          <time dateTime={thread.latestTimestamp}>
-                            {timeLabel || "Date unavailable"}
-                          </time>
-                        </small>
-                      </button>
+                    <li key={thread.key} className={styles.historyItemRow}>
+                      {isConfirmingDelete ? (
+                        <div className={styles.historyDeleteConfirm} role="group" aria-label="Confirm delete chat">
+                          <span className={styles.historyDeleteConfirmText}>Delete?</span>
+                          <button
+                            type="button"
+                            className={styles.historyDeleteConfirmButton}
+                            onClick={(event) => void handleConfirmDeleteThread(event, thread)}
+                            aria-label="Confirm delete chat"
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.historyDeleteCancelButton}
+                            onClick={handleCancelDelete}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className={
+                            thread.sessionId === sessionId
+                              ? `${styles.historyThreadSurface} ${styles.historyItemActive}`
+                              : styles.historyThreadSurface
+                          }
+                          onClick={() => onSelectThread(thread)}
+                          title={thread.title}
+                        >
+                          <div className={styles.historyTop}>
+                            <button
+                              type="button"
+                              className={styles.historyTitleButton}
+                              data-history-thread={thread.key}
+                              aria-label={`${thread.title}. ${modeLabel}, ${
+                                dateTimeLabel || "Date unavailable"
+                              }`}
+                              aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                            >
+                              <span className={styles.historyTitle} data-history-title>
+                                {thread.title}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.historyDeleteButton}
+                              onClick={(event) => handleDeleteClick(event, thread)}
+                              aria-label="Delete chat"
+                              title="Delete chat"
+                            >
+                              <CortexIcon name="trash" size={15} strokeWidth={1.8} />
+                            </button>
+                          </div>
+                          <small className={styles.historyMeta}>
+                            <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
+                            <time dateTime={thread.latestTimestamp}>
+                              {timeLabel || "Date unavailable"}
+                            </time>
+                          </small>
+                        </div>
+                      )}
                     </li>
                   );
                 })}

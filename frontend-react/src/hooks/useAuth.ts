@@ -5,6 +5,7 @@ import {
   buildCognitoLoginUrl,
   buildCognitoLogoutUrl,
 } from "../api/auth";
+import { markFreshLoginPending } from "../session/activeSession";
 import type { CognitoConfig, WhoAmIResponse } from "../types";
 
 interface AuthState {
@@ -71,6 +72,7 @@ export function useAuth() {
     if (!cognitoConfig?.enabled) return;
     try {
       const url = buildCognitoLoginUrl(cognitoConfig);
+      markFreshLoginPending();
       window.location.href = url;
     } catch {
       // Cognito not fully configured
@@ -82,6 +84,7 @@ export function useAuth() {
     try {
       await fetch("/v1/auth/logout", { method: "POST", credentials: "include" });
     } finally {
+      markFreshLoginPending();
       setState((prev) => ({ ...prev, whoAmI: null, loggedIn: false }));
       if (cognitoConfig?.enabled) {
         try {

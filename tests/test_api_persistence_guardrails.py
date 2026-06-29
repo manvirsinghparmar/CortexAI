@@ -1437,6 +1437,31 @@ def test_history_can_filter_by_session_id_and_new_session_flag(db_mode_fastapi_c
     assert len(payload_b) == 1
     assert payload_b[0]["session_id"] == session_b
 
+    cleared_a = client.delete(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_a},
+    )
+    assert cleared_a.status_code == 204
+
+    only_a_after_clear = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_a, "limit": 200},
+    )
+    assert only_a_after_clear.status_code == 200
+    assert only_a_after_clear.json() == []
+
+    only_b_after_clear = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_b, "limit": 200},
+    )
+    assert only_b_after_clear.status_code == 200
+    payload_b_after_clear = only_b_after_clear.json()
+    assert len(payload_b_after_clear) == 1
+    assert payload_b_after_clear[0]["session_id"] == session_b
+
 
 @pytest.mark.integration
 def test_history_includes_web_source_items_when_research_is_used(

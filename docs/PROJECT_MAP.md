@@ -65,7 +65,8 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
-  - History thread grouping and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`
+  - History thread grouping, per-thread delete, and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
+  - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
   - Top-right Cognito account menu: `frontend-react/src/components/layout/AccountMenu.tsx`
@@ -105,9 +106,10 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Change React history behavior:
   1. Keep `/v1/history` row-level persistence semantics in `server/routes/history.py` and `db/repository.py`.
   2. Update session/thread normalization in `frontend-react/src/history/historyThreads.ts`.
-  3. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.
-  4. Cover Ask session grouping and Compare `request_group_id` grouping in React and API tests.
-  5. Update `README.md` and related docs
+  3. Update active-thread browser persistence in `frontend-react/src/session/activeSession.ts` when reload/fresh-login behavior changes.
+  4. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.
+  5. Cover Ask session grouping and Compare `request_group_id` grouping in React and API tests.
+  6. Update `README.md` and related docs
 
 - Change routing behavior:
   1. Update files in `orchestrator/`

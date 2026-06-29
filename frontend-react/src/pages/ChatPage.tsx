@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { fetchHistory } from "../api/history";
 import { PromptComposer } from "../components/composer/PromptComposer";
@@ -18,6 +18,7 @@ import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
 import { useTheme } from "../hooks/useTheme";
+import { normalizeSessionId } from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
 import type { ChatMode, HistoryThread, ModelCatalogItem } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
@@ -35,7 +36,7 @@ export function ChatPage() {
   const { whoAmI, cognitoConfig, loading: authLoading, loggedIn, login, logout } = useAuth();
   const { models, error: modelsError } = useModels(!authLoading);
   const backendOffline = !!modelsError && !authLoading;
-  const { load: loadHistory } = useHistory();
+  const { load: loadHistory, removeThread } = useHistory();
   const { submit, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
@@ -45,6 +46,7 @@ export function ChatPage() {
   const setError = useChatStore((s) => s.setError);
   const hydrateFromHistoryThread = useChatStore((s) => s.hydrateFromHistoryThread);
   const mode = useChatStore((s) => s.mode);
+  const sessionId = useChatStore((s) => s.sessionId);
   const setMode = useChatStore((s) => s.setMode);
   const startNewChat = useChatStore((s) => s.startNewChat);
   const setHistory = useChatStore((s) => s.setHistory);
@@ -55,7 +57,7 @@ export function ChatPage() {
   const showComposerBackdrop = showComposerSheet && hasTurns;
 
   useEffect(() => {
-    if (!authLoading) void loadHistory();
+    if (!authLoading) void loadHistory({ restoreActiveTranscript: true });
   }, [authLoading, loadHistory]);
 
   // Collapse the composer sheet on mobile as soon as the user submits
@@ -80,6 +82,20 @@ export function ChatPage() {
       setComposerCollapsed(true);
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");
+    }
+  };
+
+  const handleDeleteHistoryThread = async (thread: HistoryThread) => {
+    const deleted = await removeThread(thread);
+    if (
+      deleted &&
+      normalizeSessionId(thread.sessionId) &&
+      normalizeSessionId(thread.sessionId) === normalizeSessionId(sessionId)
+    ) {
+      cancel();
+      startNewChat();
+      setMobilePanel("chat");
+      setComposerCollapsed(false);
     }
   };
 
@@ -190,7 +206,10 @@ export function ChatPage() {
         <div className={styles.canvas}>
           {backendOffline && <BackendBanner />}
           {mobilePanel === "history" ? (
-            <MobileHistory onSelectThread={(thread) => void handleSelectHistoryThread(thread)} />
+            <MobileHistory
+              onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
+              onDeleteThread={(thread) => void handleDeleteHistoryThread(thread)}
+            />
           ) : (
             <>
               <ResultsSection />
@@ -421,7 +440,15 @@ function resolveDockModel(
   return models[fallbackIndex] ?? models[0] ?? DEFAULT_MODELS[0]!;
 }
 
-function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThread) => void }) {
+function MobileHistory({
+  onSelectThread,
+  onDeleteThread,
+}: {
+  onSelectThread: (thread: HistoryThread) => void;
+  onDeleteThread: (thread: HistoryThread) => void;
+}) {
+  const [confirmingDeleteKey, setConfirmingDeleteKey] = useState<string | null>(null);
+  const deleteConfirmTimerRef = useRef<number | null>(null);
   const history = useChatStore((s) => s.history);
   const historySearch = useChatStore((s) => s.historySearch);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
@@ -432,6 +459,49 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
   const historyGroups = useMemo(() => {
     return groupMobileHistoryThreads(filteredThreads);
   }, [filteredThreads]);
+
+  useEffect(() => {
+    return () => {
+      if (deleteConfirmTimerRef.current !== null) {
+        window.clearTimeout(deleteConfirmTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showDeleteConfirm = (threadKey: string) => {
+    if (deleteConfirmTimerRef.current !== null) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+    setConfirmingDeleteKey(threadKey);
+    deleteConfirmTimerRef.current = window.setTimeout(() => {
+      setConfirmingDeleteKey((current) => (current === threadKey ? null : current));
+      deleteConfirmTimerRef.current = null;
+    }, 3000);
+  };
+
+  const clearDeleteConfirm = () => {
+    if (deleteConfirmTimerRef.current !== null) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteKey(null);
+  };
+
+  const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>, thread: HistoryThread) => {
+    event.stopPropagation();
+    showDeleteConfirm(thread.key);
+  };
+
+  const handleConfirmDelete = (event: MouseEvent<HTMLButtonElement>, thread: HistoryThread) => {
+    event.stopPropagation();
+    clearDeleteConfirm();
+    onDeleteThread(thread);
+  };
+
+  const handleCancelDelete = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    clearDeleteConfirm();
+  };
 
   return (
     <section className={styles.mobileHistory} aria-label="History">
@@ -450,37 +520,89 @@ function MobileHistory({ onSelectThread }: { onSelectThread: (thread: HistoryThr
           <li key={group.key} className={styles.mobileHistoryGroup}>
             <span className={styles.mobileHistoryGroupLabel}>{group.label}</span>
             <ul className={styles.mobileHistoryList}>
-              {group.threads.map((thread) => (
-                <li key={thread.key}>
-                  <button
-                    type="button"
-                    className={thread.sessionId === sessionId ? styles.mobileHistoryActive : ""}
-                    onClick={() => onSelectThread(thread)}
-                    aria-current={thread.sessionId === sessionId ? "page" : undefined}
-                  >
-                    <span className={styles.mobileHistoryTop}>
-                      <span
-                        className={styles.mobileHistoryMode}
-                        data-mode={thread.mode}
+              {group.threads.map((thread) => {
+                const isConfirmingDelete = confirmingDeleteKey === thread.key;
+                const dateTimeLabel = formatHistoryDateTime(thread.latestTimestamp);
+
+                return (
+                  <li key={thread.key} className={styles.mobileHistoryItem}>
+                    {isConfirmingDelete ? (
+                      <div
+                        className={styles.mobileHistoryDeleteConfirm}
+                        role="group"
+                        aria-label="Confirm delete chat"
                       >
-                        {formatHistoryMode(thread.mode)}
-                      </span>
-                      <time dateTime={thread.latestTimestamp}>
-                        {formatHistoryDateTime(thread.latestTimestamp) || "Date unavailable"}
-                      </time>
-                    </span>
-                    <span className={styles.mobileHistoryTitle}>{thread.title}</span>
-                    <small className={styles.mobileHistoryMeta}>
-                      <span>
-                        {thread.turnCount}{" "}
-                        {thread.turnCount === 1 ? "turn" : "turns"}
-                      </span>
-                      <span aria-hidden="true">·</span>
-                      <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>
-                    </small>
-                  </button>
-                </li>
-              ))}
+                        <span className={styles.mobileHistoryDeleteConfirmText}>Delete?</span>
+                        <button
+                          type="button"
+                          className={styles.mobileHistoryDeleteConfirmButton}
+                          onClick={(event) => handleConfirmDelete(event, thread)}
+                          aria-label="Confirm delete chat"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.mobileHistoryDeleteCancelButton}
+                          onClick={handleCancelDelete}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className={
+                          thread.sessionId === sessionId
+                            ? `${styles.mobileHistorySurface} ${styles.mobileHistoryActive}`
+                            : styles.mobileHistorySurface
+                        }
+                        onClick={() => onSelectThread(thread)}
+                      >
+                        <span className={styles.mobileHistoryTop}>
+                          <span
+                            className={styles.mobileHistoryMode}
+                            data-mode={thread.mode}
+                          >
+                            {formatHistoryMode(thread.mode)}
+                          </span>
+                          <time dateTime={thread.latestTimestamp}>
+                            {dateTimeLabel || "Date unavailable"}
+                          </time>
+                        </span>
+                        <span className={styles.mobileHistoryTitleRow}>
+                          <button
+                            type="button"
+                            className={styles.mobileHistoryTitleButton}
+                            aria-label={`${thread.title}. ${formatHistoryMode(thread.mode)}, ${
+                              dateTimeLabel || "Date unavailable"
+                            }`}
+                            aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                          >
+                            <span className={styles.mobileHistoryTitle}>{thread.title}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.mobileHistoryDeleteButton}
+                            onClick={(event) => handleDeleteClick(event, thread)}
+                            aria-label="Delete chat"
+                            title="Delete chat"
+                          >
+                            <CortexIcon name="trash" size={15} strokeWidth={1.8} />
+                          </button>
+                        </span>
+                        <small className={styles.mobileHistoryMeta}>
+                          <span>
+                            {thread.turnCount}{" "}
+                            {thread.turnCount === 1 ? "turn" : "turns"}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>
+                        </small>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </li>
         ))}

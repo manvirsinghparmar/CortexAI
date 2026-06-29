@@ -1,45 +1,141 @@
 import { useCallback } from "react";
 import { fetchHistory, deleteHistoryEntry, clearHistory } from "../api/history";
+import { buildHistoryThreads } from "../history/historyThreads";
+import {
+  loadActiveSessionId,
+  normalizeSessionId,
+} from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
+import type { HistoryEntry, HistoryThread } from "../types";
+
+interface LoadHistoryOptions {
+  sessionId?: string;
+  restoreActiveTranscript?: boolean;
+}
 
 export function useHistory() {
   const { setHistory, setError } = useChatStore();
 
   const load = useCallback(
-    async (sessionId?: string) => {
+    async (input?: string | LoadHistoryOptions) => {
+      const options: LoadHistoryOptions =
+        typeof input === "string" ? { sessionId: input } : input ?? {};
       try {
-        const entries = await fetchHistory(500, sessionId);
+        const entries = await fetchHistory(500, options.sessionId);
         setHistory(entries);
+        if (options.restoreActiveTranscript) {
+          await restorePersistedActiveTranscript(entries);
+        }
+        return entries;
       } catch (err) {
         console.warn("History load failed", err);
+        return [];
       }
     },
     [setHistory],
   );
 
   const remove = useCallback(
-    async (id: number, sessionId?: string) => {
+    async (id: number) => {
       try {
         await deleteHistoryEntry(id);
-        await load(sessionId);
+        const currentHistory = useChatStore.getState().history;
+        setHistory(currentHistory.filter((entry) => entry.id !== id));
+        return true;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete history entry");
+        return false;
       }
     },
-    [load, setError],
+    [setHistory, setError],
+  );
+
+  const removeThread = useCallback(
+    async (thread: HistoryThread) => {
+      const entryIds = [...new Set(thread.entries.map((entry) => entry.id))].filter(
+        (id) => Number.isFinite(id),
+      );
+      if (entryIds.length === 0) return false;
+
+      try {
+        for (const id of entryIds) {
+          await deleteHistoryEntry(id);
+        }
+
+        const removedIds = new Set(entryIds);
+        const currentHistory = useChatStore.getState().history;
+        setHistory(currentHistory.filter((entry) => !removedIds.has(entry.id)));
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to delete chat");
+        return false;
+      }
+    },
+    [setHistory, setError],
   );
 
   const clear = useCallback(
     async (sessionId?: string) => {
       try {
         await clearHistory(sessionId);
-        setHistory([]);
+        const normalizedSessionId = normalizeSessionId(sessionId);
+        if (!normalizedSessionId) {
+          setHistory([]);
+          return true;
+        }
+
+        const currentHistory = useChatStore.getState().history;
+        setHistory(
+          currentHistory.filter(
+            (entry) => normalizeSessionId(entry.session_id) !== normalizedSessionId,
+          ),
+        );
+        return true;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to clear history");
+        return false;
       }
     },
     [setHistory, setError],
   );
 
-  return { load, remove, clear };
+  return { load, remove, removeThread, clear };
+}
+
+async function restorePersistedActiveTranscript(entries: HistoryEntry[]): Promise<void> {
+  const state = useChatStore.getState();
+  if (state.streaming || state.turns.length > 0) return;
+
+  const activeSessionId = loadActiveSessionId();
+  if (!activeSessionId) return;
+
+  const restored = hydrateSessionFromEntries(activeSessionId, entries);
+  if (restored) return;
+
+  const sessionEntries = await fetchHistory(500, activeSessionId).catch(() => []);
+  if (sessionEntries.length > 0) {
+    const merged = mergeHistoryEntries(entries, sessionEntries);
+    useChatStore.getState().setHistory(merged);
+    hydrateSessionFromEntries(activeSessionId, sessionEntries);
+    return;
+  }
+
+  useChatStore.getState().setSessionId(null);
+}
+
+function hydrateSessionFromEntries(sessionId: string, entries: HistoryEntry[]): boolean {
+  const matchingEntries = entries.filter(
+    (entry) => normalizeSessionId(entry.session_id) === sessionId,
+  );
+  const thread = buildHistoryThreads(matchingEntries)[0];
+  if (!thread) return false;
+
+  useChatStore.getState().hydrateFromHistoryThread(thread);
+  return true;
+}
+
+function mergeHistoryEntries(left: HistoryEntry[], right: HistoryEntry[]): HistoryEntry[] {
+  const merged = new Map<number, HistoryEntry>();
+  [...left, ...right].forEach((entry) => merged.set(entry.id, entry));
+  return [...merged.values()];
 }

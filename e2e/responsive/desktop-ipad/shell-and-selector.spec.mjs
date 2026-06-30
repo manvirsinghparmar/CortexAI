@@ -207,6 +207,43 @@ test("dark theme keeps the top Ask and Compare tabs legible", async ({ responsiv
     await expect(askTab).toHaveCSS("color", "rgb(174, 182, 194)");
 });
 
+test("dark theme keeps the landing starter copy legible", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.getByRole("button", { name: "Account" }).click();
+    await page.getByRole("menuitem", { name: "Switch to dark theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    const eyebrow = page.getByText("Your AI workspace", { exact: true });
+    const heading = page.getByRole("heading", {
+        name: "Your AI workspace for answers, analysis, and model comparison",
+    });
+    const description = page.getByText(/Ask questions, analyze files, generate content/);
+
+    await expect(eyebrow).toHaveCSS(
+        "color",
+        "rgb(248, 250, 252)",
+    );
+    await expect(eyebrow).toHaveCSS("font-weight", "800");
+    await expect(heading).toHaveCSS("color", "rgb(255, 255, 255)");
+    await expect(heading).toHaveCSS("font-weight", "800");
+    await expect(description).toHaveCSS("color", "rgb(248, 250, 252)");
+    await expect(description).toHaveCSS("font-weight", "700");
+    for (const textBlock of [eyebrow, heading, description]) {
+        await expect(textBlock).not.toHaveCSS("text-shadow", "none");
+    }
+
+    const example = page.getByRole("button", {
+        name: "Help me debug a failing FastAPI stream",
+    });
+    await expect(example).toHaveCSS("color", "rgb(255, 255, 255)");
+    await expect(example).toHaveCSS("font-weight", "700");
+    await expect(example).not.toHaveCSS("text-shadow", "none");
+    await expect(example).toHaveCSS("border-top-color", "rgb(58, 70, 84)");
+    await expect(example.locator("span").first()).toHaveCSS("color", "rgb(255, 255, 255)");
+});
+
 test("Compare sources and Improve use the same styling for matching states", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });

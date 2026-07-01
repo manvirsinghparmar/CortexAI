@@ -30,6 +30,9 @@ describe("Sidebar", () => {
       "aria-current",
       "page",
     );
+    expect(screen.getByRole("button", { name: "Usage" })).not.toHaveAttribute(
+      "aria-current",
+    );
     const activeThread = screen.getByRole("button", { name: /Quarterly planning\. Ask,/ });
     expect(activeThread).toHaveAttribute("aria-current", "page");
     expect(activeThread).toHaveAccessibleName(
@@ -149,6 +152,43 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Quarterly planning")).toBeNull();
     expect(screen.getByText("Compare vendors")).toBeInTheDocument();
     expect(within(screen.getByLabelText("Primary navigation")).getByText("Clear")).toBeInTheDocument();
+  });
+
+  it("marks Usage active and routes Ask or Compare back to chat", async () => {
+    const user = userEvent.setup();
+    const onNavigateChat = vi.fn<(mode: "single" | "compare") => void>();
+    const onNavigateUsage = vi.fn();
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+      mode: "single",
+    });
+
+    render(
+      <Sidebar
+        onSelectThread={vi.fn()}
+        activeView="usage"
+        onNavigateChat={onNavigateChat}
+        onNavigateUsage={onNavigateUsage}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Usage" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute(
+      "aria-current",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+
+    expect(useChatStore.getState().mode).toBe("compare");
+    expect(onNavigateChat).toHaveBeenCalledWith("compare");
+
+    await user.click(screen.getByRole("button", { name: "Usage" }));
+    expect(onNavigateUsage).toHaveBeenCalledTimes(1);
   });
 
   it("deletes every persisted entry in a history thread", async () => {

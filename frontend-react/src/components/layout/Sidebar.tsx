@@ -4,13 +4,16 @@ import { buildHistoryThreads, filterHistoryThreads } from "../../history/history
 import { normalizeSessionId } from "../../session/activeSession";
 import { useChatStore } from "../../store/chatStore";
 import { useHistory } from "../../hooks/useHistory";
-import type { HistoryThread, WhoAmIResponse } from "../../types";
+import type { ChatMode, HistoryThread, WhoAmIResponse } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
 import brandMarkUrl from "../../assets/brand/brand-mark.svg";
 import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
   onSelectThread: (thread: HistoryThread) => void;
+  activeView?: "chat" | "usage";
+  onNavigateChat?: (mode: ChatMode) => void;
+  onNavigateUsage?: () => void;
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
   onLogin?: () => void;
@@ -25,6 +28,9 @@ interface HistoryDateGroup {
 
 export function Sidebar({
   onSelectThread,
+  activeView = "chat",
+  onNavigateChat,
+  onNavigateUsage,
   whoAmI,
   loggedIn,
   onLogin,
@@ -117,6 +123,15 @@ export function Sidebar({
     clearDeleteConfirm();
   };
 
+  const handleModeNavigation = (nextMode: ChatMode) => {
+    setMode(nextMode);
+    onNavigateChat?.(nextMode);
+  };
+
+  const usageActive = activeView === "usage";
+  const askActive = !usageActive && mode === "single";
+  const compareActive = !usageActive && mode === "compare";
+
   const sidebarClassName = isCollapsed
     ? `${styles.sidebar} ${styles.sidebarCollapsed}`
     : styles.sidebar;
@@ -172,9 +187,9 @@ export function Sidebar({
       <nav className={styles.nav} aria-label="Workspace">
         <button
           type="button"
-          className={mode === "single" ? styles.navItemActive : styles.navItem}
-          onClick={() => setMode("single")}
-          aria-current={mode === "single" ? "page" : undefined}
+          className={askActive ? styles.navItemActive : styles.navItem}
+          onClick={() => handleModeNavigation("single")}
+          aria-current={askActive ? "page" : undefined}
           aria-label="Ask"
           title={isCollapsed ? "Ask" : undefined}
         >
@@ -183,14 +198,25 @@ export function Sidebar({
         </button>
         <button
           type="button"
-          className={mode === "compare" ? styles.navItemActive : styles.navItem}
-          onClick={() => setMode("compare")}
-          aria-current={mode === "compare" ? "page" : undefined}
+          className={compareActive ? styles.navItemActive : styles.navItem}
+          onClick={() => handleModeNavigation("compare")}
+          aria-current={compareActive ? "page" : undefined}
           aria-label="Compare"
           title={isCollapsed ? "Compare" : undefined}
         >
           <CortexIcon name="compare" />
           <span>Compare</span>
+        </button>
+        <button
+          type="button"
+          className={usageActive ? styles.navItemActive : styles.navItem}
+          onClick={onNavigateUsage}
+          aria-current={usageActive ? "page" : undefined}
+          aria-label="Usage"
+          title={isCollapsed ? "Usage" : undefined}
+        >
+          <CortexIcon name="usage" />
+          <span>Usage</span>
         </button>
       </nav>
 

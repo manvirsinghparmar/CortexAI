@@ -1,0 +1,192 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.header {
+  display: flex;
+  height: 64px;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f0f2f4;
+  background: #ffffff;
+  padding: 0 30px;
+}
+
+.titleBlock {
+  min-width: 0;
+}
+
+.titleBlock h1 {
+  margin: 0;
+  color: #0b1220;
+  font: 700 18px/1 var(--font-display);
+  letter-spacing: -0.015em;
+}
+
+.titleBlock p {
+  margin: 5px 0 0;
+  color: #94a3b8;
+  font: 400 12px/1.2 var(--font-sans);
+}
+
+.mobileSubtitle {
+  display: none;
+}
+
+.actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.periodButton,
+.exportButton,
+.mobileBackButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #ebedf0;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.periodButton,
+.exportButton {
+  height: 36px;
+  gap: 8px;
+  border-radius: 10px;
+  color: #334155;
+  font: 600 12.5px/1 var(--font-sans);
+  padding: 0 13px;
+}
+
+.periodButton svg {
+  color: #94a3b8;
+}
+
+.exportButton {
+  gap: 7px;
+  color: #64748b;
+}
+
+.periodButton:hover,
+.periodButton:focus-visible,
+.exportButton:hover,
+.exportButton:focus-visible,
+.mobileBackButton:hover,
+.mobileBackButton:focus-visible {
+  border-color: #e3e6f7;
+  background: #eef0fb;
+  color: #5b5bd6;
+  outline: none;
+}
+
+.periodMobileLabel,
+.mobileBackButton,
+.mobileAccountMenu {
+  display: none;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 30px;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    height: 100dvh;
+  }
+
+  .header {
+    min-height: 62px;
+    height: auto;
+    flex-basis: auto;
+    gap: 11px;
+    justify-content: flex-start;
+    padding: 13px 16px;
+  }
+
+  .mobileBackButton {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    border-radius: 12px;
+    color: #475569;
+  }
+
+  .titleBlock {
+    flex: 1 1 auto;
+  }
+
+  .titleBlock h1 {
+    font-size: 16px;
+    letter-spacing: -0.01em;
+  }
+
+  .desktopSubtitle {
+    display: none;
+  }
+
+  .titleBlock .mobileSubtitle {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+  }
+
+  .actions {
+    gap: 7px;
+  }
+
+  .periodButton {
+    min-width: 58px;
+    height: 36px;
+    gap: 5px;
+    border-radius: 10px;
+    font-size: 11.5px;
+    padding: 0 11px;
+  }
+
+  .periodDesktopLabel,
+  .exportButton {
+    display: none;
+  }
+
+  .periodMobileLabel,
+  .mobileAccountMenu {
+    display: inline-flex;
+  }
+
+  .body {
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 360px) {
+  .header {
+    gap: 8px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .mobileBackButton {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+}

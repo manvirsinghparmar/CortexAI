@@ -138,6 +138,7 @@ python run_server.py --reload
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
@@ -160,6 +161,16 @@ python run_server.py --reload
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
 - The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
 - `DELETE /v1/history?session_id=<id>` clears only that session's persisted request rows for the authenticated identity; omitting `session_id` clears all history. React per-thread delete uses `DELETE /v1/history/{entry_id}` for each row in the selected thread.
+
+### Usage summary contract
+
+`GET /v1/usage/summary?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` returns the aggregate contract for the Usage & insights screen. If both dates are omitted, the period defaults to the last 30 inclusive calendar days.
+
+- Request, token, spend, latency, and model reply totals are aggregated from `llm_requests` joined to `llm_responses`.
+- `smartRoutedTotal` and per-model `viaSmart` count routing rows whose `routing_mode` is `smart`, `cheap`, or `strong`; missing/explicit/legacy routing rows count as manual.
+- `sessionModes` is classified from `llm_requests.route_mode` per `session_id` within the period: Ask only, Compare only, or Mixed. The `sessions.mode` creation value is not used.
+- `tokensDeltaPct` compares the selected period with the immediately preceding equal-length period. It returns `0` when both periods have zero tokens and `100` when the current period has tokens but the previous period is zero.
+- `activityDaily` always contains 14 entries ending at `period.to`, zero-filled for days without usage.
 
 ## Authentication
 
@@ -202,6 +213,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
+- The React router exposes `/usage` for the Usage & insights scaffold. Desktop reaches it from the sidebar Usage item; mobile reaches it from the account menu.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.
 - `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.

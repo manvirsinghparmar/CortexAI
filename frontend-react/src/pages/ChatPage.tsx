@@ -1,5 +1,6 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { fetchHistory } from "../api/history";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
@@ -33,6 +34,7 @@ interface MobileHistoryDateGroup {
 }
 
 export function ChatPage() {
+  const navigate = useNavigate();
   const { whoAmI, cognitoConfig, loading: authLoading, loggedIn, login, logout } = useAuth();
   const { models, error: modelsError } = useModels(!authLoading);
   const backendOffline = !!modelsError && !authLoading;
@@ -137,6 +139,8 @@ export function ChatPage() {
     <div className={styles.layout}>
       <Sidebar
         onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
+        activeView="chat"
+        onNavigateUsage={() => navigate("/usage")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
@@ -163,6 +167,7 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              onUsageInsights={() => navigate("/usage")}
               theme={theme}
               onToggleTheme={toggleTheme}
             />

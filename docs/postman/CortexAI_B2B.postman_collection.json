@@ -687,6 +687,43 @@
           ]
         },
         {
+          "name": "GET /v1/usage/summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/usage/summary?from={{from_date}}&to={{to_date}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
+                  "  pm.expect([200, 501]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('usage summary contract shape', function () {",
+                  "    pm.expect(body).to.have.property('period');",
+                  "    pm.expect(body).to.have.property('totalTokens');",
+                  "    pm.expect(body).to.have.property('totalRequests');",
+                  "    pm.expect(body).to.have.property('models').that.is.an('array');",
+                  "    pm.expect(body).to.have.property('sessionModes');",
+                  "    pm.expect(body).to.have.property('activityDaily').that.is.an('array');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET /v1/savings",
           "request": {
             "method": "GET",

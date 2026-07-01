@@ -15,7 +15,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 - Routing telemetry: `routing_decisions`, `routing_attempts`
 - Governance: `usage_daily`, daily caps, per-key rate limit, circuit breaker
 - Savings telemetry: per-request baseline vs actual cost (`llm_savings`)
-- Reporting/export: `/v1/usage`, `/v1/savings`, CSV export endpoints
+- Reporting/export: `/v1/usage`, `/v1/usage/summary`, `/v1/savings`, CSV export endpoints
 - BYOK lifecycle: set/status/delete with encrypted-at-rest secrets
 - Privacy controls: metadata-only persistence and optional PII redaction
 - Optional prompt optimization endpoint: `/v1/optimize`
@@ -266,7 +266,7 @@ Frontend runtime config (`/runtime-config.js`):
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
-- The React sidebar uses a compact navigation rail with subtle Ask/Compare and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile continues to use the separate top and bottom navigation. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
+- The React sidebar uses a compact navigation rail with subtle Ask/Compare/Usage and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile continues to use the separate top and bottom navigation, with `Usage & insights` reached from the account menu. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - An explicit fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes, tab resume/reload, same-browser reauth, and explicit History selections continue the selected thread.
 - React Ask and Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` so follow-ups continue the selected thread and New Chat starts a new backend session.
@@ -368,6 +368,7 @@ Response includes:
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
@@ -628,6 +629,14 @@ curl -X DELETE -H "X-API-Key: dev-key-1" "http://127.0.0.1:8000/v1/byok?provider
 
 ## Usage and Savings Reporting
 
+Usage summary for the Usage & insights screen:
+```bash
+curl -H "X-API-Key: dev-key-1" \
+  "http://127.0.0.1:8000/v1/usage/summary?from=2026-02-01&to=2026-02-22"
+```
+
+`GET /v1/usage/summary` defaults to the last 30 inclusive calendar days when no range is provided. It returns the screen contract: period label, total tokens/requests/sessions, average/p95/min latency, average cost/request, total spend, token delta versus the previous equal-length period, Smart-routed totals, per-provider/model reply rows, Ask/Compare/Mixed session counts, and a zero-padded 14-day token activity series ending at `period.to`.
+
 Usage:
 ```bash
 curl -H "X-API-Key: dev-key-1" \
@@ -706,6 +715,16 @@ class CortexClient:
         r = requests.get(
             f"{self.base_url}/v1/usage",
             params={"from": from_date, "to": to_date, "group_by": group_by},
+            headers=self.headers,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def usage_summary(self, from_date: str, to_date: str):
+        r = requests.get(
+            f"{self.base_url}/v1/usage/summary",
+            params={"from": from_date, "to": to_date},
             headers=self.headers,
             timeout=30,
         )

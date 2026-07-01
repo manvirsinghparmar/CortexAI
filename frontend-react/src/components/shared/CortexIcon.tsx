@@ -7,11 +7,13 @@ export type CortexIconName =
   | "branch"
   | "check"
   | "chevron-down"
+  | "chevron-left"
   | "collapse-sidebar"
   | "compare"
   | "copy"
   | "cost"
   | "debug"
+  | "download"
   | "expand-sidebar"
   | "external-link"
   | "find-solution"
@@ -37,6 +39,7 @@ export type CortexIconName =
   | "thumb-up"
   | "tokens"
   | "trash"
+  | "usage"
   | "user"
   | "web";
 
@@ -115,6 +118,15 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
           <path d="M3.5 9a8.5 8.5 0 1 1 .3 5" />
           <path d="M3.5 4v5h5" />
           <path d="M12 8v4l3 2" />
+        </>
+      );
+    case "usage":
+      return (
+        <>
+          <path d="M3 21h18" />
+          <rect x="5" y="11" width="3.4" height="7" rx="1" />
+          <rect x="10.3" y="6" width="3.4" height="12" rx="1" />
+          <rect x="15.6" y="13.5" width="3.4" height="4.5" rx="1" />
         </>
       );
     case "search":
@@ -283,6 +295,10 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
       return <path d="M12 5v14M5 12h14" />;
     case "chevron-down":
       return <path d="M6 9l6 6 6-6" />;
+    case "chevron-left":
+      return <path d="M15 18l-6-6 6-6" />;
+    case "download":
+      return <path d="M12 3v12M8 11l4 4 4-4M5 21h14" />;
     case "swap":
       return <path d="M8 4 4 8l4 4M4 8h11M16 20l4-4-4-4M20 16H9" />;
     case "scroll-down":

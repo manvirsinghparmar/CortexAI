@@ -59,8 +59,9 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     const rowMetrics = await rows.evaluateAll(elements =>
         elements.map(element => {
             const title = element.querySelector("[data-history-title]");
+            const surface = element.parentElement?.parentElement ?? element;
             return {
-                height: element.getBoundingClientRect().height,
+                height: surface.getBoundingClientRect().height,
                 titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : "",
                 titleOverflow: title ? getComputedStyle(title).textOverflow : "",
             };
@@ -103,7 +104,12 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
 
     await longRow.hover();
-    await expect(longRow).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect.poll(
+        () => longRow.evaluate(element => {
+            const surface = element.parentElement?.parentElement ?? element;
+            return getComputedStyle(surface).backgroundColor;
+        }),
+    ).toBe("rgb(255, 255, 255)");
     await longRow.click();
     await expect(longRow).toHaveAttribute("aria-current", "page");
 
@@ -429,6 +435,10 @@ async function expectMatchingChipStyles(first, second) {
 async function expectSoftComposerShell(page) {
     const textarea = page.locator("#promptInput");
     const composer = textarea.locator("xpath=../..");
+    await textarea.evaluate(element => element.blur());
+    await expect.poll(
+        () => composer.evaluate(element => getComputedStyle(element).borderColor),
+    ).toBe("rgb(235, 237, 240)");
     const idle = await composer.evaluate(element => ({
         borderColor: getComputedStyle(element).borderColor,
         boxShadow: getComputedStyle(element).boxShadow,

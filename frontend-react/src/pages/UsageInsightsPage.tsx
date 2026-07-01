@@ -144,7 +144,14 @@ export function UsageInsightsPage() {
             <CortexIcon name="chevron-left" size={16} strokeWidth={2} />
           </button>
           <div className={styles.titleBlock}>
-            <h1>Usage &amp; insights</h1>
+            <h1 aria-label="Usage & insights">
+              <span className={styles.desktopTitle} aria-hidden="true">
+                Usage &amp; insights
+              </span>
+              <span className={styles.mobileTitle} aria-hidden="true">
+                Usage
+              </span>
+            </h1>
             <p className={styles.desktopSubtitle}>
               All models <span aria-hidden="true">&middot;</span> {periodLabel.toLowerCase()}
             </p>
@@ -228,6 +235,26 @@ export function UsageInsightsPage() {
             <section className={styles.readyState} aria-label="Usage summary loaded" />
           )}
         </section>
+        <nav className={styles.mobileNav} aria-label="Mobile navigation">
+          <button type="button" onClick={() => openChatMode("single")}>
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="ask" />
+            </span>
+            <span>Ask</span>
+          </button>
+          <button type="button" onClick={() => openChatMode("compare")}>
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="compare" />
+            </span>
+            <span>Compare</span>
+          </button>
+          <button type="button" onClick={() => navigate("/")}>
+            <span className={styles.mobileNavIcon}>
+              <CortexIcon name="history" />
+            </span>
+            <span>History</span>
+          </button>
+        </nav>
       </main>
     </div>
   );
@@ -263,7 +290,10 @@ function KpiRow({ summary }: { summary: UsageSummary }) {
             <span className={`${styles.kpiTile} ${card.accent ? styles.kpiTileAccent : ""}`}>
               <CortexIcon name={card.icon} size={16} strokeWidth={1.85} />
             </span>
-            <span className={styles.kpiLabel}>{card.label}</span>
+            <span className={styles.kpiLabel}>
+              <span className={styles.kpiDesktopLabel}>{card.label}</span>
+              <span className={styles.kpiMobileLabel}>{card.mobileLabel}</span>
+            </span>
           </div>
           <div className={styles.kpiFigure}>
             {card.figure}
@@ -274,7 +304,8 @@ function KpiRow({ summary }: { summary: UsageSummary }) {
               card.positiveTrend ? styles.kpiSubnotePositive : ""
             }`}
           >
-            {card.subnote}
+            <span className={styles.kpiDesktopSubnote}>{card.subnote}</span>
+            <span className={styles.kpiMobileSubnote}>{card.mobileSubnote ?? card.subnote}</span>
           </div>
         </article>
       ))}
@@ -299,14 +330,19 @@ function ModelLeaderboard({ summary, empty }: { summary: UsageSummary; empty: bo
             auto-routed by Smart
           </p>
         </div>
-        <span className={styles.panelTotal}>{formatInteger(summary.totalRequests)} total</span>
+        <span className={styles.panelTotal}>
+          <span className={styles.modelTotalDesktop}>{formatInteger(summary.totalRequests)} total</span>
+          <span className={styles.modelTotalMobile}>
+            {formatInteger(summary.smartRoutedTotal)} via Smart
+          </span>
+        </span>
       </div>
 
       {topSmartRow ? (
         <div className={styles.topSmartStrip}>
           <CortexIcon name="smart" size={14} strokeWidth={1.9} />
           <span>
-            <strong>{topSmartRow.displayName}</strong> is your top Smart pick -{" "}
+            <strong>{topSmartRow.displayName}</strong> is your top Smart pick{" \u2014 "}
             {formatInteger(topSmartRow.viaSmart)} routes
           </span>
         </div>
@@ -515,11 +551,13 @@ function ActivityChartPanel({ summary }: { summary: UsageSummary }) {
 interface KpiCardConfig {
   key: string;
   label: string;
+  mobileLabel: string;
   icon: CortexIconName;
   accent?: boolean;
   figure: string;
   suffix?: string;
   subnote: ReactNode;
+  mobileSubnote?: ReactNode;
   ariaLabel: string;
   positiveTrend?: boolean;
 }
@@ -540,6 +578,7 @@ function buildKpiCards(summary: UsageSummary): KpiCardConfig[] {
     {
       key: "tokens",
       label: "TOTAL TOKENS",
+      mobileLabel: "TOKENS",
       icon: "tokens",
       accent: true,
       figure: tokenValue.figure,
@@ -552,6 +591,14 @@ function buildKpiCards(summary: UsageSummary): KpiCardConfig[] {
       ) : (
         DASH
       ),
+      mobileSubnote: hasUsage ? (
+        <>
+          <TrendIcon direction={tokenDirection} />
+          {tokenDelta}
+        </>
+      ) : (
+        DASH
+      ),
       ariaLabel: `TOTAL TOKENS ${tokenValue.figure}${tokenValue.suffix ?? ""} ${
         hasUsage ? `${tokenDelta} vs prev 30d` : DASH
       }`,
@@ -560,9 +607,11 @@ function buildKpiCards(summary: UsageSummary): KpiCardConfig[] {
     {
       key: "requests",
       label: "REQUESTS",
+      mobileLabel: "REQUESTS",
       icon: "swap",
       figure: formatInteger(summary.totalRequests),
       subnote: `across ${formatInteger(summary.totalSessions)} sessions`,
+      mobileSubnote: `${formatInteger(summary.totalSessions)} sessions`,
       ariaLabel: `REQUESTS ${formatInteger(summary.totalRequests)} across ${formatInteger(
         summary.totalSessions,
       )} sessions`,
@@ -570,17 +619,21 @@ function buildKpiCards(summary: UsageSummary): KpiCardConfig[] {
     {
       key: "latency",
       label: "AVG LATENCY",
+      mobileLabel: "AVG LATENCY",
       icon: "latency",
       figure: latencyValue,
       subnote: latencySub,
+      mobileSubnote: hasUsage ? `p95 ${formatLatency(summary.p95LatencyMs)}` : DASH,
       ariaLabel: `AVG LATENCY ${latencyValue} ${latencySub}`,
     },
     {
       key: "cost",
       label: "AVG COST / REQ",
+      mobileLabel: "AVG COST",
       icon: "cost",
       figure: costValue,
       subnote: spendSub,
+      mobileSubnote: hasUsage ? `${formatCost(summary.totalSpend, 2)} total` : DASH,
       ariaLabel: `AVG COST / REQ ${costValue} ${spendSub}`,
     },
   ];

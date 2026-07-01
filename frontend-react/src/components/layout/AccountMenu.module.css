@@ -89,10 +89,10 @@
 
 @media (max-width: 900px) {
   .accountButton {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     border-color: var(--cx-hairline);
-    border-radius: 9px;
+    border-radius: 12px;
     background: var(--cx-surface);
   }
 
@@ -101,5 +101,14 @@
   .accountButton[aria-expanded="true"] {
     background: var(--cx-surface-2);
     color: var(--cx-accent);
+  }
+
+  .menu {
+    min-width: 190px;
+  }
+
+  .menuItem {
+    min-height: 44px;
+    border-radius: 10px;
   }
 }

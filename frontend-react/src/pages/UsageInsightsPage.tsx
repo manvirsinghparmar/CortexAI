@@ -1,9 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchHistory } from "../api/history";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
-import { CortexIcon } from "../components/shared/CortexIcon";
+import { CortexIcon, type CortexIconName } from "../components/shared/CortexIcon";
 import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
@@ -122,14 +122,153 @@ export function UsageInsightsPage() {
             <UsageLoadingState />
           ) : usageError ? (
             <UsageErrorState message={usageError} onRetry={reload} />
-          ) : empty ? (
-            <UsageEmptyState />
+          ) : summary ? (
+            <UsageDashboard summary={summary} showModelEmpty={empty} />
           ) : (
             <section className={styles.readyState} aria-label="Usage summary loaded" />
           )}
         </section>
       </main>
     </div>
+  );
+}
+
+function UsageDashboard({
+  summary,
+  showModelEmpty,
+}: {
+  summary: UsageSummary;
+  showModelEmpty: boolean;
+}) {
+  return (
+    <section className={styles.dashboard} aria-label="Usage summary loaded">
+      <KpiRow summary={summary} />
+      {showModelEmpty ? (
+        <UsageEmptyState />
+      ) : (
+        <section className={styles.readyState} aria-label="Usage details pending" />
+      )}
+    </section>
+  );
+}
+
+function KpiRow({ summary }: { summary: UsageSummary }) {
+  const cards = buildKpiCards(summary);
+
+  return (
+    <section className={styles.kpiGrid} aria-label="Usage key metrics">
+      {cards.map((card) => (
+        <article className={styles.kpiCard} aria-label={card.ariaLabel} key={card.key}>
+          <div className={styles.kpiHeader}>
+            <span className={`${styles.kpiTile} ${card.accent ? styles.kpiTileAccent : ""}`}>
+              <CortexIcon name={card.icon} size={16} strokeWidth={1.85} />
+            </span>
+            <span className={styles.kpiLabel}>{card.label}</span>
+          </div>
+          <div className={styles.kpiFigure}>
+            {card.figure}
+            {card.suffix ? <span className={styles.kpiSuffix}>{card.suffix}</span> : null}
+          </div>
+          <div
+            className={`${styles.kpiSubnote} ${
+              card.positiveTrend ? styles.kpiSubnotePositive : ""
+            }`}
+          >
+            {card.subnote}
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+interface KpiCardConfig {
+  key: string;
+  label: string;
+  icon: CortexIconName;
+  accent?: boolean;
+  figure: string;
+  suffix?: string;
+  subnote: ReactNode;
+  ariaLabel: string;
+  positiveTrend?: boolean;
+}
+
+function buildKpiCards(summary: UsageSummary): KpiCardConfig[] {
+  const hasUsage = summary.totalRequests > 0 || summary.totalTokens > 0;
+  const tokenValue = formatCompactNumber(summary.totalTokens);
+  const tokenDelta = hasUsage ? formatPercent(summary.tokensDeltaPct) : DASH;
+  const tokenDirection = summary.tokensDeltaPct < 0 ? "down" : "up";
+  const latencyValue = hasUsage ? formatLatency(summary.avgLatencyMs) : DASH;
+  const latencySub = hasUsage
+    ? `p95 ${formatLatency(summary.p95LatencyMs)} \u00b7 fastest ${formatLatency(summary.minLatencyMs)}`
+    : DASH;
+  const costValue = hasUsage ? formatCost(summary.avgCostPerRequest, 4) : DASH;
+  const spendSub = hasUsage ? `${formatCost(summary.totalSpend, 2)} total spend` : DASH;
+
+  return [
+    {
+      key: "tokens",
+      label: "TOTAL TOKENS",
+      icon: "tokens",
+      accent: true,
+      figure: tokenValue.figure,
+      suffix: tokenValue.suffix,
+      subnote: hasUsage ? (
+        <>
+          <TrendIcon direction={tokenDirection} />
+          {tokenDelta} vs prev 30d
+        </>
+      ) : (
+        DASH
+      ),
+      ariaLabel: `TOTAL TOKENS ${tokenValue.figure}${tokenValue.suffix ?? ""} ${
+        hasUsage ? `${tokenDelta} vs prev 30d` : DASH
+      }`,
+      positiveTrend: hasUsage && summary.tokensDeltaPct >= 0,
+    },
+    {
+      key: "requests",
+      label: "REQUESTS",
+      icon: "swap",
+      figure: formatInteger(summary.totalRequests),
+      subnote: `across ${formatInteger(summary.totalSessions)} sessions`,
+      ariaLabel: `REQUESTS ${formatInteger(summary.totalRequests)} across ${formatInteger(
+        summary.totalSessions,
+      )} sessions`,
+    },
+    {
+      key: "latency",
+      label: "AVG LATENCY",
+      icon: "latency",
+      figure: latencyValue,
+      subnote: latencySub,
+      ariaLabel: `AVG LATENCY ${latencyValue} ${latencySub}`,
+    },
+    {
+      key: "cost",
+      label: "AVG COST / REQ",
+      icon: "cost",
+      figure: costValue,
+      subnote: spendSub,
+      ariaLabel: `AVG COST / REQ ${costValue} ${spendSub}`,
+    },
+  ];
+}
+
+function TrendIcon({ direction }: { direction: "up" | "down" }) {
+  return (
+    <svg
+      className={direction === "down" ? styles.trendIconDown : styles.trendIcon}
+      width="9"
+      height="9"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M12 5l8 13H4z" />
+    </svg>
   );
 }
 
@@ -188,6 +327,52 @@ function UsageErrorState({ message, onRetry }: { message: string; onRetry: () =>
       </button>
     </section>
   );
+}
+
+const DASH = "\u2014";
+
+function formatCompactNumber(value: number): { figure: string; suffix?: string } {
+  if (!Number.isFinite(value) || value <= 0) return { figure: "0" };
+  if (value >= 1_000_000) return { figure: trimNumber(value / 1_000_000, 2), suffix: "M" };
+  if (value >= 1_000) return { figure: trimNumber(value / 1_000, 1), suffix: "K" };
+  return { figure: formatInteger(value) };
+}
+
+function trimNumber(value: number, maximumFractionDigits: number): string {
+  return value.toLocaleString("en-US", {
+    maximumFractionDigits,
+    minimumFractionDigits: maximumFractionDigits,
+  }).replace(/\.0+$/, "");
+}
+
+function formatInteger(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return DASH;
+  return `${(ms / 1000).toLocaleString("en-US", {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 1,
+  })}s`;
+}
+
+function formatCost(value: number, fractionDigits: number): string {
+  if (!Number.isFinite(value) || value < 0) return DASH;
+  return `$${value.toLocaleString("en-US", {
+    maximumFractionDigits: fractionDigits,
+    minimumFractionDigits: fractionDigits,
+  })}`;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  const normalized = Math.abs(value);
+  return `${normalized.toLocaleString("en-US", {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: Number.isInteger(normalized) ? 0 : 1,
+  })}%`;
 }
 
 function isUsageSummaryEmpty(summary: UsageSummary): boolean {

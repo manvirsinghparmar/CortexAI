@@ -113,6 +113,12 @@
   gap: 18px;
 }
 
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .srOnly {
   position: absolute;
   width: 1px;
@@ -130,13 +136,91 @@
   gap: 14px;
 }
 
+.kpiGrid {
+  display: flex;
+  gap: 14px;
+}
+
 .skeletonCard,
+.kpiCard,
 .skeletonPanel,
 .statePanel {
   border: 1px solid #eef0f2;
   border-radius: 14px;
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.kpiCard {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 16px 17px;
+}
+
+.kpiHeader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 15px;
+}
+
+.kpiTile {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #f1f3f5;
+  color: #475569;
+}
+
+.kpiTileAccent {
+  background: #eef0fb;
+  color: #5b5bd6;
+}
+
+.kpiLabel {
+  min-width: 0;
+  color: #94a3b8;
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+.kpiFigure {
+  color: #0b1220;
+  font: 700 30px/1 var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+.kpiSuffix {
+  margin-left: 1px;
+  color: #64748b;
+  font-size: 18px;
+}
+
+.kpiSubnote {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  color: #94a3b8;
+  font: 500 11px/1 var(--font-mono);
+}
+
+.kpiSubnotePositive {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.trendIcon,
+.trendIconDown {
+  flex: 0 0 auto;
+}
+
+.trendIconDown {
+  transform: rotate(180deg);
 }
 
 .skeletonCard {
@@ -340,6 +424,55 @@
 
   .body {
     padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .kpiGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .kpiCard {
+    border-radius: 13px;
+    padding: 12px 13px;
+  }
+
+  .kpiHeader {
+    gap: 7px;
+    margin-bottom: 10px;
+  }
+
+  .kpiTile {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+    border-radius: 7px;
+  }
+
+  .kpiTile svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .kpiLabel {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+  }
+
+  .kpiFigure {
+    font-size: 22px;
+    letter-spacing: -0.02em;
+  }
+
+  .kpiSuffix {
+    color: inherit;
+    font-size: inherit;
+    margin-left: 0;
+  }
+
+  .kpiSubnote {
+    margin-top: 8px;
+    font-size: 10px;
   }
 
   .skeletonKpis {

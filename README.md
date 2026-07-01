@@ -636,6 +636,7 @@ curl -H "X-API-Key: dev-key-1" \
 ```
 
 `GET /v1/usage/summary` defaults to the last 30 inclusive calendar days when no range is provided. It returns the screen contract: period label, total tokens/requests/sessions, average/p95/min latency, average cost/request, total spend, token delta versus the previous equal-length period, Smart-routed totals, per-provider/model reply rows, Ask/Compare/Mixed session counts, and a zero-padded 14-day token activity series ending at `period.to`.
+The React Usage & insights screen uses the same period-scoped summary query; its period selector refetches the full dashboard and its Export button downloads day-grouped CSV rows from `/v1/usage/export` for the loaded period.
 
 Usage:
 ```bash

@@ -48,6 +48,22 @@ describe("ResponseCard", () => {
     expect(screen.queryByRole("button", { name: "Branch response" })).not.toBeInTheDocument();
   });
 
+  it("shows a visible confirmation after copying a response", async () => {
+    const { restoreClipboard, writeText } = mockClipboardWrite();
+
+    try {
+      render(<ResponseCard response={response(false, "Copy this answer.")} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy response" }));
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("Copy this answer."));
+      expect(await screen.findByRole("status")).toHaveTextContent("Copied");
+      expect(screen.getByRole("button", { name: "Copied response" })).toBeInTheDocument();
+    } finally {
+      restoreClipboard();
+    }
+  });
+
   it("shows completed response stats without a run-details disclosure control", () => {
     render(<ResponseCard response={response()} compact />);
 
@@ -528,5 +544,30 @@ function mockMatchMedia(matchesSmallScreen: boolean): () => void {
   }));
   return () => {
     window.matchMedia = originalMatchMedia;
+  };
+}
+
+function mockClipboardWrite() {
+  const originalClipboard = navigator.clipboard;
+  const writeText = vi.fn().mockResolvedValue(undefined);
+
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+
+  return {
+    writeText,
+    restoreClipboard: () => {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: originalClipboard,
+        });
+        return;
+      }
+
+      Reflect.deleteProperty(navigator, "clipboard");
+    },
   };
 }

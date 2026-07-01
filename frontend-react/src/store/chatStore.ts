@@ -12,6 +12,13 @@ import type {
   TurnStatus,
 } from "../types";
 import { buildTurnsFromHistoryEntries } from "../history/historyThreads";
+import {
+  clearActiveSessionId,
+  consumeFreshLoginSessionReset,
+  loadActiveSessionId,
+  normalizeSessionId,
+  persistActiveSessionId,
+} from "../session/activeSession";
 
 interface BeginTurnInput {
   mode: ChatMode;
@@ -105,6 +112,9 @@ interface ChatStoreState {
   pendingNewSession: boolean;
   setPendingNewSession: (v: boolean) => void;
 }
+
+const shouldResetForFreshLogin = consumeFreshLoginSessionReset();
+const initialSessionId = shouldResetForFreshLogin ? null : loadActiveSessionId();
 
 export const useChatStore = create<ChatStoreState>((set) => ({
   mode: "single",
@@ -270,6 +280,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
   hydrateFromHistoryThread: (thread) => {
     const turns = buildTurnsFromHistoryEntries(thread.entries);
     const latestTurn = turns[turns.length - 1] ?? null;
+    const sessionId = normalizeSessionId(thread.sessionId);
+    persistActiveSessionId(sessionId);
     set({
       mode: latestTurn?.mode ?? thread.preferredMode,
       prompt: "",
@@ -279,12 +291,13 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       responses: latestTurn?.responses ?? [],
       streaming: false,
       streamingText: "",
-      sessionId: thread.sessionId ?? null,
-      pendingNewSession: !thread.sessionId,
+      sessionId,
+      pendingNewSession: !sessionId,
       error: null,
     });
   },
-  startNewChat: () =>
+  startNewChat: () => {
+    clearActiveSessionId();
     set({
       prompt: "",
       attachments: [],
@@ -296,7 +309,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       error: null,
       sessionId: null,
       pendingNewSession: true,
-    }),
+    });
+  },
 
   responses: [],
   setResponses: (responses) => set({ responses }),
@@ -318,9 +332,13 @@ export const useChatStore = create<ChatStoreState>((set) => ({
   historySearch: "",
   setHistorySearch: (q) => set({ historySearch: q }),
 
-  sessionId: null,
-  setSessionId: (id) => set({ sessionId: id, pendingNewSession: false }),
-  pendingNewSession: true,
+  sessionId: initialSessionId,
+  setSessionId: (id) => {
+    const sessionId = normalizeSessionId(id);
+    persistActiveSessionId(sessionId);
+    set({ sessionId, pendingNewSession: !sessionId });
+  },
+  pendingNewSession: !initialSessionId,
   setPendingNewSession: (v) => set({ pendingNewSession: v }),
 }));
 

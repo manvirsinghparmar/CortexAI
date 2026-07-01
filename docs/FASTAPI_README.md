@@ -87,11 +87,11 @@ python run_server.py --reload
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
-- React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data.
+- React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data, then restores the persisted active `session_id` transcript when the page was reloaded, resumed, or silently reauthenticated in the same browser.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
-- The React sidebar uses a compact navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged.
+- The React sidebar uses a compact navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
-- Frontend fresh sign-in starts an empty new chat session; browser refreshes within the same signed-in session and explicit History selections still continue the selected thread.
+- Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
 - React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests.
 - React Ask defaults `Web` on for new page sessions, React Compare defaults `With sources` on, and users can turn either off for the current page session. Compare streams `/v1/compare/stream` events into per-model response columns.
 - React Compare keeps every selected response visible in a responsive grid without horizontal response scrolling on desktop and tablet widths: three columns on wide desktop, two at tablet widths, and stacked tall cards at the app's tablet/mobile shell breakpoint. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and elevates the stuck switcher into a frosted provider-tinted bar without changing model-pill horizontal positions.
@@ -112,7 +112,7 @@ python run_server.py --reload
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
-- Frontend response card controls render as a minimal icon row for copy, regenerate, and feedback actions. Regenerate uses the existing `/v1/chat/stream` path, refills the clicked response card in place, and preserves the original source-enabled flag. Compare card regeneration is intentionally single-target so clicking one card does not rerun or replace the other comparison cards.
+- Frontend response card controls render as a minimal icon row for copy, regenerate, and feedback actions. Copy shows a brief visible success confirmation in the toolbar. Regenerate uses the existing `/v1/chat/stream` path, refills the clicked response card in place, and preserves the original source-enabled flag. Compare card regeneration is intentionally single-target so clicking one card does not rerun or replace the other comparison cards.
 - Frontend response sources render inline as publisher-name citation pills derived from `web_source_items`; grouped markers such as `[1][2][3]` collapse into one pill with a preview card listing each linked source. Desktop keeps the hover preview viewport-contained and directly beside its pill, while phone-sized mobile keeps the tap-to-open bottom sheet.
 - Frontend response Markdown keeps explicit ordered-list numbering when numbered items are split by explanatory text.
 - React response Markdown renders inline citation pills with tap/click source previews, blockquote callout styling, styled code blocks with copy controls, GFM tables, and sanitized provider error states. Desktop tables scroll within the response card, while mobile tables stack cells under their column labels.
@@ -136,7 +136,7 @@ python run_server.py --reload
 - `POST /v1/optimize`
 - `GET /v1/history`
 - `DELETE /v1/history/{entry_id}`
-- `DELETE /v1/history`
+- `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -158,7 +158,8 @@ python run_server.py --reload
 - `request_group_id` is optional and is populated for Compare target rows.
 - One Ask turn produces one row.
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
-- The React client groups sidebar items by `session_id`, then reconstructs Compare turns by `request_group_id` when a thread is selected.
+- The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
+- `DELETE /v1/history?session_id=<id>` clears only that session's persisted request rows for the authenticated identity; omitting `session_id` clears all history. React per-thread delete uses `DELETE /v1/history/{entry_id}` for each row in the selected thread.
 
 ## Authentication
 
@@ -265,7 +266,7 @@ Notes:
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
-- The browser UI avoids that fallback on fresh login by generating a new `session_id` and sending `new_session=true` for the first turn after sign-in.
+- The browser UI avoids that fallback on explicit fresh login by marking `cortex_fresh_login_pending`, consuming the backend `fresh_login=1` callback marker, clearing the stored active thread id, and sending `new_session=true` for the first turn after sign-in.
 
 Prompt optimization:
 - `POST /v1/optimize` is gated by `ENABLE_PROMPT_OPTIMIZATION=true`.

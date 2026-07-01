@@ -36,6 +36,7 @@ export type CortexIconName =
   | "thumb-down"
   | "thumb-up"
   | "tokens"
+  | "trash"
   | "user"
   | "web";
 
@@ -162,6 +163,15 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
         <>
           <path d="M12 3 3 7.5l9 4.5 9-4.5z" />
           <path d="M3 12.5l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5" />
+        </>
+      );
+    case "trash":
+      return (
+        <>
+          <path d="M4 7h16" />
+          <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" />
+          <path d="M6.5 7h11l-.7 12A2 2 0 0 1 14.8 21H9.2a2 2 0 0 1-2-1.9z" />
+          <path d="M10 11v6M14 11v6" />
         </>
       );
     case "cost":

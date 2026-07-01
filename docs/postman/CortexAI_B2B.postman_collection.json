@@ -613,7 +613,7 @@
           ]
         },
         {
-          "name": "DELETE /v1/history (all)",
+          "name": "DELETE /v1/history (all or session)",
           "request": {
             "method": "DELETE",
             "header": [
@@ -622,7 +622,24 @@
                 "value": "Bearer {{bearer_token}}"
               }
             ],
-            "url": "{{base_url}}/v1/history"
+            "url": {
+              "raw": "{{base_url}}/v1/history?session_id={{session_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "session_id",
+                  "value": "{{session_id}}",
+                  "description": "Optional. Enable to clear only this user-visible conversation session; leave disabled to clear all history for the authenticated identity.",
+                  "disabled": true
+                }
+              ]
+            }
           },
           "event": [
             {

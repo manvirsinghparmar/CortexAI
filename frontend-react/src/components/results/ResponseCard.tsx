@@ -55,6 +55,7 @@ export function ResponseCard({
 }: ResponseCardProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const hasError = !!response.error;
   const softError = response.error?.details?.kind === "transient_capacity";
   const badge = getModelBadge(response.provider, response.model);
@@ -75,10 +76,26 @@ export function ResponseCard({
   const showRegenerate = !!onRegenerate && !loadingStatus;
   const statsId = `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
   const copyResponse = async () => {
-    await navigator.clipboard?.writeText(responseText || "").catch(() => undefined);
+    const copiedToClipboard = await writeClipboardText(responseText || "");
+    if (!copiedToClipboard) return;
+
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copyTimerRef.current = null;
+    }, 1800);
   };
 
   return (
@@ -218,16 +235,23 @@ export function ResponseCard({
 
       <footer className={styles.actions}>
         <div className={styles.actionGroup}>
-          <button
-            type="button"
-            className={styles.actionButton}
-            aria-label={copied ? "Copied response" : "Copy response"}
-            title={copied ? "Copied" : "Copy response"}
-            onClick={() => void copyResponse()}
-          >
-            <CortexIcon name="copy" />
-            <span>{copied ? "Copied" : "Copy"}</span>
-          </button>
+          <span className={styles.copyActionWrap}>
+            <button
+              type="button"
+              className={`${styles.actionButton} ${copied ? styles.actionButtonCopied : ""}`}
+              aria-label={copied ? "Copied response" : "Copy response"}
+              title={copied ? "Copied" : "Copy response"}
+              onClick={() => void copyResponse()}
+            >
+              <CortexIcon name="copy" />
+              <span>{copied ? "Copied" : "Copy"}</span>
+            </button>
+            {copied && (
+              <span className={styles.copyStatus} role="status" aria-live="polite">
+                Copied
+              </span>
+            )}
+          </span>
           {showRegenerate && (
             <button
               type="button"
@@ -396,6 +420,35 @@ function CodeBlock({
       </pre>
     </div>
   );
+}
+
+async function writeClipboardText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to the legacy copy path below.
+  }
+
+  if (typeof document === "undefined") return false;
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.top = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.select();
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textArea);
+  }
 }
 
 function getModelBadge(provider: string, model: string) {

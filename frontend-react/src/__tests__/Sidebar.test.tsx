@@ -30,7 +30,7 @@ describe("Sidebar", () => {
       "aria-current",
       "page",
     );
-    const activeThread = screen.getByRole("button", { name: /Quarterly planning/ });
+    const activeThread = screen.getByRole("button", { name: /Quarterly planning\. Ask,/ });
     expect(activeThread).toHaveAttribute("aria-current", "page");
     expect(activeThread).toHaveAccessibleName(
       /Quarterly planning\. Ask,/,
@@ -38,7 +38,7 @@ describe("Sidebar", () => {
     expect(activeThread.querySelector("[data-history-title]")).toHaveTextContent(
       "Quarterly planning",
     );
-    expect(activeThread.querySelector("small")).toHaveTextContent(/^ASK/);
+    expect(activeThread.closest("li")?.querySelector("small")).toHaveTextContent(/^ASK/);
     expect(activeThread).not.toHaveTextContent("2 turns");
     expect(activeThread).not.toHaveTextContent("gpt-5.1");
     const timestamps = [...document.querySelectorAll("time")];
@@ -54,7 +54,7 @@ describe("Sidebar", () => {
 
     await user.type(screen.getByRole("textbox", { name: "Search history" }), "vendors");
     expect(screen.queryByText("Quarterly planning")).not.toBeInTheDocument();
-    const compareThread = screen.getByRole("button", { name: /Compare vendors/ });
+    const compareThread = screen.getByRole("button", { name: /Compare vendors\. Compare,/ });
     expect(compareThread).toBeInTheDocument();
 
     await user.click(compareThread);
@@ -120,7 +120,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
   });
 
-  it("clears persisted history after confirmation", async () => {
+  it("clears the active persisted thread after confirmation", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -138,12 +138,58 @@ describe("Sidebar", () => {
     render(<Sidebar onSelectThread={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Clear" }));
 
-    await waitFor(() => expect(useChatStore.getState().history).toEqual([]));
+    await waitFor(() =>
+      expect(useChatStore.getState().history.map((entry) => entry.id)).toEqual([3, 4]),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/history?session_id=ask-session",
       expect.objectContaining({ method: "DELETE", credentials: "include" }),
     );
-    expect(within(screen.getByLabelText("Primary navigation")).queryByText("Clear")).toBeNull();
+    expect(useChatStore.getState().sessionId).toBeNull();
+    expect(screen.queryByText("Quarterly planning")).toBeNull();
+    expect(screen.getByText("Compare vendors")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Primary navigation")).getByText("Clear")).toBeInTheDocument();
+  });
+
+  it("deletes every persisted entry in a history thread", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      statusText: "No Content",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+    });
+
+    const onSelectThread = vi.fn();
+
+    render(<Sidebar onSelectThread={onSelectThread} />);
+    const activeThread = screen.getByRole("button", { name: /Quarterly planning\. Ask,/ });
+    const activeRow = activeThread.closest("li");
+    expect(activeRow).not.toBeNull();
+
+    await user.click(within(activeRow!).getByRole("button", { name: "Delete chat" }));
+
+    expect(onSelectThread).not.toHaveBeenCalled();
+    expect(within(activeRow!).getByText("Delete?")).toBeInTheDocument();
+    await user.click(within(activeRow!).getByRole("button", { name: "Confirm delete chat" }));
+
+    await waitFor(() =>
+      expect(useChatStore.getState().history.map((entry) => entry.id)).toEqual([3, 4]),
+    );
+    const deletedPaths = fetchMock.mock.calls.map((call) => call[0]);
+    expect(deletedPaths).toContain("/v1/history/1");
+    expect(deletedPaths).toContain("/v1/history/2");
+    expect(deletedPaths).not.toContain("/v1/history/3");
+    expect(deletedPaths).not.toContain("/v1/history/4");
+    expect(useChatStore.getState().sessionId).toBeNull();
+    expect(screen.queryByText("Quarterly planning")).toBeNull();
+    expect(screen.getByText("Compare vendors")).toBeInTheDocument();
   });
 });
 

@@ -520,7 +520,7 @@
   border-radius: 12px;
   background: var(--cx-surface);
   color: var(--cx-ink-900);
-  cursor: pointer;
+  cursor: default;
   padding: 8px 10px;
   text-align: left;
   box-shadow: var(--cx-shadow-sm);
@@ -529,13 +529,15 @@
     border-color 140ms ease;
 }
 
-.profile:not(:disabled):hover {
-  border-color: var(--cx-accent-border);
-  background: var(--cx-accent-soft);
+.profileInteractive {
+  cursor: pointer;
 }
 
-.profile:disabled {
-  cursor: default;
+.profileInteractive:hover,
+.profileInteractive:focus-visible {
+  border-color: var(--cx-accent-border);
+  background: var(--cx-accent-soft);
+  outline: none;
 }
 
 .sessionDot {

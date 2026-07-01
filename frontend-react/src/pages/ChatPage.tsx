@@ -144,7 +144,6 @@ export function ChatPage() {
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
-        onLogout={authEnabled ? handleLogout : undefined}
       />
 
       <main className={styles.main}>

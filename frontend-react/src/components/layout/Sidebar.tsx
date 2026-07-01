@@ -17,7 +17,6 @@ interface SidebarProps {
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
   onLogin?: () => void;
-  onLogout?: () => void;
 }
 
 interface HistoryDateGroup {
@@ -34,7 +33,6 @@ export function Sidebar({
   whoAmI,
   loggedIn,
   onLogin,
-  onLogout,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [confirmingDeleteKey, setConfirmingDeleteKey] = useState<string | null>(null);
@@ -57,6 +55,7 @@ export function Sidebar({
   const planLabel = whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
   const sessionLabel = sessionId ? formatSessionId(sessionId) : userLabel;
   const sessionStatus = sessionId || loggedIn ? "Session active" : planLabel;
+  const canSignInFromProfile = !loggedIn && !!onLogin;
 
   useEffect(() => {
     return () => {
@@ -332,14 +331,38 @@ export function Sidebar({
         </ul>
       </div>
 
-      <button
-        type="button"
-        className={styles.profile}
-        onClick={loggedIn ? onLogout : onLogin}
-        disabled={!loggedIn && !onLogin}
-        aria-label={loggedIn ? `Sign out ${userLabel}` : onLogin ? "Sign in" : "Guest account"}
-        title={isCollapsed ? userLabel : undefined}
-      >
+      {canSignInFromProfile ? (
+        <button
+          type="button"
+          className={`${styles.profile} ${styles.profileInteractive}`}
+          onClick={onLogin}
+          aria-label="Sign in"
+          title={isCollapsed ? userLabel : undefined}
+        >
+          <SessionProfileContent sessionLabel={sessionLabel} sessionStatus={sessionStatus} />
+        </button>
+      ) : (
+        <div
+          className={styles.profile}
+          aria-label={`${sessionLabel}. ${sessionStatus}`}
+          title={isCollapsed ? userLabel : undefined}
+        >
+          <SessionProfileContent sessionLabel={sessionLabel} sessionStatus={sessionStatus} />
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function SessionProfileContent({
+  sessionLabel,
+  sessionStatus,
+}: {
+  sessionLabel: string;
+  sessionStatus: string;
+}) {
+  return (
+    <>
         <span className={styles.sessionDot} aria-hidden="true">
           <span />
         </span>
@@ -347,8 +370,7 @@ export function Sidebar({
           <strong>{sessionLabel}</strong>
           <span>{sessionStatus}</span>
         </span>
-      </button>
-    </aside>
+    </>
   );
 }
 

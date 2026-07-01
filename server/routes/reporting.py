@@ -133,7 +133,7 @@ async def savings_report(
 @router.get("/usage/export")
 async def usage_export(
     request: Request,
-    format: str = Query(default="csv"),  # noqa: A002
+    format: str = Query(default="csv"),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),
@@ -176,7 +176,7 @@ async def usage_export(
 @router.get("/savings/export")
 async def savings_export(
     request: Request,
-    format: str = Query(default="csv"),  # noqa: A002
+    format: str = Query(default="csv"),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
     group_by: str = Query(default="day"),

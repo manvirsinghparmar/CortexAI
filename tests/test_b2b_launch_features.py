@@ -25,7 +25,6 @@ from sqlalchemy import (
     Table,
     Uuid,
     create_engine,
-    func,
     insert,
     select,
     text,

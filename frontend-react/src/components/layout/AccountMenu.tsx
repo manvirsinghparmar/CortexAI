@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CortexIcon, type CortexIconName } from "../shared/CortexIcon";
 import type { AppTheme } from "../../hooks/useTheme";
 import styles from "./AccountMenu.module.css";
@@ -64,29 +64,29 @@ export function AccountMenu({
   const showMenu = menuActions.length > 0;
   const buttonLabel = loggedIn ? "Account" : "Guest account";
 
-  const clearCloseTimer = () => {
+  const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current === null) return;
     window.clearTimeout(closeTimerRef.current);
     closeTimerRef.current = null;
-  };
+  }, []);
 
-  const openMenu = () => {
+  const openMenu = useCallback(() => {
     clearCloseTimer();
     if (showMenu) setOpen(true);
-  };
+  }, [clearCloseTimer, showMenu]);
 
-  const closeMenu = () => {
+  const closeMenu = useCallback(() => {
     clearCloseTimer();
     setOpen(false);
-  };
+  }, [clearCloseTimer]);
 
-  const scheduleCloseMenu = () => {
+  const scheduleCloseMenu = useCallback(() => {
     clearCloseTimer();
     closeTimerRef.current = window.setTimeout(() => {
       setOpen(false);
       closeTimerRef.current = null;
     }, 160);
-  };
+  }, [clearCloseTimer]);
 
   useEffect(() => {
     return () => {
@@ -115,7 +115,7 @@ export function AccountMenu({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [closeMenu, open]);
 
   const handleAction = (action: AccountMenuActionKey) => {
     closeMenu();

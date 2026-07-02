@@ -125,6 +125,18 @@
   transform: translateY(-1px);
 }
 
+.newChatButton:disabled {
+  background: var(--cx-surface-3);
+  color: var(--cx-ink-300);
+  cursor: default;
+  transform: none;
+}
+
+.newChatButton:disabled:hover {
+  box-shadow: none;
+  transform: none;
+}
+
 .newChatButton svg {
   width: 17px;
   height: 17px;
@@ -185,6 +197,21 @@
   color: var(--cx-ink-900);
 }
 
+.navItem:disabled,
+.navItemActive:disabled {
+  background: transparent;
+  box-shadow: none;
+  color: var(--cx-ink-300);
+  cursor: default;
+  transform: none;
+}
+
+.navItem:disabled:hover,
+.navItemActive:disabled:hover {
+  background: transparent;
+  color: var(--cx-ink-300);
+}
+
 .navItemActive {
   background: var(--cx-surface);
   color: var(--cx-ink-900);
@@ -199,6 +226,16 @@
   width: 3px;
   border-radius: 999px;
   background: var(--cx-accent);
+}
+
+.navItemActive:disabled {
+  background: transparent;
+  box-shadow: none;
+  color: var(--cx-ink-300);
+}
+
+.navItemActive:disabled::before {
+  background: var(--cx-hairline);
 }
 
 .historyBlock {
@@ -234,6 +271,16 @@
 
 .historyHeader button:hover {
   color: var(--cx-ink-700);
+}
+
+.signedOutHistory {
+  border: 1px dashed var(--cx-hairline);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cx-surface) 70%, transparent);
+  color: var(--cx-ink-500);
+  font: 600 12px/18px var(--font-sans);
+  margin-top: 10px;
+  padding: 13px 12px;
 }
 
 .historySearchWrap {

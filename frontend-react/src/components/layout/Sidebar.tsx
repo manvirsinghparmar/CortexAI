@@ -17,6 +17,7 @@ interface SidebarProps {
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
   onLogin?: () => void;
+  signedOut?: boolean;
 }
 
 interface HistoryDateGroup {
@@ -33,6 +34,7 @@ export function Sidebar({
   whoAmI,
   loggedIn,
   onLogin,
+  signedOut = false,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [confirmingDeleteKey, setConfirmingDeleteKey] = useState<string | null>(null);
@@ -51,10 +53,12 @@ export function Sidebar({
   }, [history, historySearch]);
   const historyGroups = useMemo(() => groupHistoryThreads(filteredThreads), [filteredThreads]);
 
-  const userLabel = whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest");
-  const planLabel = whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
-  const sessionLabel = sessionId ? formatSessionId(sessionId) : userLabel;
-  const sessionStatus = sessionId || loggedIn ? "Session active" : planLabel;
+  const userLabel = signedOut ? "Sign in" : whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest");
+  const planLabel = signedOut
+    ? "Access your workspace"
+    : whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
+  const sessionLabel = sessionId && !signedOut ? formatSessionId(sessionId) : userLabel;
+  const sessionStatus = sessionId && !signedOut ? "Session active" : planLabel;
   const canSignInFromProfile = !loggedIn && !!onLogin;
 
   useEffect(() => {
@@ -174,6 +178,7 @@ export function Sidebar({
           onClick={startNewChat}
           aria-label="New chat"
           title={isCollapsed ? "New chat" : undefined}
+          disabled={signedOut}
         >
           <CortexIcon name="new-chat" />
           <span>New chat</span>
@@ -191,6 +196,7 @@ export function Sidebar({
           aria-current={askActive ? "page" : undefined}
           aria-label="Ask"
           title={isCollapsed ? "Ask" : undefined}
+          disabled={signedOut}
         >
           <CortexIcon name="ask" />
           <span>Ask</span>
@@ -202,6 +208,7 @@ export function Sidebar({
           aria-current={compareActive ? "page" : undefined}
           aria-label="Compare"
           title={isCollapsed ? "Compare" : undefined}
+          disabled={signedOut}
         >
           <CortexIcon name="compare" />
           <span>Compare</span>
@@ -213,6 +220,7 @@ export function Sidebar({
           aria-current={usageActive ? "page" : undefined}
           aria-label="Usage"
           title={isCollapsed ? "Usage" : undefined}
+          disabled={signedOut}
         >
           <CortexIcon name="usage" />
           <span>Usage</span>
@@ -222,113 +230,119 @@ export function Sidebar({
       <div className={styles.historyBlock} hidden={isCollapsed}>
         <div className={styles.historyHeader}>
           <span>History</span>
-          {history.length > 0 && (
+          {!signedOut && history.length > 0 && (
             <button type="button" onClick={handleClearAll}>
               Clear
             </button>
           )}
         </div>
-        <div className={styles.historySearchWrap}>
-          <CortexIcon name="search" />
-          <input
-            id="historySearch"
-            className={styles.historySearch}
-            value={historySearch}
-            onChange={(event) => setHistorySearch(event.target.value)}
-            placeholder="Search history"
-            aria-label="Search history"
-          />
-        </div>
-        <ul className={styles.historyList}>
-          {historyGroups.map((group) => (
-            <li key={group.key} className={styles.historyGroup}>
-              <div className={styles.historyGroupLabel}>{group.label}</div>
-              <ul className={styles.historyGroupItems}>
-                {group.threads.map((thread) => {
-                  const modeLabel = formatMode(thread.mode);
-                  const timeLabel = formatHistoryTime(thread.latestTimestamp);
-                  const dateTimeLabel = formatHistoryDateTime(thread.latestTimestamp);
-                  const modeClassName = [
-                    styles.modeTag,
-                    thread.mode === "compare"
-                      ? styles.modeTagCompare
-                      : thread.mode === "single"
-                        ? styles.modeTagAsk
-                        : styles.modeTagMixed,
-                  ].join(" ");
+        {signedOut ? (
+          <div className={styles.signedOutHistory}>Sign in to view history.</div>
+        ) : (
+          <>
+            <div className={styles.historySearchWrap}>
+              <CortexIcon name="search" />
+              <input
+                id="historySearch"
+                className={styles.historySearch}
+                value={historySearch}
+                onChange={(event) => setHistorySearch(event.target.value)}
+                placeholder="Search history"
+                aria-label="Search history"
+              />
+            </div>
+            <ul className={styles.historyList}>
+              {historyGroups.map((group) => (
+                <li key={group.key} className={styles.historyGroup}>
+                  <div className={styles.historyGroupLabel}>{group.label}</div>
+                  <ul className={styles.historyGroupItems}>
+                    {group.threads.map((thread) => {
+                      const modeLabel = formatMode(thread.mode);
+                      const timeLabel = formatHistoryTime(thread.latestTimestamp);
+                      const dateTimeLabel = formatHistoryDateTime(thread.latestTimestamp);
+                      const modeClassName = [
+                        styles.modeTag,
+                        thread.mode === "compare"
+                          ? styles.modeTagCompare
+                          : thread.mode === "single"
+                            ? styles.modeTagAsk
+                            : styles.modeTagMixed,
+                      ].join(" ");
 
-                  const isConfirmingDelete = confirmingDeleteKey === thread.key;
+                      const isConfirmingDelete = confirmingDeleteKey === thread.key;
 
-                  return (
-                    <li key={thread.key} className={styles.historyItemRow}>
-                      {isConfirmingDelete ? (
-                        <div className={styles.historyDeleteConfirm} role="group" aria-label="Confirm delete chat">
-                          <span className={styles.historyDeleteConfirmText}>Delete?</span>
-                          <button
-                            type="button"
-                            className={styles.historyDeleteConfirmButton}
-                            onClick={(event) => void handleConfirmDeleteThread(event, thread)}
-                            aria-label="Confirm delete chat"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.historyDeleteCancelButton}
-                            onClick={handleCancelDelete}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div
-                          className={
-                            thread.sessionId === sessionId
-                              ? `${styles.historyThreadSurface} ${styles.historyItemActive}`
-                              : styles.historyThreadSurface
-                          }
-                          onClick={() => onSelectThread(thread)}
-                          title={thread.title}
-                        >
-                          <div className={styles.historyTop}>
-                            <button
-                              type="button"
-                              className={styles.historyTitleButton}
-                              data-history-thread={thread.key}
-                              aria-label={`${thread.title}. ${modeLabel}, ${
-                                dateTimeLabel || "Date unavailable"
-                              }`}
-                              aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                      return (
+                        <li key={thread.key} className={styles.historyItemRow}>
+                          {isConfirmingDelete ? (
+                            <div className={styles.historyDeleteConfirm} role="group" aria-label="Confirm delete chat">
+                              <span className={styles.historyDeleteConfirmText}>Delete?</span>
+                              <button
+                                type="button"
+                                className={styles.historyDeleteConfirmButton}
+                                onClick={(event) => void handleConfirmDeleteThread(event, thread)}
+                                aria-label="Confirm delete chat"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.historyDeleteCancelButton}
+                                onClick={handleCancelDelete}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div
+                              className={
+                                thread.sessionId === sessionId
+                                  ? `${styles.historyThreadSurface} ${styles.historyItemActive}`
+                                  : styles.historyThreadSurface
+                              }
+                              onClick={() => onSelectThread(thread)}
+                              title={thread.title}
                             >
-                              <span className={styles.historyTitle} data-history-title>
-                                {thread.title}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className={styles.historyDeleteButton}
-                              onClick={(event) => handleDeleteClick(event, thread)}
-                              aria-label="Delete chat"
-                              title="Delete chat"
-                            >
-                              <CortexIcon name="trash" size={15} strokeWidth={1.8} />
-                            </button>
-                          </div>
-                          <small className={styles.historyMeta}>
-                            <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
-                            <time dateTime={thread.latestTimestamp}>
-                              {timeLabel || "Date unavailable"}
-                            </time>
-                          </small>
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </li>
-          ))}
-        </ul>
+                              <div className={styles.historyTop}>
+                                <button
+                                  type="button"
+                                  className={styles.historyTitleButton}
+                                  data-history-thread={thread.key}
+                                  aria-label={`${thread.title}. ${modeLabel}, ${
+                                    dateTimeLabel || "Date unavailable"
+                                  }`}
+                                  aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                                >
+                                  <span className={styles.historyTitle} data-history-title>
+                                    {thread.title}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={styles.historyDeleteButton}
+                                  onClick={(event) => handleDeleteClick(event, thread)}
+                                  aria-label="Delete chat"
+                                  title="Delete chat"
+                                >
+                                  <CortexIcon name="trash" size={15} strokeWidth={1.8} />
+                                </button>
+                              </div>
+                              <small className={styles.historyMeta}>
+                                <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
+                                <time dateTime={thread.latestTimestamp}>
+                                  {timeLabel || "Date unavailable"}
+                                </time>
+                              </small>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </div>
 
       {canSignInFromProfile ? (

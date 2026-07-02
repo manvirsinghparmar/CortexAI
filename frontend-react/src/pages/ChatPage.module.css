@@ -70,10 +70,20 @@
   color: var(--cx-ink-900);
 }
 
+.tab:disabled {
+  color: var(--cx-ink-300);
+  cursor: default;
+}
+
 .activeTab {
   border-bottom-color: var(--cx-accent);
   color: var(--cx-ink-900);
   font-weight: 700;
+}
+
+.activeTab:disabled {
+  border-bottom-color: var(--cx-hairline);
+  color: var(--cx-ink-300);
 }
 
 .topActions {
@@ -103,6 +113,15 @@
   color: var(--cx-accent);
 }
 
+.iconButton:disabled {
+  color: var(--cx-ink-300);
+  cursor: default;
+}
+
+.iconButton:disabled:hover {
+  color: var(--cx-ink-300);
+}
+
 .canvas {
   flex: 1;
   min-height: 0;
@@ -110,14 +129,100 @@
   padding: 24px;
 }
 
-.backendBanner {
-  border: 1px solid #f3c76b;
+.workspaceLoading,
+.signInGate {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+}
+
+.workspaceLoading {
+  color: var(--cx-ink-500);
+  font: 600 14px/20px var(--font-sans);
+}
+
+.signInGate {
+  padding: clamp(24px, 6vh, 72px) 16px;
+}
+
+.signInPanel {
+  display: grid;
+  width: min(560px, 100%);
+  justify-items: center;
+  gap: 18px;
+  border: 1px solid var(--cx-hairline);
   border-radius: 8px;
-  background: #fff8e1;
-  color: #614711;
-  font: 600 13px/18px var(--font-sans);
-  margin-bottom: 12px;
-  padding: 10px 14px;
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-card);
+  padding: clamp(26px, 4vw, 42px);
+  text-align: center;
+}
+
+.signInIcon {
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+}
+
+.signInCopy {
+  display: grid;
+  gap: 10px;
+}
+
+.signInEyebrow {
+  margin: 0;
+  color: var(--cx-ink-500);
+  font: 700 12px/16px var(--font-sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.signInPanel h2 {
+  margin: 0;
+  color: var(--cx-ink-900);
+  font: 700 clamp(30px, 4vw, 42px)/1.12 var(--font-sans);
+  letter-spacing: 0;
+}
+
+.signInPanel p:not(.signInEyebrow) {
+  max-width: 440px;
+  margin: 0;
+  color: var(--cx-ink-600);
+  font: 500 16px/25px var(--font-sans);
+}
+
+.signInButton {
+  display: inline-flex;
+  min-width: 132px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: #0B1220;
+  color: #fff;
+  cursor: pointer;
+  font: 700 14px/20px var(--font-sans);
+  padding: 0 20px;
+  transition:
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.signInButton:hover,
+.signInButton:focus-visible {
+  outline: none;
+  box-shadow: var(--cx-shadow-card);
+  transform: translateY(-1px);
+}
+
+.signInButton:active {
+  transform: translateY(0);
 }
 
 .composerWrap {
@@ -506,6 +611,20 @@
     overflow: auto;
     padding: 16px 16px 0;
     scroll-padding-bottom: var(--mobile-response-actions-clearance);
+  }
+
+  .signInGate {
+    min-height: calc(100dvh - 138px);
+    padding: 18px 0 28px;
+  }
+
+  .signInPanel {
+    padding: 28px 22px;
+  }
+
+  .signInPanel h2 {
+    font-size: 30px;
+    line-height: 36px;
   }
 
   /* Fixed bottom-sheet overlay — replaces the inline flex slot on mobile */

@@ -36,8 +36,10 @@ interface MobileHistoryDateGroup {
 export function ChatPage() {
   const navigate = useNavigate();
   const { whoAmI, cognitoConfig, loading: authLoading, loggedIn, login, logout } = useAuth();
-  const { models, error: modelsError } = useModels(!authLoading);
-  const backendOffline = !!modelsError && !authLoading;
+  const authEnabled = cognitoConfig?.enabled ?? false;
+  const signedOut = !authLoading && authEnabled && !loggedIn;
+  const workspaceReady = !authLoading && !signedOut;
+  const { models } = useModels(workspaceReady);
   const { load: loadHistory, removeThread } = useHistory();
   const { submit, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
@@ -54,13 +56,12 @@ export function ChatPage() {
   const setHistory = useChatStore((s) => s.setHistory);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const hasTurns = useChatStore((s) => s.turns.length > 0);
-  const authEnabled = cognitoConfig?.enabled ?? false;
   const showComposerSheet = !composerCollapsed;
   const showComposerBackdrop = showComposerSheet && hasTurns;
 
   useEffect(() => {
-    if (!authLoading) void loadHistory({ restoreActiveTranscript: true });
-  }, [authLoading, loadHistory]);
+    if (workspaceReady) void loadHistory({ restoreActiveTranscript: true });
+  }, [loadHistory, workspaceReady]);
 
   // Collapse the composer sheet on mobile as soon as the user submits
   const prevStreamingRef = useRef(false);
@@ -144,6 +145,7 @@ export function ChatPage() {
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
+        signedOut={signedOut}
       />
 
       <main className={styles.main}>
@@ -158,6 +160,7 @@ export function ChatPage() {
               className={`${styles.iconButton} ${styles.mobileComposeButton}`}
               aria-label="Start new chat"
               onClick={handleStartNewChat}
+              disabled={signedOut}
             >
               <CortexIcon name="new-chat" />
             </button>
@@ -180,6 +183,7 @@ export function ChatPage() {
               type="button"
               className={`${styles.tab} ${mode === "single" ? styles.activeTab : ""}`}
               onClick={() => setMode("single")}
+              disabled={signedOut}
             >
               Ask
             </button>
@@ -188,12 +192,19 @@ export function ChatPage() {
               type="button"
               className={`${styles.tab} ${mode === "compare" ? styles.activeTab : ""}`}
               onClick={() => setMode("compare")}
+              disabled={signedOut}
             >
               Compare
             </button>
           </nav>
           <div className={styles.topActions} aria-label="Workspace actions">
-            <button type="button" className={styles.iconButton} aria-label="New chat" onClick={startNewChat}>
+            <button
+              type="button"
+              className={styles.iconButton}
+              aria-label="New chat"
+              onClick={startNewChat}
+              disabled={signedOut}
+            >
               <CortexIcon name="plus" />
             </button>
             <AccountMenu
@@ -208,8 +219,11 @@ export function ChatPage() {
         </header>
 
         <div className={styles.canvas}>
-          {backendOffline && <BackendBanner />}
-          {mobilePanel === "history" ? (
+          {authLoading ? (
+            <WorkspaceLoading />
+          ) : signedOut ? (
+            <SignedOutGate onLogin={login} />
+          ) : mobilePanel === "history" ? (
             <MobileHistory
               onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
               onDeleteThread={(thread) => void handleDeleteHistoryThread(thread)}
@@ -232,7 +246,7 @@ export function ChatPage() {
           )}
         </div>
 
-        {mobilePanel === "chat" && (
+        {workspaceReady && mobilePanel === "chat" && (
           <>
             {/* Dim backdrop — mobile only, shown when sheet is open */}
             <div
@@ -271,48 +285,69 @@ export function ChatPage() {
           </>
         )}
 
-        <nav className={styles.mobileNav} aria-label="Mobile navigation">
-          <button
-            type="button"
-            className={mobilePanel === "chat" && mode === "single" ? styles.mobileNavActive : ""}
-            onClick={() => handleMobileMode("single")}
-          >
-            <span className={styles.mobileNavIcon}>
-              <CortexIcon name="ask" />
-            </span>
-            <span>Ask</span>
-          </button>
-          <button
-            type="button"
-            className={mobilePanel === "chat" && mode === "compare" ? styles.mobileNavActive : ""}
-            onClick={() => handleMobileMode("compare")}
-          >
-            <span className={styles.mobileNavIcon}>
-              <CortexIcon name="compare" />
-            </span>
-            <span>Compare</span>
-          </button>
-          <button
-            type="button"
-            className={mobilePanel === "history" ? styles.mobileNavActive : ""}
-            onClick={() => setMobilePanel("history")}
-          >
-            <span className={styles.mobileNavIcon}>
-              <CortexIcon name="history" />
-            </span>
-            <span>History</span>
-          </button>
-        </nav>
+        {workspaceReady && (
+          <nav className={styles.mobileNav} aria-label="Mobile navigation">
+            <button
+              type="button"
+              className={mobilePanel === "chat" && mode === "single" ? styles.mobileNavActive : ""}
+              onClick={() => handleMobileMode("single")}
+            >
+              <span className={styles.mobileNavIcon}>
+                <CortexIcon name="ask" />
+              </span>
+              <span>Ask</span>
+            </button>
+            <button
+              type="button"
+              className={mobilePanel === "chat" && mode === "compare" ? styles.mobileNavActive : ""}
+              onClick={() => handleMobileMode("compare")}
+            >
+              <span className={styles.mobileNavIcon}>
+                <CortexIcon name="compare" />
+              </span>
+              <span>Compare</span>
+            </button>
+            <button
+              type="button"
+              className={mobilePanel === "history" ? styles.mobileNavActive : ""}
+              onClick={() => setMobilePanel("history")}
+            >
+              <span className={styles.mobileNavIcon}>
+                <CortexIcon name="history" />
+              </span>
+              <span>History</span>
+            </button>
+          </nav>
+        )}
       </main>
     </div>
   );
 }
 
-function BackendBanner() {
+function WorkspaceLoading() {
   return (
-    <div className={styles.backendBanner}>
-      Backend not connected. Chat, compare, model catalog, history, and attachments require the
-      FastAPI backend at port 8000.
+    <div className={styles.workspaceLoading} role="status">
+      Preparing your workspace...
+    </div>
+  );
+}
+
+function SignedOutGate({ onLogin }: { onLogin: () => void }) {
+  return (
+    <div className={styles.signInGate}>
+      <section className={styles.signInPanel} aria-labelledby="sign-in-title">
+        <span className={styles.signInIcon} aria-hidden="true">
+          <CortexIcon name="user" size={24} />
+        </span>
+        <div className={styles.signInCopy}>
+          <p className={styles.signInEyebrow}>CortexAI workspace</p>
+          <h2 id="sign-in-title">Sign in to use CortexAI</h2>
+          <p>Access your AI workspace, saved chats, model comparison, and file analysis.</p>
+        </div>
+        <button type="button" className={styles.signInButton} onClick={onLogin}>
+          Sign in
+        </button>
+      </section>
     </div>
   );
 }

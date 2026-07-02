@@ -222,6 +222,36 @@ describe("Sidebar", () => {
     expect(onLogin).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a signed-out sidebar state without interactive workspace history", async () => {
+    const user = userEvent.setup();
+    const onLogin = vi.fn();
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+    });
+
+    render(
+      <Sidebar
+        onSelectThread={vi.fn()}
+        loggedIn={false}
+        onLogin={onLogin}
+        signedOut
+      />,
+    );
+
+    expect(screen.getByText("Sign in")).toBeInTheDocument();
+    expect(screen.getByText("Access your workspace")).toBeInTheDocument();
+    expect(screen.getByText("Sign in to view history.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Search history" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Compare" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(onLogin).toHaveBeenCalledTimes(1);
+  });
+
   it("deletes every persisted entry in a history thread", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockResolvedValue({

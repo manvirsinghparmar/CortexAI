@@ -12,6 +12,7 @@ import {
   resolveOptimizationResponse,
 } from "../optimization/promptOptimization";
 import { makePlaceholderResponse, useChatStore } from "../store/chatStore";
+import { StreamDeltaBuffer } from "../streaming/streamDeltaBuffer";
 import { parseModelKey } from "./useSmartRouting";
 import type {
   ApiError,
@@ -291,8 +292,14 @@ async function runAskTurn({
   }
 
   let finalResponse: Partial<ChatResponse> = {};
+  const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
   for await (const chunk of streamChat(request, signal)) {
     if (signal.aborted) break;
+    if (chunk.type === "delta" && chunk.text) {
+      deltaBuffer.append(0, chunk.text);
+      continue;
+    }
+    deltaBuffer.flush();
     const latest = useChatStore.getState();
     if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
       const current =
@@ -313,11 +320,6 @@ async function runAskTurn({
       latest.updateTurnResponse(activeTurnId, 0, {
         ...current,
         ui_status: "requesting",
-      });
-    } else if (chunk.type === "delta" && chunk.text) {
-      latest.appendStreamingText(chunk.text);
-      latest.appendTurnResponseText(activeTurnId, 0, chunk.text, {
-        ui_status: "streaming",
       });
     } else if (chunk.type === "metadata" && chunk.metadata) {
       finalResponse = { ...finalResponse, ...chunk.metadata };
@@ -340,6 +342,7 @@ async function runAskTurn({
       throw new Error(chunk.error ?? "Stream error");
     }
   }
+  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {
@@ -438,10 +441,16 @@ async function runCompareTurn({
     }
   }
 
+  const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
   for await (const chunk of streamCompare(request, signal)) {
     if (signal.aborted) break;
-    const latest = useChatStore.getState();
     const index = chunk.index ?? 0;
+    if (chunk.type === "delta" && chunk.text) {
+      deltaBuffer.append(index, chunk.text);
+      continue;
+    }
+    deltaBuffer.flush();
+    const latest = useChatStore.getState();
     if (chunk.type === "response_start") {
       const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
       latest.updateTurnResponse(activeTurnId, index, {
@@ -449,10 +458,6 @@ async function runCompareTurn({
         provider: chunk.provider ?? latest.responses[index]?.provider ?? targets[index]?.provider ?? "",
         model: chunk.model ?? latest.responses[index]?.model ?? targets[index]?.model ?? "",
         ui_status: "requesting",
-      });
-    } else if (chunk.type === "delta" && chunk.text) {
-      latest.appendTurnResponseText(activeTurnId, index, chunk.text, {
-        ui_status: "streaming",
       });
     } else if (chunk.type === "response_done" && chunk.response) {
       const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
@@ -474,6 +479,7 @@ async function runCompareTurn({
       throw new Error(chunk.error ?? "Compare stream error");
     }
   }
+  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {
@@ -529,8 +535,14 @@ async function runRegenerateResponse({
   state.prepareTurnResponseForStreaming(turnId, responseIndex, placeholder);
 
   let finalResponse: Partial<ChatResponse> = {};
+  const deltaBuffer = new StreamDeltaBuffer(turnId);
   for await (const chunk of streamChat(request, signal)) {
     if (signal.aborted) break;
+    if (chunk.type === "delta" && chunk.text) {
+      deltaBuffer.append(responseIndex, chunk.text);
+      continue;
+    }
+    deltaBuffer.flush();
     const latest = useChatStore.getState();
     if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
       const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
@@ -545,10 +557,6 @@ async function runRegenerateResponse({
       latest.updateTurnResponse(turnId, responseIndex, {
         ...current,
         ui_status: "requesting",
-      });
-    } else if (chunk.type === "delta" && chunk.text) {
-      latest.appendTurnResponseText(turnId, responseIndex, chunk.text, {
-        ui_status: "streaming",
       });
     } else if (chunk.type === "metadata" && chunk.metadata) {
       finalResponse = { ...finalResponse, ...chunk.metadata };
@@ -568,6 +576,7 @@ async function runRegenerateResponse({
       throw new Error(chunk.error ?? "Stream error");
     }
   }
+  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {

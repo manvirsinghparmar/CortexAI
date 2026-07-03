@@ -2,6 +2,7 @@ import {
   Children,
   cloneElement,
   isValidElement,
+  memo,
   useEffect,
   useRef,
   useState,
@@ -207,28 +208,7 @@ export function ResponseCard({
             optimizeEnabled={optimizeEnabled}
           />
         ) : (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkCitations]}
-            components={{
-              cite: (props) => (
-                <Citation
-                  refs={citationRefsFromProps(props as CitationMarkdownProps)}
-                  sources={response.web_source_items}
-                />
-              ),
-              a: ({ href, children, ...props }) => {
-                return (
-                  <a href={href} target={isExternal(href) ? "_blank" : undefined} rel="noreferrer" {...props}>
-                    {children}
-                  </a>
-                );
-              },
-              code: CodeBlock,
-              table: MarkdownTable,
-            }}
-          >
-            {responseText}
-          </ReactMarkdown>
+          <ResponseMarkdown text={responseText} sources={response.web_source_items} />
         )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
@@ -289,6 +269,43 @@ export function ResponseCard({
     </article>
   );
 }
+
+const MARKDOWN_PLUGINS = [remarkGfm, remarkCitations];
+
+// Markdown parsing is the dominant render cost of a response. Memoized so a
+// card only re-parses when its own text changes, not on every store update.
+const ResponseMarkdown = memo(function ResponseMarkdown({
+  text,
+  sources,
+}: {
+  text: string;
+  sources: ChatResponse["web_source_items"];
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_PLUGINS}
+      components={{
+        cite: (props) => (
+          <Citation
+            refs={citationRefsFromProps(props as CitationMarkdownProps)}
+            sources={sources}
+          />
+        ),
+        a: ({ href, children, ...props }) => {
+          return (
+            <a href={href} target={isExternal(href) ? "_blank" : undefined} rel="noreferrer" {...props}>
+              {children}
+            </a>
+          );
+        },
+        code: CodeBlock,
+        table: MarkdownTable,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+});
 
 function MarkdownTable({
   children,

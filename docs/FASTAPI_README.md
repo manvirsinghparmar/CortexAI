@@ -206,6 +206,7 @@ React/Vite frontend notes:
 - `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.
 - `Dockerfile.frontend` builds the React app and serves static assets with nginx. `Dockerfile.api` is API-only; it does not include `frontend-react/dist` unless the deployment image is extended to copy those files.
+- HTML cache policy: `index.html` is served with `Cache-Control: no-cache` in both hosting modes (nginx config in `Dockerfile.frontend`; `NoCacheHTMLStaticFiles` for the monolith static mount) so new deploys take effect on the next load. Hashed assets under `/assets/` remain long-cached (`public, immutable`) because their filenames change per build.
 
 ## API Key Persistence Policy
 

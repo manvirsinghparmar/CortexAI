@@ -255,6 +255,7 @@ python run_server.py --reload
 
 Frontend runtime config (`/runtime-config.js`):
 - In monolith mode (`SERVE_FRONTEND=true`), FastAPI serves `/runtime-config.js` dynamically with `Cache-Control: no-store`.
+- SPA shell caching: `index.html` (and any other HTML) is served with `Cache-Control: no-cache` so browsers revalidate the shell on every load — nginx applies it in `Dockerfile.frontend` deployments, and the monolith static mount applies it to HTML responses. Hashed build assets under `/assets/` keep their long cache (`public, immutable`, 1 year). Without shell revalidation, a cached `index.html` could reference hashed files deleted by a newer deploy and break the app until a hard refresh.
 - `apiBase` defaults to current request origin. Override with `FRONTEND_RUNTIME_API_BASE` when API is on another origin.
 - Browser dev-session bootstrap flag:
   - defaults from `ENABLE_DEV_SESSION_LOGIN`

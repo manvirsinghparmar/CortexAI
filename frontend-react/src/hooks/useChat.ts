@@ -293,56 +293,62 @@ async function runAskTurn({
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
-  for await (const chunk of streamChat(request, signal)) {
-    if (signal.aborted) break;
-    if (chunk.type === "delta" && chunk.text) {
-      deltaBuffer.append(0, chunk.text);
-      continue;
+  // finally guarantees the buffer timer is cleared and pending text applied
+  // even when the stream aborts or throws, so no orphaned timeout can mutate
+  // a turn after the cancel/error path has settled it.
+  try {
+    for await (const chunk of streamChat(request, signal)) {
+      if (signal.aborted) break;
+      if (chunk.type === "delta" && chunk.text) {
+        deltaBuffer.append(0, chunk.text);
+        continue;
+      }
+      deltaBuffer.flush();
+      const latest = useChatStore.getState();
+      if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+        const current =
+          latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+          latest.responses[0] ??
+          placeholder;
+        latest.updateTurnResponse(activeTurnId, 0, {
+          ...current,
+          provider: chunk.provider ?? current.provider,
+          model: chunk.model ?? current.model,
+          ui_status: "requesting",
+        });
+      } else if (chunk.type === "start") {
+        const current =
+          latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+          latest.responses[0] ??
+          placeholder;
+        latest.updateTurnResponse(activeTurnId, 0, {
+          ...current,
+          ui_status: "requesting",
+        });
+      } else if (chunk.type === "metadata" && chunk.metadata) {
+        finalResponse = { ...finalResponse, ...chunk.metadata };
+        const current =
+          latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
+          latest.responses[0] ??
+          placeholder;
+        latest.updateTurnResponse(activeTurnId, 0, {
+          ...current,
+          ...finalResponse,
+          text: chunk.metadata.text ?? latest.responses[0]?.text ?? "",
+          started_at: current.started_at ?? startedAt,
+          ui_status: finalResponse.error ? "failed" : "finalizing",
+          failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
+        } as ChatResponse);
+      } else if (chunk.type === "done") {
+        if (chunk.session_id) latest.setSessionId(chunk.session_id);
+        break;
+      } else if (chunk.type === "error") {
+        throw new Error(chunk.error ?? "Stream error");
+      }
     }
+  } finally {
     deltaBuffer.flush();
-    const latest = useChatStore.getState();
-    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
-      const current =
-        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
-        latest.responses[0] ??
-        placeholder;
-      latest.updateTurnResponse(activeTurnId, 0, {
-        ...current,
-        provider: chunk.provider ?? current.provider,
-        model: chunk.model ?? current.model,
-        ui_status: "requesting",
-      });
-    } else if (chunk.type === "start") {
-      const current =
-        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
-        latest.responses[0] ??
-        placeholder;
-      latest.updateTurnResponse(activeTurnId, 0, {
-        ...current,
-        ui_status: "requesting",
-      });
-    } else if (chunk.type === "metadata" && chunk.metadata) {
-      finalResponse = { ...finalResponse, ...chunk.metadata };
-      const current =
-        latest.turns.find((turn) => turn.id === activeTurnId)?.responses[0] ??
-        latest.responses[0] ??
-        placeholder;
-      latest.updateTurnResponse(activeTurnId, 0, {
-        ...current,
-        ...finalResponse,
-        text: chunk.metadata.text ?? latest.responses[0]?.text ?? "",
-        started_at: current.started_at ?? startedAt,
-        ui_status: finalResponse.error ? "failed" : "finalizing",
-        failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
-      } as ChatResponse);
-    } else if (chunk.type === "done") {
-      if (chunk.session_id) latest.setSessionId(chunk.session_id);
-      break;
-    } else if (chunk.type === "error") {
-      throw new Error(chunk.error ?? "Stream error");
-    }
   }
-  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {
@@ -442,44 +448,47 @@ async function runCompareTurn({
   }
 
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
-  for await (const chunk of streamCompare(request, signal)) {
-    if (signal.aborted) break;
-    const index = chunk.index ?? 0;
-    if (chunk.type === "delta" && chunk.text) {
-      deltaBuffer.append(index, chunk.text);
-      continue;
+  try {
+    for await (const chunk of streamCompare(request, signal)) {
+      if (signal.aborted) break;
+      const index = chunk.index ?? 0;
+      if (chunk.type === "delta" && chunk.text) {
+        deltaBuffer.append(index, chunk.text);
+        continue;
+      }
+      deltaBuffer.flush();
+      const latest = useChatStore.getState();
+      if (chunk.type === "response_start") {
+        const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
+        latest.updateTurnResponse(activeTurnId, index, {
+          ...current,
+          provider: chunk.provider ?? latest.responses[index]?.provider ?? targets[index]?.provider ?? "",
+          model: chunk.model ?? latest.responses[index]?.model ?? targets[index]?.model ?? "",
+          ui_status: "requesting",
+        });
+      } else if (chunk.type === "response_done" && chunk.response) {
+        const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
+        const completedAt = new Date().toISOString();
+        const failed = !!chunk.response.error;
+        latest.updateTurnResponse(activeTurnId, index, {
+          ...current,
+          ...chunk.response,
+          started_at: current.started_at ?? startedAt,
+          completed_at: failed ? current.completed_at : completedAt,
+          failed_at: failed ? current.failed_at ?? completedAt : current.failed_at,
+          ui_status: failed ? "failed" : "complete",
+        });
+      } else if (chunk.type === "done") {
+        if (chunk.compare) latest.setTurnCompareSummary(activeTurnId, chunk.compare);
+        if (chunk.session_id) latest.setSessionId(chunk.session_id);
+        break;
+      } else if (chunk.type === "error") {
+        throw new Error(chunk.error ?? "Compare stream error");
+      }
     }
+  } finally {
     deltaBuffer.flush();
-    const latest = useChatStore.getState();
-    if (chunk.type === "response_start") {
-      const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
-      latest.updateTurnResponse(activeTurnId, index, {
-        ...current,
-        provider: chunk.provider ?? latest.responses[index]?.provider ?? targets[index]?.provider ?? "",
-        model: chunk.model ?? latest.responses[index]?.model ?? targets[index]?.model ?? "",
-        ui_status: "requesting",
-      });
-    } else if (chunk.type === "response_done" && chunk.response) {
-      const current = getTurnResponse(latest, activeTurnId, index, placeholders[index]);
-      const completedAt = new Date().toISOString();
-      const failed = !!chunk.response.error;
-      latest.updateTurnResponse(activeTurnId, index, {
-        ...current,
-        ...chunk.response,
-        started_at: current.started_at ?? startedAt,
-        completed_at: failed ? current.completed_at : completedAt,
-        failed_at: failed ? current.failed_at ?? completedAt : current.failed_at,
-        ui_status: failed ? "failed" : "complete",
-      });
-    } else if (chunk.type === "done") {
-      if (chunk.compare) latest.setTurnCompareSummary(activeTurnId, chunk.compare);
-      if (chunk.session_id) latest.setSessionId(chunk.session_id);
-      break;
-    } else if (chunk.type === "error") {
-      throw new Error(chunk.error ?? "Compare stream error");
-    }
   }
-  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {
@@ -536,47 +545,50 @@ async function runRegenerateResponse({
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(turnId);
-  for await (const chunk of streamChat(request, signal)) {
-    if (signal.aborted) break;
-    if (chunk.type === "delta" && chunk.text) {
-      deltaBuffer.append(responseIndex, chunk.text);
-      continue;
+  try {
+    for await (const chunk of streamChat(request, signal)) {
+      if (signal.aborted) break;
+      if (chunk.type === "delta" && chunk.text) {
+        deltaBuffer.append(responseIndex, chunk.text);
+        continue;
+      }
+      deltaBuffer.flush();
+      const latest = useChatStore.getState();
+      if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
+        const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+        latest.updateTurnResponse(turnId, responseIndex, {
+          ...current,
+          provider: chunk.provider ?? current.provider,
+          model: chunk.model ?? current.model,
+          ui_status: "requesting",
+        });
+      } else if (chunk.type === "start") {
+        const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+        latest.updateTurnResponse(turnId, responseIndex, {
+          ...current,
+          ui_status: "requesting",
+        });
+      } else if (chunk.type === "metadata" && chunk.metadata) {
+        finalResponse = { ...finalResponse, ...chunk.metadata };
+        const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
+        latest.updateTurnResponse(turnId, responseIndex, {
+          ...current,
+          ...finalResponse,
+          text: chunk.metadata.text ?? current.text,
+          started_at: current.started_at ?? startedAt,
+          ui_status: finalResponse.error ? "failed" : "finalizing",
+          failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
+        } as ChatResponse);
+      } else if (chunk.type === "done") {
+        if (chunk.session_id) latest.setSessionId(chunk.session_id);
+        break;
+      } else if (chunk.type === "error") {
+        throw new Error(chunk.error ?? "Stream error");
+      }
     }
+  } finally {
     deltaBuffer.flush();
-    const latest = useChatStore.getState();
-    if (!smartMode && chunk.type === "start" && (chunk.provider || chunk.model)) {
-      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
-      latest.updateTurnResponse(turnId, responseIndex, {
-        ...current,
-        provider: chunk.provider ?? current.provider,
-        model: chunk.model ?? current.model,
-        ui_status: "requesting",
-      });
-    } else if (chunk.type === "start") {
-      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
-      latest.updateTurnResponse(turnId, responseIndex, {
-        ...current,
-        ui_status: "requesting",
-      });
-    } else if (chunk.type === "metadata" && chunk.metadata) {
-      finalResponse = { ...finalResponse, ...chunk.metadata };
-      const current = getTurnResponse(latest, turnId, responseIndex, placeholder);
-      latest.updateTurnResponse(turnId, responseIndex, {
-        ...current,
-        ...finalResponse,
-        text: chunk.metadata.text ?? current.text,
-        started_at: current.started_at ?? startedAt,
-        ui_status: finalResponse.error ? "failed" : "finalizing",
-        failed_at: finalResponse.error ? new Date().toISOString() : current.failed_at,
-      } as ChatResponse);
-    } else if (chunk.type === "done") {
-      if (chunk.session_id) latest.setSessionId(chunk.session_id);
-      break;
-    } else if (chunk.type === "error") {
-      throw new Error(chunk.error ?? "Stream error");
-    }
   }
-  deltaBuffer.flush();
 
   const latest = useChatStore.getState();
   if (!signal.aborted) {

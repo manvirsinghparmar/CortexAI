@@ -1,0 +1,241 @@
+.wrap {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 11px;
+  width: auto;
+}
+
+.chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.comparisonGroup {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.connector {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 6px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 999px;
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-sm);
+  color: var(--cx-ink-500);
+  pointer-events: none;
+}
+
+.connector::before,
+.connector::after {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  width: 7px;
+  height: 1px;
+  background: var(--cx-hairline);
+  content: "";
+}
+
+.connector::before {
+  right: 100%;
+}
+
+.connector::after {
+  left: 100%;
+}
+
+.connector svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chip {
+  position: relative;
+  display: inline-flex;
+  min-width: 166px;
+  max-width: 210px;
+  align-items: center;
+}
+
+.picker {
+  width: 100%;
+}
+
+.removeButton {
+  position: absolute;
+  z-index: 3;
+  top: -7px;
+  right: -7px;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 999px;
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-sm);
+  color: var(--cx-ink-500);
+  cursor: pointer;
+  font: 800 12px/1 var(--font-sans);
+}
+
+.removeButton:hover {
+  border-color: var(--error);
+  background: var(--error-container);
+  color: var(--error);
+}
+
+.removeButton:focus-visible,
+.addButton:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
+}
+
+.addButton {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  gap: 7px;
+  border: 1px dashed color-mix(in srgb, var(--cx-ink-400) 58%, var(--cx-hairline));
+  border-radius: var(--cx-r-lg);
+  background: transparent;
+  color: var(--cx-ink-500);
+  cursor: pointer;
+  font: 700 12px/16px var(--font-sans);
+  padding: 0 11px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+  white-space: nowrap;
+}
+
+.addButton svg {
+  width: 15px;
+  height: 15px;
+}
+
+.addButton:hover {
+  border-color: var(--cx-accent);
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+  transform: translateY(-1px);
+}
+
+.trailingControls {
+  display: flex;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  .wrap {
+    flex-wrap: wrap;
+  }
+
+  .trailingControls {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .wrap {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .chips {
+    grid-column: 1 / -1;
+    width: 100%;
+    overflow-x: auto;
+    padding: 2px 2px 4px;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+
+  .comparisonGroup {
+    scroll-snap-align: start;
+  }
+
+  .connector {
+    width: 18px;
+    height: 24px;
+    flex-basis: 18px;
+    margin: 0 3px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--cx-ink-400);
+  }
+
+  .connector::before,
+  .connector::after {
+    display: none;
+  }
+
+  .connector svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chip {
+    min-width: 150px;
+    max-width: 200px;
+    flex: 1 0 150px;
+    scroll-snap-align: start;
+  }
+
+  .trailingControls {
+    justify-self: end;
+    margin-left: 0;
+  }
+
+  .addButton {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 430px) {
+  .wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .addButton,
+  .trailingControls {
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .addButton {
+    transition: none;
+  }
+
+  .addButton:hover {
+    transform: none;
+  }
+}

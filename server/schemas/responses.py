@@ -199,6 +199,53 @@ class UsageReportDTO(BaseModel):
     breakdown: List[UsageBucketDTO] = Field(default_factory=list)
 
 
+class UsageSummaryPeriodDTO(BaseModel):
+    from_: str = Field(alias="from")
+    to: str
+    label: str
+
+    class Config:
+        allow_population_by_field_name = True
+        populate_by_name = True
+
+
+class UsageSummaryModelDTO(BaseModel):
+    provider: str
+    modelId: str
+    displayName: str
+    replies: int
+    viaSmart: int
+
+
+class UsageSummarySessionModesDTO(BaseModel):
+    askOnly: int
+    compareOnly: int
+    mixed: int
+
+
+class UsageSummaryActivityDayDTO(BaseModel):
+    date: str
+    tokens: int
+
+
+class UsageSummaryDTO(BaseModel):
+    period: UsageSummaryPeriodDTO
+    totalTokens: int
+    totalRequests: int
+    totalSessions: int
+    avgLatencyMs: float
+    p95LatencyMs: float
+    minLatencyMs: float
+    avgCostPerRequest: float
+    totalSpend: float
+    tokensDeltaPct: float
+    smartRoutedTotal: int
+    models: List[UsageSummaryModelDTO] = Field(default_factory=list)
+    sessionModes: UsageSummarySessionModesDTO
+    switchedMidSession: int
+    activityDaily: List[UsageSummaryActivityDayDTO] = Field(default_factory=list)
+
+
 class SavingsTotalsDTO(BaseModel):
     requests: int
     successful_requests: int = 0

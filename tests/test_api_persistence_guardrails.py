@@ -1317,6 +1317,13 @@ def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fas
     history_payload = history_response.json()
     assert len(history_payload) == 3
     assert {item["mode"] for item in history_payload} == {"chat", "compare"}
+    compare_history = [item for item in history_payload if item["mode"] == "compare"]
+    assert len(compare_history) == 2
+    assert {item["request_group_id"] for item in compare_history} == {
+        compare_body["request_group_id"]
+    }
+    chat_history = [item for item in history_payload if item["mode"] == "chat"]
+    assert chat_history[0]["request_group_id"] is None
 
 
 @pytest.mark.integration
@@ -1429,6 +1436,31 @@ def test_history_can_filter_by_session_id_and_new_session_flag(db_mode_fastapi_c
     payload_b = only_b.json()
     assert len(payload_b) == 1
     assert payload_b[0]["session_id"] == session_b
+
+    cleared_a = client.delete(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_a},
+    )
+    assert cleared_a.status_code == 204
+
+    only_a_after_clear = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_a, "limit": 200},
+    )
+    assert only_a_after_clear.status_code == 200
+    assert only_a_after_clear.json() == []
+
+    only_b_after_clear = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_b, "limit": 200},
+    )
+    assert only_b_after_clear.status_code == 200
+    payload_b_after_clear = only_b_after_clear.json()
+    assert len(payload_b_after_clear) == 1
+    assert payload_b_after_clear[0]["session_id"] == session_b
 
 
 @pytest.mark.integration

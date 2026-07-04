@@ -778,6 +778,36 @@ def test_optimize_passes_compact_context_when_enabled(client, monkeypatch):
     assert body["optimization_status"] == "optimized"
 
 
+def test_optimize_accepts_four_thousand_character_context_hint(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    seen_payload = {}
+
+    class FakeOptimizer:
+        def optimize_prompt(self, payload):
+            seen_payload.update(payload)
+            return {
+                "optimized_prompt": payload["prompt"],
+                "prompt_quality": "weak",
+                "attempt_count": 1,
+                "retry_reasons": [],
+                "unchanged_retry_used": False,
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    context_hint = "h" * 4000
+    r = client.post(
+        "/v1/optimize",
+        json={"prompt": "Rewrite it", "context_hint": context_hint},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert r.status_code == 200
+    assert seen_payload["context_hint"] == context_hint
+
+
 def test_optimize_falls_back_when_schema_optimizer_rejects_output(client, monkeypatch):
     from server.routes import optimize as optimize_route
 

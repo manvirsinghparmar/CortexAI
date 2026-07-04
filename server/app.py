@@ -24,11 +24,30 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+class NoCacheHTMLStaticFiles(StaticFiles):
+    """StaticFiles that forces HTML revalidation.
+
+    A heuristically cached index.html can reference hashed assets deleted by
+    the next deploy, leaving users on a broken page until a hard refresh.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["cache-control"] = "no-cache"
+        return response
+
+
 def _resolve_frontend_dir() -> str:
     configured = (os.getenv("FRONTEND_DIR") or "").strip()
     if configured:
         return configured
-    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+    root = os.path.dirname(os.path.dirname(__file__))
+    # When REACT_FRONTEND=true, serve the pre-built React/Vite dist instead of
+    # the legacy vanilla frontend.  Set FRONTEND_DIR to override either path.
+    if _env_bool("REACT_FRONTEND", default=False):
+        return os.path.join(root, "frontend-react", "dist")
+    return os.path.join(root, "frontend")
 
 
 def _parse_positive_int_env(name: str, default: int) -> int:
@@ -208,7 +227,7 @@ def create_app() -> FastAPI:
     serve_frontend = _env_bool("SERVE_FRONTEND", default=True)
     frontend_dir = _resolve_frontend_dir()
     if serve_frontend and os.path.isdir(frontend_dir):
-        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+        app.mount("/", NoCacheHTMLStaticFiles(directory=frontend_dir, html=True), name="frontend")
     elif serve_frontend:
         logger.warning(f"Frontend directory not found at {frontend_dir}; skipping static mount")
     else:

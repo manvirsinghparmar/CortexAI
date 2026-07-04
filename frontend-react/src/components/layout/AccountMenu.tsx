@@ -115,7 +115,7 @@ export function AccountMenu({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [closeMenu, open]);
+  }, [open, closeMenu]);
 
   const handleAction = (action: AccountMenuActionKey) => {
     closeMenu();

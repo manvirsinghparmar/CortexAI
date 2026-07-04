@@ -1,4 +1,12 @@
-import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { SparkleIcon } from "../common/SparkleIcon";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
@@ -59,15 +67,15 @@ export function ResultsSection() {
     };
   }, [latestTurnId, turnCount]);
 
-  if (turns.length === 0) return null;
-
-  const registerTurn = (turnId: string, node: HTMLElement | null) => {
+  const registerTurn = useCallback((turnId: string, node: HTMLElement | null) => {
     if (node) {
       turnRefs.current.set(turnId, node);
     } else {
       turnRefs.current.delete(turnId);
     }
-  };
+  }, []);
+
+  if (turns.length === 0) return null;
 
   return (
     <section
@@ -91,27 +99,13 @@ export function ResultsSection() {
               onRegenerate={regenerate}
             />
           ) : (
-            <article
+            <SingleTurn
               key={turn.id}
-              ref={(node) => registerTurn(turn.id, node)}
-              data-turn-id={turn.id}
-              className={`${styles.turn} ${styles.singleTurn}`}
-            >
-              <TurnPrompt turn={turn} turnIndex={turnIndex} />
-              {!shouldHideResponsesForOptimization(turn) &&
-                turn.responses.map((response, responseIndex) => (
-                  <ResponseCard
-                    key={response.request_id}
-                    response={response}
-                    isStreaming={isResponseLoading(turn, response)}
-                    slotIndex={responseIndex}
-                    loadingMode="ask"
-                    researchEnabled={turn.researchEnabled}
-                    optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
-                    onRegenerate={() => void regenerate(turn.id, responseIndex)}
-                  />
-                ))}
-            </article>
+              turn={turn}
+              turnIndex={turnIndex}
+              registerTurn={registerTurn}
+              onRegenerate={regenerate}
+            />
           ),
         )}
       </div>
@@ -119,17 +113,51 @@ export function ResultsSection() {
   );
 }
 
-function CompareTurn({
-  turn,
-  turnIndex,
-  registerTurn,
-  onRegenerate,
-}: {
+interface TurnProps {
   turn: ChatTurn;
   turnIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
-}) {
+}
+
+// Memoized so streaming updates to one turn don't re-render (and re-parse
+// markdown for) every other turn in the transcript.
+const SingleTurn = memo(function SingleTurn({
+  turn,
+  turnIndex,
+  registerTurn,
+  onRegenerate,
+}: TurnProps) {
+  return (
+    <article
+      ref={(node) => registerTurn(turn.id, node)}
+      data-turn-id={turn.id}
+      className={`${styles.turn} ${styles.singleTurn}`}
+    >
+      <TurnPrompt turn={turn} turnIndex={turnIndex} />
+      {!shouldHideResponsesForOptimization(turn) &&
+        turn.responses.map((response, responseIndex) => (
+          <ResponseCard
+            key={response.request_id}
+            response={response}
+            isStreaming={isResponseLoading(turn, response)}
+            slotIndex={responseIndex}
+            loadingMode="ask"
+            researchEnabled={turn.researchEnabled}
+            optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+            onRegenerate={() => void onRegenerate(turn.id, responseIndex)}
+          />
+        ))}
+    </article>
+  );
+});
+
+const CompareTurn = memo(function CompareTurn({
+  turn,
+  turnIndex,
+  registerTurn,
+  onRegenerate,
+}: TurnProps) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
   const [responseTabsStuck, setResponseTabsStuck] = useState(false);
   const responseTabsRef = useRef<HTMLDivElement | null>(null);
@@ -319,7 +347,7 @@ function CompareTurn({
       )}
     </article>
   );
-}
+});
 
 function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
   const durations = responses.map((response) =>

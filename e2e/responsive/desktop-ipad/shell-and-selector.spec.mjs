@@ -103,12 +103,13 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     expect(listMetrics.overflowY).toBe("auto");
     expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
 
-    await longRow.hover();
+    // The hover highlight lives on the thread surface wrapper
+    // (button -> .historyTop -> .historyThreadSurface); the button itself
+    // stays transparent.
+    const longRowSurface = longRow.locator("xpath=../..");
+    await longRowSurface.hover();
     await expect.poll(
-        () => longRow.evaluate(element => {
-            const surface = element.parentElement?.parentElement ?? element;
-            return getComputedStyle(surface).backgroundColor;
-        }),
+        () => longRowSurface.evaluate(element => getComputedStyle(element).backgroundColor),
     ).toBe("rgb(255, 255, 255)");
     await longRow.click();
     await expect(longRow).toHaveAttribute("aria-current", "page");
@@ -435,15 +436,15 @@ async function expectMatchingChipStyles(first, second) {
 async function expectSoftComposerShell(page) {
     const textarea = page.locator("#promptInput");
     const composer = textarea.locator("xpath=../..");
-    await textarea.evaluate(element => element.blur());
+    // Blur any prior focus and poll: the shell transitions border-color and
+    // box-shadow for 160ms after focus moves, so a one-shot snapshot races it.
+    await page.evaluate(() => document.activeElement?.blur?.());
     await expect.poll(
         () => composer.evaluate(element => getComputedStyle(element).borderColor),
     ).toBe("rgb(235, 237, 240)");
     const idle = await composer.evaluate(element => ({
-        borderColor: getComputedStyle(element).borderColor,
         boxShadow: getComputedStyle(element).boxShadow,
     }));
-    expect(idle.borderColor).toBe("rgb(235, 237, 240)");
     expect(idle.boxShadow).not.toBe("none");
 
     await textarea.focus();

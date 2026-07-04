@@ -20,7 +20,17 @@ const PROVIDERS: Record<
     logoUrl: "https://www.google.com/s2/favicons?domain_url=openai.com&sz=64",
     color: "#10A37F",
   },
+  anthropic: {
+    label: "Claude",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=claude.ai&sz=64",
+    color: "#D97706",
+  },
   gemini: {
+    label: "Gemini",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=gemini.google.com&sz=64",
+    color: "#4285F4",
+  },
+  google: {
     label: "Gemini",
     logoUrl: "https://www.google.com/s2/favicons?domain_url=gemini.google.com&sz=64",
     color: "#4285F4",
@@ -39,6 +49,26 @@ const PROVIDERS: Record<
     label: "Claude",
     logoUrl: "https://www.google.com/s2/favicons?domain_url=claude.ai&sz=64",
     color: "#D97706",
+  },
+  meta: {
+    label: "Meta Llama",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=meta.com&sz=64",
+    color: "#0866FF",
+  },
+  llama: {
+    label: "Meta Llama",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=meta.com&sz=64",
+    color: "#0866FF",
+  },
+  mistral: {
+    label: "Mistral",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=mistral.ai&sz=64",
+    color: "#FF7000",
+  },
+  mistralai: {
+    label: "Mistral",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=mistral.ai&sz=64",
+    color: "#FF7000",
   },
 };
 

@@ -8,11 +8,12 @@ interface AccountMenuProps {
   loggedIn: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
+  onUsageInsights?: () => void;
   theme?: AppTheme;
   onToggleTheme?: () => void;
 }
 
-type AccountMenuActionKey = "login" | "logout" | "theme";
+type AccountMenuActionKey = "login" | "logout" | "theme" | "usage";
 
 interface AccountMenuAction {
   key: AccountMenuActionKey;
@@ -26,6 +27,7 @@ export function AccountMenu({
   loggedIn,
   onLogin,
   onLogout,
+  onUsageInsights,
   theme,
   onToggleTheme,
 }: AccountMenuProps) {
@@ -34,11 +36,19 @@ export function AccountMenu({
   const closeTimerRef = useRef<number | null>(null);
   const canLogin = authEnabled && !!onLogin;
   const canLogout = !!onLogout;
+  const canOpenUsage = !!onUsageInsights;
   const canToggleTheme = !!theme && !!onToggleTheme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const menuActions: AccountMenuAction[] = [];
   if (!loggedIn && canLogin) {
     menuActions.push({ key: "login", label: "Sign in" });
+  }
+  if (canOpenUsage) {
+    menuActions.push({
+      key: "usage",
+      label: "Usage & insights",
+      icon: "usage",
+    });
   }
   if (canToggleTheme) {
     menuActions.push({
@@ -60,23 +70,23 @@ export function AccountMenu({
     closeTimerRef.current = null;
   }, []);
 
-  const openMenu = () => {
+  const openMenu = useCallback(() => {
     clearCloseTimer();
     if (showMenu) setOpen(true);
-  };
+  }, [clearCloseTimer, showMenu]);
 
   const closeMenu = useCallback(() => {
     clearCloseTimer();
     setOpen(false);
   }, [clearCloseTimer]);
 
-  const scheduleCloseMenu = () => {
+  const scheduleCloseMenu = useCallback(() => {
     clearCloseTimer();
     closeTimerRef.current = window.setTimeout(() => {
       setOpen(false);
       closeTimerRef.current = null;
     }, 160);
-  };
+  }, [clearCloseTimer]);
 
   useEffect(() => {
     return () => {
@@ -113,6 +123,8 @@ export function AccountMenu({
       onLogout?.();
     } else if (action === "theme") {
       onToggleTheme?.();
+    } else if (action === "usage") {
+      onUsageInsights?.();
     } else {
       onLogin?.();
     }

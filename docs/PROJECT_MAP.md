@@ -66,6 +66,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
   - History thread grouping, per-thread delete, and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
+  - Usage & insights route, states, KPI row, mobile compact dashboard, model leaderboard/provider-logo tiles, session modes panel, activity chart, period selector/export, and data layer: `frontend-react/src/pages/UsageInsightsPage.tsx`, `frontend-react/src/pages/UsageInsightsPage.module.css`, `frontend-react/src/api/usage.ts`, `frontend-react/src/hooks/useUsageSummary.ts`
   - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`

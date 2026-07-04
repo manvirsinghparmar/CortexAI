@@ -108,6 +108,19 @@ async function installResponsiveRoutes(page, state) {
                 timestamp: "2026-06-12T12:00:00Z",
             });
         }
+        if (url.pathname === "/v1/usage/summary" && method === "GET") {
+            return json(route, usageSummary());
+        }
+        if (url.pathname === "/v1/usage/export" && method === "GET") {
+            return route.fulfill({
+                status: 200,
+                contentType: "text/csv",
+                headers: {
+                    "Content-Disposition": "attachment; filename=usage_report.csv",
+                },
+                body: "date,requests,tokens,cost\n2026-07-01,42,189540,1.72\n",
+            });
+        }
         if (url.pathname === "/v1/history" && method === "GET") {
             const sessionId = url.searchParams.get("session_id");
             return json(
@@ -332,6 +345,71 @@ function whoAmI() {
             scope: "provider_model",
         },
     };
+}
+
+function usageSummary() {
+    return {
+        period: {
+            from: "2026-06-02",
+            to: "2026-07-01",
+            label: "Last 30 days",
+        },
+        totalTokens: 2840000,
+        totalRequests: 1336,
+        totalSessions: 312,
+        avgLatencyMs: 4600,
+        p95LatencyMs: 8100,
+        minLatencyMs: 1400,
+        avgCostPerRequest: 0.0091,
+        totalSpend: 12.16,
+        tokensDeltaPct: 18.4,
+        smartRoutedTotal: 720,
+        models: [
+            usageModel("openai", "gpt-5.4-mini", "GPT-5.4 Mini", 512, 470),
+            usageModel("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", 318, 88),
+            usageModel("deepseek", "deepseek-chat", "DeepSeek Chat", 246, 60),
+            usageModel("openai", "gpt-5.1", "GPT-5.1", 142, 64),
+            usageModel("google", "gemini-2.5-flash", "Gemini 2.5", 66, 38),
+            usageModel("meta", "llama-3.3-70b", "Llama 3.3 70B", 34, 0),
+            usageModel("mistral", "mistral-large", "Mistral Large", 18, 0),
+        ],
+        sessionModes: {
+            askOnly: 168,
+            compareOnly: 96,
+            mixed: 48,
+        },
+        switchedMidSession: 48,
+        activityDaily: [
+            activityDay("2026-06-18", 148000),
+            activityDay("2026-06-19", 176000),
+            activityDay("2026-06-20", 121000),
+            activityDay("2026-06-21", 96000),
+            activityDay("2026-06-22", 189000),
+            activityDay("2026-06-23", 213000),
+            activityDay("2026-06-24", 198000),
+            activityDay("2026-06-25", 234000),
+            activityDay("2026-06-26", 268000),
+            activityDay("2026-06-27", 241000),
+            activityDay("2026-06-28", 172000),
+            activityDay("2026-06-29", 286000),
+            activityDay("2026-06-30", 304000),
+            activityDay("2026-07-01", 321000),
+        ],
+    };
+}
+
+function usageModel(provider, modelId, displayName, replies, viaSmart) {
+    return {
+        provider,
+        modelId,
+        displayName,
+        replies,
+        viaSmart,
+    };
+}
+
+function activityDay(date, tokens) {
+    return { date, tokens };
 }
 
 function json(route, body, status = 200) {

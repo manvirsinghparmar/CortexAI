@@ -15,7 +15,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 - Routing telemetry: `routing_decisions`, `routing_attempts`
 - Governance: `usage_daily`, daily caps, per-key rate limit, circuit breaker
 - Savings telemetry: per-request baseline vs actual cost (`llm_savings`)
-- Reporting/export: `/v1/usage`, `/v1/savings`, CSV export endpoints
+- Reporting/export: `/v1/usage`, `/v1/usage/summary`, `/v1/savings`, CSV export endpoints
 - BYOK lifecycle: set/status/delete with encrypted-at-rest secrets
 - Privacy controls: metadata-only persistence and optional PII redaction
 - Optional prompt optimization endpoint: `/v1/optimize`
@@ -260,13 +260,13 @@ Frontend runtime config (`/runtime-config.js`):
   - defaults from `ENABLE_DEV_SESSION_LOGIN`
   - optional explicit frontend override: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`
   - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
-- The frontend completes Cognito/local dev-session bootstrap before fetching session-scoped startup data (`/v1/providers`, `/v1/models`, and `/v1/history`), so local development history appears on load instead of waiting for the first chat request.
+- The frontend completes Cognito/local dev-session bootstrap before fetching session-scoped startup data (`/v1/providers`, `/v1/models`, and `/v1/history`). If Cognito is enabled and no user session is present, React shows a sign-in gate instead of calling those session-scoped startup endpoints; local development history still appears on load after dev-session bootstrap.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
-- React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
-- The React sidebar uses a compact navigation rail with subtle Ask/Compare and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile continues to use the separate top and bottom navigation. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
+- React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; signed-out Cognito users see a sign-in gate instead of the Ask/Compare workspace, and background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
+- The React sidebar uses a compact navigation rail with subtle Ask/Compare/Usage and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; the bottom-left session tile is status-only once a session is active, while explicit logout stays in the account menu. Mobile continues to use the separate top and bottom navigation, with `Usage & insights` reached from the account menu. The mobile Usage route uses the compact 2x2 KPI grid, Smart-pick leaderboard strip, session-mode bar, and Ask/Compare/History footer navigation. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - An explicit fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes, tab resume/reload, same-browser reauth, and explicit History selections continue the selected thread.
 - React Ask and Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` so follow-ups continue the selected thread and New Chat starts a new backend session.
@@ -368,6 +368,7 @@ Response includes:
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
@@ -391,7 +392,7 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_REGION` – AWS region
    - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
    - `COGNITO_REDIRECT_URI` – (optional) Callback URL; React falls back to same-origin `/auth`
-3. **Frontend**: Load the app; the React top-right account icon opens an account menu. Cognito guests can `Sign in`, the theme switch toggles the React `data-theme` between light and dark and persists the browser preference, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
+3. **Frontend**: Load the app; signed-out Cognito users see a `Sign in to use CortexAI` gate in the workspace and the React top-right account icon remains a secondary account menu. Cognito guests can `Sign in`, the theme switch toggles the React `data-theme` between light and dark and persists the browser preference, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
 
 `/v1/models` now includes attachment capability metadata per model:
 - `supports_image_input`
@@ -628,6 +629,15 @@ curl -X DELETE -H "X-API-Key: dev-key-1" "http://127.0.0.1:8000/v1/byok?provider
 
 ## Usage and Savings Reporting
 
+Usage summary for the Usage & insights screen:
+```bash
+curl -H "X-API-Key: dev-key-1" \
+  "http://127.0.0.1:8000/v1/usage/summary?from=2026-02-01&to=2026-02-22"
+```
+
+`GET /v1/usage/summary` defaults to the last 30 inclusive calendar days when no range is provided. It returns the screen contract: period label, total tokens/requests/sessions, average/p95/min latency, average cost/request, total spend, token delta versus the previous equal-length period, Smart-routed totals, per-provider/model reply rows, Ask/Compare/Mixed session counts, and a zero-padded 14-day token activity series ending at `period.to`.
+The React Usage & insights screen uses the same period-scoped summary query; its period selector refetches the full dashboard and its Export button downloads day-grouped CSV rows from `/v1/usage/export` for the loaded period. On phone layouts it preserves the same backend-driven values in shortened labels and a compact model/session presentation.
+
 Usage:
 ```bash
 curl -H "X-API-Key: dev-key-1" \
@@ -706,6 +716,16 @@ class CortexClient:
         r = requests.get(
             f"{self.base_url}/v1/usage",
             params={"from": from_date, "to": to_date, "group_by": group_by},
+            headers=self.headers,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def usage_summary(self, from_date: str, to_date: str):
+        r = requests.get(
+            f"{self.base_url}/v1/usage/summary",
+            params={"from": from_date, "to": to_date},
             headers=self.headers,
             timeout=30,
         )

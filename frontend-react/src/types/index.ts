@@ -250,6 +250,49 @@ export interface WhoAmIResponse {
   breakers: WhoAmIBreakerConfig;
 }
 
+export interface UsageSummaryPeriod {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface UsageSummaryModel {
+  provider: "openai" | "anthropic" | "deepseek" | "google" | "meta" | "mistral" | string;
+  modelId: string;
+  displayName: string;
+  replies: number;
+  viaSmart: number;
+}
+
+export interface UsageSummarySessionModes {
+  askOnly: number;
+  compareOnly: number;
+  mixed: number;
+}
+
+export interface UsageActivityDay {
+  date: string;
+  tokens: number;
+}
+
+export interface UsageSummary {
+  period: UsageSummaryPeriod;
+  totalTokens: number;
+  totalRequests: number;
+  totalSessions: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  minLatencyMs: number;
+  avgCostPerRequest: number;
+  totalSpend: number;
+  tokensDeltaPct: number;
+  smartRoutedTotal: number;
+  models: UsageSummaryModel[];
+  sessionModes: UsageSummarySessionModes;
+  switchedMidSession: number;
+  activityDaily: UsageActivityDay[];
+}
+
 export interface OptimizeRequest {
   prompt: string;
   context_hint?: string;

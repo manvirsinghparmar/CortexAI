@@ -59,8 +59,9 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     const rowMetrics = await rows.evaluateAll(elements =>
         elements.map(element => {
             const title = element.querySelector("[data-history-title]");
+            const surface = element.parentElement?.parentElement ?? element;
             return {
-                height: element.getBoundingClientRect().height,
+                height: surface.getBoundingClientRect().height,
                 titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : "",
                 titleOverflow: title ? getComputedStyle(title).textOverflow : "",
             };
@@ -107,7 +108,9 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     // stays transparent.
     const longRowSurface = longRow.locator("xpath=../..");
     await longRowSurface.hover();
-    await expect(longRowSurface).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect.poll(
+        () => longRowSurface.evaluate(element => getComputedStyle(element).backgroundColor),
+    ).toBe("rgb(255, 255, 255)");
     await longRow.click();
     await expect(longRow).toHaveAttribute("aria-current", "page");
 
@@ -436,7 +439,9 @@ async function expectSoftComposerShell(page) {
     // Blur any prior focus and poll: the shell transitions border-color and
     // box-shadow for 160ms after focus moves, so a one-shot snapshot races it.
     await page.evaluate(() => document.activeElement?.blur?.());
-    await expect(composer).toHaveCSS("border-color", "rgb(235, 237, 240)");
+    await expect.poll(
+        () => composer.evaluate(element => getComputedStyle(element).borderColor),
+    ).toBe("rgb(235, 237, 240)");
     const idle = await composer.evaluate(element => ({
         boxShadow: getComputedStyle(element).boxShadow,
     }));

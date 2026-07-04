@@ -147,6 +147,28 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
   });
 
+  it("opens Usage & insights from the account menu when wired", async () => {
+    const user = userEvent.setup();
+    const onUsageInsights = vi.fn();
+
+    render(
+      <AccountMenu
+        authEnabled={false}
+        loggedIn={false}
+        onUsageInsights={onUsageInsights}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Guest account" }));
+
+    const usageAction = screen.getByRole("menuitem", { name: "Usage & insights" });
+    expect(usageAction).toBeInTheDocument();
+
+    await user.click(usageAction);
+    expect(onUsageInsights).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
+  });
+
   it("updates the theme switch label for dark mode", async () => {
     const user = userEvent.setup();
 

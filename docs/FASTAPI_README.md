@@ -87,7 +87,7 @@ python run_server.py --reload
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
-- React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data, then restores the persisted active `session_id` transcript when the page was reloaded, resumed, or silently reauthenticated in the same browser.
+- React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data. Signed-out Cognito users see a workspace sign-in gate instead of the Ask/Compare composer, while authenticated and local dev-session users restore the persisted active `session_id` transcript when the page was reloaded, resumed, or silently reauthenticated in the same browser.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
 - The React sidebar uses a compact navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
@@ -138,6 +138,7 @@ python run_server.py --reload
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
@@ -160,6 +161,16 @@ python run_server.py --reload
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
 - The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
 - `DELETE /v1/history?session_id=<id>` clears only that session's persisted request rows for the authenticated identity; omitting `session_id` clears all history. React per-thread delete uses `DELETE /v1/history/{entry_id}` for each row in the selected thread.
+
+### Usage summary contract
+
+`GET /v1/usage/summary?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` returns the aggregate contract for the Usage & insights screen. If both dates are omitted, the period defaults to the last 30 inclusive calendar days.
+
+- Request, token, spend, latency, and model reply totals are aggregated from `llm_requests` joined to `llm_responses`.
+- `smartRoutedTotal` and per-model `viaSmart` count routing rows whose `routing_mode` is `smart`, `cheap`, or `strong`; missing/explicit/legacy routing rows count as manual.
+- `sessionModes` is classified from `llm_requests.route_mode` per `session_id` within the period: Ask only, Compare only, or Mixed. The `sessions.mode` creation value is not used.
+- `tokensDeltaPct` compares the selected period with the immediately preceding equal-length period. It returns `0` when both periods have zero tokens and `100` when the current period has tokens but the previous period is zero.
+- `activityDaily` always contains 14 entries ending at `period.to`, zero-filled for days without usage.
 
 ## Authentication
 
@@ -195,13 +206,14 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 - `enableDevSessionLogin` defaults from `ENABLE_DEV_SESSION_LOGIN`.
 - Optional override for browser config: `FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN`.
 - In production-like runtimes (`APP_ENV/ENVIRONMENT/ENV=prod|production`), dev-login bootstrap is forced off.
-- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped startup endpoints (`/v1/providers`, `/v1/models`, `/v1/history`) so Ask/Compare selectors and the history sidebar hydrate immediately in local development.
-- The React top-right account icon opens a menu with Cognito `Sign in` when available, a persisted light/dark theme switch, and `Log off` as a session-clear fallback, including when the icon is still labelled `Guest account`. Log off clears the local session cookie through `/v1/auth/logout`, resets the active React chat/history state, then follows the Cognito Hosted UI `logoutUrl` when available.
+- Frontend startup completes Cognito/local dev-session bootstrap before calling session-scoped startup endpoints (`/v1/providers`, `/v1/models`, `/v1/history`). If Cognito is enabled and no user session is present, React shows a sign-in gate instead of calling those endpoints; authenticated and local dev-session users still hydrate Ask/Compare selectors and the history sidebar immediately.
+- The React workspace shows a `Sign in to use CortexAI` gate for signed-out Cognito users, and the top-right account icon remains a secondary menu with Cognito `Sign in` when available, a persisted light/dark theme switch, and `Log off` as a session-clear fallback, including when the icon is still labelled `Guest account`. Log off clears the local session cookie through `/v1/auth/logout`, resets the active React chat/history state, then follows the Cognito Hosted UI `logoutUrl` when available.
 - Response is sent with no-cache headers so config changes apply immediately.
 
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
+- The React router exposes `/usage` for the Usage & insights scaffold. Desktop reaches it from the sidebar Usage item; mobile reaches it from the account menu.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.
 - `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.

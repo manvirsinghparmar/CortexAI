@@ -96,7 +96,7 @@ describe("response regeneration", () => {
       },
     });
     const state = useChatStore.getState();
-    const regeneratedTurn = state.turns.at(-1);
+    const regeneratedTurn = state.turns[state.turns.length - 1];
     expect(state.turns).toHaveLength(2);
     expect(regeneratedTurn?.id).toBe(source.id);
     expect(regeneratedTurn?.prompt).toBe("Research this");
@@ -151,8 +151,9 @@ describe("response regeneration", () => {
         new_session: false,
       },
     });
-    const regeneratedTurn = useChatStore.getState().turns.at(-1);
-    expect(useChatStore.getState().turns).toHaveLength(1);
+    const state = useChatStore.getState();
+    const regeneratedTurn = state.turns[state.turns.length - 1];
+    expect(state.turns).toHaveLength(1);
     expect(regeneratedTurn?.id).toBe(source.id);
     expect(regeneratedTurn?.mode).toBe("compare");
     expect(regeneratedTurn?.responses).toHaveLength(2);
@@ -167,7 +168,7 @@ describe("response regeneration", () => {
     expect(regeneratedTurn?.compareSummary?.success_count).toBe(2);
     expect(regeneratedTurn?.compareSummary?.total_tokens).toBe(150);
     expect(regeneratedTurn?.compareSummary?.total_cost).toBeCloseTo(0.004);
-    expect(useChatStore.getState().activeTurnId).toBe(source.id);
+    expect(state.activeTurnId).toBe(source.id);
   });
 
   it("targets only the clicked model and leaves other Compare cards unchanged", async () => {
@@ -206,8 +207,9 @@ describe("response regeneration", () => {
       routing: { smart_mode: false, research_mode: true },
       attachments: [{ file_id: "source-file" }],
     });
-    const regeneratedTurn = useChatStore.getState().turns.at(-1);
-    expect(useChatStore.getState().turns).toHaveLength(1);
+    const state = useChatStore.getState();
+    const regeneratedTurn = state.turns[state.turns.length - 1];
+    expect(state.turns).toHaveLength(1);
     expect(regeneratedTurn?.id).toBe(source.id);
     expect(regeneratedTurn?.mode).toBe("compare");
     expect(regeneratedTurn?.responses).toHaveLength(3);

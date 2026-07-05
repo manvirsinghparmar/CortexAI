@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -109,6 +109,39 @@
                   "  pm.expect(body).to.have.property('python_executable');",
                   "  pm.expect(body).to.have.property('claude');",
                   "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Diagnostics",
+      "item": [
+        {
+          "name": "POST /v1/client-diagnostics",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"postman\",\n  \"reason\": \"manual-check\",\n  \"page_instance_id\": \"postman-page\",\n  \"events\": [\n    {\n      \"event\": \"boot\",\n      \"timestamp\": \"2026-07-04T00:00:00.000Z\",\n      \"page_instance_id\": \"postman-page\",\n      \"details\": {\n        \"navigationType\": \"navigate\",\n        \"wasDiscarded\": false\n      }\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/v1/client-diagnostics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204', function () { pm.response.to.have.status(204); });"
                 ]
               }
             }

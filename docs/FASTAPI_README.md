@@ -40,6 +40,8 @@ REACT_FRONTEND=false
 # FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
 # Optional browser-visible dev-login token (local only)
 # FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=
+# Optional stream keep-alive interval; set 0 to disable heartbeat events
+# STREAM_HEARTBEAT_INTERVAL_SECONDS=15
 # Optional prompt optimization
 # ENABLE_PROMPT_OPTIMIZATION=false
 # ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=false
@@ -92,6 +94,7 @@ python run_server.py --reload
 - The React sidebar uses a compact navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
+- React posts non-sensitive lifecycle diagnostics to `/v1/client-diagnostics`; backend logs them as `frontend.diagnostic` events so production refresh reports can be separated into reload/navigation, tab discard, back/forward cache restore, long main-thread task, or frontend error cases.
 - React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests.
 - React Ask defaults `Web` on for new page sessions, React Compare defaults `With sources` on, and users can turn either off for the current page session. Compare streams `/v1/compare/stream` events into per-model response columns.
 - React Compare keeps every selected response visible in a responsive grid without horizontal response scrolling on desktop and tablet widths: three columns on wide desktop, two at tablet widths, and stacked tall cards at the app's tablet/mobile shell breakpoint. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and elevates the stuck switcher into a frosted provider-tinted bar without changing model-pill horizontal positions.
@@ -129,6 +132,7 @@ python run_server.py --reload
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
 - `GET /v1/files/{file_id}`
+- `POST /v1/client-diagnostics`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -356,6 +360,7 @@ Rules:
 
 `POST /v1/chat/stream` returns NDJSON events:
 - `start`
+- `heartbeat`
 - `line`
 - `response_done`
 - `done`
@@ -365,6 +370,9 @@ Notes:
 - `start` includes the routed preview `provider` and `model`, plus `session_id`, `research_mode`, and an initial `web_source_items` array. Smart-mode clients should not present the preview as the final selected model.
 - `response_done` includes the full `ChatResponseDTO`, including `session_id` and `web_source_items`.
 - `done` includes the resolved `session_id`.
+- `heartbeat` carries elapsed timing while provider work is pending. It keeps
+  the HTTP response body active, is ignored by the React UI, and does not call
+  provider APIs or consume model tokens.
 - Server logs emit `chat.stream.*` lifecycle events from inside the response body generator, including provider-call start/completion and terminal stream reason.
 
 ## Compare API
@@ -448,6 +456,7 @@ Persistence:
 
 `POST /v1/compare/stream` returns NDJSON events:
 - `start`
+- `heartbeat`
 - `response_start`
 - `line`
 - `response_done`
@@ -458,6 +467,8 @@ Notes:
 - `start` includes `session_id`, `research_mode`, and target count.
 - Each `response_done` includes one full `ChatResponseDTO`.
 - Final `done` includes the aggregate compare payload with both `request_group_id` and `session_id`.
+- `heartbeat` may appear while Compare targets are pending and has the same
+  keep-alive semantics as chat streaming.
 - Server logs emit `compare.stream.*` lifecycle events from inside the response body generator, including per-target provider-call progress and terminal stream reason.
 
 ## Schema Migrations
@@ -502,6 +513,7 @@ Security/logging:
 - `X-API-Key` and `Authorization` headers are redacted in auth logs.
 - Middleware sets/returns `X-Request-ID` and emits request lifecycle events (`http.request.start|complete|exception`) for correlation.
 - The browser frontend sends `X-Request-ID` on Ask/Compare/Optimize calls and logs stream read failures to the developer console with request id, server request id, status, elapsed time, classified kind, and received event count.
+- Browser lifecycle diagnostics are accepted by unauthenticated `POST /v1/client-diagnostics` and logged as `frontend.diagnostic` with sanitized metadata only; prompts, responses, attachment contents, and auth secrets are not sent.
 - Structured persistence logs include `request_id`/`request_group_id`, resolved `user_id`, `api_key_id`, decision path, and status.
 - Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
 - Tavily search-option resolver logs include category, topic/time/country decisions, domain-rule metadata, returned source-content lengths, and API credits used.

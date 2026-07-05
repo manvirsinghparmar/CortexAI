@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -36,6 +37,7 @@ from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["Chat"])
 STREAM_LINE_DELAY_S = 0.1
+STREAM_HEARTBEAT_INTERVAL_S = 15.0
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 ApiKeyPersistenceResolution = persistence_service.ApiKeyPersistenceResolution
 
@@ -126,6 +128,18 @@ def _parse_int_env(name: str) -> int | None:
         logger.warning("Ignoring non-positive %s value: %s", name, raw)
         return None
     return value
+
+
+def _stream_heartbeat_interval_s() -> float:
+    raw = str(os.getenv("STREAM_HEARTBEAT_INTERVAL_SECONDS", "") or "").strip()
+    if not raw:
+        return STREAM_HEARTBEAT_INTERVAL_S
+    try:
+        value = float(raw)
+    except Exception:
+        logger.warning("Ignoring invalid STREAM_HEARTBEAT_INTERVAL_SECONDS: %s", raw)
+        return STREAM_HEARTBEAT_INTERVAL_S
+    return value if value > 0 else 0.0
 
 
 def _normalize_provider(provider: str | None) -> str | None:
@@ -509,7 +523,7 @@ async def chat(
             inference_attachments=inference_attachments,
         )
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -640,7 +654,7 @@ async def chat_stream(
     target_provider = execution_plan.preview_provider
     target_model = execution_plan.preview_model
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -652,6 +666,9 @@ async def chat_stream(
     kwargs["request_id"] = req_id
 
     async def event_stream():
+        stream_started_at = time.monotonic()
+        heartbeat_interval_s = _stream_heartbeat_interval_s()
+        provider_task: asyncio.Task | None = None
         stream_log = StreamLogContext(
             stream_name="chat",
             request_id=req_id,
@@ -677,7 +694,7 @@ async def chat_stream(
 
         try:
             stream_log.log("provider_call_started")
-            response = await asyncio.to_thread(
+            provider_task = asyncio.create_task(asyncio.to_thread(
                 orchestrator.ask,
                 prompt=effective_prompt,
                 model_type=execution_plan.model_type,
@@ -688,7 +705,22 @@ async def chat_stream(
                 routing_mode=execution_plan.routing_mode,
                 routing_constraints=execution_plan.routing_constraints,
                 **kwargs,
-            )
+            ))
+            if heartbeat_interval_s > 0:
+                while not provider_task.done():
+                    done, _ = await asyncio.wait(
+                        {provider_task},
+                        timeout=heartbeat_interval_s,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if done:
+                        break
+                    elapsed_ms = int((time.monotonic() - stream_started_at) * 1000)
+                    yield stream_log.record_event(
+                        _to_ndjson({"type": "heartbeat", "elapsed_ms": elapsed_ms})
+                    )
+                    stream_log.log("heartbeat_sent", elapsed_ms=elapsed_ms)
+            response = await provider_task
             response = sanitize_provider_error_response(normalize_empty_success_response(response))
             stream_log.log(
                 "provider_call_completed",
@@ -736,6 +768,8 @@ async def chat_stream(
             stream_log.log("done_sent", terminal_reason="done")
 
         except asyncio.CancelledError:
+            if provider_task is not None and not provider_task.done():
+                provider_task.cancel()
             stream_log.log(
                 "client_disconnected",
                 level="warning",

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -33,6 +35,7 @@ router = APIRouter(prefix="/v1", tags=["Compare"])
 
 MAX_COMPARE_TARGETS = 4
 STREAM_LINE_DELAY_S = 0.1
+STREAM_HEARTBEAT_INTERVAL_S = 15.0
 ATTACHMENTS_ONLY_FALLBACK_PROMPT = "Please analyze the attached file(s)."
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
@@ -110,6 +113,18 @@ def _iter_stream_lines(text: str):
 def _to_ndjson(event: dict) -> str:
     """Serialize one stream event as NDJSON."""
     return json.dumps(event, ensure_ascii=False) + "\n"
+
+
+def _stream_heartbeat_interval_s() -> float:
+    raw = str(os.getenv("STREAM_HEARTBEAT_INTERVAL_SECONDS", "") or "").strip()
+    if not raw:
+        return STREAM_HEARTBEAT_INTERVAL_S
+    try:
+        value = float(raw)
+    except Exception:
+        logger.warning("Ignoring invalid STREAM_HEARTBEAT_INTERVAL_SECONDS: %s", raw)
+        return STREAM_HEARTBEAT_INTERVAL_S
+    return value if value > 0 else 0.0
 
 
 def _make_error_response(
@@ -271,7 +286,7 @@ async def compare(
 
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -406,7 +421,7 @@ async def compare_stream(
         has_attachments=bool(resolved_attachments),
     )
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -420,6 +435,8 @@ async def compare_stream(
     request_group_id = str(uuid.uuid4())
 
     async def event_stream():
+        stream_started_at = time.monotonic()
+        heartbeat_interval_s = _stream_heartbeat_interval_s()
         stream_log = StreamLogContext(
             stream_name="compare",
             request_id=req_id,
@@ -443,6 +460,7 @@ async def compare_stream(
         stream_log.log("start_event_sent")
 
         ordered_responses: list[UnifiedResponse | None] = [None] * len(request.targets)
+        tasks: list[asyncio.Task] = []
         try:
             prepared_turn = None
             prepare_messages = getattr(orchestrator, "prepare_messages_for_turn", None)
@@ -456,8 +474,6 @@ async def compare_stream(
                     )
                 except Exception:
                     logger.exception("Compare stream shared message preparation failed")
-
-            tasks = []
 
             for i, target in enumerate(request.targets):
                 provider = (target.provider or "").strip().lower()
@@ -525,48 +541,63 @@ async def compare_stream(
                     )
                 )
 
-            for task in asyncio.as_completed(tasks):
-                idx, response = await task
-                response = sanitize_provider_error_response(normalize_empty_success_response(response))
-                ordered_responses[idx] = response
-                stream_log.log(
-                    "provider_call_completed",
-                    target_index=idx,
-                    response_provider=getattr(response, "provider", ""),
-                    response_model=getattr(response, "model", ""),
-                    response_is_error=bool(getattr(response, "is_error", False)),
+            pending_tasks = set(tasks)
+            while pending_tasks:
+                done, pending_tasks = await asyncio.wait(
+                    pending_tasks,
+                    timeout=heartbeat_interval_s if heartbeat_interval_s > 0 else None,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
-                dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
+                if not done:
+                    elapsed_ms = int((time.monotonic() - stream_started_at) * 1000)
+                    yield stream_log.record_event(
+                        _to_ndjson({"type": "heartbeat", "elapsed_ms": elapsed_ms})
+                    )
+                    stream_log.log("heartbeat_sent", elapsed_ms=elapsed_ms)
+                    continue
 
-                yield stream_log.record_event(_to_ndjson(
-                    {
-                        "type": "response_start",
-                        "index": idx,
-                        "provider": dto.provider,
-                        "model": dto.model,
-                    }
-                ))
+                for task in done:
+                    idx, response = await task
+                    response = sanitize_provider_error_response(normalize_empty_success_response(response))
+                    ordered_responses[idx] = response
+                    stream_log.log(
+                        "provider_call_completed",
+                        target_index=idx,
+                        response_provider=getattr(response, "provider", ""),
+                        response_model=getattr(response, "model", ""),
+                        response_is_error=bool(getattr(response, "is_error", False)),
+                    )
+                    dto = ChatResponseDTO.from_unified_response(response, session_id=requested_session_id)
 
-                stream_text = dto.text or ""
-                if not stream_text and dto.error:
-                    stream_text = get_client_safe_error_display_text(dto.error)
-                for line in _iter_stream_lines(stream_text):
-                    yield stream_log.record_event(_to_ndjson({"type": "line", "index": idx, "text": line}))
-                    await asyncio.sleep(STREAM_LINE_DELAY_S)
+                    yield stream_log.record_event(_to_ndjson(
+                        {
+                            "type": "response_start",
+                            "index": idx,
+                            "provider": dto.provider,
+                            "model": dto.model,
+                        }
+                    ))
 
-                yield stream_log.record_event(_to_ndjson(
-                    {
-                        "type": "response_done",
-                        "index": idx,
-                        "response": jsonable_encoder(dto),
-                    }
-                ))
-                stream_log.log(
-                    "response_done_sent",
-                    target_index=idx,
-                    provider=dto.provider,
-                    model=dto.model,
-                )
+                    stream_text = dto.text or ""
+                    if not stream_text and dto.error:
+                        stream_text = get_client_safe_error_display_text(dto.error)
+                    for line in _iter_stream_lines(stream_text):
+                        yield stream_log.record_event(_to_ndjson({"type": "line", "index": idx, "text": line}))
+                        await asyncio.sleep(STREAM_LINE_DELAY_S)
+
+                    yield stream_log.record_event(_to_ndjson(
+                        {
+                            "type": "response_done",
+                            "index": idx,
+                            "response": jsonable_encoder(dto),
+                        }
+                    ))
+                    stream_log.log(
+                        "response_done_sent",
+                        target_index=idx,
+                        provider=dto.provider,
+                        model=dto.model,
+                    )
 
             raw_responses = [r for r in ordered_responses if r is not None]
             resolved_session_id = requested_session_id
@@ -612,6 +643,9 @@ async def compare_stream(
             stream_log.log("done_sent", terminal_reason="done")
 
         except asyncio.CancelledError:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
             stream_log.log(
                 "client_disconnected",
                 level="warning",
@@ -619,6 +653,9 @@ async def compare_stream(
             )
             raise
         except Exception as exc:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
             stream_log.log(
                 "exception",
                 level="exception",

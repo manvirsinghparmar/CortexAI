@@ -251,8 +251,17 @@ COMPARE_TARGETS = [
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 - **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
+- **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript, and desktop/tablet comparisons keep tall visible cards with internal response-body scrolling. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and turns the stuck switcher into a frosted provider-tinted reading cue without shifting model pills horizontally.
+- **Shared Prompt Presentation**: Compare prompts use the same right-aligned `You` bubble as Ask mode, including attachment and prompt-optimization states. While Improve is pending, the prompt and optimization status remain visible but model tabs, response cards, and aggregate totals stay hidden; they appear only after optimization resolves and model generation begins. Aggregate Compare totals render separately.
+- **New-Turn Reveal**: Submitting a Compare follow-up always smoothly reveals that new question once, even when the user was viewing an older turn. Streaming response growth does not continuously move the transcript, and the UI no longer renders a floating down-arrow jump control.
+- **Independent Response Readiness**: Every browser response card shows the shared provider/model logo treatment and owns its own calm loading state. Loading cards show live elapsed time with `Queued`, `Refining prompt`, `Connecting to model`, `Generating response`, or `Finalizing` instead of placeholder zero metrics. The skeleton body disappears when that card streams its first token or returns an error, while slower targets continue showing their own source/improvement-aware loading treatment. Failed cards show elapsed failure time, and completed cards hide unavailable token counts.
+- **Compact Compare Composer**: The React composer starts as a single-line prompt, expands only for longer input, and relies on the main Ask/Compare navigation instead of duplicating a mode switch beside Send. On narrow screens, active model chips stay in their options row and scroll horizontally when a third model is added.
+- **Responsive Compare Cue**: Active model chips are separated by a decorative opposing-arrows connector instead of a literal `VS` label. Desktop uses a quiet circular medallion; mobile removes the border and background to preserve model-name space inside the horizontal selector scroller.
+- **Mobile Model Picker**: Compare model dropdowns render through a fixed-position body portal, keeping every option visible and selectable above the horizontally scrollable mobile model row.
+- **Purposeful Empty State**: Before the first turn, Compare mode explains the ask-once, multi-model workflow and the value of comparing accuracy, depth, speed, tone, and usefulness. Three practical examples fill the prompt without submitting or changing the selected models.
+- **Controlled Response Rhythm**: Compare card titles, metadata, paragraphs, Markdown headings, and lists use a restrained type scale and tighter spacing so long model outputs remain readable without excessive vertical gaps.
 
 ---
 
-**Last Updated:** 2026-05-12
+**Last Updated:** 2026-06-11
 **Applies To:** OpenAI Project v2.0+

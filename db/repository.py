@@ -2387,6 +2387,7 @@ def get_llm_history_entries(
     req_prompt_col = llm_requests.c.prompt_text if "prompt_text" in req_cols else None
     req_prompt_hash_col = llm_requests.c.prompt_sha256 if "prompt_sha256" in req_cols else None
     req_session_col = llm_requests.c.session_id if "session_id" in req_cols else None
+    req_group_col = llm_requests.c.request_group_id if "request_group_id" in req_cols else None
     req_provider_col = llm_requests.c.provider if "provider" in req_cols else None
     req_model_col = llm_requests.c.model if "model" in req_cols else None
 
@@ -2409,6 +2410,7 @@ def get_llm_history_entries(
     prompt_expr = req_prompt_col if req_prompt_col is not None else literal(None)
     prompt_hash_expr = req_prompt_hash_col if req_prompt_hash_col is not None else literal(None)
     session_expr = req_session_col if req_session_col is not None else literal(None)
+    request_group_expr = req_group_col if req_group_col is not None else literal(None)
     provider_expr = req_provider_col if req_provider_col is not None else literal("unknown")
     model_expr = req_model_col if req_model_col is not None else literal("unknown")
     mode_expr = req_mode_col if req_mode_col is not None else literal("chat")
@@ -2436,6 +2438,7 @@ def get_llm_history_entries(
             llm_requests.c.id.label("request_pk"),
             llm_requests.c.request_id.label("request_id"),
             session_expr.label("session_id"),
+            request_group_expr.label("request_group_id"),
             mode_expr.label("mode"),
             prompt_expr.label("prompt_text"),
             prompt_hash_expr.label("prompt_hash"),
@@ -2494,6 +2497,11 @@ def get_llm_history_entries(
             {
                 "id": _history_entry_id(payload.get("request_pk"), payload.get("request_id")),
                 "session_id": str(payload["session_id"]) if payload.get("session_id") is not None else None,
+                "request_group_id": (
+                    str(payload["request_group_id"])
+                    if payload.get("request_group_id") is not None
+                    else None
+                ),
                 "timestamp": _to_history_timestamp(payload.get("created_at")),
                 "mode": mode,
                 "prompt": str(prompt_text),
@@ -2552,9 +2560,12 @@ def delete_llm_history_entry(db: Session, user_id: UUID, entry_id: int) -> bool:
     return bool(result.rowcount and result.rowcount > 0)
 
 
-def clear_llm_history(db: Session, user_id: UUID) -> int:
+def clear_llm_history(db: Session, user_id: UUID, session_id: str | None = None) -> int:
     """
-    Clear all history entries for a user from llm/routing audit tables.
+    Clear history entries for a user from llm/routing audit tables.
+
+    When session_id is provided, only entries in that user-visible thread are
+    deleted. Invalid session IDs are treated as an empty match.
     """
     from db.tables import get_table
 
@@ -2563,7 +2574,24 @@ def clear_llm_history(db: Session, user_id: UUID) -> int:
     routing_decisions = get_table("routing_decisions")
     routing_attempts = get_table("routing_attempts")
 
-    user_request_ids_subq = select(llm_requests.c.id).where(llm_requests.c.user_id == user_id)
+    filters = [llm_requests.c.user_id == user_id]
+    req_cols = {col.name for col in llm_requests.columns}
+    if session_id:
+        if "session_id" not in req_cols:
+            return 0
+        parsed_session_id = coerce_uuid(session_id)
+        if parsed_session_id is None:
+            return 0
+        session_text = str(parsed_session_id).lower()
+        session_col_text = func.lower(cast(llm_requests.c.session_id, String))
+        filters.append(
+            or_(
+                session_col_text == session_text,
+                func.replace(session_col_text, "-", "") == parsed_session_id.hex.lower(),
+            )
+        )
+
+    user_request_ids_subq = select(llm_requests.c.id).where(and_(*filters))
     decision_ids_subq = select(routing_decisions.c.id).where(
         routing_decisions.c.llm_request_id.in_(user_request_ids_subq)
     )
@@ -2571,7 +2599,7 @@ def clear_llm_history(db: Session, user_id: UUID) -> int:
     db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
     db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id.in_(user_request_ids_subq)))
     db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id.in_(user_request_ids_subq)))
-    deleted = db.execute(delete(llm_requests).where(llm_requests.c.user_id == user_id))
+    deleted = db.execute(delete(llm_requests).where(and_(*filters)))
     return int(deleted.rowcount or 0)
 
 

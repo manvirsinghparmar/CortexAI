@@ -1,0 +1,114 @@
+.accountMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.accountButton {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--cx-r-lg);
+  background: transparent;
+  color: var(--cx-ink-500);
+  cursor: pointer;
+}
+
+.accountButton:hover,
+.accountButton:focus-visible,
+.accountButton[aria-expanded="true"] {
+  border-color: var(--cx-hairline);
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-900);
+  outline: none;
+}
+
+.accountButton svg {
+  width: 18px;
+  height: 18px;
+}
+
+.menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 168px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-md);
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-pop);
+  padding: 6px;
+}
+
+.menu::before {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 8px;
+  content: "";
+}
+
+.menuItem {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cx-ink-900);
+  cursor: pointer;
+  font: 600 13px/18px var(--font-sans);
+  padding: 0 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menuItem svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--cx-ink-500);
+}
+
+.menuItem:hover,
+.menuItem:focus-visible {
+  background: var(--cx-surface-2);
+  outline: none;
+}
+
+.menuItem:hover svg,
+.menuItem:focus-visible svg {
+  color: var(--cx-ink-900);
+}
+
+@media (max-width: 900px) {
+  .accountButton {
+    width: 44px;
+    height: 44px;
+    border-color: var(--cx-hairline);
+    border-radius: 12px;
+    background: var(--cx-surface);
+  }
+
+  .accountButton:hover,
+  .accountButton:focus-visible,
+  .accountButton[aria-expanded="true"] {
+    background: var(--cx-surface-2);
+    color: var(--cx-accent);
+  }
+
+  .menu {
+    min-width: 190px;
+  }
+
+  .menuItem {
+    min-height: 44px;
+    border-radius: 10px;
+  }
+}

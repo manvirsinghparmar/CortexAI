@@ -102,7 +102,7 @@ Recommended checks:
 ## Notes
 
 - This integration is API-first; do not rely on legacy CLI-only flows when validating web research behavior.
-- For end-to-end behavior, use the browser E2E suite (`npm run --prefix e2e test`) and inspect response source chips + persisted metadata.
+- For end-to-end behavior, use the browser E2E suite (`npm run --prefix e2e test`) and inspect inline response citation pills + persisted metadata.
 
 ---
 

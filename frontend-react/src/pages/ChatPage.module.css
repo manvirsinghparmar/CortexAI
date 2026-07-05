@@ -1,0 +1,921 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--cx-canvas);
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--cx-canvas);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  padding: 0 64px;
+  border-bottom: 1px solid var(--cx-hairline-soft);
+  background: var(--cx-surface);
+  flex-shrink: 0;
+}
+
+.mobileTopbar {
+  display: none;
+}
+
+.mobileBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cx-ink-900);
+  font: 700 16px/1 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.mobileBrand img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--cx-r-md);
+}
+
+.mobileHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--cx-ink-600);
+  cursor: pointer;
+  font: 500 16px/24px var(--font-sans);
+  padding: 20px 0 14px;
+}
+
+.tab:hover {
+  color: var(--cx-ink-900);
+}
+
+.tab:disabled {
+  color: var(--cx-ink-300);
+  cursor: default;
+}
+
+.activeTab {
+  border-bottom-color: var(--cx-accent);
+  color: var(--cx-ink-900);
+  font-weight: 700;
+}
+
+.activeTab:disabled {
+  border-bottom-color: var(--cx-hairline);
+  color: var(--cx-ink-300);
+}
+
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.iconButton {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--cx-ink-500);
+  cursor: pointer;
+}
+
+.iconButton svg {
+  width: 18px;
+  height: 18px;
+}
+
+.iconButton:hover {
+  color: var(--cx-accent);
+}
+
+.iconButton:disabled {
+  color: var(--cx-ink-300);
+  cursor: default;
+}
+
+.iconButton:disabled:hover {
+  color: var(--cx-ink-300);
+}
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 24px;
+}
+
+.workspaceLoading,
+.signInGate {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+}
+
+.workspaceLoading {
+  color: var(--cx-ink-500);
+  font: 600 14px/20px var(--font-sans);
+}
+
+.signInGate {
+  padding: clamp(24px, 6vh, 72px) 16px;
+}
+
+.signInPanel {
+  display: grid;
+  width: min(560px, 100%);
+  justify-items: center;
+  gap: 18px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 8px;
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-card);
+  padding: clamp(26px, 4vw, 42px);
+  text-align: center;
+}
+
+.signInIcon {
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+}
+
+.signInCopy {
+  display: grid;
+  gap: 10px;
+}
+
+.signInEyebrow {
+  margin: 0;
+  color: var(--cx-ink-500);
+  font: 700 12px/16px var(--font-sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.signInPanel h2 {
+  margin: 0;
+  color: var(--cx-ink-900);
+  font: 700 clamp(30px, 4vw, 42px)/1.12 var(--font-sans);
+  letter-spacing: 0;
+}
+
+.signInPanel p:not(.signInEyebrow) {
+  max-width: 440px;
+  margin: 0;
+  color: var(--cx-ink-600);
+  font: 500 16px/25px var(--font-sans);
+}
+
+.signInButton {
+  display: inline-flex;
+  min-width: 132px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: #0B1220;
+  color: #fff;
+  cursor: pointer;
+  font: 700 14px/20px var(--font-sans);
+  padding: 0 20px;
+  transition:
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.signInButton:hover,
+.signInButton:focus-visible {
+  outline: none;
+  box-shadow: var(--cx-shadow-card);
+  transform: translateY(-1px);
+}
+
+.signInButton:active {
+  transform: translateY(0);
+}
+
+.composerWrap {
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  padding: 0 24px 24px;
+  background: var(--cx-canvas);
+}
+
+/* Mobile-only elements — hidden on desktop */
+.composerBackdrop {
+  display: none;
+}
+
+.composerSheetHeader {
+  display: none;
+}
+
+.composerSheetHandle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--cx-hairline);
+}
+
+.composerSheetClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cx-ink-400);
+  cursor: pointer;
+}
+
+.composerSheetClose:hover {
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-700);
+}
+
+.composerDock {
+  display: none;
+}
+
+.mobileNav {
+  display: none;
+}
+
+.mobileHistory {
+  display: grid;
+  max-width: 720px;
+  margin: 0 auto;
+  gap: 14px;
+}
+
+.mobileHistorySearch {
+  position: relative;
+  min-width: 0;
+}
+
+.mobileHistorySearch svg {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 15px;
+  height: 15px;
+  color: var(--cx-ink-300);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.mobileHistory input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 11px;
+  background: var(--cx-surface);
+  color: var(--cx-ink-700);
+  font: 500 13px/20px var(--font-sans);
+  outline: none;
+  padding: 0 14px 0 34px;
+}
+
+.mobileHistory input:focus {
+  border-color: var(--cx-accent-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cx-accent) 12%, transparent);
+}
+
+.mobileHistoryGroups,
+.mobileHistoryList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobileHistoryGroups {
+  gap: 12px;
+}
+
+.mobileHistoryGroup {
+  display: grid;
+  gap: 7px;
+}
+
+.mobileHistoryGroupLabel {
+  color: var(--cx-ink-400);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.mobileHistoryList {
+  gap: 4px;
+}
+
+.mobileHistoryItem {
+  min-width: 0;
+}
+
+.mobileHistorySurface {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--cx-r-xl);
+  background: transparent;
+  color: var(--cx-ink-700);
+  cursor: pointer;
+  padding: 13px;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.mobileHistorySurface:hover,
+.mobileHistorySurface:focus-within {
+  background: var(--cx-surface-2);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.mobileHistorySurface.mobileHistoryActive {
+  background: var(--cx-prov-graphite-soft);
+  color: var(--cx-ink-900);
+}
+
+.mobileHistoryTitleRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.mobileHistoryTitleButton {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  color: var(--cx-ink-700);
+  cursor: pointer;
+  font: 500 12.5px/18px var(--font-sans);
+  padding: 0;
+  text-align: left;
+}
+
+.mobileHistorySurface:hover .mobileHistoryTitleButton,
+.mobileHistorySurface:focus-within .mobileHistoryTitleButton,
+.mobileHistorySurface.mobileHistoryActive .mobileHistoryTitleButton {
+  color: var(--cx-ink-900);
+}
+
+.mobileHistoryTitleButton:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
+}
+
+.mobileHistoryDeleteButton {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cx-ink-400);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0;
+  transform: translateX(4px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.mobileHistorySurface:hover .mobileHistoryDeleteButton,
+.mobileHistorySurface:focus-within .mobileHistoryDeleteButton,
+.mobileHistoryDeleteButton:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.mobileHistoryDeleteButton:hover {
+  background: var(--cx-danger-soft);
+  color: var(--cx-danger);
+}
+
+.mobileHistoryDeleteButton:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cx-accent);
+}
+
+.mobileHistoryDeleteConfirm {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--cx-r-xl);
+  background: var(--cx-surface-2);
+  padding: 13px;
+}
+
+.mobileHistoryDeleteConfirmText {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--cx-ink-700);
+  font: 500 12.5px/18px var(--font-sans);
+}
+
+.mobileHistoryDeleteConfirmButton,
+.mobileHistoryDeleteCancelButton {
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font: 700 12px/1 var(--font-sans);
+  padding: 8px 9px;
+}
+
+.mobileHistoryDeleteConfirmButton {
+  background: var(--cx-danger-soft);
+  color: var(--cx-danger);
+}
+
+.mobileHistoryDeleteCancelButton {
+  background: transparent;
+  color: var(--cx-ink-500);
+}
+
+.mobileHistoryDeleteConfirmButton:focus-visible,
+.mobileHistoryDeleteCancelButton:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 1px;
+}
+
+.mobileHistoryTop {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobileHistoryMode {
+  flex: 0 0 auto;
+  border-radius: 5px;
+  background: var(--cx-prov-graphite-soft);
+  color: var(--cx-ink-500);
+  font: 600 9px/1 var(--font-mono);
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.mobileHistoryMode[data-mode="compare"] {
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+}
+
+.mobileHistoryTop time {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cx-ink-300);
+  font: 500 10.5px/1 var(--font-sans);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileHistoryTitle {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileHistoryActive .mobileHistoryTitle {
+  color: var(--cx-ink-900);
+}
+
+.mobileHistoryMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--cx-ink-400);
+  font: 500 10px/1 var(--font-mono);
+}
+
+.mobileHistoryMeta span {
+  flex: 0 0 auto;
+}
+
+.mobileHistoryMeta .mobileHistoryModel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    height: 100dvh;
+  }
+
+  .main {
+    --mobile-response-actions-clearance: calc(148px + env(safe-area-inset-bottom));
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  .mobileTopbar {
+    position: sticky;
+    z-index: 30;
+    top: 0;
+    display: flex;
+    height: 58px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--cx-hairline-soft);
+    background: var(--cx-surface);
+    padding: 0 18px;
+  }
+
+  .topbar {
+    display: none;
+  }
+
+  .mobileTopbar .iconButton {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--cx-hairline);
+    border-radius: 9px;
+    background: var(--cx-surface);
+  }
+
+  .mobileTopbar .iconButton:hover,
+  .mobileTopbar .iconButton:focus-visible {
+    background: var(--cx-surface-2);
+    color: var(--cx-accent);
+    outline: none;
+  }
+
+  .mobileTopbar .iconButton:active {
+    background: var(--cx-surface-3);
+  }
+
+  .mobileTopbar .mobileComposeButton {
+    color: var(--cx-ink-500);
+  }
+
+  .canvas {
+    overflow: auto;
+    padding: 16px 16px 0;
+    scroll-padding-bottom: var(--mobile-response-actions-clearance);
+  }
+
+  .signInGate {
+    min-height: calc(100dvh - 138px);
+    padding: 18px 0 28px;
+  }
+
+  .signInPanel {
+    padding: 28px 22px;
+  }
+
+  .signInPanel h2 {
+    font-size: 30px;
+    line-height: 36px;
+  }
+
+  /* Fixed bottom-sheet overlay — replaces the inline flex slot on mobile */
+  .composerWrap {
+    position: fixed;
+    z-index: 24;
+    right: 0;
+    bottom: calc(65px + env(safe-area-inset-bottom));
+    left: 0;
+    border-top: 0;
+    border-radius: 20px 20px 0 0;
+    background: var(--cx-surface);
+    box-shadow: 0 -6px 40px rgb(0 0 0 / 14%);
+    padding: 0 16px calc(env(safe-area-inset-bottom) + 14px);
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease,
+      visibility 0s linear;
+    visibility: visible;
+  }
+
+  /* Collapsed: park the sheet off-canvas; the dock pill remains visible. */
+  .composerWrap[data-collapsed="true"] {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(calc(100% + 18px));
+    transition:
+      opacity 220ms ease,
+      transform 220ms ease,
+      visibility 0s linear 220ms;
+    visibility: hidden;
+  }
+
+  /* Dim backdrop shown when sheet is open */
+  .composerBackdropVisible {
+    position: fixed;
+    inset: 0 0 calc(64px + env(safe-area-inset-bottom));
+    z-index: 23;
+    display: block;
+    background: color-mix(in srgb, #000 45%, transparent);
+    backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
+  }
+
+  /* Sheet drag-handle + close row */
+  .composerSheetHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0 8px;
+  }
+
+  .composerSheetHandle {
+    width: 38px;
+  }
+
+  /* Docked composer pill above the mobile nav, shown when collapsed. */
+  .composerDock {
+    position: fixed;
+    z-index: 22;
+    right: 14px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    left: 14px;
+    display: flex;
+    min-height: 52px;
+    align-items: center;
+    gap: 11px;
+    justify-content: center;
+    border: 1px solid #e7eaee;
+    border-radius: 15px;
+    background: #fff;
+    color: #0b1220;
+    cursor: pointer;
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, .05),
+      0 12px 28px -18px rgba(15, 23, 42, .45);
+    padding: 7px 7px 7px 13px;
+    text-align: left;
+    transition:
+      transform 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .composerDock:hover,
+  .composerDock:focus-visible {
+    outline: none;
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, .07),
+      0 16px 32px -18px rgba(15, 23, 42, .5);
+    transform: translateY(-1px);
+  }
+
+  .composerDock:active {
+    transform: translateY(0);
+  }
+
+  .composerDockContext {
+    display: inline-flex;
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
+  .dockContextChip {
+    display: inline-flex;
+    max-width: 112px;
+    min-height: 28px;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #eef0f2;
+    color: #64748b;
+    font: 700 12px/1 var(--font-sans);
+    padding: 4px 9px 4px 5px;
+    white-space: nowrap;
+  }
+
+  .dockContextChip > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dockSmartChip {
+    background: #eef0fb;
+    color: #5b5bd6;
+    padding-left: 7px;
+  }
+
+  .dockContextIcon,
+  .dockModelIcon {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: #fff;
+  }
+
+  .dockContextIcon {
+    background: transparent;
+  }
+
+  .dockContextIcon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .dockAvatarStack {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    padding-left: 1px;
+  }
+
+  .dockAvatar {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #fff;
+    border-radius: 999px;
+    background: #eef0f2;
+    overflow: hidden;
+  }
+
+  .dockAvatar + .dockAvatar {
+    margin-left: -9px;
+  }
+
+  .composerDockPlaceholder {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: #9aa3b0;
+    font: 600 14px/20px var(--font-sans);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composerDockSend {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #5b5bd6;
+    box-shadow: 0 6px 14px -6px rgba(91, 91, 214, .7);
+    color: #fff;
+  }
+
+  .composerDockSend svg {
+    width: 18px;
+    height: 18px;
+    transform: rotate(-90deg);
+  }
+
+  .mobileNav {
+    position: fixed;
+    z-index: 20;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--cx-hairline-soft);
+    background: color-mix(in srgb, var(--cx-surface) 88%, var(--cx-surface-2));
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .mobileNav button {
+    display: flex;
+    min-height: 49px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: 0;
+    border-radius: var(--cx-r-md);
+    background: transparent;
+    color: var(--cx-ink-400);
+    cursor: pointer;
+    font: 600 10px/1 var(--font-sans);
+    padding: 0;
+  }
+
+  .mobileNavIcon {
+    display: inline-flex;
+    width: 30px;
+    height: 24px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+  }
+
+  .mobileNav svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mobileNavActive {
+    color: var(--cx-accent) !important;
+    font-weight: 700 !important;
+  }
+
+  .mobileNavActive .mobileNavIcon {
+    background: var(--cx-accent-soft);
+    color: var(--cx-accent);
+  }
+
+  .mobileHistory {
+    max-width: none;
+    gap: 14px;
+  }
+}
+
+@media (max-width: 430px) {
+  .mobileTopbar {
+    padding: 0 18px;
+  }
+
+  .canvas {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .composerWrap {
+    padding: 0 12px calc(env(safe-area-inset-bottom) + 12px);
+  }
+
+  .composerDock {
+    right: 12px;
+    left: 12px;
+  }
+
+  .mobileNav {
+    padding-right: 0;
+    padding-left: 0;
+  }
+}
+
+@media (hover: none) {
+  .mobileHistoryDeleteButton {
+    opacity: .5;
+    transform: none;
+  }
+}

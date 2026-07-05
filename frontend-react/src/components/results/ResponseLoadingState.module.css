@@ -1,0 +1,133 @@
+.loading {
+  display: grid;
+  width: min(100%, 640px);
+  min-height: 112px;
+  align-content: start;
+  gap: 22px;
+  color: var(--cx-ink-500);
+}
+
+.statusLine {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 10px;
+  font: 600 14px/20px var(--font-sans);
+}
+
+.message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sparkle {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+  padding: 5px;
+  animation: sparklePulse 1.8s ease-in-out infinite;
+}
+
+.sparkle svg {
+  width: 100%;
+  height: 100%;
+}
+
+.skeleton {
+  display: grid;
+  gap: 11px;
+}
+
+.skeleton span {
+  position: relative;
+  display: block;
+  width: 88%;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--cx-hairline-soft);
+}
+
+.skeleton span:nth-child(2) {
+  width: 88%;
+}
+
+.skeleton span:nth-child(3) {
+  width: 72%;
+}
+
+.skeleton span::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 58%),
+    transparent
+  );
+  content: "";
+  transform: translateX(-100%);
+  animation: skeletonShimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes sparklePulse {
+  0%,
+  100% {
+    opacity: 0.68;
+    transform: scale(0.96);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes skeletonShimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 760px) {
+  .loading {
+    min-height: 104px;
+    gap: 16px;
+    padding-right: 0;
+  }
+
+  .statusLine {
+    gap: 9px;
+    font-size: 12.5px;
+    line-height: 18px;
+  }
+
+  .sparkle {
+    width: 16px;
+    height: 16px;
+    flex-basis: 16px;
+    background: transparent;
+    padding: 0;
+  }
+
+  .skeleton {
+    gap: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sparkle,
+  .skeleton span::after {
+    animation: none;
+  }
+
+  .skeleton span::after {
+    display: none;
+  }
+}

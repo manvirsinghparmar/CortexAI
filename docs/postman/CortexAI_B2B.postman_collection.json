@@ -573,6 +573,12 @@
                   "if (pm.response.code === 200) {",
                   "  var body = pm.response.json();",
                   "  pm.test('history is an array', function () { pm.expect(body).to.be.an('array'); });",
+                  "  if (body.length > 0) {",
+                  "    pm.test('history exposes session and compare grouping fields', function () {",
+                  "      pm.expect(body[0]).to.have.property('session_id');",
+                  "      pm.expect(body[0]).to.have.property('request_group_id');",
+                  "    });",
+                  "  }",
                   "  if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }",
                   "}"
                 ]
@@ -607,7 +613,7 @@
           ]
         },
         {
-          "name": "DELETE /v1/history (all)",
+          "name": "DELETE /v1/history (all or session)",
           "request": {
             "method": "DELETE",
             "header": [
@@ -616,7 +622,24 @@
                 "value": "Bearer {{bearer_token}}"
               }
             ],
-            "url": "{{base_url}}/v1/history"
+            "url": {
+              "raw": "{{base_url}}/v1/history?session_id={{session_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "session_id",
+                  "value": "{{session_id}}",
+                  "description": "Optional. Enable to clear only this user-visible conversation session; leave disabled to clear all history for the authenticated identity.",
+                  "disabled": true
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -658,6 +681,43 @@
                   "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
                   "  pm.expect([200, 501]).to.include(pm.response.code);",
                   "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/usage/summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/usage/summary?from={{from_date}}&to={{to_date}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 501 (legacy compatibility)', function () {",
+                  "  pm.expect([200, 501]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('usage summary contract shape', function () {",
+                  "    pm.expect(body).to.have.property('period');",
+                  "    pm.expect(body).to.have.property('totalTokens');",
+                  "    pm.expect(body).to.have.property('totalRequests');",
+                  "    pm.expect(body).to.have.property('models').that.is.an('array');",
+                  "    pm.expect(body).to.have.property('sessionModes');",
+                  "    pm.expect(body).to.have.property('activityDaily').that.is.an('array');",
+                  "  });",
+                  "}"
                 ]
               }
             }
@@ -883,7 +943,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact context for follow-up prompts only.\"\n}"
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
             },
             "url": "{{base_url}}/v1/optimize"
           },

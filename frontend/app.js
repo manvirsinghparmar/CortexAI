@@ -1051,7 +1051,6 @@ const el = {
     routeResearchBtn: $("routeResearchBtn"),
     resultsSection: $("resultsSection"),
     resultsGrid: $("resultsGrid"),
-    jumpToLatestBtn: $("jumpToLatestBtn"),
     clearBtn: $("clearBtn"),
     errorBanner: $("errorBanner"),
     errorTitle: $("errorTitle"),
@@ -2137,19 +2136,11 @@ function isNearStreamingBottom() {
     return isDocumentNearBottom() && isResultsSectionNearBottom();
 }
 
-function updateJumpToLatestVisibility() {
-    if (!el.jumpToLatestBtn) return;
-    const show = streamAutoScrollEnabled && streamAutoScrollPausedByUser;
-    el.jumpToLatestBtn.classList.toggle("hidden", !show);
-    el.jumpToLatestBtn.setAttribute("aria-hidden", show ? "false" : "true");
-}
-
 function setStreamAutoScrollPaused(paused) {
     streamAutoScrollPausedByUser = Boolean(paused);
     if (!streamAutoScrollPausedByUser) {
         streamUserScrollIntentUntil = 0;
     }
-    updateJumpToLatestVisibility();
 }
 
 function markProgrammaticStreamScroll() {
@@ -2184,7 +2175,6 @@ function handleUserScrollDuringStream() {
     setStreamAutoScrollPaused(latestBelowViewport);
     if (!latestBelowViewport && !isComposerStopModeActive()) {
         streamAutoScrollEnabled = false;
-        updateJumpToLatestVisibility();
     }
 }
 
@@ -2251,17 +2241,16 @@ function scheduleScrollResultsToBottom(options = {}) {
     }, followUpDelayMs);
 }
 
-function syncJumpToLatestDuringStream() {
+function syncStreamViewportDuringStream() {
     if (!streamAutoScrollEnabled) return;
     setStreamAutoScrollPaused(!isNearStreamingBottom());
 }
 
 function finishStreamingViewportControls() {
-    syncJumpToLatestDuringStream();
+    syncStreamViewportDuringStream();
     if (!streamAutoScrollPausedByUser) {
         streamAutoScrollEnabled = false;
     }
-    updateJumpToLatestVisibility();
 }
 
 window.addEventListener("scroll", handleUserScrollDuringStream, { passive: true });
@@ -2273,17 +2262,6 @@ if (el.resultsSection) {
     el.resultsSection.addEventListener("wheel", markStreamUserScrollIntent, { passive: true });
     el.resultsSection.addEventListener("touchmove", markStreamUserScrollIntent, { passive: true });
 }
-if (el.jumpToLatestBtn) {
-    el.jumpToLatestBtn.addEventListener("click", () => {
-        setStreamAutoScrollPaused(false);
-        scrollResultsToBottom("smooth");
-        if (!isComposerStopModeActive()) {
-            streamAutoScrollEnabled = false;
-            updateJumpToLatestVisibility();
-        }
-    });
-}
-
 function markFirstStreamResponseSeen() {
     if (hasReceivedFirstStreamResponse) return;
     hasReceivedFirstStreamResponse = true;
@@ -4923,7 +4901,7 @@ function renderStreamingMarkdown(index) {
     textEl.dataset.empty = rawText ? "false" : "true";
     textEl.setAttribute("data-streaming", "true");
     applyWideTableLayout(textEl);
-    syncJumpToLatestDuringStream();
+    syncStreamViewportDuringStream();
 }
 
 function scheduleStreamingMarkdownRender(index) {
@@ -5024,14 +5002,14 @@ function finalizeStreamCard(index, resp) {
         card.setAttribute("title", buildCompareResponseTooltip(resp, summary, pendingSources));
     }
     applyPendingWebSources(index, !hasError);
-    syncJumpToLatestDuringStream();
+    syncStreamViewportDuringStream();
 }
 
 function renderCompareSummary(data) {
     const existing = el.resultsGrid.querySelector(".compare-summary-card");
     if (existing) existing.remove();
     el.resultsGrid.insertAdjacentHTML("beforeend", buildCompareSummary(data));
-    syncJumpToLatestDuringStream();
+    syncStreamViewportDuringStream();
 }
 
 async function copyTextToClipboard(text) {

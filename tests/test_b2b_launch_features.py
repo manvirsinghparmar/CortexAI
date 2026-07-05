@@ -5,7 +5,7 @@ import io
 import shutil
 import tempfile
 from contextlib import redirect_stdout, suppress
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ from sqlalchemy import (
     Table,
     Uuid,
     create_engine,
-    func,
+    insert,
     select,
     text,
 )
@@ -575,17 +575,146 @@ def test_savings_computed_for_chat_compare_and_error(b2b_db_client):
     assert saw_error_row
 
 
+def _insert_usage_summary_row(
+    db,
+    *,
+    user_id: str,
+    session_id: str,
+    route_mode: str,
+    provider: str,
+    model: str,
+    created_at: datetime,
+    total_tokens: int,
+    estimated_cost: float,
+    latency_ms: int,
+    routing_mode: str | None,
+    request_group_id: str | None = None,
+) -> str:
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+    routing_decisions = get_table("routing_decisions")
+
+    request_uuid = uuid4()
+    request_id = request_uuid.hex
+    db.execute(
+        insert(llm_requests).values(
+            id=request_id,
+            user_id=user_id,
+            session_id=session_id,
+            request_id=f"test-{request_uuid}",
+            route_mode=route_mode,
+            provider=provider,
+            model=model,
+            prompt_sha256=f"hash-{request_id}",
+            prompt_stored=False,
+            prompt_text=None,
+            input_tokens_est=None,
+            api_key_id=None,
+            request_group_id=request_group_id,
+            created_at=created_at,
+        )
+    )
+    db.execute(
+        insert(llm_responses).values(
+            id=uuid4().hex,
+            llm_request_id=request_id,
+            text="ok",
+            finish_reason="stop",
+            latency_ms=latency_ms,
+            prompt_tokens=total_tokens // 2,
+            completion_tokens=total_tokens - (total_tokens // 2),
+            total_tokens=total_tokens,
+            estimated_cost=estimated_cost,
+            error_type=None,
+            error_message=None,
+            created_at=created_at,
+        )
+    )
+    if routing_mode is not None:
+        db.execute(
+            insert(routing_decisions).values(
+                id=uuid4().hex,
+                llm_request_id=request_id,
+                prompt_category="general",
+                research_mode="off",
+                routing_mode=routing_mode,
+                initial_tier=None,
+                final_tier=None,
+                attempt_count=1,
+                fallback_used=False,
+                decision_reasons=[],
+                features={},
+                trace={"mode": routing_mode},
+            )
+        )
+    return request_id
+
+
+def _create_reporting_api_key_owner(db, *, label: str) -> str:
+    from db import create_api_key, get_or_create_service_user
+
+    user_id = get_or_create_service_user(db)
+    _api_key_id, owner_user_id = create_api_key(
+        db,
+        user_id=user_id,
+        raw_api_key="dev-key-1",
+        label=label,
+    )
+    return str(owner_user_id)
+
+
 @pytest.mark.integration
 def test_usage_and_savings_reporting_endpoints_and_csv_export(b2b_db_client):
     client, _fake_orch = b2b_db_client
 
-    for _ in range(2):
-        chat_response = client.post(
-            "/v1/chat",
-            headers={"X-API-Key": "dev-key-1"},
-            json={"prompt": "report me", "provider": "openai", "model": "gpt-4o-mini"},
-        )
-        assert chat_response.status_code == 200
+    from db.session import SessionLocal
+    from db.tables import get_table
+
+    db = SessionLocal()
+    try:
+        user_id = _create_reporting_api_key_owner(db, label="usage-savings-report-test")
+        request_ids = [
+            _insert_usage_summary_row(
+                db,
+                user_id=user_id,
+                session_id=uuid4().hex,
+                route_mode="ask",
+                provider="openai",
+                model="gpt-4o-mini",
+                created_at=datetime(2026, 6, 10, 12, 0, 0),
+                total_tokens=30,
+                estimated_cost=0.0003,
+                latency_ms=7,
+                routing_mode="explicit",
+            )
+            for _ in range(2)
+        ]
+        llm_savings = get_table("llm_savings")
+        for request_id in request_ids:
+            db.execute(
+                insert(llm_savings).values(
+                    llm_request_id=request_id,
+                    user_id=user_id,
+                    api_key_id=None,
+                    usage_date=date(2026, 6, 10),
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    actual_cost=0.0003,
+                    baseline_provider="openai",
+                    baseline_model="gpt-4o",
+                    baseline_cost=0.0005,
+                    savings_amount=0.0002,
+                    savings_pct=0.4,
+                    response_status="success",
+                    error_code=None,
+                    created_at=datetime(2026, 6, 10, 12, 0, 0),
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
 
     usage = client.get(
         "/v1/usage",
@@ -652,6 +781,167 @@ def test_usage_and_savings_reporting_endpoints_and_csv_export(b2b_db_client):
 
 
 @pytest.mark.integration
+def test_usage_summary_contract_from_audit_tables(b2b_db_client):
+    client, _fake_orch = b2b_db_client
+
+    from db.session import SessionLocal
+
+    mixed_session = uuid4().hex
+    compare_session = uuid4().hex
+    ask_session = uuid4().hex
+    previous_session = uuid4().hex
+    compare_group = uuid4().hex
+    db = SessionLocal()
+    try:
+        user_id = _create_reporting_api_key_owner(db, label="usage-summary-test")
+
+        _insert_usage_summary_row(
+            db,
+            user_id=user_id,
+            session_id=mixed_session,
+            route_mode="ask",
+            provider="openai",
+            model="gpt-5.4-mini",
+            created_at=datetime(2026, 6, 10, 12, 0, 0),
+            total_tokens=100,
+            estimated_cost=0.01,
+            latency_ms=1000,
+            routing_mode="smart",
+        )
+        _insert_usage_summary_row(
+            db,
+            user_id=user_id,
+            session_id=mixed_session,
+            route_mode="compare",
+            provider="claude",
+            model="claude-sonnet-4-5",
+            created_at=datetime(2026, 6, 11, 12, 0, 0),
+            total_tokens=200,
+            estimated_cost=0.02,
+            latency_ms=3000,
+            routing_mode="explicit",
+            request_group_id=compare_group,
+        )
+        _insert_usage_summary_row(
+            db,
+            user_id=user_id,
+            session_id=compare_session,
+            route_mode="compare",
+            provider="gemini",
+            model="gemini-2.5-flash-lite",
+            created_at=datetime(2026, 6, 12, 12, 0, 0),
+            total_tokens=300,
+            estimated_cost=0.03,
+            latency_ms=5000,
+            routing_mode="explicit",
+            request_group_id=compare_group,
+        )
+        _insert_usage_summary_row(
+            db,
+            user_id=user_id,
+            session_id=ask_session,
+            route_mode="ask",
+            provider="deepseek",
+            model="deepseek-chat",
+            created_at=datetime(2026, 6, 12, 14, 0, 0),
+            total_tokens=50,
+            estimated_cost=0.005,
+            latency_ms=2000,
+            routing_mode="explicit",
+        )
+        _insert_usage_summary_row(
+            db,
+            user_id=user_id,
+            session_id=previous_session,
+            route_mode="ask",
+            provider="openai",
+            model="gpt-5.4-mini",
+            created_at=datetime(2026, 5, 20, 12, 0, 0),
+            total_tokens=325,
+            estimated_cost=0.0325,
+            latency_ms=1500,
+            routing_mode="explicit",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/v1/usage/summary",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"from": "2026-06-01", "to": "2026-06-14"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["period"] == {
+        "from": "2026-06-01",
+        "to": "2026-06-14",
+        "label": "2026-06-01 to 2026-06-14",
+    }
+    assert body["totalTokens"] == 650
+    assert body["totalRequests"] == 4
+    assert body["totalSessions"] == 3
+    assert body["avgLatencyMs"] == pytest.approx(2750.0)
+    assert body["p95LatencyMs"] == pytest.approx(4700.0)
+    assert body["minLatencyMs"] == pytest.approx(1000.0)
+    assert body["totalSpend"] == pytest.approx(0.065)
+    assert body["avgCostPerRequest"] == pytest.approx(0.01625)
+    assert body["tokensDeltaPct"] == pytest.approx(100.0)
+    assert body["smartRoutedTotal"] == 1
+    assert body["sessionModes"] == {"askOnly": 1, "compareOnly": 1, "mixed": 1}
+    assert body["switchedMidSession"] == 1
+
+    models_by_id = {item["modelId"]: item for item in body["models"]}
+    assert models_by_id["gpt-5.4-mini"] == {
+        "provider": "openai",
+        "modelId": "gpt-5.4-mini",
+        "displayName": "GPT-5.4 Mini",
+        "replies": 1,
+        "viaSmart": 1,
+    }
+    assert models_by_id["claude-sonnet-4-5"]["displayName"] == "Claude Sonnet 4.5"
+    assert models_by_id["deepseek-chat"]["displayName"] == "DeepSeek Chat"
+
+    assert len(body["activityDaily"]) == 14
+    assert body["activityDaily"][0]["date"] == "2026-06-01"
+    assert body["activityDaily"][-1]["date"] == "2026-06-14"
+    activity_by_date = {item["date"]: item["tokens"] for item in body["activityDaily"]}
+    assert activity_by_date["2026-06-10"] == 100
+    assert activity_by_date["2026-06-11"] == 200
+    assert activity_by_date["2026-06-12"] == 350
+    assert activity_by_date["2026-06-14"] == 0
+
+
+@pytest.mark.integration
+def test_usage_summary_empty_period_returns_zeroed_contract(b2b_db_client):
+    client, _fake_orch = b2b_db_client
+
+    response = client.get(
+        "/v1/usage/summary",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"from": "2026-06-01", "to": "2026-06-14"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["totalTokens"] == 0
+    assert body["totalRequests"] == 0
+    assert body["totalSessions"] == 0
+    assert body["avgLatencyMs"] == 0.0
+    assert body["p95LatencyMs"] == 0.0
+    assert body["minLatencyMs"] == 0.0
+    assert body["avgCostPerRequest"] == 0.0
+    assert body["totalSpend"] == 0.0
+    assert body["tokensDeltaPct"] == 0.0
+    assert body["smartRoutedTotal"] == 0
+    assert body["models"] == []
+    assert body["sessionModes"] == {"askOnly": 0, "compareOnly": 0, "mixed": 0}
+    assert body["switchedMidSession"] == 0
+    assert len(body["activityDaily"]) == 14
+
+
+@pytest.mark.integration
 def test_reporting_returns_501_when_db_mode_off(monkeypatch):
     from server.routes import chat as chat_route
     from server.routes import compare as compare_route
@@ -670,6 +960,8 @@ def test_reporting_returns_501_when_db_mode_off(monkeypatch):
     whoami_route.API_DB_ENABLED = False
     client = TestClient(app)
     try:
+        response0 = client.get("/v1/usage/summary", headers={"X-API-Key": "dev-key-1"})
+        assert response0.status_code == 501
         response = client.get("/v1/usage", headers={"X-API-Key": "dev-key-1"})
         assert response.status_code == 501
         response2 = client.get("/v1/savings", headers={"X-API-Key": "dev-key-1"})

@@ -38,6 +38,7 @@ def _require_db_mode() -> None:
 class HistoryEntry(BaseModel):
     id: int
     session_id: Optional[str] = None
+    request_group_id: Optional[str] = None
     timestamp: str
     mode: str
     prompt: str
@@ -100,9 +101,10 @@ async def delete_entry(
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_history(
     request: Request,
+    session_id: str | None = None,
     auth: AuthResult = Depends(get_auth),
 ):
-    """Delete all history entries."""
+    """Delete all history entries, or one session when session_id is provided."""
     _require_db_mode()
     req_id = str(getattr(request.state, "request_id", "") or uuid4())
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
@@ -112,4 +114,4 @@ async def clear_history(
                 request_id=req_id,
                 db_session=db_session,
             )
-        clear_llm_history(db_session, resolution.user_id)
+        clear_llm_history(db_session, resolution.user_id, session_id=session_id)

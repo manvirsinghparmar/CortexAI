@@ -40,7 +40,7 @@ _JSON_SYSTEM_INSTRUCTION = (
     "Do not add markdown fences, commentary, or extra keys."
 )
 
-_CONTEXT_HINT_MAX_CHARS = 2000
+_CONTEXT_HINT_MAX_CHARS = 4000
 _REFERENCE_CONTEXT_HINT_MAX_CHARS = 4000
 _CONTEXT_MESSAGE_LIMIT = 4
 _REFERENCE_CONTEXT_MESSAGE_LIMIT = 10
@@ -462,12 +462,12 @@ class PromptOptimizer:
         retry_reason: str | None = None,
     ) -> str:
         parts: list[str] = []
-        compact_context_hint = self._trim_context_text(
-            context_hint,
-            self._context_hint_limit(prompt_quality),
-        )
+        compact_context_hint = self._compact_context(context, prompt_quality=prompt_quality)
         if not compact_context_hint:
-            compact_context_hint = self._compact_context(context, prompt_quality=prompt_quality)
+            compact_context_hint = self._trim_context_text(
+                context_hint,
+                self._context_hint_limit(prompt_quality),
+            )
 
         if compact_context_hint:
             parts.append(

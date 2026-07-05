@@ -523,7 +523,7 @@ async def chat(
             inference_attachments=inference_attachments,
         )
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -654,7 +654,7 @@ async def chat_stream(
     target_provider = execution_plan.preview_provider
     target_model = execution_plan.preview_model
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:

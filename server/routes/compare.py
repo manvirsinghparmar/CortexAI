@@ -286,7 +286,7 @@ async def compare(
 
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:
@@ -421,7 +421,7 @@ async def compare_stream(
         has_attachments=bool(resolved_attachments),
     )
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
     if request.max_tokens is not None:

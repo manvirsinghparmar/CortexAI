@@ -20,18 +20,40 @@ export class StreamDeltaBuffer {
   }
 
   flush(): void {
-    if (this.timer !== null) {
-      window.clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.clearTimer();
     if (this.pending.size === 0) return;
 
     const state = useChatStore.getState();
+    const turn = state.turns.find((item) => item.id === this.turnId);
+    if (!turn || turn.status !== "streaming") {
+      this.pending.clear();
+      return;
+    }
+
     for (const [index, text] of this.pending) {
+      const response = turn.responses[index];
+      if (
+        response?.ui_status === "complete" ||
+        response?.ui_status === "failed"
+      ) {
+        continue;
+      }
       state.appendTurnResponseText(this.turnId, index, text, {
         ui_status: "streaming",
       });
     }
     this.pending.clear();
+  }
+
+  dispose(): void {
+    this.clearTimer();
+    this.pending.clear();
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== null) {
+      window.clearTimeout(this.timer);
+      this.timer = null;
+    }
   }
 }

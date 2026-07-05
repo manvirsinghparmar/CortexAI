@@ -482,6 +482,30 @@ def test_runtime_config_js_disables_dev_session_login_in_production(client, monk
     assert payload["enableDevSessionLogin"] is False
 
 
+def test_client_diagnostics_accepts_lifecycle_events_without_auth(client):
+    payload = {
+        "source": "test",
+        "reason": "unit",
+        "page_instance_id": "page-test",
+        "events": [
+            {
+                "event": "boot",
+                "timestamp": "2026-07-04T00:00:00.000Z",
+                "page_instance_id": "page-test",
+                "details": {
+                    "navigationType": "reload",
+                    "wasDiscarded": False,
+                },
+            }
+        ],
+    }
+
+    r = client.post("/v1/client-diagnostics", json=payload)
+
+    assert r.status_code == 204
+    assert r.text == ""
+
+
 def test_chat_with_attachments_requires_db_mode(client):
     payload = {
         "prompt": "describe this file",

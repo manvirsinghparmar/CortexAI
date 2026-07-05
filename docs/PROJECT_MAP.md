@@ -8,6 +8,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - API server: `run_server.py`
 - Main FastAPI app wiring: `server/app.py`
 - Frontend runtime config renderer: `server/frontend_runtime_config.py` (`GET /runtime-config.js`)
+- Browser lifecycle diagnostics ingestion: `server/routes/client_diagnostics.py` (`POST /v1/client-diagnostics`)
 - Browser E2E harness bootstrap: `e2e/server/run_e2e_server.py`
 
 ## API Contracts
@@ -59,6 +60,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - React/Vite frontend: `frontend-react/`
   - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
   - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
+  - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`

@@ -10,7 +10,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 ## Launch-Ready Capabilities
 
 - API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`, `/v1/providers`, `/v1/models`
-- Integration diagnostics endpoint: `/v1/whoami`
+- Integration diagnostics endpoints: `/v1/whoami`, `/v1/client-diagnostics`
 - Request attribution: `users`, `api_keys`, `sessions`, `messages`, `llm_requests`, `llm_responses`
 - Routing telemetry: `routing_decisions`, `routing_attempts`
 - Governance: `usage_daily`, daily caps, per-key rate limit, circuit breaker
@@ -147,6 +147,9 @@ LOG_FILE_BACKUP_COUNT=5
 LOG_NOISY_LIBRARIES_LEVEL=WARNING # httpx/urllib3/boto3/botocore logger level
 # Backward compatibility: LOG_TO_CONSOLE=true implies LOG_DESTINATION=both when LOG_DESTINATION is unset
 
+# Streaming resilience
+STREAM_HEARTBEAT_INTERVAL_SECONDS=15 # 0 disables heartbeat NDJSON events while providers run
+
 # BYOK encryption
 MASTER_KEY=replace-with-strong-random-secret
 
@@ -266,6 +269,7 @@ Frontend runtime config (`/runtime-config.js`):
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; signed-out Cognito users see a sign-in gate instead of the Ask/Compare workspace, and background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
+- React records non-sensitive browser lifecycle diagnostics (`boot`, `pagehide`, `beforeunload`, `visibilitychange`, long tasks, and frontend errors) in a short local buffer and posts them to `/v1/client-diagnostics`, where they appear as `frontend.diagnostic` structured logs. This distinguishes production page reloads, Chrome tab discards, back/forward cache restores, long main-thread stalls, and render/runtime failures.
 - The React sidebar uses a compact navigation rail with subtle Ask/Compare/Usage and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; the bottom-left session tile is status-only once a session is active, while explicit logout stays in the account menu. Mobile continues to use the separate top and bottom navigation, with `Usage & insights` reached from the account menu. The mobile Usage route uses the compact 2x2 KPI grid, Smart-pick leaderboard strip, session-mode bar, and Ask/Compare/History footer navigation. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
 - Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - An explicit fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes, tab resume/reload, same-browser reauth, and explicit History selections continue the selected thread.
@@ -336,6 +340,8 @@ X-Request-ID: <custom-id>
 The browser frontend now sends `X-Request-ID` on Ask/Compare/Optimize calls. For
 streaming requests, frontend console diagnostics include the client request id
 and the server-returned request id when a stream read fails.
+Browser lifecycle diagnostics post to `POST /v1/client-diagnostics` and are logged
+as `frontend.diagnostic` events without prompt or response content.
 For EC2/Linux operational logging setup and event catalog, see `docs/LOGGING.md`.
 For full AWS EC2 troubleshooting steps (CloudFront/WAF/origin correlation and Linux commands), see `docs/runbooks/aws-ec2-logging.md`.
 
@@ -359,6 +365,7 @@ Response includes:
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
 - `GET /v1/files/{file_id}`
+- `POST /v1/client-diagnostics`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
@@ -554,12 +561,16 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 
 `/v1/chat/stream` events:
 - `start`
+- `heartbeat`
 - `line`
 - `response_done`
 - `done`
 - `error`
 
 Notes:
+- `heartbeat` is emitted while provider work is still running so proxies and
+  browsers do not see an idle response body. It carries only elapsed timing and
+  does not consume provider tokens.
 - Chat responses now include `session_id`.
 - Chat `response_done` payloads include `web_source_items` for rendered citation pills.
 - Chat `start` and `done` stream events include the active `session_id`.
@@ -568,6 +579,7 @@ Notes:
 
 `/v1/compare/stream` events:
 - `start`
+- `heartbeat`
 - `response_start`
 - `line`
 - `response_done`
@@ -575,6 +587,8 @@ Notes:
 - `error`
 
 Notes:
+- `heartbeat` may appear while Compare targets are still pending; React ignores it
+  visually and waits for normal per-target events.
 - Compare responses now include `session_id`.
 - Per-model compare `response_done` payloads include `web_source_items`.
 - Compare `start` and `done` stream events include the active `session_id`.

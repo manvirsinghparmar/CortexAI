@@ -293,9 +293,8 @@ async function runAskTurn({
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
-  // finally guarantees the buffer timer is cleared and pending text applied
-  // even when the stream aborts or throws, so no orphaned timeout can mutate
-  // a turn after the cancel/error path has settled it.
+  // finally guarantees no orphaned timeout can mutate a turn after the
+  // cancel/error path has settled it.
   try {
     for await (const chunk of streamChat(request, signal)) {
       if (signal.aborted) break;
@@ -347,7 +346,11 @@ async function runAskTurn({
       }
     }
   } finally {
-    deltaBuffer.flush();
+    if (signal.aborted) {
+      deltaBuffer.dispose();
+    } else {
+      deltaBuffer.flush();
+    }
   }
 
   const latest = useChatStore.getState();
@@ -487,7 +490,11 @@ async function runCompareTurn({
       }
     }
   } finally {
-    deltaBuffer.flush();
+    if (signal.aborted) {
+      deltaBuffer.dispose();
+    } else {
+      deltaBuffer.flush();
+    }
   }
 
   const latest = useChatStore.getState();
@@ -587,7 +594,11 @@ async function runRegenerateResponse({
       }
     }
   } finally {
-    deltaBuffer.flush();
+    if (signal.aborted) {
+      deltaBuffer.dispose();
+    } else {
+      deltaBuffer.flush();
+    }
   }
 
   const latest = useChatStore.getState();

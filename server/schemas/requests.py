@@ -1,6 +1,6 @@
 """Pydantic request models for FastAPI endpoints."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -107,6 +107,20 @@ class CompareRequest(BaseModel):
         if not has_prompt and not has_attachments:
             raise ValueError("prompt is required when attachments are not provided")
         return self
+
+
+class ClientDiagnosticEvent(BaseModel):
+    event: str = Field(..., min_length=1, max_length=64)
+    timestamp: str = Field(..., min_length=1, max_length=64)
+    page_instance_id: Optional[str] = Field(None, max_length=96)
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ClientDiagnosticsRequest(BaseModel):
+    source: str = Field("react", max_length=32)
+    reason: Optional[str] = Field(None, max_length=64)
+    page_instance_id: Optional[str] = Field(None, max_length=96)
+    events: List[ClientDiagnosticEvent] = Field(default_factory=list, max_length=50)
 
 
 class ByokUpdateRequest(BaseModel):

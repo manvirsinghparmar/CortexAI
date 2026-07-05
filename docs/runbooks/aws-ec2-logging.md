@@ -112,8 +112,22 @@ Use this when browsers report errors such as `ERR_HTTP2_PROTOCOL_ERROR 200 (OK)`
 3. Interpret the stream body event chain:
    - no `*.stream.opened`: failure happened before the app began streaming.
    - `*.stream.start_event_sent` then `*.stream.client_disconnected`: browser, CDN, load balancer, or proxy closed the stream.
-   - long gap between `*.stream.provider_call_started` and `*.stream.provider_call_completed`: provider latency or idle timeout is likely.
+   - repeated `*.stream.heartbeat_sent` before completion: provider work was still running and the backend kept the response body active.
+   - long gap between `*.stream.provider_call_started` and `*.stream.provider_call_completed` with no heartbeat events: provider latency or idle timeout is likely.
    - `*.stream.done_sent` exists but browser failed: inspect CloudFront/Nginx/ALB HTTP/2 framing, buffering, compression, and read/send timeouts.
+
+## Browser Refresh / Blink Workflow
+
+Use this when the React page appears to refresh without the user pressing reload.
+
+1. Search app logs for `frontend.diagnostic` near the user-reported timestamp.
+2. Interpret the latest `boot` event:
+   - `details.wasDiscarded=true`: Chrome discarded or recovered the tab.
+   - `details.navigationType="reload"` with a recent `beforeunload`: user/browser reload or app-initiated navigation.
+   - `details.navigationType="navigate"` with `fresh_login` in `details.searchKeys`: Cognito/login redirect path.
+   - prior `longtask` events: main-thread saturation before the reload.
+   - prior `error` or `unhandledrejection`: frontend runtime failure; inspect the sanitized message and current release artifact.
+3. Correlate the same timestamp with `chat.stream.*` or `compare.stream.*` request logs. If `client_disconnected` appears immediately before the next `boot`, inspect CDN/proxy/browser behavior before assuming the backend completed normally.
 
 ## Upload Incident Workflow (`POST /v1/files/upload`)
 

@@ -11,9 +11,10 @@ import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
   onSelectThread: (thread: HistoryThread) => void;
-  activeView?: "chat" | "usage";
+  activeView?: "chat" | "usage" | "models";
   onNavigateChat?: (mode: ChatMode) => void;
   onNavigateUsage?: () => void;
+  onNavigateModels?: () => void;
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
   onLogin?: () => void;
@@ -31,6 +32,7 @@ export function Sidebar({
   activeView = "chat",
   onNavigateChat,
   onNavigateUsage,
+  onNavigateModels,
   whoAmI,
   loggedIn,
   onLogin,
@@ -132,8 +134,9 @@ export function Sidebar({
   };
 
   const usageActive = activeView === "usage";
-  const askActive = !usageActive && mode === "single";
-  const compareActive = !usageActive && mode === "compare";
+  const modelsActive = activeView === "models";
+  const askActive = activeView === "chat" && mode === "single";
+  const compareActive = activeView === "chat" && mode === "compare";
 
   const sidebarClassName = isCollapsed
     ? `${styles.sidebar} ${styles.sidebarCollapsed}`
@@ -224,6 +227,18 @@ export function Sidebar({
         >
           <CortexIcon name="usage" />
           <span>Usage</span>
+        </button>
+        <button
+          type="button"
+          className={modelsActive ? styles.navItemActive : styles.navItem}
+          onClick={onNavigateModels}
+          aria-current={modelsActive ? "page" : undefined}
+          aria-label="Models"
+          title={isCollapsed ? "Models" : undefined}
+          disabled={signedOut}
+        >
+          <CortexIcon name="models" />
+          <span>Models</span>
         </button>
       </nav>
 

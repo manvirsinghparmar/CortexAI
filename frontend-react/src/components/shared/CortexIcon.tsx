@@ -8,6 +8,7 @@ export type CortexIconName =
   | "check"
   | "chevron-down"
   | "chevron-left"
+  | "chevron-right"
   | "collapse-sidebar"
   | "compare"
   | "copy"
@@ -21,6 +22,7 @@ export type CortexIconName =
   | "improve"
   | "latency"
   | "moon"
+  | "models"
   | "new-chat"
   | "plus"
   | "regenerate"
@@ -127,6 +129,14 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
           <rect x="5" y="11" width="3.4" height="7" rx="1" />
           <rect x="10.3" y="6" width="3.4" height="12" rx="1" />
           <rect x="15.6" y="13.5" width="3.4" height="4.5" rx="1" />
+        </>
+      );
+    case "models":
+      return (
+        <>
+          <rect x="5" y="5" width="14" height="14" rx="3" />
+          <rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1.2" />
+          <path d="M9 2.5V5M15 2.5V5M9 19v2.5M15 19v2.5M2.5 9H5M2.5 15H5M19 9h2.5M19 15h2.5" />
         </>
       );
     case "search":
@@ -297,6 +307,8 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
       return <path d="M6 9l6 6 6-6" />;
     case "chevron-left":
       return <path d="M15 18l-6-6 6-6" />;
+    case "chevron-right":
+      return <path d="M9 6l6 6-6 6" />;
     case "download":
       return <path d="M12 3v12M8 11l4 4 4-4M5 21h14" />;
     case "swap":

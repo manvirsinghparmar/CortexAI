@@ -142,6 +142,7 @@ export function ChatPage() {
         onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
         activeView="chat"
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
@@ -169,6 +170,7 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              onModels={() => navigate("/models")}
               onUsageInsights={() => navigate("/usage")}
               theme={theme}
               onToggleTheme={toggleTheme}

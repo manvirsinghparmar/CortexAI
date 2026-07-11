@@ -191,6 +191,36 @@ describe("Sidebar", () => {
     expect(onNavigateUsage).toHaveBeenCalledTimes(1);
   });
 
+  it("marks Models active and routes the sidebar Models item", async () => {
+    const user = userEvent.setup();
+    const onNavigateModels = vi.fn();
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+      mode: "single",
+    });
+
+    render(
+      <Sidebar
+        onSelectThread={vi.fn()}
+        activeView="models"
+        onNavigateModels={onNavigateModels}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute(
+      "aria-current",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Models" }));
+    expect(onNavigateModels).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the signed-in session footer as status instead of a sign-out action", async () => {
     const user = userEvent.setup();
     useChatStore.setState({

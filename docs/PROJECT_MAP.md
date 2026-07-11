@@ -63,6 +63,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
+  - Task-first Models destination and static catalog contract: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/modelsCatalog.ts`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
@@ -73,7 +74,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
   - Top-right Cognito account menu: `frontend-react/src/components/layout/AccountMenu.tsx`
-  - Desktop sidebar navigation, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
+  - Desktop sidebar navigation, Models/Usage route entries, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
   - Ask/Compare result rendering: `frontend-react/src/components/results/`
   - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
   - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.

@@ -31,11 +31,21 @@ import type {
 
 let activeAbortController: AbortController | null = null;
 
+interface SubmitOptions {
+  promptOverride?: string;
+  skipOptimization?: boolean;
+  attachmentsOverride?: FileUploadResponse[];
+  clearComposer?: boolean;
+}
+
 export function useChat() {
-  const submit = useCallback(async () => {
+  const submit = useCallback(async (options: SubmitOptions = {}) => {
     const state = useChatStore.getState();
-    const rawPrompt = state.prompt.trim();
-    const attachments = [...state.attachments];
+    const rawPrompt = (options.promptOverride ?? state.prompt).trim();
+    const attachments = options.attachmentsOverride
+      ? [...options.attachmentsOverride]
+      : [...state.attachments];
+    const clearComposer = options.clearComposer ?? !options.promptOverride;
     if (!rawPrompt && attachments.length === 0) return;
     if (state.mode === "compare" && state.compareModelKeys.filter(Boolean).length < 2) {
       state.setError("Select at least two models to compare.");
@@ -60,7 +70,7 @@ export function useChat() {
     });
 
     try {
-      if (state.optimizeMode && rawPrompt) {
+      if (!options.skipOptimization && state.optimizeMode && rawPrompt) {
         optimization = pendingOptimization(rawPrompt);
         turnId = state.beginTurn({
           mode: state.mode,
@@ -78,8 +88,10 @@ export function useChat() {
           status: "optimizing",
           optimization,
         });
-        state.setPrompt("");
-        state.clearAttachments();
+        if (clearComposer) {
+          state.setPrompt("");
+          state.clearAttachments();
+        }
 
         try {
           const optimized = await optimizePrompt(
@@ -117,7 +129,7 @@ export function useChat() {
           turnId,
           optimization,
           startedAt: requestStartedAt,
-          clearComposer: true,
+          clearComposer,
         });
       } else {
         await runAskTurn({
@@ -130,7 +142,7 @@ export function useChat() {
           turnId,
           optimization,
           startedAt: requestStartedAt,
-          clearComposer: true,
+          clearComposer,
         });
       }
     } catch (err: unknown) {
@@ -147,6 +159,18 @@ export function useChat() {
       clearRequestController(controller);
     }
   }, []);
+
+  const submitFollowUp = useCallback(
+    async (suggestion: string) => {
+      await submit({
+        promptOverride: suggestion,
+        skipOptimization: true,
+        attachmentsOverride: [],
+        clearComposer: false,
+      });
+    },
+    [submit],
+  );
 
   const regenerate = useCallback(async (turnId: string, responseIndex = 0) => {
     const state = useChatStore.getState();
@@ -214,7 +238,7 @@ export function useChat() {
     state.setStreaming(false);
   }, []);
 
-  return { submit, regenerate, cancel };
+  return { submit, submitFollowUp, regenerate, cancel };
 }
 
 async function runAskTurn({

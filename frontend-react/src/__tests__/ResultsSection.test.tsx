@@ -213,6 +213,49 @@ describe("ResultsSection layout states", () => {
     expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
   });
 
+  it("shows suggested follow-ups only on the latest completed Ask response", () => {
+    const first = askTurn("ask-1", "First Ask");
+    first.responses = [
+      response("ask-1-response", "openai", "gpt-5.1", {
+        text: "If you want, I can also give you:\n- Old option",
+      }),
+    ];
+    const latest = askTurn("ask-2", "Latest Ask");
+    latest.responses = [
+      response("ask-2-response", "openai", "gpt-5.1", {
+        text: "If you want, I can also give you:\n- Latest option\n- Another option",
+      }),
+    ];
+    setTurns([first, latest]);
+
+    render(<ResultsSection />);
+
+    expect(
+      screen.getByRole("button", { name: "Ask follow-up: Latest option" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Ask follow-up: Another option" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Ask follow-up: Old option" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not show suggested follow-ups on Compare responses", () => {
+    const turn = compareTurn("compare-followups", "Compare question");
+    turn.responses = turn.responses.map((item) => ({
+      ...item,
+      text: "If you want, I can also give you:\n- Compare option",
+    }));
+    setTurns([turn]);
+
+    render(<ResultsSection />);
+
+    expect(
+      screen.queryByRole("button", { name: "Ask follow-up: Compare option" }),
+    ).not.toBeInTheDocument();
+  });
+
   it.each([
     ["Ask", askTurn("ask-1", "First Ask"), askTurn("ask-2", "Latest Ask")],
     [

@@ -26,12 +26,14 @@ export type CortexIconName =
   | "new-chat"
   | "plus"
   | "regenerate"
+  | "reply-return"
   | "review"
   | "rewrite"
   | "scroll-down"
   | "search"
   | "send"
   | "smart"
+  | "sparkle"
   | "sources"
   | "stop"
   | "summarize"
@@ -212,6 +214,8 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
           <path d="M18.5 14.5c.2 1.6.6 2 2.2 2.2-1.6.2-2 .6-2.2 2.2-.2-1.6-.6-2-2.2-2.2 1.6-.2 2-.6 2.2-2.2z" />
         </>
       );
+    case "sparkle":
+      return <path d="M12 3c.4 3.6 1.4 4.6 5 5-3.6.4-4.6 1.4-5 5-.4-3.6-1.4-4.6-5-5 3.6-.4 4.6-1.4 5-5z" />;
     case "web":
       return (
         <>
@@ -243,6 +247,13 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
         <>
           <path d="M3.5 9a8.5 8.5 0 1 1 .3 5" />
           <path d="M3.5 4v5h5" />
+        </>
+      );
+    case "reply-return":
+      return (
+        <>
+          <path d="M4 5v6a2 2 0 0 0 2 2h13" />
+          <path d="M15 9l4 4-4 4" />
         </>
       );
     case "branch":

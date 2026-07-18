@@ -270,7 +270,7 @@ Frontend runtime config (`/runtime-config.js`):
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; signed-out Cognito users see a sign-in gate instead of the Ask/Compare workspace, and background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
 - React records non-sensitive browser lifecycle diagnostics (`boot`, `pagehide`, `beforeunload`, `visibilitychange`, long tasks, and frontend errors) in a short local buffer and posts them to `/v1/client-diagnostics`, where they appear as `frontend.diagnostic` structured logs. This distinguishes production page reloads, Chrome tab discards, back/forward cache restores, long main-thread stalls, and render/runtime failures.
-- The React sidebar uses a compact navigation rail with subtle Ask/Compare/Usage/Models and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; the bottom-left session tile is status-only once a session is active, while explicit logout stays in the account menu. Mobile continues to use the separate Ask/Compare/History bottom navigation, with `Usage & insights` and `Models` reached from the account menu. The mobile Usage route uses the compact 2x2 KPI grid, Smart-pick leaderboard strip, session-mode bar, and Ask/Compare/History footer navigation. Desktop History renders each `session_id` as a two-line borderless row: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and search still covers every persisted turn. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
+- The React sidebar uses a compact navigation rail with subtle Ask/Compare/Usage/Models and current-session states. On desktop, an icon-only control at the top right collapses the sidebar to a narrow action rail and expands it back to the full history view; the bottom-left session tile is status-only once a session is active, while explicit logout stays in the account menu. Mobile continues to use the separate Ask/Compare/History bottom navigation, with `Usage & insights` and `Models` reached from the account menu. The mobile Usage route uses the compact 2x2 KPI grid, Smart-pick leaderboard strip, session-mode bar, and Ask/Compare/History footer navigation. The expanded desktop `Recent` list groups threads under Today, Yesterday, or month/day labels and renders each `session_id` as a single 36px row with a compact 11.5px ellipsized title and a narrow `MODE · time` caption, without a redundant leading mode glyph, so substantially more of the identifying prompt remains visible. Hover or keyboard focus swaps the caption for a two-item Rename/Delete menu; Rename persists `sessions.title`, while Delete keeps the short in-row confirmation and removes every persisted row in that thread. Model names, turn counts, and token counts stay hidden, search still covers every persisted turn plus the renamed title, and deleting the active thread starts a clean chat. The collapsed desktop rail and separate mobile History screen remain unchanged.
 - Selecting a history thread reloads its complete persisted transcript. Ask rows become chronological turns, while Compare target rows sharing a `request_group_id` are reconstructed as one multi-model turn.
 - An explicit fresh sign-in starts an empty new chat session instead of appending the first prompt to the previously active thread. Browser refreshes, tab resume/reload, same-browser reauth, and explicit History selections continue the selected thread.
 - React Ask and Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` so follow-ups continue the selected thread and New Chat starts a new backend session.
@@ -321,6 +321,7 @@ Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/optimize`
 - `/v1/history`
 - `/v1/history/{entry_id}`
+- `/v1/history/session/{session_id}`
 
 Accepted auth for session-scoped routes:
 ```http
@@ -374,6 +375,7 @@ Response includes:
 - `POST /v1/compare/stream`
 - `POST /v1/optimize`
 - `GET /v1/history`
+- `PATCH /v1/history/session/{session_id}`
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
@@ -542,7 +544,8 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Ask and Compare now share the same conversation session when the same `session_id` is reused.
 - Switching between Ask and Compare does not require creating a separate thread.
 - Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
-- `GET /v1/history` intentionally returns persisted request rows rather than pre-grouped UI threads. Each row includes optional `session_id` and `request_group_id`; clients group sidebar threads by `session_id` and Compare responses by `request_group_id`.
+- `GET /v1/history` intentionally returns persisted request rows rather than pre-grouped UI threads. Each row includes optional `session_id`, `session_title`, and `request_group_id`; clients group sidebar threads by `session_id` and Compare responses by `request_group_id`. A user-authored `session_title` overrides the first prompt as the sidebar label, while the legacy system placeholders (`API Chat` and `API Compare`) are ignored.
+- `PATCH /v1/history/session/{session_id}` with `{"title":"..."}` renames one authenticated user's persisted session. Titles are trimmed, limited to 120 characters, and do not change the thread's latest-activity ordering.
 - `DELETE /v1/history?session_id=<id>` clears only that user-visible conversation thread. Omitting `session_id` clears all history for the authenticated identity. React per-thread delete calls `DELETE /v1/history/{entry_id}` for every persisted row in the selected thread.
 - The browser UI persists the active thread id as `cortex_active_session_id` and restores that transcript after reload/resume. It does not auto-continue the last active thread after an explicit fresh login: that path marks `cortex_fresh_login_pending`, consumes the `fresh_login=1` callback marker, clears the active thread id, and sends `new_session=true` for the first turn. Users can still reopen older threads from History.
 

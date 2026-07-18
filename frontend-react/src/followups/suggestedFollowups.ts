@@ -8,13 +8,13 @@ const LEAD_IN_GLOBAL = new RegExp(LEAD_IN_SOURCE, "gi");
 const LEAD_IN_LINE = new RegExp(LEAD_IN_SOURCE, "i");
 const LIST_MARKER = /^(\s*(?:[-*]|\d+[.)])\s+)/;
 const QUOTED_FOLLOW_UP_QUERY_SOURCE =
-  "(?:(?:a\\s+)?(?:focused\\s+)?follow[-\\s]+up\\s+(?:query|question)\\s+could\\s+be|(?:a\\s+)?good\\s+follow[-\\s]+up\\s+(?:query|question)\\s+(?:would|could)\\s+be|(?:a\\s+)?specific\\s+(?:query|question)\\s+would\\s+be\\s+(?:needed|required)(?:,?\\s+such\\s+as)?|you\\s+could\\s+ask)";
+  "(?:(?:a\\s+)?(?:focused\\s+)?follow[-\\s]+up\\s+(?:query|question)\\s+could\\s+be|(?:a\\s+)?good\\s+follow[-\\s]+up\\s+(?:query|question)\\s+(?:would|could)\\s+be|(?:a\\s+)?specific\\s+(?:query|question)\\s+would\\s+be\\s+(?:needed|required)(?:,?\\s+such\\s+as)?|(?:i\\s+)?recommend\\s+(?:a\\s+)?(?:targeted\\s+)?follow[-\\s]+up\\s+(?:query|question)\\s+such\\s+as|you\\s+could\\s+ask)";
 const QUOTED_FOLLOW_UP_QUERY_GLOBAL = new RegExp(
   `${QUOTED_FOLLOW_UP_QUERY_SOURCE}\\s*:?\\s*(?:\\*\\*)?["\\u201c](?<query>[^"\\u201d\\n]+)["\\u201d](?:\\*\\*)?`,
   "gi",
 );
 const SINGLE_OFFER_ACTION =
-  "(?:build|compare|convert|create|draft|format|generate|give\\s+you|make|map|outline|prepare|provide|rewrite|show\\s+you|summarize|translate|turn)";
+  "(?:build|compare|convert|create|draft|explain|format|generate|give\\s+you|make|map|outline|prepare|provide|rewrite|show\\s+you|summarize|translate|turn)";
 const SINGLE_OFFER_PATTERNS = [
   new RegExp(`\\bi\\s+can(?:\\s+also)?\\s+(?<offer>${SINGLE_OFFER_ACTION}\\b.+)$`, "i"),
   new RegExp(`\\b(?:would\\s+you\\s+like|want)\\s+me\\s+to\\s+(?<offer>${SINGLE_OFFER_ACTION}\\b.+)$`, "i"),

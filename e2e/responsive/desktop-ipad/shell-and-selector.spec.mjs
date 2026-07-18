@@ -28,7 +28,7 @@ test("desktop sidebar collapses to an icon rail and expands again", async ({ res
     await page.getByRole("button", { name: "Collapse sidebar" }).click();
 
     await expect(sidebar).toHaveAttribute("data-collapsed", "true");
-    await expect(sidebar.getByRole("textbox", { name: "Search history" })).toBeHidden();
+    await expect(sidebar.getByRole("textbox", { name: "Search chats" })).toBeHidden();
     await expect.poll(
         () => sidebar.evaluate(element => element.getBoundingClientRect().width),
     ).toBeLessThanOrEqual(90);
@@ -40,7 +40,7 @@ test("desktop sidebar collapses to an icon rail and expands again", async ({ res
 
     await page.getByRole("button", { name: "Expand sidebar" }).click();
     await expect(sidebar).toHaveAttribute("data-collapsed", "false");
-    await expect(sidebar.getByRole("textbox", { name: "Search history" })).toBeVisible();
+    await expect(sidebar.getByRole("textbox", { name: "Search chats" })).toBeVisible();
 
     await page.setViewportSize({ width: 820, height: 1180 });
     await expect(sidebar).toBeHidden();
@@ -59,23 +59,27 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     const rowMetrics = await rows.evaluateAll(elements =>
         elements.map(element => {
             const title = element.querySelector("[data-history-title]");
-            const surface = element.parentElement?.parentElement ?? element;
+            const surface = element.parentElement ?? element;
             return {
                 height: surface.getBoundingClientRect().height,
+                titleWidth: title?.getBoundingClientRect().width ?? 0,
+                titleFontSize: title ? getComputedStyle(title).fontSize : "",
                 titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : "",
                 titleOverflow: title ? getComputedStyle(title).textOverflow : "",
             };
         }),
     );
     for (const row of rowMetrics) {
-        expect(row.height).toBeLessThanOrEqual(60);
+        expect(row.height).toBeLessThanOrEqual(38);
+        expect(row.titleWidth).toBeGreaterThanOrEqual(140);
+        expect(row.titleFontSize).toBe("11.5px");
         expect(row.titleWhiteSpace).toBe("nowrap");
         expect(row.titleOverflow).toBe("ellipsis");
     }
 
-    const longRow = sidebar.getByRole("button", {
-        name: /Plan a multi-region platform migration/,
-    });
+    const longRow = sidebar
+        .locator("button[data-history-thread]")
+        .filter({ hasText: "Plan a multi-region platform migration" });
     await expect(longRow).toHaveAttribute(
         "aria-label",
         /Ask,/,
@@ -103,18 +107,29 @@ test("desktop history keeps compact title, mode, and date rows", async ({ respon
     expect(listMetrics.overflowY).toBe("auto");
     expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
 
-    // The hover highlight lives on the thread surface wrapper
-    // (button -> .historyTop -> .historyThreadSurface); the button itself
-    // stays transparent.
-    const longRowSurface = longRow.locator("xpath=../..");
+    const longRowSurface = longRow.locator("xpath=..");
     await longRowSurface.hover();
     await expect.poll(
         () => longRowSurface.evaluate(element => getComputedStyle(element).backgroundColor),
-    ).toBe("rgb(255, 255, 255)");
+    ).toBe("rgb(240, 242, 244)");
+    const optionsButton = sidebar.getByRole("button", {
+        name: /Chat options for Plan a multi-region platform migration/,
+    });
+    await optionsButton.click();
+    const rowMenu = sidebar.getByRole("menu", {
+        name: /Options for Plan a multi-region platform migration/,
+    });
+    await expect(rowMenu.getByRole("menuitem")).toHaveCount(2);
+    await expect(rowMenu.getByRole("menuitem", { name: "Delete" })).toHaveCSS(
+        "color",
+        "rgb(220, 38, 38)",
+    );
+    await page.keyboard.press("Escape");
+    await expect(rowMenu).toBeHidden();
     await longRow.click();
     await expect(longRow).toHaveAttribute("aria-current", "page");
 
-    const search = sidebar.getByRole("textbox", { name: "Search history" });
+    const search = sidebar.getByRole("textbox", { name: "Search chats" });
     await search.fill("multi-region");
     await expect(rows).toHaveCount(1);
     await expect(longRow).toBeVisible();

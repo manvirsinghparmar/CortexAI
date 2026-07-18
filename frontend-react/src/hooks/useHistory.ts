@@ -1,10 +1,12 @@
 import { useCallback } from "react";
-import { fetchHistory, deleteHistoryEntry, clearHistory } from "../api/history";
-import { buildHistoryThreads } from "../history/historyThreads";
 import {
-  loadActiveSessionId,
-  normalizeSessionId,
-} from "../session/activeSession";
+  fetchHistory,
+  deleteHistoryEntry,
+  clearHistory,
+  renameHistorySession,
+} from "../api/history";
+import { buildHistoryThreads } from "../history/historyThreads";
+import { loadActiveSessionId, normalizeSessionId } from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
 import type { HistoryEntry, HistoryThread } from "../types";
 
@@ -19,7 +21,7 @@ export function useHistory() {
   const load = useCallback(
     async (input?: string | LoadHistoryOptions) => {
       const options: LoadHistoryOptions =
-        typeof input === "string" ? { sessionId: input } : input ?? {};
+        typeof input === "string" ? { sessionId: input } : (input ?? {});
       try {
         const entries = await fetchHistory(500, options.sessionId);
         setHistory(entries);
@@ -52,8 +54,8 @@ export function useHistory() {
 
   const removeThread = useCallback(
     async (thread: HistoryThread) => {
-      const entryIds = [...new Set(thread.entries.map((entry) => entry.id))].filter(
-        (id) => Number.isFinite(id),
+      const entryIds = [...new Set(thread.entries.map((entry) => entry.id))].filter((id) =>
+        Number.isFinite(id),
       );
       if (entryIds.length === 0) return false;
 
@@ -68,6 +70,34 @@ export function useHistory() {
         return true;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete chat");
+        return false;
+      }
+    },
+    [setHistory, setError],
+  );
+
+  const renameThread = useCallback(
+    async (thread: HistoryThread, title: string) => {
+      const sessionId = normalizeSessionId(thread.sessionId);
+      const normalizedTitle = title.trim();
+      if (!sessionId || !normalizedTitle) {
+        setError("This chat cannot be renamed");
+        return false;
+      }
+
+      try {
+        const renamed = await renameHistorySession(sessionId, normalizedTitle);
+        const currentHistory = useChatStore.getState().history;
+        setHistory(
+          currentHistory.map((entry) =>
+            normalizeSessionId(entry.session_id) === sessionId
+              ? { ...entry, session_title: renamed.title }
+              : entry,
+          ),
+        );
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to rename chat");
         return false;
       }
     },
@@ -99,7 +129,7 @@ export function useHistory() {
     [setHistory, setError],
   );
 
-  return { load, remove, removeThread, clear };
+  return { load, remove, removeThread, renameThread, clear };
 }
 
 async function restorePersistedActiveTranscript(entries: HistoryEntry[]): Promise<void> {

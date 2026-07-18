@@ -23,10 +23,7 @@ export function buildHistoryThreads(entries: HistoryEntry[]): HistoryThread[] {
     .sort((left, right) => right.latestTimestampMs - left.latestTimestampMs);
 }
 
-export function filterHistoryThreads(
-  threads: HistoryThread[],
-  query: string,
-): HistoryThread[] {
+export function filterHistoryThreads(threads: HistoryThread[], query: string): HistoryThread[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return threads;
   return threads.filter((thread) => thread.searchText.includes(normalized));
@@ -38,10 +35,7 @@ export function buildTurnsFromHistoryEntries(entries: HistoryEntry[]): ChatTurn[
 
   for (const entry of sorted) {
     const mode = normalizeMode(entry.mode);
-    const key =
-      mode === "compare"
-        ? compareTurnKey(entry)
-        : `ask:${entry.id}`;
+    const key = mode === "compare" ? compareTurnKey(entry) : `ask:${entry.id}`;
     const group = turnGroups.get(key) ?? [];
     group.push(entry);
     turnGroups.set(key, group);
@@ -64,12 +58,13 @@ function buildThread(
   const providers = distinct(entries.map((entry) => entry.provider));
   const models = distinct(entries.map((entry) => entry.model));
   const turns = buildTurnsFromHistoryEntries(entries);
+  const title = resolveThreadTitle(first);
 
   return {
     key,
     sessionId,
     entries,
-    title: first?.prompt || "[prompt not stored]",
+    title,
     latestTimestamp: latest?.timestamp || "",
     latestTimestampMs: parseTimestamp(latest?.timestamp),
     mode: modes.size > 1 ? "mixed" : (modes.values().next().value ?? "single"),
@@ -79,12 +74,26 @@ function buildThread(
     totalCost: entries.reduce((sum, entry) => sum + finiteNumber(entry.cost), 0),
     totalTokens: entries.reduce((sum, entry) => sum + finiteNumber(entry.tokens), 0),
     turnCount: turns.length,
-    searchText: entries
-      .map((entry) =>
-        [entry.prompt, entry.response, entry.provider, entry.model].join(" ").toLowerCase(),
-      )
-      .join(" "),
+    searchText: [
+      title,
+      ...entries.map((entry) =>
+        [entry.prompt, entry.response, entry.provider, entry.model].join(" "),
+      ),
+    ]
+      .join(" ")
+      .toLowerCase(),
   };
+}
+
+function resolveThreadTitle(first: HistoryEntry | undefined): string {
+  const sessionTitle = first?.session_title?.trim() ?? "";
+  if (sessionTitle && !isGenericApiSessionTitle(sessionTitle)) return sessionTitle;
+  return first?.prompt || "[prompt not stored]";
+}
+
+function isGenericApiSessionTitle(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "api chat" || normalized === "api compare";
 }
 
 function buildTurn(key: string, entries: HistoryEntry[]): ChatTurn {
@@ -176,7 +185,11 @@ function compareTurnKey(entry: HistoryEntry): string {
 }
 
 function normalizeMode(value: string | undefined): ChatMode {
-  return String(value || "").trim().toLowerCase() === "compare" ? "compare" : "single";
+  return String(value || "")
+    .trim()
+    .toLowerCase() === "compare"
+    ? "compare"
+    : "single";
 }
 
 function normalizeId(value: string | undefined): string | undefined {

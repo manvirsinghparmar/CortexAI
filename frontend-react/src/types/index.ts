@@ -158,6 +158,7 @@ export interface ProvidersCatalogResponse {
 export interface HistoryEntry {
   id: number;
   session_id?: string;
+  session_title?: string;
   request_group_id?: string;
   timestamp: string;
   mode: string;
@@ -309,19 +310,9 @@ export interface OptimizeResponse {
 }
 
 export type ChatMode = "single" | "compare";
-export type TurnStatus =
-  | "idle"
-  | "optimizing"
-  | "streaming"
-  | "complete"
-  | "error"
-  | "cancelled";
+export type TurnStatus = "idle" | "optimizing" | "streaming" | "complete" | "error" | "cancelled";
 
-export type PromptOptimizationUiStatus =
-  | "pending"
-  | "optimized"
-  | "kept_original"
-  | "cancelled";
+export type PromptOptimizationUiStatus = "pending" | "optimized" | "kept_original" | "cancelled";
 
 export interface PromptOptimizationState {
   status: PromptOptimizationUiStatus;

@@ -1,4 +1,11 @@
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { formatHistoryDateTime } from "../../history/historyDate";
 import { buildHistoryThreads, filterHistoryThreads } from "../../history/historyThreads";
 import { normalizeSessionId } from "../../session/activeSession";
@@ -39,8 +46,14 @@ export function Sidebar({
   signedOut = false,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [confirmingDeleteKey, setConfirmingDeleteKey] = useState<string | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const rowButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const history = useChatStore((s) => s.history);
   const historySearch = useChatStore((s) => s.historySearch);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
@@ -48,17 +61,17 @@ export function Sidebar({
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
   const startNewChat = useChatStore((s) => s.startNewChat);
-  const { clear, removeThread } = useHistory();
+  const { removeThread, renameThread } = useHistory();
 
   const filteredThreads = useMemo(() => {
     return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(0, 20);
   }, [history, historySearch]);
   const historyGroups = useMemo(() => groupHistoryThreads(filteredThreads), [filteredThreads]);
 
-  const userLabel = signedOut ? "Sign in" : whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest");
+  const userLabel = signedOut ? "Sign in" : (whoAmI?.user_id ?? (loggedIn ? "Signed in" : "Guest"));
   const planLabel = signedOut
     ? "Access your workspace"
-    : whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session");
+    : (whoAmI?.plan_tier ?? (loggedIn ? "Session active" : "Local session"));
   const sessionLabel = sessionId && !signedOut ? formatSessionId(sessionId) : userLabel;
   const sessionStatus = sessionId && !signedOut ? "Session active" : planLabel;
   const canSignInFromProfile = !loggedIn && !!onLogin;
@@ -70,6 +83,30 @@ export function Sidebar({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!openMenuKey) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (menuRef.current?.contains(target) || target.closest("[data-chat-more]")) return;
+      setOpenMenuKey(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMenuKey(null);
+    };
+    const handleScroll = () => setOpenMenuKey(null);
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("scroll", handleScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [openMenuKey]);
 
   const showDeleteConfirm = (threadKey: string) => {
     if (deleteConfirmTimerRef.current !== null) {
@@ -90,19 +127,9 @@ export function Sidebar({
     setConfirmingDeleteKey(null);
   };
 
-  const handleClearAll = async () => {
-    const scopedSessionId = normalizeSessionId(sessionId);
-    const message = scopedSessionId ? "Clear this chat?" : "Clear all chat history?";
-    if (!window.confirm(message)) return;
-
-    const cleared = await clear(scopedSessionId ?? undefined);
-    if (cleared && scopedSessionId) {
-      startNewChat();
-    }
-  };
-
-  const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>, thread: HistoryThread) => {
-    event.stopPropagation();
+  const beginDelete = (thread: HistoryThread) => {
+    setOpenMenuKey(null);
+    setRenamingKey(null);
     showDeleteConfirm(thread.key);
   };
 
@@ -126,6 +153,59 @@ export function Sidebar({
   const handleCancelDelete = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     clearDeleteConfirm();
+  };
+
+  const beginRename = (thread: HistoryThread) => {
+    clearDeleteConfirm();
+    setOpenMenuKey(null);
+    setRenamingKey(thread.key);
+    setRenameDraft(thread.title);
+  };
+
+  const finishRename = async (thread: HistoryThread) => {
+    const title = renameDraft.trim();
+    setRenamingKey(null);
+    if (title && title !== thread.title) {
+      await renameThread(thread, title);
+    }
+    window.requestAnimationFrame(() => rowButtonRefs.current.get(thread.key)?.focus());
+  };
+
+  const cancelRename = (threadKey: string) => {
+    setRenamingKey(null);
+    setRenameDraft("");
+    window.requestAnimationFrame(() => rowButtonRefs.current.get(threadKey)?.focus());
+  };
+
+  const handleThreadKeyDown = (event: ReactKeyboardEvent<HTMLElement>, thread: HistoryThread) => {
+    if (event.target instanceof HTMLInputElement) return;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const index = filteredThreads.findIndex((candidate) => candidate.key === thread.key);
+      if (index < 0) return;
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = Math.min(filteredThreads.length - 1, Math.max(0, index + delta));
+      rowButtonRefs.current.get(filteredThreads[nextIndex]?.key ?? "")?.focus();
+      return;
+    }
+
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "enter") {
+      event.preventDefault();
+      onSelectThread(thread);
+    } else if (key === "r") {
+      event.preventDefault();
+      beginRename(thread);
+    } else if (key === "d") {
+      event.preventDefault();
+      beginDelete(thread);
+    } else if (key === "escape") {
+      event.preventDefault();
+      setOpenMenuKey(null);
+      clearDeleteConfirm();
+    }
   };
 
   const handleModeNavigation = (nextMode: ChatMode) => {
@@ -244,10 +324,16 @@ export function Sidebar({
 
       <div className={styles.historyBlock} hidden={isCollapsed}>
         <div className={styles.historyHeader}>
-          <span>History</span>
-          {!signedOut && history.length > 0 && (
-            <button type="button" onClick={handleClearAll}>
-              Clear
+          <span>Recent</span>
+          {!signedOut && (
+            <button
+              type="button"
+              className={styles.historyFilterButton}
+              onClick={() => searchInputRef.current?.focus()}
+              aria-label="Filter chats"
+              title="Filter chats"
+            >
+              <FilterIcon />
             </button>
           )}
         </div>
@@ -259,11 +345,12 @@ export function Sidebar({
               <CortexIcon name="search" />
               <input
                 id="historySearch"
+                ref={searchInputRef}
                 className={styles.historySearch}
                 value={historySearch}
                 onChange={(event) => setHistorySearch(event.target.value)}
-                placeholder="Search history"
-                aria-label="Search history"
+                placeholder="Search chats"
+                aria-label="Search chats"
               />
             </div>
             <ul className={styles.historyList}>
@@ -272,24 +359,29 @@ export function Sidebar({
                   <div className={styles.historyGroupLabel}>{group.label}</div>
                   <ul className={styles.historyGroupItems}>
                     {group.threads.map((thread) => {
-                      const modeLabel = formatMode(thread.mode);
+                      const isCompare = thread.preferredMode === "compare";
+                      const modeLabel = isCompare ? "Compare" : "Ask";
                       const timeLabel = formatHistoryTime(thread.latestTimestamp);
                       const dateTimeLabel = formatHistoryDateTime(thread.latestTimestamp);
-                      const modeClassName = [
-                        styles.modeTag,
-                        thread.mode === "compare"
-                          ? styles.modeTagCompare
-                          : thread.mode === "single"
-                            ? styles.modeTagAsk
-                            : styles.modeTagMixed,
-                      ].join(" ");
-
+                      const isActive =
+                        normalizeSessionId(thread.sessionId) !== null &&
+                        normalizeSessionId(thread.sessionId) === normalizeSessionId(sessionId);
+                      const isMenuOpen = openMenuKey === thread.key;
+                      const isRenaming = renamingKey === thread.key;
                       const isConfirmingDelete = confirmingDeleteKey === thread.key;
 
                       return (
-                        <li key={thread.key} className={styles.historyItemRow}>
+                        <li
+                          key={thread.key}
+                          className={styles.historyItemRow}
+                          onKeyDown={(event) => handleThreadKeyDown(event, thread)}
+                        >
                           {isConfirmingDelete ? (
-                            <div className={styles.historyDeleteConfirm} role="group" aria-label="Confirm delete chat">
+                            <div
+                              className={styles.historyDeleteConfirm}
+                              role="group"
+                              aria-label="Confirm delete chat"
+                            >
                               <span className={styles.historyDeleteConfirmText}>Delete?</span>
                               <button
                                 type="button"
@@ -309,44 +401,126 @@ export function Sidebar({
                             </div>
                           ) : (
                             <div
-                              className={
-                                thread.sessionId === sessionId
-                                  ? `${styles.historyThreadSurface} ${styles.historyItemActive}`
-                                  : styles.historyThreadSurface
-                              }
-                              onClick={() => onSelectThread(thread)}
+                              className={[
+                                styles.historyThreadSurface,
+                                isActive ? styles.historyItemActive : "",
+                                isMenuOpen ? styles.historyMenuOpen : "",
+                              ]
+                                .filter(Boolean)
+                                .join(" ")}
                               title={thread.title}
+                              data-mode={isCompare ? "compare" : "ask"}
                             >
-                              <div className={styles.historyTop}>
+                              {isRenaming ? (
+                                <div className={styles.historyRenameRow}>
+                                  <input
+                                    className={styles.historyRenameInput}
+                                    value={renameDraft}
+                                    onChange={(event) => setRenameDraft(event.target.value)}
+                                    onBlur={() => void finishRename(thread)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        void finishRename(thread);
+                                      } else if (event.key === "Escape") {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        cancelRename(thread.key);
+                                      }
+                                    }}
+                                    aria-label={`Rename ${thread.title}`}
+                                    maxLength={120}
+                                    autoFocus
+                                  />
+                                </div>
+                              ) : (
                                 <button
                                   type="button"
-                                  className={styles.historyTitleButton}
+                                  ref={(element) => {
+                                    if (element) rowButtonRefs.current.set(thread.key, element);
+                                    else rowButtonRefs.current.delete(thread.key);
+                                  }}
+                                  className={styles.historySelectButton}
                                   data-history-thread={thread.key}
                                   aria-label={`${thread.title}. ${modeLabel}, ${
                                     dateTimeLabel || "Date unavailable"
                                   }`}
-                                  aria-current={thread.sessionId === sessionId ? "page" : undefined}
+                                  aria-current={isActive ? "page" : undefined}
+                                  onClick={() => onSelectThread(thread)}
                                 >
                                   <span className={styles.historyTitle} data-history-title>
                                     {thread.title}
                                   </span>
+                                  <span className={styles.historyRight}>
+                                    <span className={styles.historyMeta}>
+                                      {modeLabel.toUpperCase()} ·{" "}
+                                      <time dateTime={thread.latestTimestamp}>
+                                        {timeLabel || "--:--"}
+                                      </time>
+                                    </span>
+                                  </span>
                                 </button>
+                              )}
+                              {!isRenaming && (
                                 <button
                                   type="button"
-                                  className={styles.historyDeleteButton}
-                                  onClick={(event) => handleDeleteClick(event, thread)}
-                                  aria-label="Delete chat"
-                                  title="Delete chat"
+                                  className={styles.historyMoreButton}
+                                  data-chat-more
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    clearDeleteConfirm();
+                                    setOpenMenuKey((current) =>
+                                      current === thread.key ? null : thread.key,
+                                    );
+                                  }}
+                                  aria-label={`Chat options for ${thread.title}`}
+                                  aria-haspopup="menu"
+                                  aria-expanded={isMenuOpen}
+                                  title="Chat options"
                                 >
-                                  <CortexIcon name="trash" size={15} strokeWidth={1.8} />
+                                  <KebabIcon />
                                 </button>
-                              </div>
-                              <small className={styles.historyMeta}>
-                                <span className={modeClassName}>{modeLabel.toUpperCase()}</span>
-                                <time dateTime={thread.latestTimestamp}>
-                                  {timeLabel || "Date unavailable"}
-                                </time>
-                              </small>
+                              )}
+                              {isMenuOpen && (
+                                <div
+                                  ref={menuRef}
+                                  className={styles.historyMenu}
+                                  role="menu"
+                                  aria-label={`Options for ${thread.title}`}
+                                >
+                                  <button
+                                    type="button"
+                                    className={styles.historyMenuItem}
+                                    role="menuitem"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      beginRename(thread);
+                                    }}
+                                  >
+                                    <PencilIcon />
+                                    Rename
+                                    <span className={styles.historyMenuKey} aria-hidden="true">
+                                      R
+                                    </span>
+                                  </button>
+                                  <div className={styles.historyMenuSeparator} />
+                                  <button
+                                    type="button"
+                                    className={`${styles.historyMenuItem} ${styles.historyMenuDanger}`}
+                                    role="menuitem"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      beginDelete(thread);
+                                    }}
+                                  >
+                                    <TrashIcon />
+                                    Delete
+                                    <span className={styles.historyMenuKey} aria-hidden="true">
+                                      D
+                                    </span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </li>
@@ -355,6 +529,11 @@ export function Sidebar({
                   </ul>
                 </li>
               ))}
+              {filteredThreads.length === 0 && (
+                <li className={styles.historyEmpty}>
+                  {historySearch.trim() ? "No chats match" : "No recent chats"}
+                </li>
+              )}
             </ul>
           </>
         )}
@@ -392,21 +571,15 @@ function SessionProfileContent({
 }) {
   return (
     <>
-        <span className={styles.sessionDot} aria-hidden="true">
-          <span />
-        </span>
-        <span className={styles.profileText}>
-          <strong>{sessionLabel}</strong>
-          <span>{sessionStatus}</span>
-        </span>
+      <span className={styles.sessionDot} aria-hidden="true">
+        <span />
+      </span>
+      <span className={styles.profileText}>
+        <strong>{sessionLabel}</strong>
+        <span>{sessionStatus}</span>
+      </span>
     </>
   );
-}
-
-function formatMode(mode: HistoryThread["mode"]): string {
-  if (mode === "single") return "Ask";
-  if (mode === "compare") return "Compare";
-  return "Mixed";
 }
 
 function groupHistoryThreads(threads: HistoryThread[]): HistoryDateGroup[] {
@@ -429,14 +602,14 @@ function formatHistoryGroupLabel(value: string, now = new Date()): string {
 
   const date = new Date(timestamp);
   if (isSameLocalDate(date, now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameLocalDate(date, yesterday)) return "Yesterday";
 
-  const options: Intl.DateTimeFormatOptions = {
+  return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
-  };
-  if (date.getFullYear() !== now.getFullYear()) options.year = "numeric";
-
-  return date.toLocaleDateString(undefined, options);
+  });
 }
 
 function formatHistoryTime(value: string): string {
@@ -461,4 +634,38 @@ function formatSessionId(value: string): string {
   const normalized = value.trim();
   if (normalized.length <= 14) return normalized;
   return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M7 12h10M10 17h4" />
+    </svg>
+  );
+}
+
+function KebabIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.55" />
+      <circle cx="12" cy="12" r="1.55" />
+      <circle cx="12" cy="19" r="1.55" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 20h8M16.5 4.5a2.12 2.12 0 0 1 3 3L8 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14" />
+    </svg>
+  );
 }

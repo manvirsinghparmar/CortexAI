@@ -26,36 +26,30 @@ describe("Sidebar", () => {
     render(<Sidebar onSelectThread={onSelectThread} />);
 
     expect(screen.getByRole("heading", { name: "CortexAI" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(screen.getByRole("button", { name: "Usage" })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(screen.getByText("Recent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Usage" })).not.toHaveAttribute("aria-current");
     const activeThread = screen.getByRole("button", { name: /Quarterly planning\. Ask,/ });
     expect(activeThread).toHaveAttribute("aria-current", "page");
-    expect(activeThread).toHaveAccessibleName(
-      /Quarterly planning\. Ask,/,
-    );
+    expect(activeThread).toHaveAccessibleName(/Quarterly planning\. Ask,/);
     expect(activeThread.querySelector("[data-history-title]")).toHaveTextContent(
       "Quarterly planning",
     );
-    expect(activeThread.closest("li")?.querySelector("small")).toHaveTextContent(/^ASK/);
+    expect(activeThread).toHaveTextContent(/ASK ·/);
     expect(activeThread).not.toHaveTextContent("2 turns");
     expect(activeThread).not.toHaveTextContent("gpt-5.1");
     const timestamps = [...document.querySelectorAll("time")];
     expect(timestamps).toHaveLength(2);
-    expect(
-      timestamps.some(
-        (timestamp) => timestamp.dateTime === "2026-06-10T11:00:00Z",
-      ),
-    ).toBe(true);
+    expect(timestamps.some((timestamp) => timestamp.dateTime === "2026-06-10T11:00:00Z")).toBe(
+      true,
+    );
 
     await user.click(screen.getByRole("button", { name: "Compare" }));
     expect(useChatStore.getState().mode).toBe("compare");
 
-    await user.type(screen.getByRole("textbox", { name: "Search history" }), "vendors");
+    await user.click(screen.getByRole("button", { name: "Filter chats" }));
+    expect(screen.getByRole("textbox", { name: "Search chats" })).toHaveFocus();
+    await user.type(screen.getByRole("textbox", { name: "Search chats" }), "vendors");
     expect(screen.queryByText("Quarterly planning")).not.toBeInTheDocument();
     const compareThread = screen.getByRole("button", { name: /Compare vendors\. Compare,/ });
     expect(compareThread).toBeInTheDocument();
@@ -96,7 +90,7 @@ describe("Sidebar", () => {
 
     const sidebar = screen.getByLabelText("Primary navigation");
     expect(sidebar).toHaveAttribute("data-collapsed", "false");
-    expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search chats" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 
@@ -105,7 +99,7 @@ describe("Sidebar", () => {
       "aria-expanded",
       "false",
     );
-    expect(screen.queryByRole("textbox", { name: "Search history" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Search chats" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Compare" }));
     expect(useChatStore.getState().mode).toBe("compare");
@@ -120,38 +114,7 @@ describe("Sidebar", () => {
       "aria-expanded",
       "true",
     );
-    expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
-  });
-
-  it("clears the active persisted thread after confirmation", async () => {
-    const user = userEvent.setup();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 204,
-      statusText: "No Content",
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    useChatStore.setState({
-      history: historyEntries(),
-      sessionId: "ask-session",
-      pendingNewSession: false,
-    });
-
-    render(<Sidebar onSelectThread={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: "Clear" }));
-
-    await waitFor(() =>
-      expect(useChatStore.getState().history.map((entry) => entry.id)).toEqual([3, 4]),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/v1/history?session_id=ask-session",
-      expect.objectContaining({ method: "DELETE", credentials: "include" }),
-    );
-    expect(useChatStore.getState().sessionId).toBeNull();
-    expect(screen.queryByText("Quarterly planning")).toBeNull();
-    expect(screen.getByText("Compare vendors")).toBeInTheDocument();
-    expect(within(screen.getByLabelText("Primary navigation")).getByText("Clear")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search chats" })).toBeInTheDocument();
   });
 
   it("marks Usage active and routes Ask or Compare back to chat", async () => {
@@ -174,13 +137,8 @@ describe("Sidebar", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Usage" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(screen.getByRole("button", { name: "Usage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "Compare" }));
 
@@ -202,20 +160,11 @@ describe("Sidebar", () => {
     });
 
     render(
-      <Sidebar
-        onSelectThread={vi.fn()}
-        activeView="models"
-        onNavigateModels={onNavigateModels}
-      />,
+      <Sidebar onSelectThread={vi.fn()} activeView="models" onNavigateModels={onNavigateModels} />,
     );
 
-    expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Ask" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "Models" }));
     expect(onNavigateModels).toHaveBeenCalledTimes(1);
@@ -229,13 +178,7 @@ describe("Sidebar", () => {
       pendingNewSession: false,
     });
 
-    render(
-      <Sidebar
-        onSelectThread={vi.fn()}
-        loggedIn
-        whoAmI={whoAmI()}
-      />,
-    );
+    render(<Sidebar onSelectThread={vi.fn()} loggedIn whoAmI={whoAmI()} />);
 
     expect(screen.queryByRole("button", { name: /Sign out/i })).not.toBeInTheDocument();
     expect(screen.getByText("Session active").closest("button")).toBeNull();
@@ -261,19 +204,12 @@ describe("Sidebar", () => {
       pendingNewSession: false,
     });
 
-    render(
-      <Sidebar
-        onSelectThread={vi.fn()}
-        loggedIn={false}
-        onLogin={onLogin}
-        signedOut
-      />,
-    );
+    render(<Sidebar onSelectThread={vi.fn()} loggedIn={false} onLogin={onLogin} signedOut />);
 
     expect(screen.getByText("Sign in")).toBeInTheDocument();
     expect(screen.getByText("Access your workspace")).toBeInTheDocument();
     expect(screen.getByText("Sign in to view history.")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "Search history" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Search chats" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Compare" })).toBeDisabled();
@@ -304,7 +240,12 @@ describe("Sidebar", () => {
     const activeRow = activeThread.closest("li");
     expect(activeRow).not.toBeNull();
 
-    await user.click(within(activeRow!).getByRole("button", { name: "Delete chat" }));
+    await user.click(
+      within(activeRow!).getByRole("button", { name: /Chat options for Quarterly planning/ }),
+    );
+    const menu = within(activeRow!).getByRole("menu", { name: /Options for Quarterly planning/ });
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    await user.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
 
     expect(onSelectThread).not.toHaveBeenCalled();
     expect(within(activeRow!).getByText("Delete?")).toBeInTheDocument();
@@ -321,6 +262,121 @@ describe("Sidebar", () => {
     expect(useChatStore.getState().sessionId).toBeNull();
     expect(screen.queryByText("Quarterly planning")).toBeNull();
     expect(screen.getByText("Compare vendors")).toBeInTheDocument();
+  });
+
+  it("renames a persisted thread from the two-item context menu", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ session_id: "ask-session", title: "Launch plan" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useChatStore.setState({
+      history: historyEntries(),
+      sessionId: "ask-session",
+      pendingNewSession: false,
+    });
+
+    render(<Sidebar onSelectThread={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /Chat options for Quarterly planning/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Rename/ }));
+    const renameInput = screen.getByRole("textbox", { name: "Rename Quarterly planning" });
+    await user.clear(renameInput);
+    await user.type(renameInput, "Launch plan{Enter}");
+
+    await waitFor(() => expect(screen.getByText("Launch plan")).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/history/session/ask-session",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        body: JSON.stringify({ title: "Launch plan" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      useChatStore.getState().history.filter((entry) => entry.session_id === "ask-session"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ session_title: "Launch plan" }),
+        expect.objectContaining({ session_title: "Launch plan" }),
+      ]),
+    );
+  });
+
+  it("supports row arrow navigation and R, D, and Escape shortcuts", async () => {
+    const user = userEvent.setup();
+    const onSelectThread = vi.fn();
+    useChatStore.setState({ history: historyEntries(), sessionId: "ask-session" });
+
+    render(<Sidebar onSelectThread={onSelectThread} />);
+    const rows = [...document.querySelectorAll<HTMLButtonElement>("button[data-history-thread]")];
+    expect(rows).toHaveLength(2);
+    rows[0]!.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(rows[1]).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onSelectThread).toHaveBeenCalledTimes(1);
+
+    await user.keyboard("r");
+    expect(screen.getByRole("textbox", { name: /Rename/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: /Rename/ })).toBeNull();
+
+    await user.keyboard("d");
+    expect(screen.getByText("Delete?")).toBeInTheDocument();
+  });
+
+  it("groups recent chats under Today, Yesterday, and month-day labels", () => {
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const older = new Date(now);
+    older.setDate(now.getDate() - 8);
+    useChatStore.setState({
+      history: [
+        historyEntry({
+          id: 10,
+          sessionId: "today-session",
+          prompt: "Today chat",
+          response: "Today response",
+          mode: "single",
+          provider: "openai",
+          model: "gpt-5.1",
+          timestamp: now.toISOString(),
+        }),
+        historyEntry({
+          id: 11,
+          sessionId: "yesterday-session",
+          prompt: "Yesterday chat",
+          response: "Yesterday response",
+          mode: "single",
+          provider: "openai",
+          model: "gpt-5.1",
+          timestamp: yesterday.toISOString(),
+        }),
+        historyEntry({
+          id: 12,
+          sessionId: "older-session",
+          prompt: "Older chat",
+          response: "Older response",
+          mode: "compare",
+          provider: "openai",
+          model: "gpt-5.1",
+          timestamp: older.toISOString(),
+        }),
+      ],
+    });
+
+    render(<Sidebar onSelectThread={vi.fn()} />);
+
+    expect(screen.getByText("Today")).toBeInTheDocument();
+    expect(screen.getByText("Yesterday")).toBeInTheDocument();
+    expect(
+      screen.getByText(older.toLocaleDateString(undefined, { month: "short", day: "numeric" })),
+    ).toBeInTheDocument();
   });
 });
 

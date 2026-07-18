@@ -91,7 +91,7 @@ python run_server.py --reload
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data. Signed-out Cognito users see a workspace sign-in gate instead of the Ask/Compare composer, while authenticated and local dev-session users restore the persisted active `session_id` transcript when the page was reloaded, resumed, or silently reauthenticated in the same browser.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
-- The React sidebar uses a compact navigation rail with subtle mode/current-session states plus Usage and Models destinations. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate Ask/Compare/History bottom navigation, with Usage and Models reached from the account menu. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
+- The React sidebar uses a compact navigation rail with subtle mode/current-session states plus Usage and Models destinations. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate Ask/Compare/History bottom navigation, with Usage and Models reached from the account menu. The expanded desktop `Recent` list groups chats by Today, Yesterday, and month/day, with one 36px row per session: compact 11.5px ellipsized title and a narrowed `MODE · time` caption, with no leading mode glyph, to preserve substantially more identifying title text. Hover/focus replaces the caption with a Rename/Delete menu; renamed titles persist in `sessions.title`, Delete retains the short in-row confirmation, and keyboard rows support arrows, Enter, R, D, and Escape. The collapsed desktop rail and the separate mobile History surface remain unchanged.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
 - React posts non-sensitive lifecycle diagnostics to `/v1/client-diagnostics`; backend logs them as `frontend.diagnostic` events so production refresh reports can be separated into reload/navigation, tab discard, back/forward cache restore, long main-thread task, or frontend error cases.
@@ -140,6 +140,7 @@ python run_server.py --reload
 - `POST /v1/compare/stream`
 - `POST /v1/optimize`
 - `GET /v1/history`
+- `PATCH /v1/history/session/{session_id}`
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
@@ -161,10 +162,12 @@ python run_server.py --reload
 `GET /v1/history?limit=<n>&session_id=<optional>` returns persisted request rows, newest first. It does not pre-group records for presentation.
 
 - `session_id` identifies the user-visible conversation thread.
+- `session_title` is optional; user-authored values replace the first prompt as the thread label. React ignores the system-generated `API Chat` and `API Compare` placeholders.
 - `request_group_id` is optional and is populated for Compare target rows.
 - One Ask turn produces one row.
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
 - The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
+- `PATCH /v1/history/session/{session_id}` accepts `{"title":"..."}` to rename one user-owned session. The title is trimmed, limited to 120 characters, and persisted without changing latest-activity ordering.
 - `DELETE /v1/history?session_id=<id>` clears only that session's persisted request rows for the authenticated identity; omitting `session_id` clears all history. React per-thread delete uses `DELETE /v1/history/{entry_id}` for each row in the selected thread.
 
 ### Usage summary contract

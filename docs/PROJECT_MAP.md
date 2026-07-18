@@ -68,7 +68,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
-  - History thread grouping, per-thread delete, and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
+  - History thread grouping, persisted session rename, per-thread delete, and Compare-turn reconstruction: `server/routes/history.py`, `db/repository.py`, `frontend-react/src/api/history.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
   - Usage & insights route, states, KPI row, mobile compact dashboard, model leaderboard/provider-logo tiles, session modes panel, activity chart, period selector/export, and data layer: `frontend-react/src/pages/UsageInsightsPage.tsx`, `frontend-react/src/pages/UsageInsightsPage.module.css`, `frontend-react/src/api/usage.ts`, `frontend-react/src/hooks/useUsageSummary.ts`
   - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
@@ -109,7 +109,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Add/adjust tests
 
 - Change React history behavior:
-  1. Keep `/v1/history` row-level persistence semantics in `server/routes/history.py` and `db/repository.py`.
+  1. Keep `/v1/history` row-level persistence and session-title rename semantics in `server/routes/history.py` and `db/repository.py`.
   2. Update session/thread normalization in `frontend-react/src/history/historyThreads.ts`.
   3. Update active-thread browser persistence in `frontend-react/src/session/activeSession.ts` when reload/fresh-login behavior changes.
   4. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.

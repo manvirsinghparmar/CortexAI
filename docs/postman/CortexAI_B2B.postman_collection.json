@@ -46,6 +46,10 @@
       "value": "1"
     },
     {
+      "key": "session_id",
+      "value": ""
+    },
+    {
       "key": "byok_openai_key",
       "value": "sk-tenant-openai-example-1234"
     },
@@ -609,10 +613,58 @@
                   "  if (body.length > 0) {",
                   "    pm.test('history exposes session and compare grouping fields', function () {",
                   "      pm.expect(body[0]).to.have.property('session_id');",
+                  "      pm.expect(body[0]).to.have.property('session_title');",
                   "      pm.expect(body[0]).to.have.property('request_group_id');",
                   "    });",
                   "  }",
                   "  if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }",
+                  "  if (body.length > 0 && body[0].session_id) { pm.collectionVariables.set('session_id', String(body[0].session_id)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /v1/history/session/{session_id}",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Renamed CortexAI chat\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/v1/history/session/{{session_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or 404 or 501', function () {",
+                  "  pm.expect([200, 404, 501]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('renamed session title is returned', function () {",
+                  "    pm.expect(body.session_id).to.eql(pm.collectionVariables.get('session_id'));",
+                  "    pm.expect(body.title).to.eql('Renamed CortexAI chat');",
+                  "  });",
                   "}"
                 ]
               }

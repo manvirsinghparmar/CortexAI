@@ -74,6 +74,16 @@ describe("extractSuggestedFollowUps", () => {
     ]);
   });
 
+  it("extracts a single concrete explain offer", () => {
+    expect(
+      extractSuggestedFollowUps(
+        "If you want, I can also explain **why Barcelona couldn\u2019t simply re-sign him on a lower salary** in plain language.",
+      ),
+    ).toEqual([
+      "Explain why Barcelona couldn\u2019t simply re-sign him on a lower salary in plain language",
+    ]);
+  });
+
   it("does not chip vague single-offer endings", () => {
     expect(
       extractSuggestedFollowUps(
@@ -113,6 +123,20 @@ describe("extractSuggestedFollowUps", () => {
       ),
     ).toEqual([
       "What were Cristiano Ronaldo's goal and assist statistics for Al-Nassr in the most recent season?",
+    ]);
+  });
+
+  it("extracts a recommended targeted follow-up query", () => {
+    expect(
+      extractSuggestedFollowUps(
+        [
+          "The sources provided do not include revenue, profit, debt, wage bill, or valuation figures.",
+          "For the most recent and accurate financial comparison, I recommend a targeted follow-up query such as:",
+          "\u201cProvide the latest Deloitte Football Money League rankings, revenue, profit, debt, and wage figures for Real Madrid and Barcelona from the 2024/25 or 2025/26 seasons.\u201d",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      "Provide the latest Deloitte Football Money League rankings, revenue, profit, debt, and wage figures for Real Madrid and Barcelona from the 2024/25 or 2025/26 seasons",
     ]);
   });
 

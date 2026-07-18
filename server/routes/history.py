@@ -6,7 +6,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from db import clear_llm_history, delete_llm_history_entry, get_llm_history_entries
+from db import (
+    clear_llm_history,
+    delete_llm_history_entry,
+    get_llm_history_entries,
+    rename_history_session,
+)
 from server import persistence as persistence_service
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
@@ -38,6 +43,7 @@ def _require_db_mode() -> None:
 class HistoryEntry(BaseModel):
     id: int
     session_id: Optional[str] = None
+    session_title: Optional[str] = None
     request_group_id: Optional[str] = None
     timestamp: str
     mode: str
@@ -49,6 +55,15 @@ class HistoryEntry(BaseModel):
     tokens: Optional[int] = None
     cost: Optional[float] = None
     web_source_items: List[dict[str, str]] = Field(default_factory=list)
+
+
+class RenameHistorySessionRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+
+class RenameHistorySessionResponse(BaseModel):
+    session_id: str
+    title: str
 
 
 @router.get("/history", response_model=List[HistoryEntry])
@@ -96,6 +111,42 @@ async def delete_entry(
 
     if not removed:
         raise HTTPException(status_code=404, detail="History entry not found")
+
+
+@router.patch(
+    "/history/session/{session_id}",
+    response_model=RenameHistorySessionResponse,
+)
+async def rename_session(
+    request: Request,
+    session_id: str,
+    payload: RenameHistorySessionRequest,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Rename one authenticated user's persisted chat session."""
+    _require_db_mode()
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Session title cannot be empty")
+
+    req_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
+        renamed = rename_history_session(
+            db_session,
+            resolution.user_id,
+            session_id,
+            title,
+        )
+
+    if not renamed:
+        raise HTTPException(status_code=404, detail="History session not found")
+    return RenameHistorySessionResponse(session_id=session_id, title=title)
 
 
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)

@@ -2372,6 +2372,7 @@ def get_llm_history_entries(
 
     llm_requests = get_table("llm_requests")
     llm_responses = get_table("llm_responses")
+    sessions = get_table("sessions")
     routing_decisions = None
     try:
         routing_decisions = get_table("routing_decisions")
@@ -2380,6 +2381,7 @@ def get_llm_history_entries(
 
     req_cols = {col.name for col in llm_requests.columns}
     resp_cols = {col.name for col in llm_responses.columns}
+    session_cols = {col.name for col in sessions.columns}
     routing_cols = {col.name for col in routing_decisions.columns} if routing_decisions is not None else set()
 
     req_created_col = llm_requests.c.created_at if "created_at" in req_cols else None
@@ -2421,12 +2423,15 @@ def get_llm_history_entries(
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
     error_expr = resp_error_col if resp_error_col is not None else literal(None)
     routing_trace_expr = routing_trace_col if routing_trace_col is not None else literal(None)
+    session_title_expr = sessions.c.title if "title" in session_cols else literal(None)
 
     order_col = req_created_col if req_created_col is not None else llm_requests.c.id
     from_clause = llm_requests.outerjoin(
         llm_responses,
         llm_responses.c.llm_request_id == llm_requests.c.id,
     )
+    if req_session_col is not None and "id" in session_cols:
+        from_clause = from_clause.outerjoin(sessions, sessions.c.id == req_session_col)
     if routing_req_col is not None and routing_decisions is not None:
         from_clause = from_clause.outerjoin(
             routing_decisions,
@@ -2438,6 +2443,7 @@ def get_llm_history_entries(
             llm_requests.c.id.label("request_pk"),
             llm_requests.c.request_id.label("request_id"),
             session_expr.label("session_id"),
+            session_title_expr.label("session_title"),
             request_group_expr.label("request_group_id"),
             mode_expr.label("mode"),
             prompt_expr.label("prompt_text"),
@@ -2497,6 +2503,11 @@ def get_llm_history_entries(
             {
                 "id": _history_entry_id(payload.get("request_pk"), payload.get("request_id")),
                 "session_id": str(payload["session_id"]) if payload.get("session_id") is not None else None,
+                "session_title": (
+                    str(payload["session_title"])
+                    if payload.get("session_title") is not None
+                    else None
+                ),
                 "request_group_id": (
                     str(payload["request_group_id"])
                     if payload.get("request_group_id") is not None
@@ -2516,6 +2527,34 @@ def get_llm_history_entries(
         )
 
     return entries
+
+
+def rename_history_session(
+    db: Session,
+    user_id: UUID,
+    session_id: str,
+    title: str,
+) -> bool:
+    """Rename one user-owned chat session without changing its activity timestamp."""
+    from db.tables import get_table
+
+    parsed_session_id = coerce_uuid(session_id)
+    normalized_title = str(title or "").strip()
+    if parsed_session_id is None or not normalized_title:
+        return False
+
+    sessions = get_table("sessions")
+    result = db.execute(
+        update(sessions)
+        .where(
+            and_(
+                sessions.c.id == parsed_session_id,
+                sessions.c.user_id == user_id,
+            )
+        )
+        .values(title=normalized_title)
+    )
+    return bool(result.rowcount and result.rowcount > 0)
 
 
 def _find_request_pk_by_history_id(db: Session, user_id: UUID, entry_id: int) -> Any | None:

@@ -129,6 +129,43 @@ Use this when the React page appears to refresh without the user pressing reload
    - prior `error` or `unhandledrejection`: frontend runtime failure; inspect the sanitized message and current release artifact.
 3. Correlate the same timestamp with `chat.stream.*` or `compare.stream.*` request logs. If `client_disconnected` appears immediately before the next `boot`, inspect CDN/proxy/browser behavior before assuming the backend completed normally.
 
+### Pattern: Cognito auth redirect loop (repeating `fresh_login` boot events)
+
+Symptoms:
+
+- Multiple `boot` events in `frontend.diagnostic` within seconds of each other.
+- Each `boot` has `details.navigationType="navigate"` and `details.searchKeys` includes `fresh_login`.
+- No successful `/v1/whoami` in between (or 401 responses).
+
+Root cause:
+
+The token exchange between the backend and Cognito is failing (usually redirect URI mismatch).  
+When the backend runs behind CloudFront or an ALB without proxy header support enabled, `request.base_url` returns `http://…`.  
+The computed `redirect_uri` (`http://…/auth`) does not match the `https://…/auth` registered in the Cognito App Client, so every token exchange fails and the browser is redirected back to the login page immediately.
+
+Remediation:
+
+1. Set `COGNITO_REDIRECT_URI=https://app.example.com/auth` explicitly in the environment.
+2. Ensure `ENABLE_PROXY_HEADERS=true` (default) so the server trusts `X-Forwarded-Proto` from CloudFront/ALB.
+3. Confirm `request.base_url` resolves as HTTPS by checking the `auth.dev_login.*` or `http.request.start` log events for the `/auth` path and verifying the scheme.
+
+### Pattern: Automatic refresh on mobile / tab resume
+
+Symptoms:
+
+- `boot` event immediately after `pagehide` with `details.persisted=false` or after a long gap (tab was discarded).
+- `details.wasDiscarded=true` in the new `boot` event.
+- User appears logged out after resume.
+
+Root cause:
+
+The `cortex_session` cookie had no `max_age` (was a session cookie) and was cleared when the browser session ended or Chrome discarded the low-memory tab. On desktop browsers that restore tabs across restarts, the session cookie is lost. On mobile, background→foreground transitions frequently clear session state.
+
+Remediation:
+
+- Verify `SESSION_MAX_AGE_SECONDS` is set (default 604800 = 7 days).
+- If users are still losing sessions after tab restores, increase the value or investigate browser cookie storage policies.
+
 ## Upload Incident Workflow (`POST /v1/files/upload`)
 
 ### Step 1: confirm route arrival

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountMenu } from "../components/layout/AccountMenu";
@@ -167,6 +167,31 @@ describe("AccountMenu", () => {
     await user.click(usageAction);
     expect(onUsageInsights).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
+  });
+
+  it("shows Models as the first account menu tile when wired", async () => {
+    const user = userEvent.setup();
+    const onModels = vi.fn();
+
+    render(
+      <AccountMenu
+        authEnabled={false}
+        loggedIn={false}
+        onModels={onModels}
+        onUsageInsights={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Guest account" }));
+
+    const menu = screen.getByRole("menu", { name: "Account menu" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items[0]).toHaveTextContent("Models");
+    expect(items[0]).toHaveTextContent("22 across 5 providers");
+
+    await user.click(within(menu).getByRole("menuitem", { name: /Models/ }));
+
+    expect(onModels).toHaveBeenCalledTimes(1);
   });
 
   it("updates the theme switch label for dark mode", async () => {

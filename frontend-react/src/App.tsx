@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ChatPage } from "./pages/ChatPage";
+import { ModelsPage } from "./pages/ModelsPage";
 import { UsageInsightsPage } from "./pages/UsageInsightsPage";
 
 export function App() {
@@ -8,6 +9,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<ChatPage />} />
         <Route path="/usage" element={<UsageInsightsPage />} />
+        <Route path="/models" element={<ModelsPage />} />
         {/* Cognito redirects back to /auth?code=...; the backend handles OAuth exchange. */}
         <Route path="/auth" element={<RedirectHome />} />
         <Route path="/index.html" element={<RedirectHome />} />

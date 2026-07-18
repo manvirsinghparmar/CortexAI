@@ -1,6 +1,6 @@
 .sidebar {
   display: flex;
-  width: 264px;
+  width: 280px;
   height: 100vh;
   min-height: 100dvh;
   flex-shrink: 0;
@@ -37,7 +37,7 @@
 
 .brandMark {
   width: 40px;
-  height: 40px;
+  height: 38px;
   flex: 0 0 auto;
   border-radius: 12px;
   box-shadow: var(--cx-shadow-sm);
@@ -108,7 +108,7 @@
   gap: 10px;
   border: 0;
   border-radius: 11px;
-  background: #0B1220;
+  background: #0b1220;
   color: #ffffff;
   cursor: pointer;
   font: 700 13px/20px var(--font-sans);
@@ -120,7 +120,7 @@
 }
 
 .newChatButton:hover {
-  background: #0B1220;
+  background: #0b1220;
   box-shadow: var(--cx-shadow-card);
   transform: translateY(-1px);
 }
@@ -245,32 +245,49 @@
   min-height: 0;
   margin-top: 22px;
   overflow: hidden;
-  padding: 0 14px;
+  padding: 0 12px;
 }
 
 .historyHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: var(--cx-ink-500);
-  font: 600 10px/14px var(--font-mono);
-  letter-spacing: 0.16em;
+  margin-bottom: 9px;
+  padding: 0 6px;
+  color: #9aa6b4;
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
-.historyHeader button {
+.historyFilterButton {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
   border: 0;
+  border-radius: 6px;
   background: transparent;
-  color: var(--cx-ink-400);
+  color: #a8b2c0;
   cursor: pointer;
-  font: 600 12px/16px var(--font-sans);
-  letter-spacing: 0;
-  padding: 2px 0;
-  text-transform: none;
+  padding: 0;
 }
 
-.historyHeader button:hover {
-  color: var(--cx-ink-700);
+.historyFilterButton:hover,
+.historyFilterButton:focus-visible {
+  background: #e2e5ea;
+  color: #334155;
+  outline: none;
+}
+
+.historyFilterButton svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
 }
 
 .signedOutHistory {
@@ -285,13 +302,13 @@
 
 .historySearchWrap {
   position: relative;
-  margin: 10px 0 10px;
+  margin-bottom: 8px;
 }
 
 .historySearchWrap svg {
   position: absolute;
   top: 50%;
-  left: 12px;
+  left: 11px;
   width: 15px;
   height: 15px;
   color: var(--cx-ink-300);
@@ -301,18 +318,18 @@
 
 .historySearch {
   width: 100%;
-  height: 38px;
-  border: 1px solid var(--cx-hairline);
-  border-radius: 11px;
+  height: 34px;
+  border: 1px solid #e7eaee;
+  border-radius: 9px;
   background: var(--cx-surface);
   color: var(--cx-ink-700);
-  font: 500 13px/20px var(--font-sans);
+  font: 500 12.5px/1 var(--font-sans);
   margin: 0;
   outline: none;
-  padding: 0 12px 0 34px;
+  padding: 0 12px 0 32px;
   transition:
-    border-color 140ms ease,
-    box-shadow 140ms ease;
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .historySearch::placeholder {
@@ -320,18 +337,19 @@
 }
 
 .historySearch:focus {
-  border-color: var(--cx-accent-border);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cx-accent) 14%, transparent);
+  border-color: #5b5bd6;
+  box-shadow: 0 0 0 3px rgb(91 91 214 / 12%);
 }
 
 .historyList {
-  display: grid;
+  display: flex;
   align-content: start;
   flex: 1;
-  gap: 12px;
-  margin: 0 -4px;
-  overflow: auto;
-  padding: 0 4px 8px;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0 0 8px;
   list-style: none;
 }
 
@@ -341,144 +359,201 @@
 }
 
 .historyGroupItems {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .historyGroupLabel {
-  margin: 0 0 5px 3px;
-  color: var(--cx-ink-400);
-  font: 600 10px/14px var(--font-mono);
+  margin: 12px 0 3px 8px;
+  color: #aab4c0;
+  font: 600 9.5px/1 var(--font-mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
+.historyGroup:first-child .historyGroupLabel {
+  margin-top: 4px;
+}
+
 .historyItemRow {
   min-width: 0;
+  position: relative;
 }
 
 .historyThreadSurface {
-  display: grid;
+  position: relative;
+  display: flex;
   width: 100%;
-  gap: 4px;
+  height: 36px;
+  align-items: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   background: transparent;
-  color: var(--cx-ink-700);
-  cursor: pointer;
-  padding: 7px 10px;
+  color: #475569;
+  padding: 0;
   text-align: left;
   transition:
-    background-color 140ms ease,
-    box-shadow 140ms ease,
-    color 140ms ease,
-    transform 140ms ease;
+    background-color 150ms ease,
+    color 150ms ease;
 }
 
-.historyThreadSurface:hover,
-.historyThreadSurface:focus-within {
-  background: var(--cx-surface);
-  color: var(--cx-ink-900);
-  outline: none;
-  box-shadow: var(--cx-shadow-sm);
+.historyThreadSurface:hover {
+  background: #f0f2f4;
 }
 
 .historyThreadSurface.historyItemActive {
-  background: var(--cx-prov-graphite-soft);
-  color: var(--cx-ink-900);
-  box-shadow: none;
+  background: #eceef1;
+  color: #0b1220;
 }
 
-.historyTop {
+.historySelectButton,
+.historyRenameRow {
   display: flex;
+  width: 100%;
+  height: 36px;
   min-width: 0;
   align-items: center;
   gap: 6px;
+  padding: 8px 4px 8px 8px;
 }
 
-.historyTitleButton {
-  display: block;
-  min-width: 0;
-  flex: 1 1 auto;
+.historySelectButton {
   border: 0;
   background: transparent;
-  color: var(--cx-ink-700);
+  color: #475569;
   cursor: pointer;
-  font: 500 12.5px/18px var(--font-sans);
-  padding: 0;
   text-align: left;
 }
 
-.historyThreadSurface:hover .historyTitleButton,
-.historyThreadSurface:focus-within .historyTitleButton,
-.historyThreadSurface.historyItemActive .historyTitleButton {
-  color: var(--cx-ink-900);
+.historySelectButton:focus-visible {
+  border-radius: 9px;
+  outline: 2px solid #5b5bd6;
+  outline-offset: -2px;
 }
 
-.historyTitleButton:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--cx-accent);
-  outline-offset: 2px;
+.historyTitle {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #475569;
+  font: 500 11.5px/1.2 var(--font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.historyDeleteButton {
+.historyItemActive .historyTitle {
+  color: #0b1220;
+  font-weight: 600;
+}
+
+.historyRight {
   display: flex;
-  width: 24px;
-  height: 24px;
+  width: 88px;
+  height: 26px;
   flex: none;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.historyMeta {
+  color: #a3adba;
+  font: 600 8px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  opacity: 1;
+  transition: opacity 150ms ease;
+  white-space: nowrap;
+}
+
+.historyMoreButton {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: flex;
+  width: 26px;
+  height: 26px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
-  color: var(--cx-ink-400);
+  color: #94a3b8;
   cursor: pointer;
   opacity: 0;
   padding: 0;
-  transform: translateX(4px);
+  transform: translateX(3px);
   transition:
     opacity 150ms ease,
     transform 150ms ease,
-    background-color 140ms ease,
-    color 140ms ease;
+    background-color 150ms ease,
+    color 150ms ease;
 }
 
-.historyThreadSurface:hover .historyDeleteButton,
-.historyThreadSurface:focus-within .historyDeleteButton,
-.historyDeleteButton:focus-visible {
+.historyMoreButton svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
+.historyThreadSurface:hover .historyMeta,
+.historyThreadSurface:focus-within .historyMeta,
+.historyMenuOpen .historyMeta {
+  opacity: 0;
+}
+
+.historyThreadSurface:hover .historyMoreButton,
+.historyThreadSurface:focus-within .historyMoreButton,
+.historyMenuOpen .historyMoreButton,
+.historyMoreButton:focus-visible {
   opacity: 1;
   transform: none;
 }
 
-.historyDeleteButton:hover {
-  background: var(--cx-danger-soft);
-  color: var(--cx-danger);
+.historyMoreButton:hover {
+  background: #e2e5ea;
+  color: #334155;
 }
 
-.historyDeleteButton:focus-visible {
+.historyMoreButton:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--cx-accent);
+  box-shadow: 0 0 0 2px #5b5bd6;
+}
+
+.historyRenameInput {
+  min-width: 0;
+  height: 26px;
+  flex: 1;
+  border: 1px solid #5b5bd6;
+  border-radius: 6px;
+  background: var(--cx-surface);
+  color: var(--cx-ink-900);
+  font: 500 13px/1.2 var(--font-sans);
+  outline: none;
+  padding: 0 7px;
+  box-shadow: 0 0 0 3px rgb(91 91 214 / 12%);
 }
 
 .historyDeleteConfirm {
   display: flex;
-  min-height: 54px;
+  width: 100%;
+  min-height: 36px;
   align-items: center;
   gap: 6px;
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--cx-surface);
   box-shadow: var(--cx-shadow-sm);
-  padding: 9px 10px;
+  padding: 4px 6px 4px 10px;
 }
 
 .historyDeleteConfirmText {
   min-width: 0;
   flex: 1 1 auto;
   color: var(--cx-ink-700);
-  font: 500 12.5px/18px var(--font-sans);
+  font: 500 12.5px/1 var(--font-sans);
 }
 
 .historyDeleteConfirmButton,
@@ -507,53 +582,98 @@
   outline-offset: 1px;
 }
 
-.historyTitle {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.historyMenu {
+  position: absolute;
+  top: 38px;
+  right: 2px;
+  z-index: 20;
+  width: 180px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 12px;
+  background: var(--cx-surface);
+  padding: 6px;
+  box-shadow:
+    0 12px 34px -8px rgb(15 23 42 / 30%),
+    0 2px 6px rgb(15 23 42 / 8%);
 }
 
-.historyMeta {
+.historyMenuItem {
   display: flex;
-  min-width: 0;
+  width: 100%;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cx-ink-700);
+  cursor: pointer;
+  font: 600 13px/1 var(--font-sans);
+  padding: 8px 10px;
+  transition: background-color 120ms ease;
+  text-align: left;
+}
+
+.historyMenuItem:hover,
+.historyMenuItem:focus-visible {
+  background: var(--cx-surface-2);
+  outline: none;
+}
+
+.historyMenuDanger {
+  color: #dc2626;
+}
+
+.historyMenuDanger:hover,
+.historyMenuDanger:focus-visible {
+  background: #fdeaea;
+}
+
+.historyMenuItem svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.historyMenuKey {
+  margin-left: auto;
+  color: #b4bcc8;
+  font: 600 10px/1 var(--font-mono);
+}
+
+.historyMenuSeparator {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--cx-hairline-soft);
+}
+
+.historyEmpty {
   color: var(--cx-ink-400);
-  font: 500 10.5px/14px var(--font-sans);
+  font: 500 12px/18px var(--font-sans);
+  padding: 16px 8px;
+  text-align: center;
 }
 
-.historyMeta time {
-  flex: 0 0 auto;
-  color: var(--cx-ink-300);
-  white-space: nowrap;
+:global([data-theme="dark"]) .historyThreadSurface:hover {
+  background: var(--cx-surface-2);
 }
 
-.modeTag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  max-width: 82px;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 5px;
-  font: 600 9px/1 var(--font-mono);
-  padding: 4px 6px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.modeTagCompare {
-  background: var(--cx-accent-soft);
-  color: var(--cx-accent);
-}
-
-.modeTagAsk,
-.modeTagMixed {
+:global([data-theme="dark"]) .historyThreadSurface.historyItemActive {
   background: var(--cx-prov-graphite-soft);
-  color: var(--cx-ink-500);
+}
+
+:global([data-theme="dark"]) .historyFilterButton:hover,
+:global([data-theme="dark"]) .historyFilterButton:focus-visible,
+:global([data-theme="dark"]) .historyMoreButton:hover {
+  background: var(--cx-surface-3);
+  color: var(--cx-ink-700);
+}
+
+:global([data-theme="dark"]) .historySearch {
+  border-color: var(--cx-hairline);
 }
 
 .profile {
@@ -697,6 +817,12 @@
     transition: none;
   }
 
+  .historyMeta,
+  .historyMoreButton,
+  .historyThreadSurface {
+    transition: none;
+  }
+
   .sessionDot span {
     animation: none;
   }
@@ -709,8 +835,12 @@
 }
 
 @media (hover: none) {
-  .historyDeleteButton {
-    opacity: .5;
+  .historyMoreButton {
+    opacity: 0.55;
     transform: none;
+  }
+
+  .historyMeta {
+    opacity: 0;
   }
 }

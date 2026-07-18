@@ -87,6 +87,28 @@ describe("history threads", () => {
     expect(filterHistoryThreads(threads, "gemini-2.5")).toHaveLength(1);
     expect(filterHistoryThreads(threads, "not present")).toHaveLength(0);
   });
+
+  it("uses a persisted session title and includes it in search", () => {
+    const threads = buildHistoryThreads([
+      entry({ prompt: "Original prompt", session_title: "Launch readiness" }),
+    ]);
+
+    expect(threads[0].title).toBe("Launch readiness");
+    expect(filterHistoryThreads(threads, "launch readiness")).toHaveLength(1);
+  });
+
+  it.each(["API Chat", "API Compare", " api chat "])(
+    "falls back to the first prompt for the generic session title %s",
+    (sessionTitle) => {
+      const threads = buildHistoryThreads([
+        entry({ prompt: "Actual thread question", session_title: sessionTitle }),
+      ]);
+
+      expect(threads[0].title).toBe("Actual thread question");
+      expect(filterHistoryThreads(threads, "actual thread")).toHaveLength(1);
+      expect(filterHistoryThreads(threads, "api chat")).toHaveLength(0);
+    },
+  );
 });
 
 describe("conversation history", () => {

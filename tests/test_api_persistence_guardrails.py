@@ -751,7 +751,9 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
 
     dummy = DummySession()
     monkeypatch.setattr(persistence_service, "db_uow", _fake_db_uow_factory(dummy))
-    monkeypatch.setattr(persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id)
+    monkeypatch.setattr(
+        persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id
+    )
 
     calls: dict[str, list] = {
         "save_message": [],
@@ -802,7 +804,6 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
     assert len(calls["routing"]) == 1
     assert len(calls["usage"]) == 1
     assert len(calls["save_message"]) >= 1
-
     req_kwargs = calls["create_llm_request"][0]
     assert req_kwargs["user_id"] == owner_user_id
     assert req_kwargs["api_key_id"] == api_key_id
@@ -852,7 +853,9 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
 
     dummy = DummySession()
     monkeypatch.setattr(persistence_service, "db_uow", _fake_db_uow_factory(dummy))
-    monkeypatch.setattr(persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id)
+    monkeypatch.setattr(
+        persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id
+    )
     monkeypatch.setattr(persistence_service, "save_message", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         persistence_service,
@@ -912,7 +915,9 @@ def test_compare_persists_grouped_rows_and_usage_in_db_mode(fastapi_client, monk
 
     dummy = DummySession()
     monkeypatch.setattr(persistence_service, "db_uow", _fake_db_uow_factory(dummy))
-    monkeypatch.setattr(persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id)
+    monkeypatch.setattr(
+        persistence_service, "get_or_create_api_session", lambda *_args, **_kwargs: session_id
+    )
 
     llm_req_calls = []
     usage_calls = []
@@ -1324,6 +1329,27 @@ def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fas
     }
     chat_history = [item for item in history_payload if item["mode"] == "chat"]
     assert chat_history[0]["request_group_id"] is None
+
+    renamed = client.patch(
+        f"/v1/history/session/{session_id}",
+        headers={"X-API-Key": "dev-key-1"},
+        json={"title": "Shared rollout plan"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json() == {
+        "session_id": session_id,
+        "title": "Shared rollout plan",
+    }
+
+    renamed_history = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_id, "limit": 200},
+    )
+    assert renamed_history.status_code == 200
+    assert {item["session_title"] for item in renamed_history.json()} == {
+        "Shared rollout plan"
+    }
 
 
 @pytest.mark.integration

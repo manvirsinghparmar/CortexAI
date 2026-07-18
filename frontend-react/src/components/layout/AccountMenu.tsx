@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getModelsCatalogSummary } from "../../config/modelsCatalog";
 import { CortexIcon, type CortexIconName } from "../shared/CortexIcon";
 import type { AppTheme } from "../../hooks/useTheme";
 import styles from "./AccountMenu.module.css";
@@ -8,18 +9,21 @@ interface AccountMenuProps {
   loggedIn: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
+  onModels?: () => void;
   onUsageInsights?: () => void;
   theme?: AppTheme;
   onToggleTheme?: () => void;
 }
 
-type AccountMenuActionKey = "login" | "logout" | "theme" | "usage";
+type AccountMenuActionKey = "login" | "logout" | "models" | "theme" | "usage";
 
 interface AccountMenuAction {
   key: AccountMenuActionKey;
   label: string;
+  subtitle?: string;
   ariaLabel?: string;
   icon?: CortexIconName;
+  accent?: boolean;
 }
 
 export function AccountMenu({
@@ -27,6 +31,7 @@ export function AccountMenu({
   loggedIn,
   onLogin,
   onLogout,
+  onModels,
   onUsageInsights,
   theme,
   onToggleTheme,
@@ -36,10 +41,21 @@ export function AccountMenu({
   const closeTimerRef = useRef<number | null>(null);
   const canLogin = authEnabled && !!onLogin;
   const canLogout = !!onLogout;
+  const canOpenModels = !!onModels;
   const canOpenUsage = !!onUsageInsights;
   const canToggleTheme = !!theme && !!onToggleTheme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const menuActions: AccountMenuAction[] = [];
+  const modelSummary = getModelsCatalogSummary();
+  if (canOpenModels) {
+    menuActions.push({
+      key: "models",
+      label: "Models",
+      subtitle: `${modelSummary.modelCount} across ${modelSummary.providerCount} providers`,
+      icon: "models",
+      accent: true,
+    });
+  }
   if (!loggedIn && canLogin) {
     menuActions.push({ key: "login", label: "Sign in" });
   }
@@ -121,6 +137,8 @@ export function AccountMenu({
     closeMenu();
     if (action === "logout") {
       onLogout?.();
+    } else if (action === "models") {
+      onModels?.();
     } else if (action === "theme") {
       onToggleTheme?.();
     } else if (action === "usage") {
@@ -167,12 +185,27 @@ export function AccountMenu({
               key={action.key}
               type="button"
               role="menuitem"
-              className={styles.menuItem}
+              className={`${styles.menuItem} ${action.accent ? styles.menuItemAccent : ""}`}
               aria-label={action.ariaLabel}
               onClick={() => handleAction(action.key)}
             >
-              {action.icon && <CortexIcon name={action.icon} />}
-              <span>{action.label}</span>
+              {action.icon && (
+                <span className={styles.menuIcon}>
+                  <CortexIcon name={action.icon} />
+                </span>
+              )}
+              <span className={styles.menuCopy}>
+                <span>{action.label}</span>
+                {action.subtitle ? <small>{action.subtitle}</small> : null}
+              </span>
+              {action.accent ? (
+                <CortexIcon
+                  className={styles.menuChevron}
+                  name="chevron-right"
+                  size={17}
+                  strokeWidth={2}
+                />
+              ) : null}
             </button>
           ))}
         </div>

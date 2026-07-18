@@ -69,11 +69,60 @@
   white-space: nowrap;
 }
 
-.menuItem svg {
+.menuIcon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.menuIcon svg,
+.menuItem > svg {
   width: 16px;
   height: 16px;
-  flex: 0 0 16px;
   color: var(--cx-ink-500);
+}
+
+.menuCopy {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 4px;
+}
+
+.menuCopy span,
+.menuCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menuCopy small {
+  color: var(--cx-ink-500);
+  font: 500 10.5px/1 var(--font-mono);
+}
+
+.menuChevron {
+  flex: 0 0 auto;
+  color: var(--cx-accent);
+}
+
+.menuItemAccent {
+  min-height: 58px;
+  border: 1px solid var(--cx-accent-border);
+  background: var(--cx-accent-soft);
+  color: var(--cx-ink-900);
+}
+
+.menuItemAccent .menuIcon {
+  background: var(--cx-surface);
+  color: var(--cx-accent);
+}
+
+.menuItemAccent .menuIcon svg {
+  color: var(--cx-accent);
 }
 
 .menuItem:hover,
@@ -82,9 +131,17 @@
   outline: none;
 }
 
-.menuItem:hover svg,
-.menuItem:focus-visible svg {
+.menuItem:hover .menuIcon svg,
+.menuItem:focus-visible .menuIcon svg,
+.menuItem:hover > svg,
+.menuItem:focus-visible > svg {
   color: var(--cx-ink-900);
+}
+
+.menuItemAccent:hover,
+.menuItemAccent:focus-visible {
+  border-color: var(--cx-accent);
+  background: var(--cx-accent-soft);
 }
 
 @media (max-width: 900px) {

@@ -127,6 +127,7 @@ export function UsageInsightsPage() {
         activeView="usage"
         onNavigateChat={openChatMode}
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
         onLogin={authEnabled ? login : undefined}
@@ -216,6 +217,7 @@ export function UsageInsightsPage() {
                 loggedIn={loggedIn}
                 onLogin={authEnabled ? login : undefined}
                 onLogout={handleLogout}
+                onModels={() => navigate("/models")}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onUsageInsights={() => navigate("/usage")}

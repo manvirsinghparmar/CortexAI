@@ -8,6 +8,7 @@ export type CortexIconName =
   | "check"
   | "chevron-down"
   | "chevron-left"
+  | "chevron-right"
   | "collapse-sidebar"
   | "compare"
   | "copy"
@@ -21,15 +22,18 @@ export type CortexIconName =
   | "improve"
   | "latency"
   | "moon"
+  | "models"
   | "new-chat"
   | "plus"
   | "regenerate"
+  | "reply-return"
   | "review"
   | "rewrite"
   | "scroll-down"
   | "search"
   | "send"
   | "smart"
+  | "sparkle"
   | "sources"
   | "stop"
   | "summarize"
@@ -129,6 +133,14 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
           <rect x="15.6" y="13.5" width="3.4" height="4.5" rx="1" />
         </>
       );
+    case "models":
+      return (
+        <>
+          <rect x="5" y="5" width="14" height="14" rx="3" />
+          <rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1.2" />
+          <path d="M9 2.5V5M15 2.5V5M9 19v2.5M15 19v2.5M2.5 9H5M2.5 15H5M19 9h2.5M19 15h2.5" />
+        </>
+      );
     case "search":
       return (
         <>
@@ -202,6 +214,8 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
           <path d="M18.5 14.5c.2 1.6.6 2 2.2 2.2-1.6.2-2 .6-2.2 2.2-.2-1.6-.6-2-2.2-2.2 1.6-.2 2-.6 2.2-2.2z" />
         </>
       );
+    case "sparkle":
+      return <path d="M12 3c.4 3.6 1.4 4.6 5 5-3.6.4-4.6 1.4-5 5-.4-3.6-1.4-4.6-5-5 3.6-.4 4.6-1.4 5-5z" />;
     case "web":
       return (
         <>
@@ -233,6 +247,13 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
         <>
           <path d="M3.5 9a8.5 8.5 0 1 1 .3 5" />
           <path d="M3.5 4v5h5" />
+        </>
+      );
+    case "reply-return":
+      return (
+        <>
+          <path d="M4 5v6a2 2 0 0 0 2 2h13" />
+          <path d="M15 9l4 4-4 4" />
         </>
       );
     case "branch":
@@ -297,6 +318,8 @@ function iconPath(name: Exclude<CortexIconName, "stop">) {
       return <path d="M6 9l6 6 6-6" />;
     case "chevron-left":
       return <path d="M15 18l-6-6 6-6" />;
+    case "chevron-right":
+      return <path d="M9 6l6 6-6 6" />;
     case "download":
       return <path d="M12 3v12M8 11l4 4 4-4M5 21h14" />;
     case "swap":

@@ -91,7 +91,7 @@ python run_server.py --reload
 - Frontend composer keyboard UX: `Enter` sends prompt, `Shift+Enter` inserts newline.
 - React startup waits for Cognito/local dev-session bootstrap before fetching session-scoped model and history data. Signed-out Cognito users see a workspace sign-in gate instead of the Ask/Compare composer, while authenticated and local dev-session users restore the persisted active `session_id` transcript when the page was reloaded, resumed, or silently reauthenticated in the same browser.
 - React Ask/Compare turns send `context.session_id`, bounded `conversation_history`, and `new_session` to preserve selected-thread continuity while allowing explicit New Chat resets.
-- The React sidebar uses a compact navigation rail with subtle mode/current-session states. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate top and bottom navigation. Desktop History shows one two-line borderless row per session: a single-line title plus mode and the latest activity date. Model names, turn counts, and token counts stay hidden; long titles truncate visually while remaining available through the row tooltip and thread-wide search is unchanged. Desktop and mobile History rows reveal an inline delete control on hover/focus, require a short in-row confirmation, and remove every persisted row in that thread; deleting the active thread starts a clean chat.
+- The React sidebar uses a compact navigation rail with subtle mode/current-session states plus Usage and Models destinations. Desktop has an icon-only top-right control that collapses the sidebar to a narrow action rail and expands it back to the full history view; mobile remains on the separate Ask/Compare/History bottom navigation, with Usage and Models reached from the account menu. The expanded desktop `Recent` list groups chats by Today, Yesterday, and month/day, with one 36px row per session: compact 11.5px ellipsized title and a narrowed `MODE · time` caption, with no leading mode glyph, to preserve substantially more identifying title text. Hover/focus replaces the caption with a Rename/Delete menu; renamed titles persist in `sessions.title`, Delete retains the short in-row confirmation, and keyboard rows support arrows, Enter, R, D, and Escape. The collapsed desktop rail and the separate mobile History surface remain unchanged.
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
 - React posts non-sensitive lifecycle diagnostics to `/v1/client-diagnostics`; backend logs them as `frontend.diagnostic` events so production refresh reports can be separated into reload/navigation, tab discard, back/forward cache restore, long main-thread task, or frontend error cases.
@@ -113,6 +113,7 @@ python run_server.py --reload
 - React desktop top mode navigation keeps the active and inactive Ask/Compare labels legible in both light and dark themes, with a theme-accent underline identifying the selected mode independently of the sidebar navigation.
 - Mobile and desktop completed response-card duration, token, and cost metadata appears directly in the header without a run-details chevron. Loading and failed cards keep a muted elapsed/status line visible on mobile and desktop. The frontend displays the same UI-observed elapsed duration with abbreviated units when live timestamps are available, falls back to API `latency_ms` for restored rows, and keeps unavailable token counts hidden instead of rendering zero-token placeholders.
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
+- React exposes `/models` for a task-first model selection guide. The screen is currently driven by `frontend-react/src/config/models.data.json`, not `/v1/models`: editing a provider's `models[]` changes the visible catalog, while `tier`, `speed`, and `rec` derive the Depth meter, Speed meter, and recommended row/callout. If this metadata becomes production-owned by the gateway, the frontend should keep the same JSON contract and swap the static import for an API-backed loader.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
 - Frontend response card controls render as a minimal icon row for copy, regenerate, and feedback actions. Copy shows a brief visible success confirmation in the toolbar. Regenerate uses the existing `/v1/chat/stream` path, refills the clicked response card in place, and preserves the original source-enabled flag. Compare card regeneration is intentionally single-target so clicking one card does not rerun or replace the other comparison cards.
@@ -139,6 +140,7 @@ python run_server.py --reload
 - `POST /v1/compare/stream`
 - `POST /v1/optimize`
 - `GET /v1/history`
+- `PATCH /v1/history/session/{session_id}`
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
@@ -160,10 +162,12 @@ python run_server.py --reload
 `GET /v1/history?limit=<n>&session_id=<optional>` returns persisted request rows, newest first. It does not pre-group records for presentation.
 
 - `session_id` identifies the user-visible conversation thread.
+- `session_title` is optional; user-authored values replace the first prompt as the thread label. React ignores the system-generated `API Chat` and `API Compare` placeholders.
 - `request_group_id` is optional and is populated for Compare target rows.
 - One Ask turn produces one row.
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
 - The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
+- `PATCH /v1/history/session/{session_id}` accepts `{"title":"..."}` to rename one user-owned session. The title is trimmed, limited to 120 characters, and persisted without changing latest-activity ordering.
 - `DELETE /v1/history?session_id=<id>` clears only that session's persisted request rows for the authenticated identity; omitting `session_id` clears all history. React per-thread delete uses `DELETE /v1/history/{entry_id}` for each row in the selected thread.
 
 ### Usage summary contract
@@ -217,7 +221,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
-- The React router exposes `/usage` for the Usage & insights scaffold. Desktop reaches it from the sidebar Usage item; mobile reaches it from the account menu.
+- The React router exposes `/usage` for Usage & insights and `/models` for the task-first model guide. Desktop reaches both from the sidebar; mobile reaches both from the account menu, and Models intentionally has no bottom-tab entry.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.
 - `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { SparkleIcon } from "../common/SparkleIcon";
 import { getModelPresentation } from "../../config/modelPresentation";
+import { extractSuggestedFollowUps } from "../../followups/suggestedFollowups";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chatStore";
@@ -20,7 +21,8 @@ import styles from "./ResultsSection.module.css";
 
 export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
-  const { regenerate } = useChat();
+  const mode = useChatStore((s) => s.mode);
+  const { regenerate, submitFollowUp } = useChat();
   const sectionRef = useRef<HTMLElement | null>(null);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
@@ -97,6 +99,7 @@ export function ResultsSection() {
               turnIndex={turnIndex}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onSuggestedFollowUp={submitFollowUp}
             />
           ) : (
             <SingleTurn
@@ -105,6 +108,8 @@ export function ResultsSection() {
               turnIndex={turnIndex}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onSuggestedFollowUp={submitFollowUp}
+              showSuggestedFollowUps={mode === "single" && turn.id === latestTurnId}
             />
           ),
         )}
@@ -118,6 +123,8 @@ interface TurnProps {
   turnIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
+  onSuggestedFollowUp: (suggestion: string) => Promise<void>;
+  showSuggestedFollowUps?: boolean;
 }
 
 // Memoized so streaming updates to one turn don't re-render (and re-parse
@@ -127,6 +134,8 @@ const SingleTurn = memo(function SingleTurn({
   turnIndex,
   registerTurn,
   onRegenerate,
+  onSuggestedFollowUp,
+  showSuggestedFollowUps = false,
 }: TurnProps) {
   return (
     <article
@@ -145,6 +154,12 @@ const SingleTurn = memo(function SingleTurn({
             loadingMode="ask"
             researchEnabled={turn.researchEnabled}
             optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
+            suggestedFollowUps={
+              showSuggestedFollowUps && shouldShowSuggestedFollowUps(turn, response)
+                ? extractSuggestedFollowUps(response.text)
+                : []
+            }
+            onSuggestedFollowUp={onSuggestedFollowUp}
             onRegenerate={() => void onRegenerate(turn.id, responseIndex)}
           />
         ))}
@@ -417,6 +432,19 @@ function shouldHideResponsesForOptimization(turn: ChatTurn) {
     turn.status === "optimizing" ||
     turn.optimization?.status === "pending" ||
     turn.optimization?.status === "cancelled"
+  );
+}
+
+function shouldShowSuggestedFollowUps(
+  turn: ChatTurn,
+  response: ChatTurn["responses"][number],
+) {
+  return (
+    turn.mode === "single" &&
+    turn.status === "complete" &&
+    !response.error &&
+    (response.ui_status === undefined || response.ui_status === "complete") &&
+    !!response.text.trim()
   );
 }
 

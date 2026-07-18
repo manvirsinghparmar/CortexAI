@@ -1,4 +1,4 @@
-import { get, del } from "./client";
+import { get, del, patch } from "./client";
 import type { HistoryEntry } from "../types";
 
 export async function fetchHistory(limit = 100, sessionId?: string): Promise<HistoryEntry[]> {
@@ -14,4 +14,14 @@ export async function deleteHistoryEntry(id: number): Promise<void> {
 export async function clearHistory(sessionId?: string): Promise<void> {
   const params = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
   await del<unknown>(`/v1/history${params}`);
+}
+
+export async function renameHistorySession(
+  sessionId: string,
+  title: string,
+): Promise<{ session_id: string; title: string }> {
+  return patch<{ session_id: string; title: string }>(
+    `/v1/history/session/${encodeURIComponent(sessionId)}`,
+    { title },
+  );
 }

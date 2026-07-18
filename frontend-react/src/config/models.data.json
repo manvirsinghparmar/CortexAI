@@ -1,0 +1,145 @@
+{
+  "_comment": "Single source of truth for the Models catalog. Add / update / remove a model by editing its provider's `models` array. Add a provider by appending an object (give it a colorVar pair + glyph). `speed` and `tier` drive the Speed and Depth meters. `rec` maps each task to the id of the model to highlight as the top pick.",
+
+  "tasks": ["All", "Reasoning", "Coding", "Agentic", "Fast & cheap", "Vision", "Long context", "Writing"],
+
+  "depthRule": {
+    "_comment": "Depth = complex/multi-step task handling. Derived from tier, so it stays in sync automatically.",
+    "Deep": ["Flagship", "Reasoning", "Coding"],
+    "Balanced": ["Balanced", "Multimodal"],
+    "Light": ["Fast", "Lite"]
+  },
+
+  "speedLevels": { "Fast": 3, "Medium": 2, "Slow": 1 },
+
+  "rec": {
+    "Reasoning": "openai:gpt-5.4",
+    "Coding": "claude:claude-sonnet-4-6",
+    "Agentic": "openai:gpt-5.2-codex",
+    "Fast & cheap": "claude:claude-haiku-4-5",
+    "Vision": "gemini:gemini-2.5-pro",
+    "Long context": "grok:grok-4-1-fast-reasoning",
+    "Writing": "claude:claude-sonnet-4-6"
+  },
+
+  "providers": [
+    {
+      "key": "openai", "name": "OpenAI · GPT",
+      "colorVar": "--cx-prov-a", "colorSoftVar": "--cx-prov-a-soft", "glyph": "#5b5bd6",
+      "models": [
+        { "name": "GPT-5.4", "id": "openai:gpt-5.4", "tier": "Flagship", "speed": "Medium",
+          "bestFor": "Latest frontier model — top-tier reasoning, coding and knowledge for the hardest asks.",
+          "tags": ["Reasoning", "Coding", "Agentic", "Vision"],
+          "strengths": ["Strongest general reasoning in the GPT line", "Strong agentic, multi-step coding", "Multimodal across text and images"] },
+        { "name": "GPT-5.4 Mini", "id": "openai:gpt-5.4-mini", "tier": "Balanced", "speed": "Fast",
+          "bestFor": "Frontier-class quality at a fraction of the cost — a great everyday default.",
+          "tags": ["Fast & cheap", "Coding", "Reasoning"],
+          "strengths": ["Fast and inexpensive", "Reliable reasoning for daily work", "A favourite pick for Smart routing"] },
+        { "name": "GPT-5.4 Nano", "id": "openai:gpt-5.4-nano", "tier": "Fast", "speed": "Fast",
+          "bestFor": "Smallest, fastest GPT-5 — built for ultra-low-latency, high-volume tasks.",
+          "tags": ["Fast & cheap", "High-volume"],
+          "strengths": ["Lowest cost and latency", "High throughput at scale", "Great for classification & routing"] },
+        { "name": "GPT-5.2 Codex", "id": "openai:gpt-5.2-codex", "tier": "Coding", "speed": "Medium",
+          "bestFor": "Purpose-built agentic coder — plans, edits and iterates across entire repos.",
+          "tags": ["Coding", "Agentic", "Long context"],
+          "strengths": ["Repo-scale context handling", "Excellent tool-calling", "Tuned for real software engineering"] },
+        { "name": "GPT-5.1", "id": "openai:gpt-5.1", "tier": "Balanced", "speed": "Medium",
+          "bestFor": "Versatile general reasoner for language, analysis and everyday coding.",
+          "tags": ["Reasoning", "Coding", "Writing"],
+          "strengths": ["Broad multimodal intelligence", "Dependable everyday reasoning", "Strong natural-language writing"] },
+        { "name": "GPT-4o", "id": "openai:gpt-4o", "tier": "Multimodal", "speed": "Fast",
+          "bestFor": "Fast multimodal all-rounder for text, images and quick conversation.",
+          "tags": ["Vision", "Writing", "Fast & cheap"],
+          "strengths": ["Real-time multimodal responses", "Strong general chat", "Broadly supported and stable"] },
+        { "name": "GPT-4o Mini", "id": "openai:gpt-4o-mini", "tier": "Fast", "speed": "Fast",
+          "bestFor": "Lightweight and economical — simple tasks at high volume.",
+          "tags": ["Fast & cheap", "High-volume"],
+          "strengths": ["Very low cost", "Snappy responses", "Good for scaled workloads"] },
+        { "name": "GPT-4.1", "id": "openai:gpt-4.1", "tier": "Balanced", "speed": "Medium",
+          "bestFor": "Reliable coding and instruction-following with a large context window.",
+          "tags": ["Coding", "Long context", "Writing"],
+          "strengths": ["Precise instruction-following", "Strong at code", "Handles long inputs well"] },
+        { "name": "GPT-4.1 Mini", "id": "openai:gpt-4.1-mini", "tier": "Fast", "speed": "Fast",
+          "bestFor": "Balanced small model — capable coding and chat for less.",
+          "tags": ["Fast & cheap", "Coding"],
+          "strengths": ["Solid coding for its size", "Low latency", "Cost-efficient"] },
+        { "name": "GPT-4.1 Nano", "id": "openai:gpt-4.1-nano", "tier": "Fast", "speed": "Fast",
+          "bestFor": "The fastest, cheapest 4.1 — for latency-critical, high-volume work.",
+          "tags": ["Fast & cheap", "High-volume"],
+          "strengths": ["Ultra-low latency", "Minimal cost", "High throughput"] }
+      ]
+    },
+    {
+      "key": "anthropic", "name": "Anthropic · Claude",
+      "colorVar": "--cx-prov-b", "colorSoftVar": "--cx-prov-b-soft", "glyph": "#e07a4d",
+      "models": [
+        { "name": "Claude Opus 4.6", "id": "claude:claude-opus-4-6", "tier": "Flagship", "speed": "Slow",
+          "bestFor": "The deep thinker — hardest problems, tricky refactors and long agent chains.",
+          "tags": ["Reasoning", "Coding", "Agentic", "Vision"],
+          "strengths": ["Highest reasoning depth", "Catches subtle bugs others miss", "Strong long-horizon planning"] },
+        { "name": "Claude Opus 4.5", "id": "claude:claude-opus-4-5", "tier": "Flagship", "speed": "Slow",
+          "bestFor": "Prior flagship Opus — deep reasoning for high-stakes, low-volume work.",
+          "tags": ["Reasoning", "Coding", "Agentic"],
+          "strengths": ["Deep analytical reasoning", "Reliable on complex code", "Careful, surgical edits"] },
+        { "name": "Claude Sonnet 4.6", "id": "claude:claude-sonnet-4-6", "tier": "Balanced", "speed": "Medium",
+          "bestFor": "The everyday workhorse — balanced speed and intelligence for most tasks.",
+          "tags": ["Coding", "Reasoning", "Writing", "Long context"],
+          "strengths": ["Reliable multi-file coding", "~1M-token context window", "Strong tool use and writing"] },
+        { "name": "Claude Sonnet 4.5", "id": "claude:claude-sonnet-4-5", "tier": "Balanced", "speed": "Medium",
+          "bestFor": "Dependable all-rounder — near-Opus reasoning at a lower cost.",
+          "tags": ["Coding", "Reasoning", "Writing"],
+          "strengths": ["Consistent daily driver", "Good context retention", "Strong structured reasoning"] },
+        { "name": "Claude Haiku 4.5", "id": "claude:claude-haiku-4-5", "tier": "Fast", "speed": "Fast",
+          "bestFor": "Fast and low-cost — real-time chat, high-volume jobs and quick edits.",
+          "tags": ["Fast & cheap", "High-volume", "Coding"],
+          "strengths": ["4–5× faster than Sonnet", "Near-frontier at ~1/3 the cost", "Great for classification & routing"] }
+      ]
+    },
+    {
+      "key": "deepseek", "name": "DeepSeek",
+      "colorVar": "--cx-prov-c", "colorSoftVar": "--cx-prov-c-soft", "glyph": "#3d7ff0",
+      "models": [
+        { "name": "DeepSeek Chat", "id": "deepseek:deepseek-chat", "tier": "Balanced", "speed": "Fast",
+          "bestFor": "General-purpose default — everyday chat, writing and coding at low cost.",
+          "tags": ["Coding", "Writing", "Fast & cheap"],
+          "strengths": ["Direct, low-latency answers", "Strong open-weight coding", "Very cost-efficient"] },
+        { "name": "DeepSeek Reasoning", "id": "deepseek:deepseek-reasoner", "tier": "Reasoning", "speed": "Slow",
+          "bestFor": "Reasoning specialist — chain-of-thought for math, logic and hard problems.",
+          "tags": ["Reasoning", "Math", "Coding"],
+          "strengths": ["Explicit step-by-step thinking", "Strong math and logic", "Self-verifies before answering"] }
+      ]
+    },
+    {
+      "key": "google", "name": "Google · Gemini",
+      "colorVar": "--cx-prov-d", "colorSoftVar": "--cx-prov-d-soft", "glyph": "#8454d6",
+      "models": [
+        { "name": "Gemini Pro", "id": "gemini:gemini-2.5-pro", "tier": "Flagship", "speed": "Medium",
+          "bestFor": "Frontier reasoning with a 1M-token window — research, hard code, big docs.",
+          "tags": ["Reasoning", "Coding", "Long context", "Vision"],
+          "strengths": ["Deep reasoning and coding", "1M-token context window", "Native text, image, audio & video"] },
+        { "name": "Gemini Flash", "id": "gemini:gemini-2.5-flash", "tier": "Balanced", "speed": "Fast",
+          "bestFor": "Speed and scale — fast chat, summarization and data extraction.",
+          "tags": ["Fast & cheap", "High-volume", "Coding"],
+          "strengths": ["High throughput", "Large context at low cost", "Turn thinking on when needed"] },
+        { "name": "Gemini Flash-Lite", "id": "gemini:gemini-2.5-flash-lite", "tier": "Lite", "speed": "Fast",
+          "bestFor": "Most cost-efficient Gemini — classification, translation and routing at scale.",
+          "tags": ["Fast & cheap", "High-volume"],
+          "strengths": ["Lowest latency and cost", "1M-token context", "Built for high-volume batch"] }
+      ]
+    },
+    {
+      "key": "xai", "name": "xAI · Grok",
+      "colorVar": "--cx-prov-graphite", "colorSoftVar": "--cx-prov-graphite-soft", "glyph": "#64748b",
+      "models": [
+        { "name": "Grok Reasoning", "id": "grok:grok-4-1-fast-reasoning", "tier": "Reasoning", "speed": "Medium",
+          "bestFor": "Agentic reasoning with a 2M-token window — tool-calling and multi-step work.",
+          "tags": ["Reasoning", "Agentic", "Long context"],
+          "strengths": ["Frontier tool use", "Huge 2M-token context", "Strong multi-step reasoning"] },
+        { "name": "Grok Fast", "id": "grok:grok-4-1-fast-non-reasoning", "tier": "Fast", "speed": "Fast",
+          "bestFor": "Instant agentic responses — high-throughput tool-calling, no reasoning overhead.",
+          "tags": ["Fast & cheap", "Agentic", "High-volume"],
+          "strengths": ["Very fast and cheap per step", "2M-token context", "Built for agent loops"] }
+      ]
+    }
+  ]
+}

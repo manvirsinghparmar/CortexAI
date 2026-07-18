@@ -26,6 +26,7 @@ import {
   ResponseLoadingState,
   type ResponseLoadingMode,
 } from "./ResponseLoadingState";
+import { SuggestedFollowUps } from "./SuggestedFollowUps";
 import styles from "./ResponseCard.module.css";
 
 interface ResponseCardProps {
@@ -36,6 +37,8 @@ interface ResponseCardProps {
   loadingMode?: ResponseLoadingMode;
   researchEnabled?: boolean;
   optimizeEnabled?: boolean;
+  suggestedFollowUps?: string[];
+  onSuggestedFollowUp?: (suggestion: string) => void | Promise<void>;
   onRegenerate?: () => void;
   compareHighlights?: {
     fastest?: boolean;
@@ -51,6 +54,8 @@ export function ResponseCard({
   loadingMode = "ask",
   researchEnabled = false,
   optimizeEnabled = false,
+  suggestedFollowUps = [],
+  onSuggestedFollowUp,
   onRegenerate,
   compareHighlights,
 }: ResponseCardProps) {
@@ -75,6 +80,8 @@ export function ResponseCard({
   const metaPinned = !!loadingStatus || isFailed;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
+  const showSuggestedFollowUps =
+    suggestedFollowUps.length > 0 && !!onSuggestedFollowUp && !hasError && !showLoading;
   const statsId = `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
   useEffect(() => {
@@ -212,6 +219,14 @@ export function ResponseCard({
         )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
+
+      {showSuggestedFollowUps && (
+        <SuggestedFollowUps
+          suggestions={suggestedFollowUps}
+          onSelect={onSuggestedFollowUp}
+          disabled={!!isStreaming}
+        />
+      )}
 
       <footer className={styles.actions}>
         <div className={styles.actionGroup}>

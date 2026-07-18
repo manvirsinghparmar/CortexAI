@@ -618,6 +618,121 @@
   vertical-align: text-bottom;
 }
 
+.followUpRow {
+  flex: 0 0 auto;
+  margin: -4px 24px 18px;
+}
+
+.followUpLabel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 11px;
+  color: var(--cx-ink-400);
+}
+
+.followUpLabel svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  color: #8b8bf0;
+}
+
+.followUpLabel span {
+  color: var(--cx-ink-400);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.followUpChipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.followUpChip {
+  display: inline-flex;
+  max-width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e3e6f7;
+  border-radius: 999px;
+  background: #f7f8fd;
+  color: var(--cx-ink-600);
+  cursor: pointer;
+  font: 600 12.5px/1 var(--font-sans);
+  padding: 0 14px;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.followUpChip svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--cx-accent);
+}
+
+.followUpChipText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.followUpChip:hover:not(:disabled) {
+  border-color: var(--cx-accent-border);
+  background: var(--cx-accent-soft);
+  box-shadow: var(--cx-shadow-sm);
+  color: var(--cx-ink-700);
+  transform: translateY(-1px);
+}
+
+.followUpChip:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
+}
+
+.followUpChip:disabled {
+  cursor: default;
+}
+
+.followUpChipSent,
+.followUpChipSent:hover:disabled {
+  border-color: var(--cx-accent);
+  background: var(--cx-accent);
+  color: #fff;
+}
+
+.followUpChipSent svg {
+  color: currentColor;
+}
+
+:global([data-theme="dark"]) .followUpChip {
+  border-color: var(--cx-accent-border);
+  background: var(--cx-accent-soft);
+  color: var(--cx-ink-700);
+}
+
+:global([data-theme="dark"]) .followUpChip:hover:not(:disabled) {
+  border-color: var(--cx-accent);
+  background: color-mix(in srgb, var(--cx-accent-soft) 72%, var(--cx-surface));
+  color: var(--cx-ink-900);
+}
+
+:global([data-theme="dark"]) .followUpChipSent,
+:global([data-theme="dark"]) .followUpChipSent:hover:disabled {
+  border-color: var(--cx-accent);
+  background: var(--cx-accent);
+  color: #fff;
+}
+
 .errorMsg {
   display: flex;
   gap: 12px;
@@ -970,6 +1085,42 @@
     line-height: 23px;
   }
 
+  .followUpRow {
+    margin: -2px 16px 14px;
+  }
+
+  .followUpLabel {
+    gap: 6px;
+    margin-bottom: 9px;
+  }
+
+  .followUpLabel svg {
+    width: 12px;
+    height: 12px;
+    flex-basis: 12px;
+  }
+
+  .followUpLabel span {
+    font-size: 9px;
+  }
+
+  .followUpChipList {
+    gap: 7px;
+  }
+
+  .followUpChip {
+    height: 30px;
+    gap: 7px;
+    font-size: 11.5px;
+    padding: 0 11px;
+  }
+
+  .followUpChip svg {
+    width: 12px;
+    height: 12px;
+    flex-basis: 12px;
+  }
+
   .citationRoot {
     max-width: min(68vw, 17rem);
     min-height: 30px;
@@ -1091,8 +1242,14 @@
 @media (prefers-reduced-motion: reduce) {
   .citationPopover,
   .citationSheet,
-  .copyStatus {
+  .copyStatus,
+  .followUpChip {
     animation: none;
+    transition: none;
+  }
+
+  .followUpChip:hover:not(:disabled) {
+    transform: none;
   }
 }
 

@@ -64,6 +64,39 @@ describe("ResponseCard", () => {
     }
   });
 
+  it("renders suggested follow-ups before the action toolbar and marks a tapped chip as sent", () => {
+    vi.useFakeTimers();
+    const onSuggestedFollowUp = vi.fn();
+    render(
+      <ResponseCard
+        response={response(false, "Answer with next steps.")}
+        suggestedFollowUps={["Show the full odds table", "Explain dark-horse teams"]}
+        onSuggestedFollowUp={onSuggestedFollowUp}
+      />,
+    );
+
+    const row = screen.getByLabelText("Suggested follow-ups");
+    const chip = screen.getByRole("button", {
+      name: "Ask follow-up: Show the full odds table",
+    });
+
+    expect(row.nextElementSibling?.tagName).toBe("FOOTER");
+    expect(
+      screen.getByRole("button", { name: "Ask follow-up: Explain dark-horse teams" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(chip);
+
+    expect(onSuggestedFollowUp).toHaveBeenCalledWith("Show the full odds table");
+    expect(chip).toBeDisabled();
+
+    act(() => {
+      vi.advanceTimersByTime(1700);
+    });
+
+    expect(chip).toBeEnabled();
+  });
+
   it("shows completed response stats without a run-details disclosure control", () => {
     render(<ResponseCard response={response()} compact />);
 

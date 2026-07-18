@@ -63,18 +63,20 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
+  - Task-first Models destination and static catalog contract: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/modelsCatalog.ts`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
-  - History thread grouping, per-thread delete, and Compare-turn reconstruction: `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
+  - History thread grouping, persisted session rename, per-thread delete, and Compare-turn reconstruction: `server/routes/history.py`, `db/repository.py`, `frontend-react/src/api/history.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
   - Usage & insights route, states, KPI row, mobile compact dashboard, model leaderboard/provider-logo tiles, session modes panel, activity chart, period selector/export, and data layer: `frontend-react/src/pages/UsageInsightsPage.tsx`, `frontend-react/src/pages/UsageInsightsPage.module.css`, `frontend-react/src/api/usage.ts`, `frontend-react/src/hooks/useUsageSummary.ts`
   - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
   - Top-right Cognito account menu: `frontend-react/src/components/layout/AccountMenu.tsx`
-  - Desktop sidebar navigation, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
+  - Desktop sidebar navigation, Models/Usage route entries, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
   - Ask/Compare result rendering: `frontend-react/src/components/results/`
+  - Deterministic assistant-offered follow-up extraction and response-level chip row: `frontend-react/src/followups/suggestedFollowups.ts`, `frontend-react/src/components/results/SuggestedFollowUps.tsx`, `frontend-react/src/components/results/ResponseCard.tsx`
   - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
   - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.
   - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
@@ -107,7 +109,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Add/adjust tests
 
 - Change React history behavior:
-  1. Keep `/v1/history` row-level persistence semantics in `server/routes/history.py` and `db/repository.py`.
+  1. Keep `/v1/history` row-level persistence and session-title rename semantics in `server/routes/history.py` and `db/repository.py`.
   2. Update session/thread normalization in `frontend-react/src/history/historyThreads.ts`.
   3. Update active-thread browser persistence in `frontend-react/src/session/activeSession.ts` when reload/fresh-login behavior changes.
   4. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.

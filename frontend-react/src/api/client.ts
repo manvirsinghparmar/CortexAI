@@ -94,6 +94,17 @@ export async function post<T>(path: string, body: unknown, signal?: AbortSignal)
   return handleResponse<T>(res);
 }
 
+export async function patch<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(path, {
+    method: "PATCH",
+    credentials: "include",
+    headers: buildHeaders(),
+    body: JSON.stringify(body),
+    signal,
+  });
+  return handleResponse<T>(res);
+}
+
 export async function del<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method: "DELETE",

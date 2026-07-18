@@ -317,6 +317,8 @@ describe("Sidebar", () => {
     rows[0]!.focus();
     await user.keyboard("{ArrowDown}");
     expect(rows[1]).toHaveFocus();
+    const focusedThreadKey = rows[1]!.dataset.historyThread;
+    expect(focusedThreadKey).toBeTruthy();
     await user.keyboard("{Enter}");
     expect(onSelectThread).toHaveBeenCalledTimes(1);
 
@@ -324,6 +326,13 @@ describe("Sidebar", () => {
     expect(screen.getByRole("textbox", { name: /Rename/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("textbox", { name: /Rename/ })).toBeNull();
+    await waitFor(() => {
+      expect(
+        document.querySelector<HTMLButtonElement>(
+          `button[data-history-thread="${focusedThreadKey}"]`,
+        ),
+      ).toHaveFocus();
+    });
 
     await user.keyboard("d");
     expect(screen.getByText("Delete?")).toBeInTheDocument();

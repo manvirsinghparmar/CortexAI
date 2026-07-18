@@ -826,7 +826,10 @@ The UI page can appear to refresh automatically in production for these reasons:
 4. **ALB idle timeout vs SSE streaming**  
    AWS ALB defaults to a 60-second idle timeout. The backend sends heartbeat events every `STREAM_HEARTBEAT_INTERVAL_SECONDS` (default 15 s) to keep streaming connections alive. If the ALB is configured with a shorter timeout, or WAF rules terminate long-lived connections, users will see streams fail. Increase the ALB idle timeout to at least 120 seconds for streaming routes.
 
-5. **`frontend.diagnostic` log events**  
+5. **Safari background-tab eviction (confirmed root cause in July 2026)**  
+   Any `beforeunload` event listener makes the page ineligible for the browser's back/forward cache (bfcache). Safari must then keep the full JS context in memory for backgrounded tabs. After ~8–10 minutes it evicts the tab and does a full reload when the user returns. The `beforeunload` listener has been removed from `bootDiagnostics.ts`; `pagehide` is used instead (covers the same events and is bfcache-compatible). After deploying this change, look for `frontend.diagnostic` events with `details.navigationType="pagehide"` and `details.persisted=true`, which confirms the page is now entering bfcache successfully.
+
+6. **`frontend.diagnostic` log events**  
    The React client records every page boot, unload, and visibility change to `/v1/client-diagnostics`. Search for `frontend.diagnostic` events in CloudWatch / `app.log` around the reported timestamp and inspect `details.navigationType` and `details.wasDiscarded` to identify the exact refresh cause (user reload, Chrome tab discard, bfcache restore, or Cognito redirect). See `docs/runbooks/aws-ec2-logging.md` § "Browser Refresh / Blink Workflow".
 
 These artifacts are intentionally separate so frontend-only or API-only changes can be built independently.

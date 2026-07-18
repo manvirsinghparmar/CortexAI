@@ -370,6 +370,9 @@ class TavilyResearchClient:
                     return int(value)
         return TAVILY_CREDITS_PER_ADVANCED_SEARCH
 
+    # Tavily rejects queries longer than this with BadRequestError.
+    _TAVILY_MAX_QUERY_CHARS = 400
+
     def search(
         self, query: str, max_results: int = 5, search_depth: str = "advanced"
     ) -> list[SourceDoc]:
@@ -384,6 +387,25 @@ class TavilyResearchClient:
         Returns:
             List of SourceDoc objects with extracted content
         """
+        # Truncate before sending to avoid a guaranteed BadRequestError for
+        # queries that exceed Tavily's 400-character hard limit.
+        original_length = len(str(query or ""))
+        if original_length > self._TAVILY_MAX_QUERY_CHARS:
+            query = query[: self._TAVILY_MAX_QUERY_CHARS]
+            logger.debug(
+                "Tavily query truncated to %d chars (was %d)",
+                self._TAVILY_MAX_QUERY_CHARS,
+                original_length,
+                extra={
+                    "extra_fields": {
+                        "event": "research.query.truncated",
+                        "provider": "tavily",
+                        "original_length": original_length,
+                        "truncated_length": self._TAVILY_MAX_QUERY_CHARS,
+                    }
+                },
+            )
+
         query_hash = self._query_hash(query)
         query_length = len(str(query or ""))
         resolution = resolve_tavily_search_options(

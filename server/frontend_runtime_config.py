@@ -31,6 +31,18 @@ def _normalize_api_base(value: str) -> str:
 
 
 def _resolve_request_api_base(request: Request) -> str:
+    """Derive the API base URL from the current request.
+
+    When ``ProxyHeadersMiddleware`` is active (the default), ``request.base_url``
+    already reflects ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` set by
+    CloudFront or an ALB, so this returns ``https://`` even though FastAPI
+    itself is running on HTTP internally.
+
+    Without the proxy middleware the returned value may be ``http://`` in HTTPS
+    deployments, which causes the browser to block API calls as Mixed Content.
+    Override with ``FRONTEND_RUNTIME_API_BASE`` when the auto-detected value is
+    wrong.
+    """
     return _normalize_api_base(str(request.base_url))
 
 

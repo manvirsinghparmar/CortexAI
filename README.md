@@ -196,7 +196,7 @@ For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.e
 python run_app.py --enable-dev-login
 ```
 
-`run_app.py` starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port.
+`run_app.py` is local-development-only. It starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port. It refuses to start Vite when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`, because Vite's HMR client can automatically reload browser pages. It also rejects non-loopback frontend hosts by default; use `--allow-public-dev-server` only for intentional development on a trusted network.
 Before launching either process, the runner verifies that both requested ports are available and reports a clear error when another process owns one. On Windows, shutdown terminates the complete FastAPI/Vite process trees so failed startup or `Ctrl+C` does not leave an orphaned Vite listener.
 
 Run the API server by itself:
@@ -248,6 +248,8 @@ React development server (hot reload, with `/v1`, `/auth`, and `/runtime-config.
 npm run --prefix frontend-react dev
 ```
 
+The direct Vite command has the same production/public-host guard as `run_app.py`. For trusted-network development only, set `ALLOW_PUBLIC_VITE_DEV_SERVER=true` before using `--host 0.0.0.0`. Never use that override in production.
+
 When launched by `run_app.py`, Vite reads `CORTEX_API_PROXY_TARGET` from the runner so custom `--api-host` / `--api-port` values stay aligned with the frontend proxy.
 
 For this split local workflow, run the API separately with `SERVE_FRONTEND=false`:
@@ -267,6 +269,7 @@ Frontend runtime config (`/runtime-config.js`):
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
 - For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
+- Production HTML must reference hashed `/assets/index-*.js` output. Treat `/@vite/client`, `/@react-refresh`, or `/src/main.tsx` in the served HTML as a failed deployment: those paths mean the hot-reload development server is public and can reload active pages.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; signed-out Cognito users see a sign-in gate instead of the Ask/Compare workspace, and background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
 - React records non-sensitive browser lifecycle diagnostics (`boot`, `pagehide`, `beforeunload`, `visibilitychange`, long tasks, and frontend errors) in a short local buffer and posts them to `/v1/client-diagnostics`, where they appear as `frontend.diagnostic` structured logs. This distinguishes production page reloads, Chrome tab discards, back/forward cache restores, long main-thread stalls, and render/runtime failures.

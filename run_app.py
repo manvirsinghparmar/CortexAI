@@ -17,6 +17,8 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_REACT_DIR = ROOT / "frontend-react"
+PRODUCTION_ENVIRONMENT_VALUES = {"prod", "production"}
+PRODUCTION_ENVIRONMENT_NAMES = ("APP_ENV", "ENVIRONMENT", "ENV")
 
 
 @dataclass
@@ -51,6 +53,41 @@ def _check_frontend_ready() -> None:
         raise RuntimeError(
             "React frontend dependencies are not installed. "
             "Run `npm ci --prefix frontend-react` first."
+        )
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = str(host or "").strip().strip("[]").lower()
+    return normalized == "localhost" or normalized == "::1" or normalized.startswith("127.")
+
+
+def _validate_vite_dev_server(
+    *,
+    frontend_host: str,
+    allow_public_dev_server: bool,
+    env: dict[str, str],
+) -> None:
+    production_name = next(
+        (
+            name
+            for name in PRODUCTION_ENVIRONMENT_NAMES
+            if str(env.get(name, "") or "").strip().lower()
+            in PRODUCTION_ENVIRONMENT_VALUES
+        ),
+        None,
+    )
+    if production_name is not None:
+        raise RuntimeError(
+            f"run_app.py cannot start Vite because {production_name} is production-like. "
+            "Vite's HMR client can automatically reload browser pages. Build the React app "
+            "and serve frontend-react/dist with Dockerfile.frontend/nginx instead."
+        )
+
+    if not _is_loopback_host(frontend_host) and not allow_public_dev_server:
+        raise RuntimeError(
+            f"Refusing to expose the Vite development server on {frontend_host}. "
+            "Use the static production build, or pass --allow-public-dev-server only for "
+            "intentional development on a trusted network."
         )
 
 
@@ -163,13 +200,27 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="npm executable used to run the React dev server",
     )
+    parser.add_argument(
+        "--allow-public-dev-server",
+        action="store_true",
+        help=(
+            "Allow Vite to bind a non-loopback host for trusted-network development. "
+            "This never overrides a production-like APP_ENV/ENVIRONMENT/ENV."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
+    env = os.environ.copy()
 
     try:
+        _validate_vite_dev_server(
+            frontend_host=args.frontend_host,
+            allow_public_dev_server=args.allow_public_dev_server,
+            env=env,
+        )
         npm = _resolve_npm(args.npm)
         _check_frontend_ready()
         _require_port_available("API", args.api_host, args.api_port)
@@ -182,7 +233,6 @@ def main() -> int:
     api_base = f"http://{api_host_for_browser}:{args.api_port}"
     frontend_url = f"http://{_display_host(args.frontend_host)}:{args.frontend_port}/"
 
-    env = os.environ.copy()
     if not args.serve_api_frontend:
         env["SERVE_FRONTEND"] = "false"
     if args.enable_dev_login:
@@ -191,6 +241,8 @@ def main() -> int:
 
     env["CORTEX_API_PROXY_TARGET"] = api_base
     env["FRONTEND_RUNTIME_API_BASE"] = api_base
+    if args.allow_public_dev_server:
+        env["ALLOW_PUBLIC_VITE_DEV_SERVER"] = "true"
 
     api_command = [
         args.python,

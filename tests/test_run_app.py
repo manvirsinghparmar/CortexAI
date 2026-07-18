@@ -39,3 +39,39 @@ def test_windows_taskkill_command_targets_descendants():
         "/T",
         "/F",
     ]
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.10.20.30", "::1", "[::1]"])
+def test_vite_dev_server_accepts_loopback_hosts(host):
+    run_app._validate_vite_dev_server(
+        frontend_host=host,
+        allow_public_dev_server=False,
+        env={},
+    )
+
+
+@pytest.mark.parametrize("name", ["APP_ENV", "ENVIRONMENT", "ENV"])
+def test_vite_dev_server_rejects_production_environment_even_with_public_override(name):
+    with pytest.raises(RuntimeError, match=rf"{name} is production-like"):
+        run_app._validate_vite_dev_server(
+            frontend_host="127.0.0.1",
+            allow_public_dev_server=True,
+            env={name: "production"},
+        )
+
+
+def test_vite_dev_server_rejects_public_host_by_default():
+    with pytest.raises(RuntimeError, match=r"Refusing to expose the Vite development server"):
+        run_app._validate_vite_dev_server(
+            frontend_host="0.0.0.0",
+            allow_public_dev_server=False,
+            env={},
+        )
+
+
+def test_vite_dev_server_accepts_public_host_for_trusted_network_development():
+    run_app._validate_vite_dev_server(
+        frontend_host="0.0.0.0",
+        allow_public_dev_server=True,
+        env={"APP_ENV": "local"},
+    )

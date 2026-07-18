@@ -63,7 +63,7 @@ REACT_FRONTEND=false
 python run_app.py
 ```
 
-This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port.
+This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port. This is a local-development command: it refuses production-like `APP_ENV`/`ENVIRONMENT`/`ENV` values and rejects a non-loopback frontend host unless `--allow-public-dev-server` is explicitly supplied for trusted-network development.
 
 For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.env` or run:
 ```bash
@@ -221,11 +221,13 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
+- Both Vite entry paths fail fast in production-like environments. Direct Vite startup also rejects public hosts unless `ALLOW_PUBLIC_VITE_DEV_SERVER=true`; that override is only for trusted development networks and must not be used in production.
 - The React router exposes `/usage` for Usage & insights and `/models` for the task-first model guide. Desktop reaches both from the sidebar; mobile reaches both from the account menu, and Models intentionally has no bottom-tab entry.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.
 - `run_app.py` checks both requested ports before starting either child process. On Windows it terminates each full child process tree, preventing npm/Vite descendants from remaining bound after partial startup failure or `Ctrl+C`.
 - Standalone production hosting must provide `/runtime-config.js` at the React origin and route `/v1/*` plus `/auth` to the FastAPI service. The current React client uses same-origin relative API paths, so split-origin deployments need a reverse proxy/CDN/nginx rule for those paths.
 - `Dockerfile.frontend` builds the React app and serves static assets with nginx. `Dockerfile.api` is API-only; it does not include `frontend-react/dist` unless the deployment image is extended to copy those files.
+- Verify a production rollout by checking that `/` references hashed `/assets/index-*.js` output and does not contain `/@vite/client`, `/@react-refresh`, or `/src/main.tsx`.
 
 ## API Key Persistence Policy
 

@@ -120,14 +120,15 @@ Use this when browsers report errors such as `ERR_HTTP2_PROTOCOL_ERROR 200 (OK)`
 
 Use this when the React page appears to refresh without the user pressing reload.
 
-1. Search app logs for `frontend.diagnostic` near the user-reported timestamp.
-2. Interpret the latest `boot` event:
+1. Fetch the production HTML and check its script paths. `/@vite/client`, `/@react-refresh`, or `/src/main.tsx` means the Vite development server is exposed in production. Its HMR WebSocket reconnect and full-reload handlers call `location.reload()`. Stop that process, build with `npm run --prefix frontend-react build`, and serve `frontend-react/dist` through `Dockerfile.frontend`/nginx or the FastAPI static mount. A correct build references hashed `/assets/index-*.js` files.
+2. Search app logs for `frontend.diagnostic` near the user-reported timestamp.
+3. Interpret the latest `boot` event:
    - `details.wasDiscarded=true`: Chrome discarded or recovered the tab.
    - `details.navigationType="reload"` with a recent `beforeunload`: user/browser reload or app-initiated navigation.
    - `details.navigationType="navigate"` with `fresh_login` in `details.searchKeys`: Cognito/login redirect path.
    - prior `longtask` events: main-thread saturation before the reload.
    - prior `error` or `unhandledrejection`: frontend runtime failure; inspect the sanitized message and current release artifact.
-3. Correlate the same timestamp with `chat.stream.*` or `compare.stream.*` request logs. If `client_disconnected` appears immediately before the next `boot`, inspect CDN/proxy/browser behavior before assuming the backend completed normally.
+4. Correlate the same timestamp with `chat.stream.*` or `compare.stream.*` request logs. If `client_disconnected` appears immediately before the next `boot`, inspect CDN/proxy/browser behavior before assuming the backend completed normally.
 
 ## Upload Incident Workflow (`POST /v1/files/upload`)
 

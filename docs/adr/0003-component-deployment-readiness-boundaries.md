@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-03-01
-- Last reviewed: 2026-05-09 (decision extended for React/Vite frontend)
+- Last reviewed: 2026-07-18 (public Vite/HMR guard added)
 
 ## Context
 
@@ -30,7 +30,7 @@ We define deployment-readiness boundaries as:
    - `scripts/serve_frontend.py` provides independent local/static serving.
    - Frontend runtime config can override API base and local dev bootstrap flags using `window.CORTEX_RUNTIME_CONFIG` or `localStorage`.
    - The React frontend is built with `npm ci --prefix frontend-react` and `npm run --prefix frontend-react build`.
-   - React hot-reload development uses `npm run --prefix frontend-react dev`, with Vite proxying `/v1`, `/auth`, and `/runtime-config.js` to the local API.
+   - React hot-reload development uses `npm run --prefix frontend-react dev`, with Vite proxying `/v1`, `/auth`, and `/runtime-config.js` to the local API. `run_app.py` and Vite's resolved-config guard reject production-like environments and accidental public bindings; a public trusted-network development session requires an explicit override.
 
 3. Build artifacts are split by component.
    - `scripts/build_frontend_artifact.py` generates static artifact output + zip.

@@ -10,7 +10,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 ## Launch-Ready Capabilities
 
 - API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`, `/v1/providers`, `/v1/models`
-- Integration diagnostics endpoints: `/v1/whoami`, `/v1/client-diagnostics`
+- Integration diagnostics endpoints: `/v1/whoami`, `/v1/entitlements`, `/v1/client-diagnostics`
 - Request attribution: `users`, `api_keys`, `sessions`, `messages`, `llm_requests`, `llm_responses`
 - Routing telemetry: `routing_decisions`, `routing_attempts`
 - Governance: `usage_daily`, daily caps, per-key rate limit, circuit breaker
@@ -107,6 +107,11 @@ PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2 # explicit /v1/optimize attempt count
 PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450 # compact optimizer output cap
 PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 
+# B2C subscription resolution (WP3)
+BILLING_ENABLED=false               # false => Free for every account
+SUBSCRIPTION_PAYMENT_GRACE_DAYS=3   # fallback past_due grace window
+# DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; ignored in production and when billing is enabled
+
 # Tavily research retrieval
 TAVILY_API_KEY=                     # required when research_mode=true
 TAVILY_ENHANCED_SEARCH_ENABLED=true # false => fixed Tavily params only
@@ -175,11 +180,14 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
 - Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
-- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. The billing database foundation stores account ownership, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records. These records do not yet resolve an effective plan, grant paid access, call Stripe, or enforce an allowance; those behaviors begin in later work packages.
+- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` now resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and future reservation quantities without mutating counters.
+- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; WP3 has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
+- Ask, Compare, optimize, upload, and export routes are not yet wired to reserve or enforce these allowances; that integration remains in later work packages. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
 python -m pytest tests/test_registry_pricing_alignment.py tests/test_subscription_plan_catalog.py -q
+python -m pytest tests/test_billing_entitlements.py tests/test_billing_repository.py -q
 ```
 
 ## Run
@@ -357,7 +365,8 @@ curl -H "X-API-Key: dev-key-1" http://127.0.0.1:8000/v1/whoami
 ```
 Returns owner IDs (in DB mode), active storage policy, baseline model, and guardrail config snapshot.
 Response includes:
-- `api_key_id`, `user_id`, `plan_tier`
+- `api_key_id`, `user_id`, `plan_tier` (`plan_tier` is a compatibility display field)
+- `billing.plan_code`, `billing.status` (database-backed runtime)
 - `storage_policy`, `redact_pii`
 - `baseline.provider`, `baseline.model`, `baseline.source`
 - `rate_limits.requests_per_minute`, `rate_limits.daily_cap_scope`
@@ -382,6 +391,7 @@ Response includes:
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/entitlements`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -394,6 +404,22 @@ Response includes:
 - `GET /v1/auth/cognito-config` (no auth; returns public Cognito config for frontend)
 - `POST /v1/auth/dev-login` (local-development helper; gated by env flags)
 - `POST /v1/auth/logout` (clears the session cookie)
+
+### Subscription entitlement snapshot
+
+`GET /v1/entitlements` accepts the same API-key, Cognito bearer, or signed-session authentication as `/v1/whoami`. On first access it lazily creates the authenticated user's billing account, resolves the effective plan, creates the current usage period, and ensures all seven allowance counters exist. Free periods use UTC calendar-month boundaries; paid periods use the stored provider period.
+
+The response contains:
+
+- `plan`: effective code/display name, lifecycle status/source, renewal/reset time, cancellation-at-period-end state, and optional grace deadline
+- `features`: Compare, research, prompt improvement, file analysis, usage export, saved history, and model-catalog access
+- `model_access.allowed_billing_classes`: `standard`, `advanced`, and/or `ultra`
+- `allowances`: `used`, `reserved`, `limit`, and nonnegative `remaining` for model responses, advanced/ultra responses, research, optimization, file analysis, and uploaded bytes
+- `period.starts_at` / `period.ends_at`
+
+Lifecycle resolution is conservative: `trialing`/`active` grant paid access for a valid stored period; `past_due` grants it only through `grace_until`; cancel-at-period-end access lasts only until the stored period end; `unpaid`, `incomplete`, `incomplete_expired`, `paused`, expired cancellations, unknown plans, and unknown statuses fall back to Free. No Stripe IDs or provider secrets are exposed by this endpoint.
+
+`plan_tier` remains on `/v1/whoami` for backward compatibility and is now populated from the effective plan display name in database mode. New consumers should use `/v1/entitlements` and `billing.plan_code` instead.
 
 ### Cognito (Gmail) sign-in
 
@@ -1101,6 +1127,13 @@ OpenAIProject/
     savings.py
     usage_reporting.py
     utils.py
+    billing/
+      account_service.py
+      entitlement_service.py
+      errors.py
+      models.py
+      plan_catalog.py
+      subscription_service.py
     routes/
       __init__.py
       admin.py
@@ -1108,6 +1141,7 @@ OpenAIProject/
       catalog.py
       chat.py
       compare.py
+      entitlements.py
       files.py
       health.py
       history.py

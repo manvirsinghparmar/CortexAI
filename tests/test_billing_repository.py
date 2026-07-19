@@ -354,6 +354,42 @@ def test_usage_period_rejects_invalid_dates(billing_db):
 
 
 @pytest.mark.unit
+def test_get_or_create_usage_period_is_idempotent(billing_db):
+    db, _ = billing_db
+    account = repository.get_or_create_billing_account_for_user(db, uuid4())
+    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
+    ends_at = datetime(2026, 8, 1, tzinfo=UTC)
+
+    first = repository.get_or_create_usage_period(
+        db,
+        billing_account_id=account["id"],
+        plan_code="free",
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    second = repository.get_or_create_usage_period(
+        db,
+        billing_account_id=account["id"],
+        plan_code="free",
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+
+    assert first["id"] == second["id"]
+
+    repository.close_usage_period(db, first["id"])
+    reactivated = repository.get_or_create_usage_period(
+        db,
+        billing_account_id=account["id"],
+        plan_code="free",
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    assert reactivated["id"] == first["id"]
+    assert reactivated["status"] == "active"
+
+
+@pytest.mark.unit
 def test_usage_counter_is_idempotent_and_nonnegative(billing_db):
     db, tables = billing_db
     _, period = _account_and_period(db)

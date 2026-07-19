@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, TypeAlias
 from uuid import UUID, uuid4
 
@@ -91,6 +91,25 @@ def _required_text(value: str, field_name: str) -> str:
     return normalized
 
 
+def _new_id_for(table) -> UUID | str:
+    """Generate an ID compatible with PostgreSQL UUID and reflected SQLite text."""
+    value = uuid4()
+    try:
+        if table.c.id.type.python_type is str:
+            return value.hex
+    except (AttributeError, NotImplementedError):
+        pass
+    return value
+
+
+def _same_datetime(left: datetime | None, right: datetime | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    normalized_left = left.replace(tzinfo=UTC) if left.tzinfo is None else left.astimezone(UTC)
+    normalized_right = right.replace(tzinfo=UTC) if right.tzinfo is None else right.astimezone(UTC)
+    return normalized_left == normalized_right
+
+
 def _normalized_provider(provider: str) -> str:
     return _required_text(provider, "provider").lower()
 
@@ -132,7 +151,7 @@ def get_billing_account_for_user(db: Session, user_id: UUID) -> BillingRecord | 
 def get_or_create_billing_account_for_user(db: Session, user_id: UUID) -> BillingRecord:
     """Get or atomically create the one B2C billing account for a user."""
     billing_accounts = _table("billing_accounts")
-    account_id = uuid4()
+    account_id = _new_id_for(billing_accounts)
     stmt = (
         _dialect_insert(db, billing_accounts)
         .values(id=account_id, owner_type="user", owner_id=user_id)
@@ -204,6 +223,31 @@ def get_live_subscription_for_account(
     return _first_record(db.execute(stmt))
 
 
+def get_latest_subscription_for_account(
+    db: Session,
+    billing_account_id: UUID,
+) -> BillingRecord | None:
+    """Return the latest snapshot, including terminal lifecycle statuses.
+
+    The live-subscription query intentionally excludes ``canceled`` rows so the
+    database can enforce one provider-live row per account. Effective-plan
+    resolution still needs the latest terminal row to honor cancel-at-period-
+    end access when no live row exists.
+    """
+    subscriptions = _table("subscriptions")
+    stmt = (
+        select(subscriptions)
+        .where(subscriptions.c.billing_account_id == billing_account_id)
+        .order_by(
+            subscriptions.c.last_provider_event_at.desc().nullslast(),
+            subscriptions.c.updated_at.desc(),
+            subscriptions.c.current_period_end.desc().nullslast(),
+        )
+        .limit(1)
+    )
+    return _first_record(db.execute(stmt))
+
+
 def upsert_subscription_snapshot(
     db: Session,
     snapshot: SubscriptionSnapshot,
@@ -218,7 +262,7 @@ def upsert_subscription_snapshot(
     payload["plan_code"] = _required_text(snapshot.plan_code, "plan_code").lower()
     payload["status"] = _required_text(snapshot.status, "status").lower()
 
-    insert_payload = {"id": uuid4(), **payload}
+    insert_payload = {"id": _new_id_for(subscriptions), **payload}
     update_payload = {
         key: value
         for key, value in payload.items()
@@ -288,7 +332,7 @@ def create_usage_period(
     stmt = (
         insert(usage_periods)
         .values(
-            id=uuid4(),
+            id=_new_id_for(usage_periods),
             billing_account_id=billing_account_id,
             subscription_id=subscription_id,
             plan_code=_required_text(plan_code, "plan_code").lower(),
@@ -302,6 +346,76 @@ def create_usage_period(
     if persisted is None:
         raise RuntimeError("Usage period could not be created")
     return persisted
+
+
+def get_or_create_usage_period(
+    db: Session,
+    *,
+    billing_account_id: UUID,
+    plan_code: str,
+    starts_at: datetime,
+    ends_at: datetime,
+    subscription_id: UUID | None = None,
+) -> BillingRecord:
+    """Atomically create an exact usage period or return its matching row."""
+    if ends_at <= starts_at:
+        raise ValueError("ends_at must be after starts_at")
+
+    usage_periods = _table("usage_periods")
+    normalized_plan = _required_text(plan_code, "plan_code").lower()
+    stmt = (
+        _dialect_insert(db, usage_periods)
+        .values(
+            id=_new_id_for(usage_periods),
+            billing_account_id=billing_account_id,
+            subscription_id=subscription_id,
+            plan_code=normalized_plan,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            status="active",
+        )
+        .on_conflict_do_nothing(index_elements=["billing_account_id", "starts_at"])
+        .returning(*usage_periods.c)
+    )
+    created = _first_record(db.execute(stmt))
+    if created is not None:
+        return created
+
+    existing_stmt = select(usage_periods).where(
+        and_(
+            usage_periods.c.billing_account_id == billing_account_id,
+            usage_periods.c.starts_at == starts_at,
+        )
+    )
+    existing = _first_record(db.execute(existing_stmt))
+    if existing is None:
+        raise RuntimeError("Usage period conflict occurred but the row could not be read")
+
+    definition_conflicts = (
+        existing.get("subscription_id") != subscription_id
+        or existing.get("plan_code") != normalized_plan
+        or not _same_datetime(existing.get("ends_at"), ends_at)
+    )
+    if definition_conflicts:
+        raise RuntimeError("Existing usage period conflicts with the effective subscription")
+    if existing.get("status") == "closed":
+        reactivate_stmt = (
+            update(usage_periods)
+            .where(
+                and_(
+                    usage_periods.c.id == existing["id"],
+                    usage_periods.c.status == "closed",
+                )
+            )
+            .values(status="active", updated_at=func.now())
+            .returning(*usage_periods.c)
+        )
+        reactivated = _first_record(db.execute(reactivate_stmt))
+        if reactivated is not None:
+            return reactivated
+    if existing.get("status") != "active":
+        raise RuntimeError("Existing usage period has an unsupported state")
+    return existing
 
 
 def close_usage_period(db: Session, usage_period_id: UUID) -> BillingRecord | None:
@@ -327,7 +441,7 @@ def get_or_create_usage_counter(
     stmt = (
         _dialect_insert(db, usage_counters)
         .values(
-            id=uuid4(),
+            id=_new_id_for(usage_counters),
             usage_period_id=usage_period_id,
             meter_key=meter_key,
             used_quantity=0,
@@ -403,7 +517,7 @@ def create_usage_reservation(
     stmt = (
         insert(usage_reservations)
         .values(
-            id=uuid4(),
+            id=_new_id_for(usage_reservations),
             billing_account_id=billing_account_id,
             usage_period_id=usage_period_id,
             request_id=_required_text(request_id, "request_id"),
@@ -572,7 +686,7 @@ def create_webhook_event_if_absent(
     stmt = (
         _dialect_insert(db, billing_webhook_events)
         .values(
-            id=uuid4(),
+            id=_new_id_for(billing_webhook_events),
             provider=provider_name,
             provider_event_id=external_id,
             event_type=_required_text(event_type, "event_type"),

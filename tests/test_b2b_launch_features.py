@@ -12,12 +12,16 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import (
+    BigInteger,
     JSON,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     Float,
+    ForeignKey,
+    Index,
     Integer,
     MetaData,
     PrimaryKeyConstraint,
@@ -30,7 +34,12 @@ from sqlalchemy import (
     text,
 )
 
-from models.unified_response import MultiUnifiedResponse, NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import (
+    MultiUnifiedResponse,
+    NormalizedError,
+    TokenUsage,
+    UnifiedResponse,
+)
 from orchestrator.core import CortexOrchestrator
 from orchestrator.routing_types import ModelCandidate, Tier, ValidationResult
 from server import circuit_breaker as circuit_breaker_service
@@ -49,7 +58,9 @@ class InspectableOrchestrator:
         self.force_ask_error = False
         self.ask_text = "normal response"
 
-    def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         self.ask_calls += 1
         self.last_ask_kwargs = kwargs
         provider = model_type or "openai"
@@ -130,7 +141,9 @@ class InspectableOrchestrator:
                         provider=provider,
                         model=model,
                         latency_ms=11,
-                        token_usage=TokenUsage(prompt_tokens=25, completion_tokens=15, total_tokens=40),
+                        token_usage=TokenUsage(
+                            prompt_tokens=25, completion_tokens=15, total_tokens=40
+                        ),
                         estimated_cost=0.0004,
                         finish_reason="stop",
                         error=None,
@@ -159,7 +172,9 @@ class InspectableOrchestrator:
                         provider=provider,
                         model=model,
                         latency_ms=9,
-                        token_usage=TokenUsage(prompt_tokens=18, completion_tokens=0, total_tokens=18),
+                        token_usage=TokenUsage(
+                            prompt_tokens=18, completion_tokens=0, total_tokens=18
+                        ),
                         estimated_cost=0.0,
                         finish_reason="error",
                         error=NormalizedError(
@@ -237,6 +252,90 @@ def _bootstrap_b2b_schema(database_url: str) -> None:
         Column("auth_provider", String),
         Column("auth_subject", String),
         Column("auth_issuer", String),
+    )
+
+    Table(
+        "billing_accounts",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("owner_type", String(32), nullable=False),
+        Column("owner_id", Uuid, nullable=False),
+        Column("stripe_customer_id", String(255), unique=True),
+        Column("currency", String(3), nullable=False, server_default="USD"),
+        Column("country", String(2)),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index("uq_billing_accounts_owner", "owner_type", "owner_id", unique=True),
+    )
+
+    Table(
+        "subscriptions",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("billing_account_id", Uuid, ForeignKey("billing_accounts.id"), nullable=False),
+        Column("provider", String(32), nullable=False, server_default="stripe"),
+        Column("provider_subscription_id", String(255)),
+        Column("provider_price_id", String(255)),
+        Column("plan_code", String(64), nullable=False),
+        Column("status", String(64), nullable=False),
+        Column("current_period_start", DateTime),
+        Column("current_period_end", DateTime),
+        Column("cancel_at_period_end", Boolean, nullable=False, server_default="0"),
+        Column("canceled_at", DateTime),
+        Column("trial_end", DateTime),
+        Column("grace_until", DateTime),
+        Column("latest_invoice_id", String(255)),
+        Column("last_provider_event_at", DateTime),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_subscriptions_provider_id",
+            "provider",
+            "provider_subscription_id",
+            unique=True,
+        ),
+        Index(
+            "uq_subscriptions_one_live_per_account",
+            "billing_account_id",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('trialing','active','past_due','unpaid','paused','incomplete')"
+            ),
+        ),
+    )
+
+    Table(
+        "usage_periods",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("billing_account_id", Uuid, ForeignKey("billing_accounts.id"), nullable=False),
+        Column("subscription_id", Uuid, ForeignKey("subscriptions.id")),
+        Column("plan_code", String(64), nullable=False),
+        Column("starts_at", DateTime, nullable=False),
+        Column("ends_at", DateTime, nullable=False),
+        Column("status", String(32), nullable=False, server_default="active"),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("ends_at > starts_at"),
+        Index("uq_usage_period_account_start", "billing_account_id", "starts_at", unique=True),
+    )
+
+    Table(
+        "usage_counters",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("usage_period_id", Uuid, ForeignKey("usage_periods.id"), nullable=False),
+        Column("meter_key", String(64), nullable=False),
+        Column("used_quantity", BigInteger, nullable=False, server_default="0"),
+        Column("reserved_quantity", BigInteger, nullable=False, server_default="0"),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("used_quantity >= 0 AND reserved_quantity >= 0"),
+        Index(
+            "uq_usage_counter_period_meter",
+            "usage_period_id",
+            "meter_key",
+            unique=True,
+        ),
     )
 
     Table(
@@ -442,6 +541,7 @@ def b2b_db_client(monkeypatch):
     from server.routes import byok as byok_route
     from server.routes import chat as chat_route
     from server.routes import compare as compare_route
+    from server.routes import entitlements as entitlements_route
     from server.routes import history as history_route
     from server.routes import reporting as reporting_route
     from server.routes import whoami as whoami_route
@@ -477,6 +577,7 @@ def b2b_db_client(monkeypatch):
     old_reporting_db = reporting_route.API_DB_ENABLED
     old_byok_db = byok_route.API_DB_ENABLED
     old_whoami_db = whoami_route.API_DB_ENABLED
+    old_entitlements_db = entitlements_route.API_DB_ENABLED
 
     persistence_service.API_DB_ENABLED = True
     chat_route.API_DB_ENABLED = True
@@ -486,6 +587,7 @@ def b2b_db_client(monkeypatch):
     reporting_route.API_DB_ENABLED = True
     byok_route.API_DB_ENABLED = True
     whoami_route.API_DB_ENABLED = True
+    entitlements_route.API_DB_ENABLED = True
 
     app = create_app()
     if hasattr(deps.get_orchestrator, "_instance"):
@@ -507,6 +609,7 @@ def b2b_db_client(monkeypatch):
         reporting_route.API_DB_ENABLED = old_reporting_db
         byok_route.API_DB_ENABLED = old_byok_db
         whoami_route.API_DB_ENABLED = old_whoami_db
+        entitlements_route.API_DB_ENABLED = old_entitlements_db
         rate_limit_service.reset_rate_limit_state()
         circuit_breaker_service.reset_circuit_breakers()
         _reset_db_runtime_state(schema_name="public")
@@ -766,7 +869,9 @@ def test_usage_and_savings_reporting_endpoints_and_csv_export(b2b_db_client):
         == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct"
     )
     savings_lines = savings_csv.text.splitlines()
-    assert savings_lines[0] == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct"
+    assert (
+        savings_lines[0] == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct"
+    )
     savings_reader = csv.DictReader(io.StringIO(savings_csv.text))
     savings_rows = list(savings_reader)
     assert savings_rows
@@ -1043,7 +1148,9 @@ def test_byok_set_status_delete_and_runtime_usage(b2b_db_client):
     provider_api_keys = fake_orch.last_ask_kwargs.get("provider_api_keys", {})
     assert provider_api_keys.get("openai") == "sk-openai-tenant-123456"
 
-    delete_one = client.delete("/v1/byok", headers={"X-API-Key": "dev-key-1"}, params={"provider": "openai"})
+    delete_one = client.delete(
+        "/v1/byok", headers={"X-API-Key": "dev-key-1"}, params={"provider": "openai"}
+    )
     assert delete_one.status_code == 200
     assert delete_one.json()["deleted_count"] >= 1
 
@@ -1091,6 +1198,8 @@ def test_whoami_snapshot_in_db_mode(monkeypatch, b2b_db_client):
     payload = response.json()
     assert payload["api_key_id"] is not None
     assert payload["user_id"] is not None
+    assert payload["plan_tier"] == "Free"
+    assert payload["billing"] == {"plan_code": "free", "status": "free"}
     assert payload["storage_policy"] in {"metadata", "full"}
     assert payload["baseline"]["provider"] == "openai"
     assert payload["baseline"]["model"] == "gpt-4o-mini"
@@ -1101,6 +1210,23 @@ def test_whoami_snapshot_in_db_mode(monkeypatch, b2b_db_client):
     assert float(payload["rate_limits"]["daily_cost_cap"]) == pytest.approx(4.56, rel=1e-6)
     assert payload["breakers"]["scope"] == "global_provider_model"
     assert payload["breakers"]["failure_threshold"] >= 1
+
+    entitlements_response = client.get(
+        "/v1/entitlements",
+        headers={"X-API-Key": "dev-key-1"},
+    )
+    assert entitlements_response.status_code == 200
+    entitlements_payload = entitlements_response.json()
+    assert entitlements_payload["plan"]["code"] == "free"
+    assert set(entitlements_payload["allowances"]) == {
+        "model_responses",
+        "advanced_model_responses",
+        "ultra_model_responses",
+        "research_turns",
+        "optimization_turns",
+        "file_analysis_turns",
+        "uploaded_bytes",
+    }
 
 
 @pytest.mark.integration
@@ -1354,7 +1480,11 @@ def test_storage_policy_metadata_only_avoids_raw_prompt_and_response(monkeypatch
     response = client.post(
         "/v1/chat",
         headers={"X-API-Key": "dev-key-1"},
-        json={"prompt": "user@example.com raw prompt", "provider": "openai", "model": "gpt-4o-mini"},
+        json={
+            "prompt": "user@example.com raw prompt",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
     )
     assert response.status_code == 200
 

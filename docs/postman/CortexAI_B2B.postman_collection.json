@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, effective subscription entitlements, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -181,9 +181,46 @@
                   "  pm.expect(body).to.have.property('baseline');",
                   "  pm.expect(body).to.have.property('rate_limits');",
                   "  pm.expect(body).to.have.property('breakers');",
+                  "  pm.expect(body).to.have.property('plan_tier');",
+                  "  if (body.billing) { pm.expect(body.billing).to.have.property('plan_code'); }",
                   "});",
                   "if (body.user_id) { pm.collectionVariables.set('user_id', body.user_id); }",
                   "if (body.api_key_id) { pm.collectionVariables.set('api_key_id', body.api_key_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/entitlements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/entitlements",
+            "description": "Returns the server-resolved plan, lifecycle state, features, model billing classes, current period, and all seven allowance counters. BILLING_ENABLED=false resolves Free without Stripe."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('entitlements response shape', function () {",
+                  "  pm.expect(body).to.have.property('plan');",
+                  "  pm.expect(body).to.have.property('features');",
+                  "  pm.expect(body).to.have.property('model_access');",
+                  "  pm.expect(body).to.have.property('allowances');",
+                  "  pm.expect(body).to.have.property('period');",
+                  "  pm.expect(Object.keys(body.allowances)).to.have.lengthOf(7);",
+                  "  Object.keys(body.allowances).forEach(function (meter) { pm.expect(body.allowances[meter].remaining).to.be.at.least(0); });",
+                  "});"
                 ]
               }
             }

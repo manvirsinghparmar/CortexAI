@@ -115,7 +115,11 @@ python run_server.py --reload
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - React exposes `/models` for a task-first model selection guide. The screen is currently driven by `frontend-react/src/config/models.data.json`, not `/v1/models`: editing a provider's `models[]` changes the visible catalog, while `tier`, `speed`, and `rec` derive the Depth meter, Speed meter, and recommended row/callout. If this metadata becomes production-owned by the gateway, the frontend should keep the same JSON contract and swap the static import for an API-backed loader.
 - `config/subscription_plans.yaml` is the server-owned Free/Plus/Pro plan catalogue. `server/billing/plan_catalog.py` validates and caches it during API startup, including ranks, prices, Stripe price environment-variable mappings, entitlements, allowances, limits, and allowed billing classes.
-- `db/billing_repository.py` provides transaction-neutral access to billing accounts, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records created by `db/migrations/20260718_add_b2c_billing_foundation.sql`. Stored rows remain data only in WP2: they do not resolve an effective plan or authorize paid behavior.
+- `db/billing_repository.py` provides transaction-neutral access to billing accounts, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records created by `db/migrations/20260718_add_b2c_billing_foundation.sql`.
+- `server/billing/account_service.py` validates user ownership and lazily creates B2C accounts. `server/billing/subscription_service.py` applies the server-side lifecycle/grace policy and creates the effective usage period. `server/billing/entitlement_service.py` returns feature/model/file decisions and exact future reservation quantities without mutating counters.
+- `BILLING_ENABLED=false` resolves all users to Free and is the production-safe setting until verified Stripe webhook synchronization is deployed. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. WP3 requires no Stripe dependency and does not trust client-supplied billing identifiers.
+- Request-route allowance enforcement and atomic counter reservation remain later work packages; current Ask, Compare, streaming, history, uploads, optimize, and reporting behavior is unchanged.
+- Focused validation: `python -m pytest tests/test_billing_entitlements.py tests/test_billing_repository.py -q`.
 - `/v1/models` exposes `billing_class` as `standard`, `advanced`, or `ultra`. This value is independent from the existing smart-routing `tier`; missing legacy classifications use the conservative `advanced` fallback and emit a warning.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
@@ -147,6 +151,7 @@ python run_server.py --reload
 - `DELETE /v1/history/{entry_id}`
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
+- `GET /v1/entitlements`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -191,6 +196,27 @@ Protected `/v1/*` endpoints accept any one of:
 - `X-API-Key: <key-from-API_KEYS>`
 
 Invalid or missing credentials return `401`.
+
+### Effective subscription and entitlements
+
+`GET /v1/entitlements` uses API-key, Cognito bearer, or signed-session authentication. It commits lazy account/usage-period creation and returns all seven allowance counters with `used`, `reserved`, `limit`, and nonnegative `remaining` values. Free periods are UTC calendar months; paid periods use stored provider boundaries.
+
+Effective lifecycle rules are server-side and conservative:
+
+- `trialing` and `active`: paid plan for a valid current stored period
+- `past_due`: paid plan only through `grace_until`; otherwise Free
+- `canceled`: paid plan only when `cancel_at_period_end=true` and the stored period has not ended
+- `unpaid`, `incomplete`, `incomplete_expired`, `paused`, expired cancellation, unknown status, or unknown plan: Free
+
+The endpoint returns `plan`, `features`, `model_access`, `allowances`, and `period` sections and never exposes provider subscription IDs, Stripe price IDs, customer IDs, amounts, or secrets. `/v1/whoami.plan_tier` remains a compatibility display field populated from the effective plan in database mode; new integrations should use `/v1/entitlements` plus `/v1/whoami.billing.plan_code`.
+
+Subscription environment controls:
+
+```ini
+BILLING_ENABLED=false
+SUBSCRIPTION_PAYMENT_GRACE_DAYS=3
+# DEV_SUBSCRIPTION_PLAN=pro  # local/dev only; never production
+```
 
 Session-scoped endpoints are session-scoped:
 - `/v1/chat*`

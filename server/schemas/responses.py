@@ -322,6 +322,11 @@ class WhoAmIBreakerConfigDTO(BaseModel):
     scope: str
 
 
+class WhoAmIBillingDTO(BaseModel):
+    plan_code: str
+    status: str
+
+
 class WhoAmIResponseDTO(BaseModel):
     api_key_id: Optional[str] = None
     user_id: Optional[str] = None
@@ -331,6 +336,52 @@ class WhoAmIResponseDTO(BaseModel):
     baseline: WhoAmIBaselineDTO
     rate_limits: WhoAmIRateLimitConfigDTO
     breakers: WhoAmIBreakerConfigDTO
+    billing: Optional[WhoAmIBillingDTO] = None
+
+
+class EntitlementPlanDTO(BaseModel):
+    code: str
+    display_name: str
+    status: str
+    source: str
+    renews_at: str
+    cancel_at_period_end: bool
+    grace_until: Optional[str] = None
+
+
+class EntitlementFeaturesDTO(BaseModel):
+    compare_enabled: bool
+    max_compare_models: int
+    research_enabled: bool
+    prompt_improvement_enabled: bool
+    file_analysis_enabled: bool
+    usage_export_enabled: bool
+    saved_history_enabled: bool
+    models_catalog_enabled: bool
+
+
+class EntitlementModelAccessDTO(BaseModel):
+    allowed_billing_classes: List[str] = Field(default_factory=list)
+
+
+class EntitlementAllowanceDTO(BaseModel):
+    used: int
+    reserved: int
+    limit: int
+    remaining: int
+
+
+class EntitlementPeriodDTO(BaseModel):
+    starts_at: str
+    ends_at: str
+
+
+class EntitlementsResponseDTO(BaseModel):
+    plan: EntitlementPlanDTO
+    features: EntitlementFeaturesDTO
+    model_access: EntitlementModelAccessDTO
+    allowances: Dict[str, EntitlementAllowanceDTO] = Field(default_factory=dict)
+    period: EntitlementPeriodDTO
 
 
 class FileBaseDTO(BaseModel):

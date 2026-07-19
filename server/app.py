@@ -11,7 +11,22 @@ from server.frontend_runtime_config import render_frontend_runtime_config_js
 from server.billing.plan_catalog import get_plan_catalog
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import admin, auth as auth_routes, byok, catalog, chat, client_diagnostics, compare, files, health, history, optimize, reporting, whoami
+from server.routes import (
+    admin,
+    auth as auth_routes,
+    byok,
+    catalog,
+    chat,
+    client_diagnostics,
+    compare,
+    entitlements,
+    files,
+    health,
+    history,
+    optimize,
+    reporting,
+    whoami,
+)
 
 from utils.logger import get_logger
 
@@ -229,6 +244,7 @@ def create_app() -> FastAPI:
     app.include_router(reporting.router)
     app.include_router(byok.router)
     app.include_router(whoami.router)
+    app.include_router(entitlements.router)
     app.include_router(catalog.router)
     app.include_router(files.router)
 
@@ -247,4 +263,3 @@ def create_app() -> FastAPI:
         logger.info("SERVE_FRONTEND=false; static frontend mount disabled")
 
     return app
-

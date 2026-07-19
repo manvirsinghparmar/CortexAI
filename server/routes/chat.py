@@ -20,6 +20,9 @@ from config.provider_catalog import (
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import attachments as attachments_service
+from server.billing.enforcement_service import ReservedRequestUsage, resolve_model_target
+from server.billing.entitlement_service import ModelTargetIntent
+from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
 from server import persistence as persistence_service
 from server.routes.session_auth import SessionScopedAuthGuard
@@ -61,6 +64,9 @@ TRUE_SMART_ROUTING_ENABLED = os.getenv(
 _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _persist_chat_interaction = persistence_service.persist_chat_interaction
 _resolve_runtime_byok_provider_keys = persistence_service.resolve_runtime_byok_provider_keys
+_reserve_subscription_usage = persistence_service.reserve_subscription_usage
+_finalize_subscription_usage = persistence_service.finalize_subscription_usage
+_release_subscription_usage = persistence_service.release_subscription_usage
 
 
 @dataclass(frozen=True)
@@ -220,12 +226,33 @@ def _pick_smart_provider_from_candidates(
         return _pick_ranked(("openai",))
 
     code_signals = (
-        "code", "bug", "debug", "stack trace", "python", "javascript", "typescript",
-        "sql", "api", "refactor", "algorithm", "function", "class ", "exception",
+        "code",
+        "bug",
+        "debug",
+        "stack trace",
+        "python",
+        "javascript",
+        "typescript",
+        "sql",
+        "api",
+        "refactor",
+        "algorithm",
+        "function",
+        "class ",
+        "exception",
     )
     deep_reasoning_signals = (
-        "analyze", "analysis", "tradeoff", "architecture", "design", "compare",
-        "step by step", "explain why", "root cause", "research", "cite",
+        "analyze",
+        "analysis",
+        "tradeoff",
+        "architecture",
+        "design",
+        "compare",
+        "step by step",
+        "explain why",
+        "root cause",
+        "research",
+        "cite",
     )
     creative_signals = ("poem", "story", "creative", "brainstorm", "tagline", "tweet")
 
@@ -246,6 +273,7 @@ def _resolve_chat_execution_plan(
     orchestrator: CortexOrchestrator,
     provider_api_keys: dict[str, str] | None = None,
     attachment_compatible_providers: list[str] | None = None,
+    allowed_billing_classes: frozenset[str] | None = None,
 ) -> ChatExecutionPlan:
     manual_provider = (request.provider or "").strip().lower()
     manual_model = (request.model or "").strip()
@@ -269,6 +297,9 @@ def _resolve_chat_execution_plan(
 
     if TRUE_SMART_ROUTING_ENABLED and smart_mode:
         constraints = _build_chat_routing_constraints()
+        if allowed_billing_classes is not None:
+            constraints = dict(constraints or {})
+            constraints["allowed_billing_classes"] = sorted(allowed_billing_classes)
         if attachment_compatible_providers:
             compatible_providers = _normalize_provider_list(attachment_compatible_providers)
             if compatible_providers:
@@ -280,7 +311,9 @@ def _resolve_chat_execution_plan(
                 )
                 if existing_allowed:
                     compatible_set = set(compatible_providers)
-                    intersected = [provider for provider in existing_allowed if provider in compatible_set]
+                    intersected = [
+                        provider for provider in existing_allowed if provider in compatible_set
+                    ]
                     if not intersected:
                         raise HTTPException(
                             status_code=400,
@@ -407,10 +440,7 @@ def _build_user_context(context_req):
             for item in context_req.conversation_history
         ]
 
-    return UserContext(
-        session_id=context_req.session_id,
-        conversation_history=history
-    )
+    return UserContext(session_id=context_req.session_id, conversation_history=history)
 
 
 def _resolve_effective_prompt(prompt: str | None, *, has_attachments: bool) -> str:
@@ -430,13 +460,110 @@ def _iter_stream_lines(text: str):
     if len(lines) <= 1:
         # If the model returns one long paragraph, chunk it for smoother streaming.
         chunk_size = 120
-        return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
     return lines
 
 
 def _to_ndjson(event: dict) -> str:
     """Serialize one stream event as NDJSON."""
     return json.dumps(event, ensure_ascii=False) + "\n"
+
+
+def _research_was_performed(response: object) -> bool:
+    metadata = getattr(response, "metadata", None)
+    return bool(
+        isinstance(metadata, dict)
+        and metadata.get("research_used")
+        and not metadata.get("research_reused")
+    )
+
+
+def _successful_billing_targets(
+    response: object,
+    *,
+    orchestrator: CortexOrchestrator,
+) -> tuple[ModelTargetIntent, ...]:
+    if bool(getattr(response, "is_error", False)):
+        return ()
+    return (
+        resolve_model_target(
+            provider=str(getattr(response, "provider", "") or ""),
+            model=str(getattr(response, "model", "") or ""),
+            orchestrator=orchestrator,
+        ),
+    )
+
+
+def _reserve_chat_usage(
+    *,
+    resolution: persistence_service.ApiKeyPersistenceResolution,
+    request_id: str,
+    execution_plan: ChatExecutionPlan,
+    research_enabled: bool,
+    orchestrator: CortexOrchestrator,
+) -> ReservedRequestUsage:
+    try:
+        target = resolve_model_target(
+            provider=execution_plan.preview_provider,
+            model=execution_plan.preview_model,
+            orchestrator=orchestrator,
+        )
+        return _reserve_subscription_usage(
+            user_id=resolution.user_id,
+            request_id=request_id,
+            operation_type="ask",
+            model_targets=(target,),
+            research_enabled=research_enabled,
+            smart_routing=execution_plan.strategy == "smart_orchestrator",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        http_error = enforcement_http_exception(exc)
+        log = logger.exception if http_error.status_code >= 500 else logger.warning
+        log(
+            "Chat subscription preflight denied",
+            extra={"extra_fields": {"request_id": request_id, "error_type": type(exc).__name__}},
+        )
+        raise http_error from exc
+
+
+def _finalize_chat_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    response: object,
+    orchestrator: CortexOrchestrator,
+    settle_model_response: bool = True,
+) -> None:
+    try:
+        _finalize_subscription_usage(
+            reservation=reservation,
+            successful_targets=(
+                _successful_billing_targets(
+                    response,
+                    orchestrator=orchestrator,
+                )
+                if settle_model_response
+                else ()
+            ),
+            research_performed=_research_was_performed(response),
+        )
+    except Exception as exc:
+        logger.exception("Chat subscription usage finalization failed")
+        raise enforcement_http_exception(exc) from exc
+
+
+def _release_chat_usage_safely(
+    reservation: ReservedRequestUsage | None,
+    *,
+    reason: str,
+) -> None:
+    if reservation is None:
+        return
+    try:
+        _release_subscription_usage(reservation=reservation, reason=reason)
+    except Exception:
+        logger.exception("Chat subscription usage release failed")
 
 
 @router.post("/chat", response_model=ChatResponseDTO)
@@ -456,7 +583,6 @@ async def chat(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    
 
     persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -534,19 +660,69 @@ async def chat(
         kwargs["attachments"] = inference_attachments
     kwargs["request_id"] = req_id
 
-    response = await asyncio.to_thread(
-        orchestrator.ask,
-        prompt=effective_prompt,
-        model_type=execution_plan.model_type,
-        context=context,
-        model_name=execution_plan.model_name,
-        token_tracker=None,
-        research_mode=orchestrator_research_mode,
-        routing_mode=execution_plan.routing_mode,
-        routing_constraints=execution_plan.routing_constraints,
-        **kwargs,
-    )
-    response = sanitize_provider_error_response(normalize_empty_success_response(response))
+    billing_reservation: ReservedRequestUsage | None = None
+    if API_DB_ENABLED and persistence_resolution is not None:
+        billing_reservation = _reserve_chat_usage(
+            resolution=persistence_resolution,
+            request_id=f"{req_id}:chat:{uuid4()}",
+            execution_plan=execution_plan,
+            research_enabled=research_mode,
+            orchestrator=orchestrator,
+        )
+        if execution_plan.strategy == "smart_orchestrator":
+            try:
+                execution_plan = _resolve_chat_execution_plan(
+                    request,
+                    effective_prompt=effective_prompt,
+                    context=context,
+                    orchestrator=orchestrator,
+                    provider_api_keys=provider_api_keys,
+                    attachment_compatible_providers=attachment_compatible_providers,
+                    allowed_billing_classes=billing_reservation.allowed_billing_classes,
+                )
+                if resolved_attachments:
+                    attachments_service.enforce_model_attachment_compatibility(
+                        provider=execution_plan.preview_provider,
+                        model=execution_plan.preview_model,
+                        attachments=resolved_attachments,
+                        mode="chat",
+                    )
+            except Exception:
+                _release_chat_usage_safely(
+                    billing_reservation,
+                    reason="smart_routing_preflight_failed",
+                )
+                raise
+
+    provider_completed = False
+    try:
+        response = await asyncio.to_thread(
+            orchestrator.ask,
+            prompt=effective_prompt,
+            model_type=execution_plan.model_type,
+            context=context,
+            model_name=execution_plan.model_name,
+            token_tracker=None,
+            research_mode=orchestrator_research_mode,
+            routing_mode=execution_plan.routing_mode,
+            routing_constraints=execution_plan.routing_constraints,
+            **kwargs,
+        )
+        provider_completed = True
+        response = sanitize_provider_error_response(normalize_empty_success_response(response))
+        if billing_reservation is not None:
+            _finalize_chat_usage(
+                reservation=billing_reservation,
+                response=response,
+                orchestrator=orchestrator,
+            )
+    except BaseException:
+        if not provider_completed:
+            _release_chat_usage_safely(
+                billing_reservation,
+                reason="provider_execution_failed",
+            )
+        raise
 
     resolved_session_id = requested_session_id
     if API_DB_ENABLED and persistence_resolution is not None:
@@ -585,7 +761,6 @@ async def chat_stream(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
-    
 
     persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
     provider_api_keys: dict[str, str] = {}
@@ -665,10 +840,49 @@ async def chat_stream(
         kwargs["attachments"] = inference_attachments
     kwargs["request_id"] = req_id
 
+    billing_reservation: ReservedRequestUsage | None = None
+    if API_DB_ENABLED and persistence_resolution is not None:
+        billing_reservation = _reserve_chat_usage(
+            resolution=persistence_resolution,
+            request_id=f"{req_id}:chat-stream:{uuid4()}",
+            execution_plan=execution_plan,
+            research_enabled=research_mode,
+            orchestrator=orchestrator,
+        )
+        if execution_plan.strategy == "smart_orchestrator":
+            try:
+                execution_plan = _resolve_chat_execution_plan(
+                    request,
+                    effective_prompt=effective_prompt,
+                    context=context,
+                    orchestrator=orchestrator,
+                    provider_api_keys=provider_api_keys,
+                    attachment_compatible_providers=attachment_compatible_providers,
+                    allowed_billing_classes=billing_reservation.allowed_billing_classes,
+                )
+                if resolved_attachments:
+                    attachments_service.enforce_model_attachment_compatibility(
+                        provider=execution_plan.preview_provider,
+                        model=execution_plan.preview_model,
+                        attachments=resolved_attachments,
+                        mode="chat",
+                    )
+            except Exception:
+                _release_chat_usage_safely(
+                    billing_reservation,
+                    reason="smart_routing_preflight_failed",
+                )
+                raise
+        target_provider = execution_plan.preview_provider
+        target_model = execution_plan.preview_model
+
     async def event_stream():
         stream_started_at = time.monotonic()
         heartbeat_interval_s = _stream_heartbeat_interval_s()
         provider_task: asyncio.Task | None = None
+        billing_finalization_attempted = False
+        response: object | None = None
+        meaningful_output_emitted = False
         stream_log = StreamLogContext(
             stream_name="chat",
             request_id=req_id,
@@ -689,23 +903,32 @@ async def chat_stream(
                 "web_source_items": [],
             }
         )
-        yield stream_log.record_event(start_line)
+        try:
+            yield stream_log.record_event(start_line)
+        except BaseException:
+            _release_chat_usage_safely(
+                billing_reservation,
+                reason="client_disconnected_before_provider_execution",
+            )
+            raise
         stream_log.log("start_event_sent")
 
         try:
             stream_log.log("provider_call_started")
-            provider_task = asyncio.create_task(asyncio.to_thread(
-                orchestrator.ask,
-                prompt=effective_prompt,
-                model_type=execution_plan.model_type,
-                context=context,
-                model_name=execution_plan.model_name,
-                token_tracker=None,
-                research_mode=orchestrator_research_mode,
-                routing_mode=execution_plan.routing_mode,
-                routing_constraints=execution_plan.routing_constraints,
-                **kwargs,
-            ))
+            provider_task = asyncio.create_task(
+                asyncio.to_thread(
+                    orchestrator.ask,
+                    prompt=effective_prompt,
+                    model_type=execution_plan.model_type,
+                    context=context,
+                    model_name=execution_plan.model_name,
+                    token_tracker=None,
+                    research_mode=orchestrator_research_mode,
+                    routing_mode=execution_plan.routing_mode,
+                    routing_constraints=execution_plan.routing_constraints,
+                    **kwargs,
+                )
+            )
             if heartbeat_interval_s > 0:
                 while not provider_task.done():
                     done, _ = await asyncio.wait(
@@ -728,14 +951,40 @@ async def chat_stream(
                 response_model=getattr(response, "model", ""),
                 response_is_error=bool(getattr(response, "is_error", False)),
             )
-
             stream_text = response.text or ""
             if not stream_text and response.error:
                 stream_text = get_client_safe_error_display_text(response.error)
 
+            if billing_reservation is not None and response.is_error:
+                billing_finalization_attempted = True
+                _finalize_chat_usage(
+                    reservation=billing_reservation,
+                    response=response,
+                    orchestrator=orchestrator,
+                )
+
             for line in _iter_stream_lines(stream_text):
-                yield stream_log.record_event(_to_ndjson({"type": "line", "index": 0, "text": line}))
+                if not response.is_error and line:
+                    meaningful_output_emitted = True
+                yield stream_log.record_event(
+                    _to_ndjson({"type": "line", "index": 0, "text": line})
+                )
+                if billing_reservation is not None and not billing_finalization_attempted:
+                    billing_finalization_attempted = True
+                    _finalize_chat_usage(
+                        reservation=billing_reservation,
+                        response=response,
+                        orchestrator=orchestrator,
+                    )
                 await asyncio.sleep(STREAM_LINE_DELAY_S)
+
+            if billing_reservation is not None and not billing_finalization_attempted:
+                billing_finalization_attempted = True
+                _finalize_chat_usage(
+                    reservation=billing_reservation,
+                    response=response,
+                    orchestrator=orchestrator,
+                )
 
             resolved_session_id = requested_session_id
             if API_DB_ENABLED and persistence_resolution is not None:
@@ -754,13 +1003,15 @@ async def chat_stream(
                     logger.exception("Chat stream persistence failed in DB mode")
 
             dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
-            yield stream_log.record_event(_to_ndjson(
-                {
-                    "type": "response_done",
-                    "index": 0,
-                    "response": jsonable_encoder(dto),
-                }
-            ))
+            yield stream_log.record_event(
+                _to_ndjson(
+                    {
+                        "type": "response_done",
+                        "index": 0,
+                        "response": jsonable_encoder(dto),
+                    }
+                )
+            )
             stream_log.log("response_done_sent")
             yield stream_log.record_event(
                 _to_ndjson({"type": "done", "mode": "chat", "session_id": resolved_session_id})
@@ -770,6 +1021,27 @@ async def chat_stream(
         except asyncio.CancelledError:
             if provider_task is not None and not provider_task.done():
                 provider_task.cancel()
+            if not billing_finalization_attempted:
+                if (
+                    billing_reservation is not None
+                    and response is not None
+                    and (meaningful_output_emitted or _research_was_performed(response))
+                ):
+                    try:
+                        billing_finalization_attempted = True
+                        _finalize_chat_usage(
+                            reservation=billing_reservation,
+                            response=response,
+                            orchestrator=orchestrator,
+                            settle_model_response=meaningful_output_emitted,
+                        )
+                    except Exception:
+                        logger.exception("Chat stream partial subscription finalization failed")
+                else:
+                    _release_chat_usage_safely(
+                        billing_reservation,
+                        reason="client_disconnected_before_billable_output",
+                    )
             stream_log.log(
                 "client_disconnected",
                 level="warning",
@@ -777,6 +1049,27 @@ async def chat_stream(
             )
             raise
         except Exception as exc:
+            if not billing_finalization_attempted:
+                if (
+                    billing_reservation is not None
+                    and response is not None
+                    and (meaningful_output_emitted or _research_was_performed(response))
+                ):
+                    try:
+                        billing_finalization_attempted = True
+                        _finalize_chat_usage(
+                            reservation=billing_reservation,
+                            response=response,
+                            orchestrator=orchestrator,
+                            settle_model_response=meaningful_output_emitted,
+                        )
+                    except Exception:
+                        logger.exception("Chat stream partial subscription finalization failed")
+                else:
+                    _release_chat_usage_safely(
+                        billing_reservation,
+                        reason="provider_execution_failed",
+                    )
             stream_log.log(
                 "exception",
                 level="exception",

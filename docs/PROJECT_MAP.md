@@ -44,6 +44,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Consumer subscription plans: `config/subscription_plans.yaml`
 - Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
 - Effective account/subscription lifecycle and entitlement decisions: `server/billing/account_service.py`, `server/billing/subscription_service.py`, `server/billing/entitlement_service.py`, `server/billing/errors.py`
+- Ask/Compare authorization, conservative Smart premium-envelope reservation, and actual-success finalization: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
 - Cost tables: `config/pricing.py`
@@ -52,7 +53,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 - SQLAlchemy table reflection and repository access: `db/`
 - B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
-- Billing constraint/lifecycle/entitlement/metering coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_billing_postgres_integration.py`
+- Billing constraint/lifecycle/entitlement/metering/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
@@ -166,7 +167,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Keep transaction orchestration and transition rules in `server/billing/metering_service.py`; keep SQL row locks and counter mutations in `db/billing_repository.py`
   2. Preserve caller-owned commit/rollback boundaries, deterministic counter lock ordering, account-scoped request idempotency, nonnegative counters, and conservative configuration failures
   3. Validate portable transitions in `tests/test_billing_metering.py` and real concurrent overuse prevention with `BILLING_TEST_DATABASE_URL` in `tests/test_billing_postgres_integration.py`
-  4. Route-level provider enforcement remains separate and must reserve before calls, settle successful work, and release failures when Work Packages 5 and 6 integrate the service
+  4. Ask/Compare routes already integrate through `server/billing/enforcement_service.py`; preserve pre-provider reservation, output-aware settlement, and failure release. Work Package 6 must extend the same boundaries to Optimize and files without folding provider execution into billing transactions
 
 - Investigate production logging incidents on AWS EC2:
   1. Follow `docs/runbooks/aws-ec2-logging.md`

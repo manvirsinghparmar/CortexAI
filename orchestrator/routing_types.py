@@ -44,6 +44,7 @@ class RoutingConstraints:
     max_total_latency_ms: int | None = None
     preferred_provider: str | None = None
     allowed_providers: list[str] | None = None
+    allowed_billing_classes: list[str] | None = None
     min_context_limit: int | None = None
     json_only: bool = False
     strict_format: bool = False

@@ -208,7 +208,9 @@ class SmartRouter:
                     if "reasoning" in tags:
                         why_selected.append("matches_reasoning_requirement")
                     else:
-                        why_selected.append("selected_without_reasoning_tag_due_to_ranking_availability")
+                        why_selected.append(
+                            "selected_without_reasoning_tag_due_to_ranking_availability"
+                        )
                 if (features.token_estimate + features.context_token_estimate) >= 2200:
                     if "long_context" in tags:
                         why_selected.append("long_context_preferred")
@@ -221,6 +223,7 @@ class SmartRouter:
                     "provider": candidate.provider,
                     "model": candidate.model_name,
                     "tier": tier.value,
+                    "billing_class": candidate.billing_class.value,
                     "status": "pending",
                     "outcome_reason": "not_attempted",
                     "why_selected": why_selected,
@@ -229,7 +232,9 @@ class SmartRouter:
 
         return plan
 
-    def _build_selected_slots(self, candidate_plan: list[dict[str, Any]]) -> list[dict[str, Any] | None]:
+    def _build_selected_slots(
+        self, candidate_plan: list[dict[str, Any]]
+    ) -> list[dict[str, Any] | None]:
         slots: list[dict[str, Any] | None] = []
         for idx in range(3):
             if idx < len(candidate_plan):
@@ -240,6 +245,7 @@ class SmartRouter:
                         "provider": item["provider"],
                         "model": item["model"],
                         "tier": item["tier"],
+                        "billing_class": item["billing_class"],
                         "why_selected": item.get("why_selected", []),
                         "status": "pending",
                         "why_worked": None,

@@ -16,6 +16,23 @@ class BillingConfigurationError(RuntimeError):
     """Billing persistence or configuration is internally inconsistent."""
 
 
+class EntitlementDeniedError(RuntimeError):
+    """A subscription entitlement decision denied provider execution."""
+
+    def __init__(self, denial: Any) -> None:
+        self.denial = denial
+        super().__init__(str(getattr(denial, "message", "Subscription access denied")))
+
+
+class InvalidModelSelectionError(ValueError):
+    """A requested provider/model pair is not an enabled registry entry."""
+
+    def __init__(self, *, provider: str, model: str) -> None:
+        self.provider = provider
+        self.model = model
+        super().__init__(f"Model '{model}' for provider '{provider}' is not available.")
+
+
 class UsageReservationConflictError(RuntimeError):
     """An idempotency key was reused for a different metering operation."""
 
@@ -121,6 +138,27 @@ def billing_configuration_http_exception() -> HTTPException:
             "message": "Subscription access could not be evaluated safely.",
         },
     )
+
+
+def invalid_model_selection_http_exception(error: InvalidModelSelectionError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "code": "invalid_model_selection",
+            "message": str(error),
+            "provider": error.provider,
+            "model": error.model,
+        },
+    )
+
+
+def enforcement_http_exception(error: Exception) -> HTTPException:
+    """Map subscription enforcement-domain failures to safe HTTP responses."""
+    if isinstance(error, EntitlementDeniedError):
+        return entitlement_http_exception(error.denial)
+    if isinstance(error, InvalidModelSelectionError):
+        return invalid_model_selection_http_exception(error)
+    return billing_configuration_http_exception()
 
 
 def billing_database_required_http_exception() -> HTTPException:

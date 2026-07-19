@@ -25,10 +25,16 @@ from sqlalchemy.orm import sessionmaker
 
 from db import billing_repository as repository
 from server.billing.errors import (
+    EntitlementDeniedError,
     UsageAllowanceExceededError,
     UsageReservationConflictError,
     UsageReservationStateError,
 )
+from server.billing.enforcement_service import (
+    authorize_and_reserve_usage,
+    finalize_reserved_usage,
+)
+from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.metering_service import (
     expire_stale_reservations,
     release_usage,
@@ -44,6 +50,12 @@ def metering_db(monkeypatch):
     engine = create_engine("sqlite+pysqlite:///:memory:")
     metadata = MetaData()
 
+    users = Table(
+        "users",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("email", String, unique=True),
+    )
     billing_accounts = Table(
         "billing_accounts",
         metadata,
@@ -121,6 +133,7 @@ def metering_db(monkeypatch):
     tables = {
         table.name: table
         for table in (
+            users,
             billing_accounts,
             usage_periods,
             usage_counters,
@@ -177,6 +190,26 @@ def _counter(db, tables, effective, meter):
         .mappings()
         .one()
     )
+
+
+def _reservation_counter(db, tables, reservation_id, meter):
+    reservation = repository.get_usage_reservation_by_id(db, reservation_id)
+    return (
+        db.execute(
+            select(tables["usage_counters"]).where(
+                tables["usage_counters"].c.usage_period_id == reservation["usage_period_id"],
+                tables["usage_counters"].c.meter_key == meter,
+            )
+        )
+        .mappings()
+        .one()
+    )
+
+
+def _user(db, tables):
+    user_id = uuid4()
+    db.execute(tables["users"].insert().values(id=user_id, email=f"{user_id}@example.com"))
+    return user_id
 
 
 @pytest.mark.unit
@@ -397,3 +430,206 @@ def test_metering_changes_follow_the_caller_owned_transaction(metering_db):
         )
         is None
     )
+
+
+@pytest.mark.unit
+def test_smart_reservation_uses_highest_allowed_class_then_settles_actual_class(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-smart-standard-result",
+        operation_type="ask",
+        model_targets=(ModelTargetIntent("openai", "gpt-4o-mini", "standard"),),
+        research_enabled=False,
+        smart_routing=True,
+    )
+
+    assert reservation.allowed_billing_classes == frozenset({"standard", "advanced"})
+    assert reservation.requested_quantities == {
+        "model_responses": 1,
+        "advanced_model_responses": 1,
+    }
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(ModelTargetIntent("openai", "gpt-4o-mini", "standard"),),
+        research_performed=False,
+    )
+
+    model_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "model_responses",
+    )
+    advanced_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "advanced_model_responses",
+    )
+    assert (model_counter["used_quantity"], model_counter["reserved_quantity"]) == (1, 0)
+    assert (advanced_counter["used_quantity"], advanced_counter["reserved_quantity"]) == (0, 0)
+
+
+@pytest.mark.unit
+def test_pro_smart_reservation_can_settle_an_advanced_fallback(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DEV_SUBSCRIPTION_PLAN", "pro")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-pro-smart-advanced-result",
+        operation_type="ask",
+        model_targets=(ModelTargetIntent("openai", "gpt-5.1", "advanced"),),
+        research_enabled=False,
+        smart_routing=True,
+    )
+
+    assert reservation.requested_quantities == {
+        "model_responses": 1,
+        "advanced_model_responses": 1,
+        "ultra_model_responses": 1,
+    }
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(ModelTargetIntent("openai", "gpt-5.1", "advanced"),),
+        research_performed=False,
+    )
+
+    counters = {
+        meter: _reservation_counter(db, tables, reservation.reservation_id, meter)
+        for meter in reservation.requested_quantities
+    }
+    assert (
+        counters["model_responses"]["used_quantity"],
+        counters["model_responses"]["reserved_quantity"],
+    ) == (1, 0)
+    assert (
+        counters["advanced_model_responses"]["used_quantity"],
+        counters["advanced_model_responses"]["reserved_quantity"],
+    ) == (1, 0)
+    assert (
+        counters["ultra_model_responses"]["used_quantity"],
+        counters["ultra_model_responses"]["reserved_quantity"],
+    ) == (0, 0)
+
+
+@pytest.mark.unit
+def test_free_plan_denies_three_target_compare_before_reservation(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    targets = tuple(
+        ModelTargetIntent("openai", f"standard-{index}", "standard") for index in range(3)
+    )
+
+    with pytest.raises(EntitlementDeniedError) as exc_info:
+        authorize_and_reserve_usage(
+            db,
+            user_id=_user(db, tables),
+            request_id="req-three-target-free",
+            operation_type="compare",
+            model_targets=targets,
+            research_enabled=False,
+        )
+
+    assert exc_info.value.denial.feature == "compare_model_count"
+    assert exc_info.value.denial.recommended_plan == "pro"
+    assert db.execute(select(tables["usage_reservations"])).all() == []
+
+
+@pytest.mark.unit
+def test_compare_partial_settlement_charges_only_successful_target(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-partial-enforcement",
+        operation_type="compare",
+        model_targets=(
+            ModelTargetIntent("openai", "standard-model", "standard"),
+            ModelTargetIntent("gemini", "advanced-model", "advanced"),
+        ),
+        research_enabled=False,
+    )
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(ModelTargetIntent("gemini", "advanced-model", "advanced"),),
+        research_performed=False,
+    )
+
+    model_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "model_responses",
+    )
+    advanced_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "advanced_model_responses",
+    )
+    assert (model_counter["used_quantity"], model_counter["reserved_quantity"]) == (1, 0)
+    assert (advanced_counter["used_quantity"], advanced_counter["reserved_quantity"]) == (1, 0)
+
+
+@pytest.mark.unit
+def test_provider_failure_releases_model_units_but_completed_research_settles(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-research-provider-error",
+        operation_type="ask",
+        model_targets=(ModelTargetIntent("openai", "standard-model", "standard"),),
+        research_enabled=True,
+    )
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(),
+        research_performed=True,
+    )
+
+    model_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "model_responses",
+    )
+    research_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "research_turns",
+    )
+    assert (model_counter["used_quantity"], model_counter["reserved_quantity"]) == (0, 0)
+    assert (research_counter["used_quantity"], research_counter["reserved_quantity"]) == (1, 0)

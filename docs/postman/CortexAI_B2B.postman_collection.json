@@ -428,7 +428,8 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
             },
-            "url": "{{base_url}}/v1/chat"
+            "url": "{{base_url}}/v1/chat",
+            "description": "DB-mode Ask resolves the effective plan and server-owned model billing class, then reserves model/research units before provider execution. Entitlement denial is 403, exhausted monthly allowance is 429, and unsafe billing configuration is 500."
           },
           "event": [
             {
@@ -436,10 +437,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var body = pm.response.json();",
                   "pm.test('chat response has request_id/provider/model', function () {",
                   "  pm.expect(body.request_id).to.be.a('string');",
@@ -473,7 +477,8 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
             },
-            "url": "{{base_url}}/v1/chat/stream"
+            "url": "{{base_url}}/v1/chat/stream",
+            "description": "Reserves Ask subscription usage before returning the NDJSON stream. Provider failure releases response units; successful model/research usage is finalized before terminal response events."
           },
           "event": [
             {
@@ -481,10 +486,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var text = pm.response.text();",
                   "pm.test('stream includes start and done markers', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"start\\\"');",
@@ -518,7 +526,8 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
-            "url": "{{base_url}}/v1/compare"
+            "url": "{{base_url}}/v1/compare",
+            "description": "Accepts 2-3 explicit targets. Free/Plus allow 2 and Pro allows 3. All target classes and research are reserved before providers start; settlement charges only successful targets and performed research."
           },
           "event": [
             {
@@ -526,10 +535,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var body = pm.response.json();",
                   "pm.test('compare has request_group_id + responses', function () {",
                   "  pm.expect(body.request_group_id).to.be.a('string');",
@@ -564,7 +576,8 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
-            "url": "{{base_url}}/v1/compare/stream"
+            "url": "{{base_url}}/v1/compare/stream",
+            "description": "Reserves all Compare targets before returning NDJSON. Aggregate settlement finalizes successful targets before done and also handles completed partial targets on disconnect/error."
           },
           "event": [
             {
@@ -572,10 +585,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var text = pm.response.text();",
                   "pm.test('stream includes done marker', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",

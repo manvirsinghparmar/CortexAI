@@ -8,7 +8,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Generator, Iterable
+from typing import Generator, Iterable, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -45,6 +45,13 @@ from server.dependencies import AuthResult
 from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
+from server.billing.enforcement_service import (
+    ReservedRequestUsage,
+    authorize_and_reserve_usage,
+    finalize_reserved_usage,
+    release_reserved_usage,
+)
+from server.billing.entitlement_service import ModelTargetIntent
 from utils.logger import get_logger
 
 API_DB_ENABLED = bool(os.getenv("DATABASE_URL"))
@@ -207,7 +214,7 @@ def resolve_api_key_for_request(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
-        )
+        ) from exc
 
 
 def _resolve_cognito_for_request_in_session(
@@ -608,6 +615,60 @@ def resolve_and_enforce_usage_caps(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
+        ) from exc
+
+
+def reserve_subscription_usage(
+    *,
+    user_id: UUID,
+    request_id: str,
+    operation_type: str,
+    model_targets: Iterable[ModelTargetIntent],
+    research_enabled: bool,
+    smart_routing: bool = False,
+) -> ReservedRequestUsage:
+    """Authorize and atomically reserve subscription usage before provider work."""
+    with db_uow() as db_session:
+        return authorize_and_reserve_usage(
+            db_session,
+            user_id=user_id,
+            request_id=request_id,
+            operation_type=operation_type,
+            model_targets=tuple(model_targets),
+            research_enabled=research_enabled,
+            smart_routing=smart_routing,
+        )
+
+
+def finalize_subscription_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    successful_targets: Iterable[ModelTargetIntent],
+    research_performed: bool,
+    release_reason: str = "provider_failed_before_billable_output",
+) -> None:
+    """Settle successful subscription units and release unused units."""
+    with db_uow() as db_session:
+        finalize_reserved_usage(
+            db_session,
+            reservation=reservation,
+            successful_targets=tuple(successful_targets),
+            research_performed=research_performed,
+            release_reason=release_reason,
+        )
+
+
+def release_subscription_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    reason: str,
+) -> None:
+    """Release all units for a request that never reached finalization."""
+    with db_uow() as db_session:
+        release_reserved_usage(
+            db_session,
+            reservation=reservation,
+            reason=reason,
         )
 
 
@@ -641,7 +702,7 @@ def get_failed_attempts_by_request_group(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed-attempts lookup failed: {exc}",
-        )
+        ) from exc
 
 
 def resolve_runtime_byok_provider_keys(
@@ -767,7 +828,9 @@ def extract_routing_payload(response: UnifiedResponse) -> tuple[dict, list[dict]
     if not isinstance(routing_metadata, dict):
         return {}, [], {}
 
-    attempt_rows = routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    attempt_rows = (
+        routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    )
     if not isinstance(attempt_rows, list):
         attempt_rows = []
 
@@ -809,9 +872,14 @@ def persist_routing_telemetry(
     )
 
     metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    prompt_category = metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    prompt_category = (
+        metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    )
     normalized_research_mode = (
-        metadata.get("research_mode") or routing_metadata.get("research_mode") or research_mode or "off"
+        metadata.get("research_mode")
+        or routing_metadata.get("research_mode")
+        or research_mode
+        or "off"
     )
 
     with db_session.begin_nested():
@@ -859,31 +927,31 @@ def _persist_request_attachments(
     db_session: Session,
     *,
     llm_request_id: UUID,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None,
+    attachments: Sequence[object] | None,
 ) -> None:
     """Persist request attachment links for one llm_request row."""
     if not attachments:
         return
 
     for idx, item in enumerate(attachments):
+        file_id: object
         if isinstance(item, RequestAttachmentPersistenceItem):
             file_id = item.file_id
             usage_role = item.usage_role
             transform_mode = item.transform_mode
             order_index = int(item.order_index)
             resolved_artifact_meta = (
-                dict(item.resolved_artifact_meta) if isinstance(item.resolved_artifact_meta, dict) else {}
+                dict(item.resolved_artifact_meta)
+                if isinstance(item.resolved_artifact_meta, dict)
+                else {}
             )
         elif isinstance(item, dict):
             file_id = item.get("file_id")
             usage_role = str(item.get("usage_role") or "primary")
             transform_mode = str(item.get("transform_mode") or "auto")
             order_index = int(item.get("order_index", idx))
-            resolved_artifact_meta = (
-                dict(item.get("resolved_artifact_meta"))
-                if isinstance(item.get("resolved_artifact_meta"), dict)
-                else {}
-            )
+            meta_raw = item.get("resolved_artifact_meta")
+            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
         else:
             file_id = getattr(item, "file_id", None)
             usage_role = str(getattr(item, "usage_role", "primary") or "primary")
@@ -917,7 +985,7 @@ def persist_chat_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
+    attachments: Sequence[object] | None = None,
 ) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
@@ -1007,7 +1075,7 @@ def persist_compare_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
+    attachments: Sequence[object] | None = None,
 ) -> str:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:

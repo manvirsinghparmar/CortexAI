@@ -21,9 +21,7 @@ def _validate_provider(provider: str, *, field_name: str) -> str:
     allowed = _supported_provider_set()
     if value not in allowed:
         allowed_text = ", ".join(sorted(allowed))
-        raise ValueError(
-            f"Unsupported {field_name} '{value}'. Supported providers: {allowed_text}"
-        )
+        raise ValueError(f"Unsupported {field_name} '{value}'. Supported providers: {allowed_text}")
     return value
 
 
@@ -92,7 +90,7 @@ class CompareTargetRequest(BaseModel):
 
 class CompareRequest(BaseModel):
     prompt: str = Field("", min_length=0)
-    targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=4)
+    targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=3)
     routing: Optional[ChatRoutingRequest] = None
     context: Optional[UserContextRequest] = None
     attachments: Optional[List[AttachmentRequestItem]] = None

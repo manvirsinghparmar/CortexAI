@@ -4,18 +4,22 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     Float,
     Integer,
+    Index,
     MetaData,
     PrimaryKeyConstraint,
     String,
@@ -71,7 +75,9 @@ class FakeOrchestrator:
             "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
         }
 
-    def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         self.ask_calls += 1
         return UnifiedResponse(
             request_id="req_guardrail_ask_1",
@@ -96,7 +102,9 @@ class FakeOrchestrator:
                             "attempt_number": 1,
                             "tier": "T1",
                             "provider": model_type or "openai",
-                            "model": kwargs.get("model_name") or kwargs.get("model") or "gpt-4o-mini",
+                            "model": kwargs.get("model_name")
+                            or kwargs.get("model")
+                            or "gpt-4o-mini",
                             "validation": "ok",
                             "latency_ms": 10,
                         }
@@ -168,9 +176,26 @@ def fastapi_client(monkeypatch):
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
+    subscription_reservation = SimpleNamespace(
+        allowed_billing_classes=frozenset({"standard", "advanced"}),
+    )
+    monkeypatch.setattr(
+        chat_route,
+        "_reserve_chat_usage",
+        lambda **_kwargs: subscription_reservation,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_compare_usage",
+        lambda **_kwargs: subscription_reservation,
+    )
+    monkeypatch.setattr(chat_route, "_finalize_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(compare_route, "_finalize_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(chat_route, "_release_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(compare_route, "_release_subscription_usage", lambda **_kwargs: None)
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
-    session_user_id = "11111111-1111-1111-1111-111111111111"
+    session_user_id = UUID("11111111-1111-1111-1111-111111111111")
     monkeypatch.setattr(
         deps,
         "parse_session",
@@ -414,12 +439,156 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         PrimaryKeyConstraint("routing_decision_id", "attempt_number"),
     )
 
+    Table(
+        "billing_accounts",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("owner_type", String(32), nullable=False),
+        Column("owner_id", Uuid, nullable=False),
+        Column("stripe_customer_id", String(255), unique=True),
+        Column("currency", String(3), nullable=False, default="USD"),
+        Column("country", String(2)),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("owner_type IN ('user', 'organization')"),
+        Index("uq_billing_accounts_owner", "owner_type", "owner_id", unique=True),
+    )
+
+    Table(
+        "subscriptions",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("provider", String(32), nullable=False, default="stripe"),
+        Column("provider_subscription_id", String(255)),
+        Column("provider_price_id", String(255)),
+        Column("plan_code", String(64), nullable=False),
+        Column("status", String(64), nullable=False),
+        Column("current_period_start", DateTime),
+        Column("current_period_end", DateTime),
+        Column("cancel_at_period_end", Boolean, nullable=False, default=False),
+        Column("canceled_at", DateTime),
+        Column("trial_end", DateTime),
+        Column("grace_until", DateTime),
+        Column("latest_invoice_id", String(255)),
+        Column("last_provider_event_at", DateTime),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_subscriptions_provider_id",
+            "provider",
+            "provider_subscription_id",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_periods",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("subscription_id", Uuid),
+        Column("plan_code", String(64), nullable=False),
+        Column("starts_at", DateTime, nullable=False),
+        Column("ends_at", DateTime, nullable=False),
+        Column("status", String(32), nullable=False, default="active"),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("ends_at > starts_at"),
+        Index(
+            "uq_usage_period_account_start",
+            "billing_account_id",
+            "starts_at",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_counters",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("meter_key", String(64), nullable=False),
+        Column("used_quantity", BigInteger, nullable=False, default=0),
+        Column("reserved_quantity", BigInteger, nullable=False, default=0),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("used_quantity >= 0 AND reserved_quantity >= 0"),
+        Index(
+            "uq_usage_counter_period_meter",
+            "usage_period_id",
+            "meter_key",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_reservations",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("state", String(32), nullable=False),
+        Column("requested_quantities", JSON, nullable=False),
+        Column("settled_quantities", JSON),
+        Column("release_reason", String(255)),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("settled_at", DateTime),
+        Column("released_at", DateTime),
+        CheckConstraint("state IN ('reserved', 'settled', 'released', 'expired')"),
+        Index(
+            "uq_usage_reservations_request",
+            "billing_account_id",
+            "request_id",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "billing_webhook_events",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("provider", String(32), nullable=False, default="stripe"),
+        Column("provider_event_id", String(255), nullable=False),
+        Column("event_type", String(255), nullable=False),
+        Column("payload_hash", String(64), nullable=False),
+        Column("processing_status", String(32), nullable=False),
+        Column("received_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("processed_at", DateTime),
+        Column("error_message", String),
+        CheckConstraint("processing_status IN ('received', 'processed', 'ignored', 'failed')"),
+        Index(
+            "uq_billing_webhook_provider_event",
+            "provider",
+            "provider_event_id",
+            unique=True,
+        ),
+    )
+
     metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(metadata.tables["users"]).values(
+                id=UUID("11111111-1111-1111-1111-111111111111"),
+                email="session-user@example.com",
+                display_name="Session User",
+                is_active=True,
+                auth_provider="session",
+                auth_subject="test-session-user",
+                auth_issuer="cortexai",
+            )
+        )
+    import db.tables as db_tables
+
+    db_tables._tables_cache.update({table.name: table for table in metadata.tables.values()})
     engine.dispose()
 
 
 class DBModeCompareOrchestrator:
-    def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         metadata = {}
         if str(kwargs.get("research_mode") or "").strip().lower() == "on":
             metadata = {
@@ -560,7 +729,7 @@ def db_mode_fastapi_client(monkeypatch):
     app = create_app()
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
-    session_user_id = "11111111-1111-1111-1111-111111111111"
+    session_user_id = UUID("11111111-1111-1111-1111-111111111111")
     monkeypatch.setattr(
         deps,
         "parse_session",
@@ -777,20 +946,26 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
     monkeypatch.setattr(
         persistence_service,
         "create_llm_response",
-        lambda _db, _llm_request_id, _response: calls["create_llm_response"].append(_llm_request_id),
+        lambda _db, _llm_request_id, _response: calls["create_llm_response"].append(
+            _llm_request_id
+        ),
     )
     monkeypatch.setattr(
         persistence_service,
         "persist_routing_telemetry",
         lambda *_args, **_kwargs: calls["routing"].append(True),
     )
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         persistence_service,
         "upsert_usage_daily",
         lambda _db, **kwargs: calls["usage"].append(kwargs),
     )
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/chat",
@@ -817,7 +992,9 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
 ):
     client, fake_orch = fastapi_client
 
-    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _blank_success(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id="req_blank_success",
             text="",
@@ -867,10 +1044,16 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
         "create_llm_response",
         lambda _db, _llm_request_id, _response: persisted_responses.append(_response),
     )
-    monkeypatch.setattr(persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(persistence_service, "upsert_usage_daily", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/chat",
@@ -930,15 +1113,21 @@ def test_compare_persists_grouped_rows_and_usage_in_db_mode(fastapi_client, monk
 
     monkeypatch.setattr(persistence_service, "create_llm_request", _capture_llm_req)
     monkeypatch.setattr(persistence_service, "create_llm_response", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(persistence_service, "save_compare_summary", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         persistence_service,
         "upsert_usage_daily",
         lambda _db, **kwargs: usage_calls.append(kwargs),
     )
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/compare",
@@ -1163,7 +1352,9 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
 def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
-    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _blank_success(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id="req_stream_blank_success",
             text="",
@@ -1213,7 +1404,9 @@ def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client,
 def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
-    def _ask_with_one_blank(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _ask_with_one_blank(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         provider = model_type or "openai"
         model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
         if provider == "openai":
@@ -1347,9 +1540,7 @@ def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fas
         params={"session_id": session_id, "limit": 200},
     )
     assert renamed_history.status_code == 200
-    assert {item["session_title"] for item in renamed_history.json()} == {
-        "Shared rollout plan"
-    }
+    assert {item["session_title"] for item in renamed_history.json()} == {"Shared rollout plan"}
 
 
 @pytest.mark.integration
@@ -1383,7 +1574,9 @@ def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fas
         },
     )
     assert compare_response.status_code == 200
-    compare_events = [json.loads(line) for line in compare_response.text.splitlines() if line.strip()]
+    compare_events = [
+        json.loads(line) for line in compare_response.text.splitlines() if line.strip()
+    ]
     compare_done = next(event for event in compare_events if event.get("type") == "done")
     assert compare_done["compare"]["session_id"] == session_id
 

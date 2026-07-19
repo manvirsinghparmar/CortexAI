@@ -75,7 +75,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,12 +86,16 @@ from orchestrator.model_registry import ModelRegistry
 from server.app import create_app
 from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
 from server.schemas.responses import CompareResponseDTO
+from server.billing.enforcement_service import ReservedRequestUsage
+from server.billing.entitlement_service import EntitlementDenial
+from server.billing.errors import EntitlementDeniedError
+from server.persistence import ApiKeyPersistenceResolution
 from api.base_client import BaseAIClient
-
 
 # -------------------------------------------------------------------
 # Fake MultiUnifiedResponse (match what CompareResponseDTO expects)
 # -------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class FakeMultiUnifiedResponse:
@@ -116,6 +120,7 @@ class FakeMultiUnifiedResponse:
 # Fake orchestrator (keeps tests offline & deterministic)
 # -------------------------------------------------------------------
 
+
 class FakeOrchestrator:
     def __init__(self):
         self.last_ask_prompt = None
@@ -137,7 +142,9 @@ class FakeOrchestrator:
             "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
         }
 
-    def ask(self, prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs
+    ) -> UnifiedResponse:
         self.last_ask_prompt = prompt
         self.last_ask_model_type = model_type
         self.last_ask_context = context
@@ -162,11 +169,13 @@ class FakeOrchestrator:
         context: Any = None,
         research_mode: str = "auto",
     ) -> dict[str, Any]:
-        self.prepare_messages_calls.append({
-            "prompt": prompt,
-            "context": context,
-            "research_mode": research_mode,
-        })
+        self.prepare_messages_calls.append(
+            {
+                "prompt": prompt,
+                "context": context,
+                "research_mode": research_mode,
+            }
+        )
         return {
             "prompt": prompt,
             "messages": [{"role": "user", "content": prompt}],
@@ -175,11 +184,7 @@ class FakeOrchestrator:
         }
 
     def compare(
-        self,
-        prompt: str,
-        models_list: List[Dict[str, Any]],
-        context: Any = None,
-        **kwargs
+        self, prompt: str, models_list: List[Dict[str, Any]], context: Any = None, **kwargs
     ) -> FakeMultiUnifiedResponse:
         self.last_compare_prompt = prompt
         self.last_compare_context = context
@@ -230,6 +235,7 @@ class FakeOrchestrator:
 # -------------------------------------------------------------------
 # Dummy client to access BaseAIClient helpers
 # -------------------------------------------------------------------
+
 
 class DummyClient(BaseAIClient):
     def __init__(self):
@@ -286,6 +292,7 @@ def _bootstrap_dev_auth_sqlite_schema() -> None:
 # Pytest fixtures
 # -------------------------------------------------------------------
 
+
 @pytest.fixture()
 def app(monkeypatch):
     """
@@ -310,11 +317,13 @@ def app(monkeypatch):
     from server.routes import chat as chat_route
     from server.routes import compare as compare_route
     from server.routes import history as history_route
+
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
 
     from server import dependencies as deps
+
     session_user_id = UUID("11111111-1111-1111-1111-111111111111")
     monkeypatch.setattr(
         deps,
@@ -341,7 +350,7 @@ def client(app):
 def _parse_runtime_config_payload(js_text: str) -> dict[str, Any]:
     prefix = "window.CORTEX_RUNTIME_CONFIG = "
     assert js_text.startswith(prefix)
-    payload_text = js_text[len(prefix):].strip()
+    payload_text = js_text[len(prefix) :].strip()
     if payload_text.endswith(";"):
         payload_text = payload_text[:-1]
     return json.loads(payload_text)
@@ -350,6 +359,7 @@ def _parse_runtime_config_payload(js_text: str) -> dict[str, Any]:
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_health_ok(client):
     r = client.get("/health")
@@ -441,7 +451,10 @@ def test_dev_login_rejected_in_production_runtime(client, monkeypatch):
 def test_auth_success_redirect_marks_fresh_login():
     from server.routes import auth as auth_route
 
-    assert auth_route._with_query_param("/index.html", "fresh_login", "1") == "/index.html?fresh_login=1"
+    assert (
+        auth_route._with_query_param("/index.html", "fresh_login", "1")
+        == "/index.html?fresh_login=1"
+    )
     assert (
         auth_route._with_query_param("/index.html?foo=bar&fresh_login=0", "fresh_login", "1")
         == "/index.html?foo=bar&fresh_login=1"
@@ -512,7 +525,11 @@ def test_chat_with_attachments_requires_db_mode(client):
         "provider": "openai",
         "model": "gpt-4o-mini",
         "attachments": [
-            {"file_id": "11111111-1111-1111-1111-111111111111", "usage_role": "primary", "transform_mode": "auto"}
+            {
+                "file_id": "11111111-1111-1111-1111-111111111111",
+                "usage_role": "primary",
+                "transform_mode": "auto",
+            }
         ],
     }
     r = client.post(
@@ -533,7 +550,11 @@ def test_compare_with_attachments_requires_db_mode(client):
             {"provider": "gemini", "model": "gemini-2.5-flash"},
         ],
         "attachments": [
-            {"file_id": "22222222-2222-2222-2222-222222222222", "usage_role": "primary", "transform_mode": "auto"}
+            {
+                "file_id": "22222222-2222-2222-2222-222222222222",
+                "usage_role": "primary",
+                "transform_mode": "auto",
+            }
         ],
     }
     r = client.post(
@@ -990,7 +1011,10 @@ def test_provider_503_high_demand_error_is_classified_as_transient_capacity():
 
     assert err.code == "provider_error"
     assert err.retryable is True
-    assert err.message == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert (
+        err.message
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert err.details["kind"] == "transient_capacity"
     assert err.details["status_code"] == 503
 
@@ -1219,7 +1243,10 @@ def test_chat_sanitizes_raw_transient_provider_error(client, app):
     assert r.status_code == 200
 
     body = r.json()
-    assert body["error"]["message"] == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert (
+        body["error"]["message"]
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert body["error"]["details"]["kind"] == "transient_capacity"
     assert "UNAVAILABLE" not in body["error"]["message"]
 
@@ -1305,14 +1332,21 @@ def test_chat_stream_sanitizes_raw_transient_provider_error(client, app):
     )
     assert r.status_code == 200
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
-    rendered_text = "\n".join(str(event.get("text", "")) for event in events if event.get("type") == "line")
-    assert rendered_text == "This model is temporarily busy. Try again shortly or switch to another model."
+    rendered_text = "\n".join(
+        str(event.get("text", "")) for event in events if event.get("type") == "line"
+    )
+    assert (
+        rendered_text
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert "UNAVAILABLE" not in rendered_text
     assert "high demand" not in rendered_text
 
 
 def test_compare_normalizes_empty_success_payload_to_provider_error(client, app):
-    def _compare_with_blank_success(prompt: str, models_list: List[Dict[str, Any]], context: Any = None, **kwargs):
+    def _compare_with_blank_success(
+        prompt: str, models_list: List[Dict[str, Any]], context: Any = None, **kwargs
+    ):
         empty = UnifiedResponse(
             request_id="req_cmp_empty",
             text="",
@@ -1446,7 +1480,10 @@ def test_compare_sanitizes_raw_transient_provider_error(client, app):
     assert r.status_code == 200
     body = r.json()
     first = body["responses"][0]
-    assert first["error"]["message"] == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert (
+        first["error"]["message"]
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert first["error"]["details"]["kind"] == "transient_capacity"
     assert "UNAVAILABLE" not in first["error"]["message"]
     assert body["success_count"] == 1
@@ -1487,7 +1524,9 @@ def test_compare_stream_returns_ndjson_events(client, caplog):
 
 
 def test_compare_stream_normalizes_empty_success_payload_to_provider_error(client, app):
-    def _ask_with_one_blank(prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs):
+    def _ask_with_one_blank(
+        prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs
+    ):
         provider = model_type or "openai"
         model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
         if provider == "openai":
@@ -1538,7 +1577,11 @@ def test_compare_stream_normalizes_empty_success_payload_to_provider_error(clien
     response_done_events = [event for event in events if event.get("type") == "response_done"]
     assert len(response_done_events) >= 2
     openai_done = next(
-        (event for event in response_done_events if event.get("response", {}).get("provider") == "openai"),
+        (
+            event
+            for event in response_done_events
+            if event.get("response", {}).get("provider") == "openai"
+        ),
         None,
     )
     assert openai_done is not None
@@ -1552,7 +1595,9 @@ def test_compare_stream_normalizes_empty_success_payload_to_provider_error(clien
 def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(client, app):
     observed_kwargs: dict[str, Any] = {}
 
-    def _ask_with_one_blank(prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs):
+    def _ask_with_one_blank(
+        prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs
+    ):
         observed_kwargs.clear()
         observed_kwargs.update(kwargs)
         provider = model_type or "openai"
@@ -1953,7 +1998,9 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
     assert first_response.status_code == 200
     first_events = [json.loads(line) for line in first_response.text.splitlines() if line.strip()]
     first_start = next((event for event in first_events if event.get("type") == "start"), None)
-    first_done = next((event for event in first_events if event.get("type") == "response_done"), None)
+    first_done = next(
+        (event for event in first_events if event.get("type") == "response_done"), None
+    )
     assert first_start is not None
     assert first_done is not None
     assert first_start.get("research_mode") is True
@@ -1982,7 +2029,9 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
     assert second_response.status_code == 200
     second_events = [json.loads(line) for line in second_response.text.splitlines() if line.strip()]
     second_start = next((event for event in second_events if event.get("type") == "start"), None)
-    second_done = next((event for event in second_events if event.get("type") == "response_done"), None)
+    second_done = next(
+        (event for event in second_events if event.get("type") == "response_done"), None
+    )
     assert second_start is not None
     assert second_done is not None
     assert second_start.get("research_mode") is False
@@ -1992,3 +2041,385 @@ def test_compare_stream_web_toggle_off_after_on_only_returns_sources_for_web_tur
     assert app.state.fake_orchestrator.last_ask_kwargs.get("research_mode") == "off"
 
 
+def _enable_subscription_route_test_mode(monkeypatch):
+    from server.routes import chat as chat_route
+    from server.routes import compare as compare_route
+
+    resolution = ApiKeyPersistenceResolution(
+        user_id=UUID("11111111-1111-1111-1111-111111111111"),
+        api_key_id=None,
+        decision_path="test",
+    )
+    for route in (chat_route, compare_route):
+        monkeypatch.setattr(route, "API_DB_ENABLED", True)
+        monkeypatch.setattr(
+            route,
+            "_resolve_and_enforce_caps",
+            lambda **_kwargs: resolution,
+        )
+        monkeypatch.setattr(
+            route,
+            "_resolve_runtime_byok_provider_keys",
+            lambda **_kwargs: {},
+        )
+    monkeypatch.setattr(
+        chat_route,
+        "_persist_chat_interaction",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_persist_compare_interaction",
+        lambda **_kwargs: None,
+    )
+    return chat_route, compare_route
+
+
+def _test_reservation(operation_type: str, *, allowed=frozenset({"standard", "advanced"})):
+    return ReservedRequestUsage(
+        reservation_id=uuid4(),
+        request_id=f"test-{operation_type}",
+        operation_type=operation_type,
+        requested_quantities={"model_responses": 1 if operation_type == "ask" else 2},
+        allowed_billing_classes=allowed,
+        current_plan="free",
+        reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_chat_entitlement_denial_prevents_provider_execution(client, app, monkeypatch):
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+
+    def deny_usage(**_kwargs):
+        raise EntitlementDeniedError(
+            EntitlementDenial(
+                code="monthly_allowance_exhausted",
+                message="The monthly model response allowance has been exhausted.",
+                meter="model_responses",
+                current_plan="free",
+                recommended_plan="plus",
+                used=30,
+                limit=30,
+                remaining=0,
+            )
+        )
+
+    monkeypatch.setattr(chat_route, "_reserve_subscription_usage", deny_usage)
+    response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "hello",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "monthly_allowance_exhausted"
+    assert app.state.fake_orchestrator.last_ask_prompt is None
+
+
+def test_free_plan_three_target_compare_denial_prevents_provider_execution(
+    client,
+    app,
+    monkeypatch,
+):
+    _, compare_route = _enable_subscription_route_test_mode(monkeypatch)
+
+    def deny_usage(**_kwargs):
+        raise EntitlementDeniedError(
+            EntitlementDenial(
+                code="feature_not_in_plan",
+                message="The Free plan supports up to 2 Compare models.",
+                feature="compare_model_count",
+                current_plan="free",
+                recommended_plan="pro",
+            )
+        )
+
+    monkeypatch.setattr(compare_route, "_reserve_subscription_usage", deny_usage)
+    response = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "compare",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+                {"provider": "deepseek", "model": "deepseek-chat"},
+            ],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["feature"] == "compare_model_count"
+    assert app.state.fake_orchestrator.last_compare_prompt is None
+
+
+def test_compare_partial_success_settles_only_successful_target(client, app, monkeypatch):
+    _, compare_route = _enable_subscription_route_test_mode(monkeypatch)
+    reservation = _test_reservation("compare")
+    settled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
+
+    def partial_compare(prompt, models_list, context=None, **kwargs):
+        del context
+        success = UnifiedResponse(
+            request_id="partial-success",
+            text="ok",
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=1,
+            token_usage=TokenUsage(1, 1, 2),
+            estimated_cost=0.0,
+            finish_reason="stop",
+            metadata={"research_used": True},
+        )
+        failure = UnifiedResponse(
+            request_id="partial-failure",
+            text="",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            latency_ms=1,
+            token_usage=TokenUsage(0, 0, 0),
+            estimated_cost=0.0,
+            finish_reason="error",
+            error=NormalizedError(
+                code="provider_error",
+                message="provider failed",
+                provider="gemini",
+                retryable=True,
+            ),
+            metadata={"research_used": True},
+        )
+        return FakeMultiUnifiedResponse(
+            request_id="partial",
+            request_group_id="partial-group",
+            prompt=prompt,
+            responses=[success, failure],
+            success_count=1,
+            failure_count=1,
+            error_count=1,
+            total_tokens=2,
+            total_cost=0.0,
+        )
+
+    app.state.fake_orchestrator.compare = partial_compare
+    response = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "compare",
+            "routing": {"research_mode": True},
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert len(settled) == 1
+    assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
+        ("openai", "gpt-4o-mini")
+    ]
+    assert settled[0]["research_performed"] is True
+
+
+def test_compare_stream_partial_success_uses_aggregate_settlement(client, app, monkeypatch):
+    _, compare_route = _enable_subscription_route_test_mode(monkeypatch)
+    reservation = _test_reservation("compare")
+    settled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
+
+    def partial_ask(prompt, model_type=None, context=None, **kwargs):
+        del prompt, context
+        model = kwargs.get("model_name") or "unknown"
+        if model_type == "gemini":
+            return UnifiedResponse(
+                request_id="stream-failure",
+                text="",
+                provider="gemini",
+                model=model,
+                latency_ms=1,
+                token_usage=TokenUsage(0, 0, 0),
+                estimated_cost=0.0,
+                finish_reason="error",
+                error=NormalizedError(
+                    code="provider_error",
+                    message="provider failed",
+                    provider="gemini",
+                    retryable=True,
+                ),
+            )
+        return UnifiedResponse(
+            request_id="stream-success",
+            text="ok",
+            provider=model_type or "openai",
+            model=model,
+            latency_ms=1,
+            token_usage=TokenUsage(1, 1, 2),
+            estimated_cost=0.0,
+            finish_reason="stop",
+        )
+
+    app.state.fake_orchestrator.ask = partial_ask
+    response = client.post(
+        "/v1/compare/stream",
+        json={
+            "prompt": "compare",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert len(settled) == 1
+    assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
+        ("openai", "gpt-4o-mini")
+    ]
+
+
+def test_compare_stream_partial_settlement_uses_only_emitted_successes():
+    from server.routes import compare as compare_route
+
+    emitted = UnifiedResponse(
+        request_id="emitted",
+        text="visible",
+        provider="openai",
+        model="gpt-4o-mini",
+        latency_ms=1,
+        token_usage=TokenUsage(1, 1, 2),
+        estimated_cost=0.0,
+        finish_reason="stop",
+    )
+    completed_but_unemitted = UnifiedResponse(
+        request_id="unemitted",
+        text="not visible",
+        provider="gemini",
+        model="gemini-2.5-flash",
+        latency_ms=1,
+        token_usage=TokenUsage(1, 1, 2),
+        estimated_cost=0.0,
+        finish_reason="stop",
+    )
+
+    assert compare_route._billable_stream_responses(
+        [emitted, completed_but_unemitted],
+        {0},
+    ) == [emitted]
+
+
+def test_chat_stream_finalizes_success_after_output_before_terminal_event(client, monkeypatch):
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    reservation = _test_reservation("ask")
+    settled: list[dict[str, Any]] = []
+    event_order: list[str] = []
+    original_to_ndjson = chat_route._to_ndjson
+    monkeypatch.setattr(
+        chat_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+
+    def record_settlement(**kwargs):
+        event_order.append("finalize")
+        settled.append(kwargs)
+
+    def record_event(event):
+        event_order.append(event["type"])
+        return original_to_ndjson(event)
+
+    monkeypatch.setattr(
+        chat_route,
+        "_finalize_subscription_usage",
+        record_settlement,
+    )
+    monkeypatch.setattr(
+        chat_route,
+        "_to_ndjson",
+        record_event,
+    )
+
+    response = client.post(
+        "/v1/chat/stream",
+        json={
+            "prompt": "hello",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    assert response.status_code == 200
+    assert events[-1]["type"] == "done"
+    assert len(settled) == 1
+    assert event_order.index("line") < event_order.index("finalize")
+    assert event_order.index("finalize") < event_order.index("done")
+    assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
+        ("openai", "gpt-4o-mini")
+    ]
+
+
+def test_smart_chat_passes_plan_billing_classes_as_routing_constraint(
+    client,
+    app,
+    monkeypatch,
+):
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    reservation = _test_reservation("ask", allowed=frozenset({"standard"}))
+    observed_constraints: list[dict[str, Any] | None] = []
+    monkeypatch.setattr(
+        chat_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        chat_route,
+        "_finalize_subscription_usage",
+        lambda **_kwargs: None,
+    )
+    app.state.fake_orchestrator.model_billing_class = lambda _provider, _model: "standard"
+
+    def preview_smart_target(**kwargs):
+        observed_constraints.append(kwargs.get("routing_constraints"))
+        return "openai", "gpt-4o-mini"
+
+    app.state.fake_orchestrator.preview_smart_target = preview_smart_target
+    response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "route this",
+            "routing": {"smart_mode": True, "research_mode": False},
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert observed_constraints[-1]["allowed_billing_classes"] == ["standard"]
+    assert app.state.fake_orchestrator.last_ask_kwargs["routing_constraints"][
+        "allowed_billing_classes"
+    ] == ["standard"]

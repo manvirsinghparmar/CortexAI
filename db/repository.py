@@ -436,7 +436,7 @@ def create_session(
         "mode": mode,
     }
     if session_id is not None and "id" in {col.name for col in sessions.columns}:
-        values["id"] = str(session_id)
+        values["id"] = session_id
 
     stmt = insert(sessions).values(**values).returning(sessions.c.id)
 
@@ -1207,7 +1207,7 @@ def create_llm_request(
     }
     column_names = {col.name for col in llm_requests.columns}
     if "request_group_id" in column_names:
-        values["request_group_id"] = str(request_group_id) if request_group_id is not None else None
+        values["request_group_id"] = request_group_id
 
     stmt = insert(llm_requests).values(**values).returning(llm_requests.c.id)
 
@@ -2759,5 +2759,3 @@ def save_compare_summary(
 
     # Save as single assistant message
     return save_message(db, session_id, role="assistant", content=summary)
-
-

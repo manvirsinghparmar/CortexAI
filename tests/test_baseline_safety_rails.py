@@ -17,6 +17,8 @@ import pytest
 from pydantic import ValidationError
 
 from orchestrator.core import CortexOrchestrator
+from orchestrator.model_registry import ModelRegistry
+from orchestrator.routing_types import RoutingConstraints, Tier
 from server import byok_service
 from server.routes import chat as chat_route
 from server.schemas.requests import (
@@ -25,7 +27,6 @@ from server.schemas.requests import (
     ChatRoutingRequest,
     CompareRequest,
 )
-
 
 SMART_CONSTRAINT_ENV_VARS = (
     "SMART_CHAT_MAX_COST_USD",
@@ -56,6 +57,7 @@ class _PreviewAndAvailabilityOrchestrator(_PreviewOrchestrator):
 
     def available_providers(self, **_kwargs):
         return list(self.available)
+
 
 # ---------------------------------------------------------------------------
 # Request schema contract
@@ -119,6 +121,19 @@ def test_compare_request_rejects_empty_prompt_without_attachments():
             targets=[
                 {"provider": "openai", "model": "gpt-4o-mini"},
                 {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+        )
+
+
+def test_compare_request_rejects_more_than_platform_maximum():
+    with pytest.raises(ValidationError):
+        CompareRequest(
+            prompt="hello",
+            targets=[
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+                {"provider": "deepseek", "model": "deepseek-chat"},
+                {"provider": "grok", "model": "grok-4-1-fast-non-reasoning"},
             ],
         )
 
@@ -239,6 +254,87 @@ def test_resolve_chat_execution_plan_smart_uses_preview_when_valid(monkeypatch):
     assert plan.model_name is None
 
 
+def test_resolve_chat_execution_plan_passes_subscription_billing_classes(monkeypatch):
+    monkeypatch.setattr(chat_route, "TRUE_SMART_ROUTING_ENABLED", True)
+    request = ChatRequest(
+        prompt="hello",
+        routing=ChatRoutingRequest(smart_mode=True, research_mode=False),
+    )
+    observed: list[dict | None] = []
+
+    class RecordingOrchestrator:
+        def preview_smart_target(self, **kwargs):
+            observed.append(kwargs.get("routing_constraints"))
+            return "openai", "gpt-4o-mini"
+
+    plan = chat_route._resolve_chat_execution_plan(
+        request,
+        effective_prompt="hello",
+        context=None,
+        orchestrator=RecordingOrchestrator(),
+        allowed_billing_classes=frozenset({"standard"}),
+    )
+
+    assert plan.routing_constraints == {"allowed_billing_classes": ["standard"]}
+    assert observed == [{"allowed_billing_classes": ["standard"]}]
+
+
+def test_model_registry_filters_subscription_class_independently_of_routing_tier():
+    registry = ModelRegistry.from_yaml()
+    candidates = registry.get_candidates(
+        Tier.T2,
+        RoutingConstraints(allowed_billing_classes=["standard"]),
+    )
+
+    assert candidates
+    assert all(candidate.tier == Tier.T2 for candidate in candidates)
+    assert {candidate.billing_class.value for candidate in candidates} == {"standard"}
+
+
+def test_reused_research_context_does_not_count_as_fresh_subscription_turn():
+    response = SimpleNamespace(
+        metadata={"research_used": True, "research_reused": True},
+    )
+
+    assert chat_route._research_was_performed(response) is False
+
+
+def test_compare_preserves_performed_research_metadata_when_all_clients_fail(
+    monkeypatch,
+):
+    orchestrator = CortexOrchestrator()
+    orchestrator.research_service = object()
+    monkeypatch.setattr(
+        orchestrator,
+        "_apply_research_if_needed",
+        lambda **_kwargs: (
+            [{"role": "user", "content": "researched prompt"}],
+            {
+                "research_used": True,
+                "research_reused": False,
+                "research_topic": "topic",
+                "research_error": None,
+                "sources": [{"title": "Source", "url": "https://example.com"}],
+            },
+        ),
+    )
+
+    def reject_client(*_args, **_kwargs):
+        raise RuntimeError("missing API key")
+
+    monkeypatch.setattr(orchestrator, "_get_client", reject_client)
+
+    result = orchestrator.compare(
+        prompt="research this",
+        models_list=[{"provider": "openai", "model": "gpt-4o-mini"}],
+        research_mode="on",
+    )
+
+    assert result.responses[0].is_error
+    assert result.responses[0].metadata["research_used"] is True
+    assert result.responses[0].metadata["research_reused"] is False
+
+
 def test_resolve_chat_execution_plan_smart_falls_back_on_invalid_preview(monkeypatch):
     monkeypatch.setattr(chat_route, "TRUE_SMART_ROUTING_ENABLED", True)
     monkeypatch.setenv("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat")
@@ -299,6 +395,7 @@ def test_resolve_chat_execution_plan_smart_fallback_prefers_available_providers(
     assert plan.strategy == "smart_orchestrator"
     assert plan.preview_provider == "openai"
     assert plan.preview_model == "gpt-5.2-codex"
+
 
 def test_providers_for_runtime_keys_returns_preview_provider_when_not_smart():
     plan = chat_route.ChatExecutionPlan(
@@ -446,7 +543,3 @@ def test_orchestrator_ask_legacy_mode_requires_provider():
     assert response.is_error is True
     assert response.error is not None
     assert response.error.code == "bad_request"
-
-
-
-

@@ -14,6 +14,10 @@ This guide covers both:
 - CLI compare mode (`COMPARE_MODE=true`)
 - Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
 
+The API accepts two or three explicit targets. Subscription enforcement may reduce the effective maximum: Free and Plus allow two targets, while Pro allows three. The four-provider examples below describe the legacy CLI `COMPARE_MODE=true` flow, not the FastAPI request limit.
+
+In database-backed API mode, all target/model entitlements and monthly counters are enforced before providers start. Successful targets settle independently, failed targets release their reserved model-response units, and shared research settles once only when it actually ran. On a streaming disconnect or error, only successful targets whose output started are settled; completed-but-unemitted targets are released.
+
 ## Release Notes (2026-02-18)
 
 - FastAPI `POST /v1/compare` now persists compare runs to DB when `DATABASE_URL` is set.

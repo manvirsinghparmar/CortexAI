@@ -10,7 +10,6 @@ from orchestrator.routing_types import ModelCandidate, RoutingConstraints, Tier
 from server.billing.models import ALLOWED_MODEL_BILLING_CLASSES, ModelBillingClass
 from utils.logger import get_logger
 
-
 logger = get_logger(__name__)
 
 
@@ -21,7 +20,11 @@ class ModelRegistry:
 
     @classmethod
     def from_yaml(cls, path: str | None = None) -> "ModelRegistry":
-        registry_path = Path(path) if path else Path(__file__).resolve().parent.parent / "config" / "model_registry.yaml"
+        registry_path = (
+            Path(path)
+            if path
+            else Path(__file__).resolve().parent.parent / "config" / "model_registry.yaml"
+        )
         if not registry_path.exists():
             raise ValueError(f"Model registry not found at {registry_path}")
 
@@ -152,6 +155,14 @@ class ModelRegistry:
             if allow_defaults:
                 allowed = [p.lower() for p in allow_defaults]
 
+        allowed_billing_classes = None
+        if constraints and constraints.allowed_billing_classes is not None:
+            allowed_billing_classes = {
+                str(item or "").strip().lower()
+                for item in constraints.allowed_billing_classes
+                if str(item or "").strip()
+            }
+
         results: list[ModelCandidate] = []
         for provider, models in self._providers.items():
             if allowed and provider.lower() not in allowed:
@@ -160,6 +171,11 @@ class ModelRegistry:
                 if not candidate.enabled:
                     continue
                 if candidate.tier != tier:
+                    continue
+                if (
+                    allowed_billing_classes is not None
+                    and candidate.billing_class.value not in allowed_billing_classes
+                ):
                     continue
                 if constraints and constraints.min_context_limit is not None:
                     if candidate.context_limit < constraints.min_context_limit:

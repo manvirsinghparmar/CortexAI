@@ -183,7 +183,7 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
 - `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; the current foundation has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
-- Ask, Compare, optimize, upload, and export routes are not yet wired to call the metering service; backend route enforcement remains Work Packages 5 and 6. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
+- DB-mode Ask and Compare routes, including both NDJSON streaming variants, now authorize and reserve subscription usage before any provider call. Successful model targets settle against their actual server-owned billing class, provider failures release model-response units, research settles only when response metadata confirms it ran, and partial Compare runs settle only successful targets. Optimize, upload/file-analysis, and export enforcement remain later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
@@ -422,6 +422,10 @@ Lifecycle resolution is conservative: `trialing`/`active` grant paid access for 
 
 `plan_tier` remains on `/v1/whoami` for backward compatibility and is now populated from the effective plan display name in database mode. New consumers should use `/v1/entitlements` and `billing.plan_code` instead.
 
+Ask and Compare enforcement is backend-authoritative in database mode. Entitlement/model denials happen before provider execution and return structured `403`, exhausted monthly meters return `429`, and unsafe billing configuration returns a provider-safe `500`. Compare accepts two or three targets at the platform boundary; Free and Plus allow two, while Pro allows three. Streaming reservations are finalized inside the response generator: model units settle after meaningful output is emitted, disconnects before output release them, performed research still settles once, and Compare disconnects aggregate only targets whose output started.
+
+Smart Ask receives `allowed_billing_classes` as a routing constraint. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's billing classes are removed. The initial conservative policy reserves one response plus the premium-meter envelope through the highest billing class Smart may select, then settles only the class of the actual successful model and releases unused premium reservations. The envelope is required because the existing atomic reservation schema cannot transfer a reservation between meter keys when Smart falls back from Ultra to Advanced.
+
 ### Cognito (Gmail) sign-in
 
 To enable "Sign in with Google" via Amazon Cognito:
@@ -542,6 +546,7 @@ Prompt optimization (`/v1/optimize`):
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
 - Targets are always explicit (`targets[]`).
+- Requests contain two or three targets. The absolute API maximum is three; the effective plan may limit the request to two.
 - `routing.smart_mode` is ignored by design in compare mode.
 - `routing.research_mode=true` is still honored and runs once per compare turn for all selected targets.
 - In the browser UI, Ask starts with `Web` enabled by default and Compare starts with `With sources` enabled by default; each keeps a manual off choice for that page session.

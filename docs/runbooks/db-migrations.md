@@ -156,6 +156,12 @@ ORDER BY created_at;
 
 Do not repair `reserved_quantity` with ad hoc SQL. Run the metering cleanup in a reviewed caller-owned unit of work so each reservation and every related counter transition remain atomic and auditable.
 
+### Ask and Compare enforcement deployment
+
+Work Package 5 also uses the existing billing tables and requires no new migration. Apply and verify `20260718_add_b2c_billing_foundation.sql` before deploying the WP5 API: database-mode `/v1/chat*` and `/v1/compare*` now create Free-plan reservations even while `BILLING_ENABLED=false`. A missing billing table therefore fails the request conservatively before any provider call.
+
+Reservation, provider execution, and settlement are deliberately separate transactions. During a rolling deployment, do not drop or rewrite the additive billing tables. If the new API must be rolled back, redeploy the prior application version and retain the billing rows for audit/reconciliation; stale `reserved` rows can be handled by the reviewed cleanup flow above.
+
 ### Billing rollback
 
 The preferred application rollback is to redeploy the previous API version and leave the additive, unused tables in place. This preserves any billing evidence and requires no database mutation.

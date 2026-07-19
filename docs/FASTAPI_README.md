@@ -118,9 +118,10 @@ python run_server.py --reload
 - `db/billing_repository.py` provides transaction-neutral access to billing accounts, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records created by `db/migrations/20260718_add_b2c_billing_foundation.sql`.
 - `server/billing/account_service.py` validates user ownership and lazily creates B2C accounts. `server/billing/subscription_service.py` applies the server-side lifecycle/grace policy and creates the effective usage period. `server/billing/entitlement_service.py` returns feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` owns atomic allowance mutation. It locks the billing owner for idempotency-key creation, locks required counters in deterministic order, rejects over-limit reservations before mutation, settles only successful quantities, releases unused quantities, and expires clearly stale reservations after a default 30-minute threshold. Every function uses the caller-owned transaction and never commits.
+- `server/billing/enforcement_service.py` composes effective-plan resolution, entitlement evaluation, atomic reservation, actual-model settlement, research settlement, and failure release for DB-mode Ask/Compare. `server/persistence.py` owns the short committing units of work; no billing transaction remains open during a provider call.
 - `BILLING_ENABLED=false` resolves all users to Free and is the production-safe setting until verified Stripe webhook synchronization is deployed. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. The current foundation requires no Stripe dependency and does not trust client-supplied billing identifiers.
-- Request routes do not call the metering service yet; current Ask, Compare, streaming, history, uploads, optimize, and reporting behavior is unchanged until Work Packages 5 and 6 add backend enforcement.
-- Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_billing_repository.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
+- `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` reserve before provider execution. They settle only successful model responses by actual billing class, release failed targets, and settle research once only when it ran. Compare performs aggregate partial settlement. Upload/file-analysis, optimize, and export enforcement remain outside WP5.
+- Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
 - `/v1/models` exposes `billing_class` as `standard`, `advanced`, or `ultra`. This value is independent from the existing smart-routing `tier`; missing legacy classifications use the conservative `advanced` fallback and emit a warning.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
@@ -438,11 +439,17 @@ Notes:
 ```
 
 Rules:
-- 2 to 4 targets.
+- 2 to 3 targets at the API boundary. Free and Plus allow 2; Pro allows 3.
 - Compare always uses explicit targets.
 - `routing.smart_mode` is ignored in compare mode by design.
 - With `routing.research_mode=true`, research runs once per compare turn and is shared across all selected targets for fairness.
 - Browser Ask sends `routing.research_mode=true` by default because the `Web` toggle starts on, and Browser Compare does the same because `With sources` starts on; users can turn either off for the current page session.
+
+Subscription enforcement:
+- The effective plan, model billing classes, feature access, and meter quantities are resolved server-side; client-supplied billing identifiers are ignored.
+- Entitlement/model denials return structured `403` responses before provider execution. Monthly exhaustion returns `429`; unsafe billing configuration returns a provider-safe `500`.
+- Smart Ask receives the plan's allowed billing classes as an independent routing constraint. It conservatively reserves the premium-meter envelope through the highest allowed Smart class, settles only the actual successful class, and releases unused premium reservations. This accommodates the existing reservation schema, which cannot transfer units between premium meter keys.
+- Streaming reservations are created before the `StreamingResponse` is returned. Ask settles a successful model after its first meaningful output is emitted, releases model units on a pre-output disconnect, and still settles performed research once. Compare finalizes aggregate successful targets before `done`, or settles only partial targets whose output started on disconnect/error.
 
 Persistence:
 - One `llm_requests` + `llm_responses` row per compare target response.

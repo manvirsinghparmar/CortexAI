@@ -908,25 +908,26 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         return response
 
-    def _build_routing_constraints(
-        self, raw: dict[str, Any] | None
-    ) -> RoutingConstraints | None:
+    def _build_routing_constraints(self, raw: dict[str, Any] | None) -> RoutingConstraints | None:
         if not raw:
             return None
         allowed_providers = raw.get("allowed_providers") or raw.get("allow_providers")
         if isinstance(allowed_providers, str):
             allowed_providers = [allowed_providers]
+        allowed_billing_classes = raw.get("allowed_billing_classes")
+        if isinstance(allowed_billing_classes, str):
+            allowed_billing_classes = [allowed_billing_classes]
 
         return RoutingConstraints(
             max_cost_usd=raw.get("max_cost_usd"),
             max_total_latency_ms=raw.get("max_total_latency_ms"),
             preferred_provider=raw.get("preferred_provider"),
             allowed_providers=allowed_providers,
+            allowed_billing_classes=allowed_billing_classes,
             min_context_limit=raw.get("min_context_limit"),
             json_only=bool(raw.get("json_only", False)),
             strict_format=bool(raw.get("strict_format", False)),
         )
-
 
     def available_providers(
         self,
@@ -970,6 +971,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             allowed_providers=available,
             preferred_provider=preferred_provider,
         )
+
     def _resolve_forced_tier(self, routing_mode: str) -> Tier | None:
         if routing_mode == "cheap":
             return Tier.T0
@@ -1039,6 +1041,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             )
         return True, ""
 
+    def model_billing_class(self, provider: str, model: str) -> str | None:
+        """Return the server-owned subscription class for one enabled model."""
+        if not self._model_registry:
+            return None
+        candidate = self._model_registry.find_model(provider, model)
+        if candidate is None or not candidate.enabled:
+            return None
+        return candidate.billing_class.value
+
     def _invoke_candidate(
         self,
         candidate: ModelCandidate,
@@ -1086,10 +1097,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             kind = str(details.get("kind") or "").strip()
             safe_message = get_client_safe_provider_error_message(response.error)
             kind_fragment = f" kind={kind}" if kind else ""
-            return (
-                f"provider_error:{response.error.code}"
-                f"{kind_fragment} message={safe_message}"
-            )
+            return f"provider_error:{response.error.code}" f"{kind_fragment} message={safe_message}"
 
         reason_map = {
             "refusal": "model_refused_request_or_system_instruction_conflict",
@@ -1117,9 +1125,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
     ) -> None:
         status = "success" if validation_ok else "failed"
         why_worked = (
-            "response_passed_validator_checks_and_returned_usable_output"
-            if validation_ok
-            else None
+            "response_passed_validator_checks_and_returned_usable_output" if validation_ok else None
         )
         why_failed = (
             None if validation_ok else self._explain_attempt_failure(response, validation_reason)
@@ -1130,6 +1136,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             "tier": tier.value,
             "provider": candidate.provider,
             "model": candidate.model_name,
+            "billing_class": candidate.billing_class.value,
             "validation": validation_reason,
             "latency_ms": response.latency_ms,
             "status": status,
@@ -1152,6 +1159,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             "attempt_number": attempt_number,
             "provider": candidate.provider,
             "model": candidate.model_name,
+            "billing_class": candidate.billing_class.value,
             "tier": tier.value,
             "status": status,
             "why_selected": (plan_entry or {}).get(
@@ -1314,7 +1322,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if routing_md.get("selected_sequence"):
                 latest_selected = routing_md["selected_sequence"][-1]
                 latest_selected["next_action"] = (
-                    decision.action.value if hasattr(decision.action, "value") else str(decision.action)
+                    decision.action.value
+                    if hasattr(decision.action, "value")
+                    else str(decision.action)
                 )
                 latest_selected["next_action_reason"] = decision.reason
 
@@ -1384,9 +1394,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if prepared_messages is not None:
                 optimized_prompt = str(prepared_prompt or prompt)
                 opt_metadata = (
-                    prepared_opt_metadata
-                    if isinstance(prepared_opt_metadata, dict)
-                    else {}
+                    prepared_opt_metadata if isinstance(prepared_opt_metadata, dict) else {}
                 )
                 messages = [dict(message) for message in prepared_messages]
                 research_metadata = (
@@ -1563,9 +1571,24 @@ Never claim you performed web browsing yourself; the system handles retrieval.
     ) -> MultiUnifiedResponse:
         request_group_id = request_group_id or str(uuid.uuid4())
         responses: list[UnifiedResponse] = []
+        research_metadata: dict[str, Any] = {
+            "research_used": False,
+            "research_reused": False,
+            "research_topic": None,
+            "research_error": "not_performed",
+            "sources": [],
+        }
         provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
         if not isinstance(provider_api_keys, dict):
             provider_api_keys = {}
+
+        def with_turn_metadata(response: UnifiedResponse) -> UnifiedResponse:
+            normalized = self._normalize_empty_success_response(response)
+            metadata = normalized.metadata or {}
+            return replace(
+                normalized,
+                metadata={**metadata, **research_metadata, "research_mode": research_mode},
+            )
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
@@ -1644,6 +1667,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
             # If we have no valid clients, still return a MultiUnifiedResponse (no exceptions)
             if not clients:
+                responses = [with_turn_metadata(response) for response in responses]
                 if token_tracker:
                     for r in responses:
                         token_tracker.update(r)
@@ -1666,10 +1690,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             research_used = research_metadata.get("research_used", False)
             updated_responses = []
             for resp in responses:
-                normalized_resp = self._normalize_empty_success_response(resp)
-                md = normalized_resp.metadata or {}
-                merged_md = {**md, **research_metadata, "research_mode": research_mode}
-                resp_with_metadata = replace(normalized_resp, metadata=merged_md)
+                resp_with_metadata = with_turn_metadata(resp)
                 # Check for browse disclaimer if research was used or explicitly requested
                 resp_checked = resp_with_metadata
                 if self._enable_browse_disclaimer_check:
@@ -1699,6 +1720,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     code="unknown",
                 )
             )
+            responses = [with_turn_metadata(response) for response in responses]
             if token_tracker:
                 for r in responses:
                     token_tracker.update(r)

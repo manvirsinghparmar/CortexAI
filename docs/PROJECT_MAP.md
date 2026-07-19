@@ -49,6 +49,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
 - Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; public plans, effective subscription, hosted-session, and webhook endpoints: `server/routes/billing.py`
 - React subscription transport and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`; contract tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`
+- React consumer plan management: route wiring in `frontend-react/src/App.tsx`; public catalogue in `frontend-react/src/pages/PricingPage.tsx`; authenticated lifecycle/allowance view in `frontend-react/src/pages/BillingPage.tsx`; shared responsive account shell in `frontend-react/src/components/subscription/SubscriptionPageShell.tsx`; backend-plan-to-menu mapping in `frontend-react/src/subscription/accountMenuPresentation.ts`; summary navigation in `frontend-react/src/components/layout/AccountMenu.tsx` across Chat, Models, Usage, Pricing, and Billing; state/route tests in `frontend-react/src/__tests__/subscriptionPages.test.tsx`, `accountMenuPresentation.test.ts`, and `subscriptionRoutes.test.tsx`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
@@ -83,7 +84,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
   - Main shell and responsive navigation: `frontend-react/src/pages/ChatPage.tsx`
-  - Top-right Cognito account menu: `frontend-react/src/components/layout/AccountMenu.tsx`
+  - Top-right Cognito account menu and summary plan/billing action: `frontend-react/src/components/layout/AccountMenu.tsx`
   - Desktop sidebar navigation, Models/Usage route entries, history list, and collapse rail: `frontend-react/src/components/layout/Sidebar.tsx`
   - Ask/Compare result rendering: `frontend-react/src/components/results/`
   - Deterministic assistant-offered follow-up extraction and response-level chip row: `frontend-react/src/followups/suggestedFollowups.ts`, `frontend-react/src/components/results/SuggestedFollowUps.tsx`, `frontend-react/src/components/results/ResponseCard.tsx`

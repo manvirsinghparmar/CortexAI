@@ -18,9 +18,11 @@ import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
+import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { normalizeSessionId } from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
+import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
 import type { ChatMode, HistoryThread, ModelCatalogItem } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
 import styles from "./ChatPage.module.css";
@@ -39,6 +41,11 @@ export function ChatPage() {
   const authEnabled = cognitoConfig?.enabled ?? false;
   const signedOut = !authLoading && authEnabled && !loggedIn;
   const workspaceReady = !authLoading && !signedOut;
+  const subscriptionState = useSubscription({ authLoading, loggedIn });
+  const accountSubscription = getAccountMenuSubscriptionPresentation(
+    subscriptionState.entitlements,
+  );
+  const accountBillingDestination = accountSubscription.billingDestination;
   const { models } = useModels(workspaceReady);
   const { load: loadHistory, removeThread } = useHistory();
   const { submit, cancel } = useChat();
@@ -170,6 +177,12 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              planLabel={accountSubscription.planLabel}
+              billingActionLabel={accountSubscription.billingActionLabel}
+              billingPastDue={accountSubscription.billingPastDue}
+              onBilling={
+                accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+              }
               onModels={() => navigate("/models")}
               onUsageInsights={() => navigate("/usage")}
               theme={theme}
@@ -214,6 +227,14 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              planLabel={accountSubscription.planLabel}
+              billingActionLabel={accountSubscription.billingActionLabel}
+              billingPastDue={accountSubscription.billingPastDue}
+              onBilling={
+                accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+              }
+              onModels={() => navigate("/models")}
+              onUsageInsights={() => navigate("/usage")}
               theme={theme}
               onToggleTheme={toggleTheme}
             />

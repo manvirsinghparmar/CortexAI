@@ -27,6 +27,15 @@ const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
   cancel: vi.fn(),
   useModels: vi.fn(),
+  subscriptionEntitlements: {
+    current: null as null | {
+      plan: {
+        code: "free" | "plus" | "pro";
+        display_name: string;
+        status: "free" | "active" | "past_due";
+      };
+    },
+  },
 }));
 
 vi.mock("../hooks/useAuth", () => ({
@@ -40,6 +49,10 @@ vi.mock("../hooks/useAuth", () => ({
 
 vi.mock("../hooks/useModels", () => ({
   useModels: mocks.useModels,
+}));
+
+vi.mock("../hooks/useSubscription", () => ({
+  useSubscription: () => ({ entitlements: mocks.subscriptionEntitlements.current }),
 }));
 
 vi.mock("../hooks/useHistory", () => ({
@@ -83,6 +96,7 @@ describe("ChatPage authentication gate", () => {
       loggedIn: false,
     });
     mocks.useModels.mockReturnValue({ models: [], loading: false, error: null });
+    mocks.subscriptionEntitlements.current = null;
   });
 
   afterEach(() => {
@@ -115,6 +129,7 @@ describe("ChatPage authentication gate", () => {
   });
 
   it("renders the workspace and startup fetches once the session is authenticated", async () => {
+    const user = userEvent.setup();
     Object.assign(mocks.authState, {
       whoAmI: whoAmI(),
       cognitoConfig: {
@@ -125,6 +140,9 @@ describe("ChatPage authentication gate", () => {
       loading: false,
       loggedIn: true,
     });
+    mocks.subscriptionEntitlements.current = {
+      plan: { code: "plus", display_name: "Plus", status: "active" },
+    };
 
     renderChatPage();
 
@@ -135,6 +153,9 @@ describe("ChatPage authentication gate", () => {
     await waitFor(() => {
       expect(mocks.loadHistory).toHaveBeenCalledWith({ restoreActiveTranscript: true });
     });
+
+    await user.click(screen.getAllByRole("button", { name: "Account" })[0]);
+    expect(screen.getByRole("menuitem", { name: "Plus plan, Manage plan" })).toBeInTheDocument();
   });
 });
 

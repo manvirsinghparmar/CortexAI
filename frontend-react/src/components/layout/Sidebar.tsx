@@ -18,7 +18,7 @@ import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
   onSelectThread: (thread: HistoryThread) => void;
-  activeView?: "chat" | "usage" | "models";
+  activeView?: "chat" | "usage" | "models" | "account";
   onNavigateChat?: (mode: ChatMode) => void;
   onNavigateUsage?: () => void;
   onNavigateModels?: () => void;

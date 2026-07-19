@@ -21,13 +21,15 @@ STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PLUS_MONTHLY_PRICE_ID=price_...
 STRIPE_PRO_MONTHLY_PRICE_ID=price_...
-STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success
-STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/plans?checkout=canceled
-STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
+STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/account/billing?checkout=success
+STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
+STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 SUBSCRIPTION_PAYMENT_GRACE_DAYS=3
 ```
 
 `STRIPE_API_VERSION` is optional. Leave it unset to use the Stripe SDK-pinned version unless a reviewed compatibility test requires an override. HTTP redirect URLs are accepted only for loopback development; public redirects and the registered webhook endpoint must use HTTPS. Startup fails conservatively when billing is enabled and a required Stripe value is missing or malformed.
+
+The success and Portal return URLs must target the React `/account/billing` route, and the cancellation URL must target `/pricing`. The `checkout=success` query is only a bounded refresh hint: do not treat the browser return as proof of payment. Confirm the page remains in a waiting state until the verified webhook-backed entitlement response reports a paid plan.
 
 Register `POST /v1/billing/webhook` for these snapshot events:
 
@@ -52,6 +54,7 @@ Listening only to required event types reduces load and avoids retaining unrelat
 6. Complete a test Checkout. Confirm Customer and Subscription IDs appear only in database/provider state, the event row becomes `processed`, `/v1/entitlements` changes only after the webhook, and one paid usage period uses the Stripe period boundaries.
 7. Resend the same event. Confirm the event count and usage-period count do not change and existing counters retain their values.
 8. Use a failing test payment to confirm `past_due`, `grace_until`, and the eventual Free fallback. Cancel through Portal and confirm history remains readable after access downgrades.
+9. Set `BILLING_ENABLED=false` and confirm `/pricing` labels plan actions Unavailable while `/account/billing` keeps Free allowances visible and does not offer Checkout or Portal.
 
 Do not complete a live-money Checkout during automated or staging validation.
 

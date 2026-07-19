@@ -23,8 +23,10 @@ import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
+import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { useChatStore } from "../store/chatStore";
+import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
 import type { ChatMode, HistoryThread } from "../types";
 import styles from "./ModelsPage.module.css";
 
@@ -55,6 +57,11 @@ export function ModelsPage() {
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const setError = useChatStore((s) => s.setError);
   const authEnabled = cognitoConfig?.enabled ?? false;
+  const subscriptionState = useSubscription({ authLoading, loggedIn });
+  const accountSubscription = getAccountMenuSubscriptionPresentation(
+    subscriptionState.entitlements,
+  );
+  const accountBillingDestination = accountSubscription.billingDestination;
 
   useEffect(() => {
     if (!authLoading) void loadHistory({ restoreActiveTranscript: false });
@@ -127,6 +134,12 @@ export function ModelsPage() {
             loggedIn={loggedIn}
             onLogin={authEnabled ? login : undefined}
             onLogout={handleLogout}
+            planLabel={accountSubscription.planLabel}
+            billingActionLabel={accountSubscription.billingActionLabel}
+            billingPastDue={accountSubscription.billingPastDue}
+            onBilling={
+              accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+            }
             onModels={() => navigate("/models")}
             onUsageInsights={() => navigate("/usage")}
             theme={theme}

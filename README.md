@@ -114,9 +114,9 @@ STRIPE_SECRET_KEY=                  # server-only; required when billing is enab
 STRIPE_WEBHOOK_SECRET=              # server-only signing secret for the webhook endpoint
 STRIPE_PLUS_MONTHLY_PRICE_ID=       # server-owned Price mapping
 STRIPE_PRO_MONTHLY_PRICE_ID=        # server-owned Price mapping
-STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success
-STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/plans?checkout=canceled
-STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
+STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/account/billing?checkout=success
+STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
+STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 # STRIPE_API_VERSION=               # optional; default is the SDK-pinned version
 # DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; ignored in production and when billing is enabled
 
@@ -210,6 +210,8 @@ python run_app.py
 
 Useful URLs:
 - React frontend: `http://127.0.0.1:5173/`
+- React pricing: `http://127.0.0.1:5173/pricing`
+- React plan and billing management: `http://127.0.0.1:5173/account/billing`
 - API health: `http://127.0.0.1:8000/health`
 - Swagger: `http://127.0.0.1:8000/docs`
 
@@ -441,7 +443,7 @@ Smart Ask receives `allowed_billing_classes` as a routing constraint. The router
 
 ### Stripe Checkout and Customer Portal
 
-`GET /v1/billing/plans` is public and returns the display-safe, server-owned Free/Plus/Pro catalogue: USD monthly prices, the Plus recommendation marker, model-class access, feature availability, and core monthly allowances. It never returns Stripe Price IDs, environment-variable names, Customer IDs, or provider objects.
+`GET /v1/billing/plans` is public and returns the display-safe, server-owned Free/Plus/Pro catalogue: USD monthly prices, the Plus recommendation marker, model-class access, feature availability, core monthly allowances, and a boolean `billing_enabled` availability flag. The flag lets public pricing UI disable hosted billing without probing Checkout; it never returns Stripe Price IDs, environment-variable names, Customer IDs, secrets, or provider objects.
 
 `GET /v1/billing/subscription` is session-scoped and returns the authenticated user's effective plan/status, provider label, current period, cancellation state, and whether the account has a manageable Stripe subscription. It applies the same conservative lifecycle resolution as `/v1/entitlements` and never exposes the provider subscription ID.
 
@@ -464,6 +466,8 @@ Paid usage periods follow Stripe period boundaries. Repeated events and multiple
 The React client owns subscription transport in `frontend-react/src/api/billing.ts` and `frontend-react/src/api/entitlements.ts`, structured error normalization in `frontend-react/src/subscription/subscriptionErrors.ts`, and auth-aware in-memory state in `frontend-react/src/hooks/useSubscription.ts`. Signed-out users may load only the public plan catalogue; subscription and entitlement requests wait for authentication bootstrap and require a logged-in user. Billing state is never read from `localStorage`.
 
 `useSubscription` exposes effective entitlements, current subscription state, plan data, allowance/model/feature helpers, explicit reload, Checkout and Portal actions, and bounded Checkout-success polling. A successful Checkout redirect is treated only as a refresh hint: the hook reports `confirming` until `/v1/entitlements` returns a paid effective plan, then `confirmed`; if the webhook remains delayed after ten bounded attempts, it reports `pending` so future billing UI can show a safe refresh action. React follows only validated HTTPS hosted URLs returned by the backend and never calls Stripe directly.
+
+The React consumer plan surfaces are `/pricing` and `/account/billing`. Pricing renders the server catalogue, current-plan state, monthly allowances, billing-disabled state, and auth/lifecycle-aware Checkout or Portal actions. Billing renders effective plan status, renewal or cancellation dates, payment-grace warnings, and allowance progress. Signed-out users can read public pricing but must authenticate for account billing. The shared account menu shows only the plan label, past-due state, and Upgrade/Manage action; it intentionally omits detailed counters. Paid access is displayed only from the webhook-synchronized subscription and entitlement responses, including after `?checkout=success`.
 
 ### Cognito (Gmail) sign-in
 

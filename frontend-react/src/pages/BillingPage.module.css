@@ -1,0 +1,327 @@
+.page {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 48px 34px 52px;
+}
+
+.heading {
+  margin-bottom: 28px;
+}
+
+.heading > span,
+.planCardTopline > span,
+.sectionHeading span {
+  color: var(--cx-accent);
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+}
+
+.heading h1 {
+  margin: 10px 0 0;
+  color: var(--cx-ink-900);
+  font: 750 34px/1.08 var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+.heading p {
+  margin: 11px 0 0;
+  color: var(--cx-ink-500);
+  font: 500 13.5px/1.5 var(--font-sans);
+}
+
+.banner,
+.loadingPanel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-xl);
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-700);
+  font: 600 13px/1.5 var(--font-sans);
+  padding: 13px 15px;
+}
+
+.banner span {
+  min-width: 0;
+  flex: 1;
+}
+
+.banner button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.bannerWarning {
+  border-color: color-mix(in srgb, var(--cx-warn-text) 30%, var(--cx-hairline));
+  background: var(--cx-warn-soft);
+  color: var(--cx-warn-text);
+}
+
+.bannerError {
+  border-color: color-mix(in srgb, var(--cx-danger) 28%, var(--cx-hairline));
+  background: var(--cx-danger-soft);
+  color: var(--cx-danger);
+}
+
+.bannerSuccess {
+  border-color: var(--cx-success-border);
+  background: var(--cx-success-soft);
+  color: var(--cx-success-text);
+}
+
+.bannerNeutral {
+  color: var(--cx-ink-600);
+}
+
+.signedOutCard,
+.planCard,
+.usageCard {
+  border: 1px solid var(--cx-hairline);
+  border-radius: 18px;
+  background: var(--cx-surface);
+  box-shadow: var(--cx-shadow-sm);
+}
+
+.signedOutCard {
+  display: grid;
+  justify-items: center;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.stateIcon,
+.planMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+}
+
+.stateIcon {
+  width: 48px;
+  height: 48px;
+}
+
+.signedOutCard h2 {
+  margin: 17px 0 0;
+  color: var(--cx-ink-900);
+  font: 750 20px/1 var(--font-display);
+}
+
+.signedOutCard p {
+  max-width: 430px;
+  margin: 11px 0 20px;
+  color: var(--cx-ink-500);
+  font: 500 13px/1.55 var(--font-sans);
+}
+
+.signedOutCard button,
+.primaryButton,
+.secondaryButton {
+  min-height: 41px;
+  border-radius: 11px;
+  cursor: pointer;
+  font: 700 13px/1 var(--font-sans);
+  padding: 0 15px;
+}
+
+.signedOutCard button,
+.primaryButton {
+  border: 1px solid var(--cx-accent);
+  background: var(--cx-accent);
+  color: #fff;
+}
+
+.secondaryButton {
+  border: 1px solid var(--cx-hairline);
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-700);
+}
+
+.signedOutCard button:disabled,
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.75fr) minmax(380px, 1.25fr);
+  gap: 16px;
+}
+
+.planCard,
+.usageCard {
+  padding: 20px;
+}
+
+.planCardTopline,
+.sectionHeading,
+.planMain,
+.usageLabel,
+.actionRow {
+  display: flex;
+  align-items: center;
+}
+
+.planCardTopline,
+.sectionHeading,
+.planMain,
+.usageLabel {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.planCardTopline strong {
+  border-radius: 999px;
+  font: 700 10px/1 var(--font-mono);
+  padding: 6px 8px;
+}
+
+.statusActive {
+  background: var(--cx-success-soft);
+  color: var(--cx-success-text);
+}
+
+.statusWarning {
+  background: var(--cx-warn-soft);
+  color: var(--cx-warn-text);
+}
+
+.statusMuted {
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-500);
+}
+
+.planMain {
+  align-items: flex-start;
+  min-height: 154px;
+  border-bottom: 1px solid var(--cx-hairline-soft);
+  padding: 34px 0 24px;
+}
+
+.planMain h2,
+.sectionHeading h2 {
+  margin: 0;
+  color: var(--cx-ink-900);
+  font: 750 24px/1 var(--font-display);
+}
+
+.planMain p {
+  margin: 10px 0 0;
+  color: var(--cx-ink-500);
+  font: 500 12px/1.5 var(--font-sans);
+}
+
+.planMark {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+}
+
+.actionRow {
+  flex-wrap: wrap;
+  gap: 9px;
+  padding-top: 18px;
+}
+
+.sectionHeading {
+  align-items: flex-end;
+  border-bottom: 1px solid var(--cx-hairline-soft);
+  padding-bottom: 17px;
+}
+
+.sectionHeading h2 {
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.sectionHeading p {
+  margin: 0;
+  color: var(--cx-ink-400);
+  font: 500 10.5px/1 var(--font-mono);
+}
+
+.usageRows {
+  display: grid;
+  gap: 16px;
+  padding-top: 19px;
+}
+
+.usageRow {
+  display: grid;
+  gap: 7px;
+}
+
+.usageLabel span {
+  color: var(--cx-ink-600);
+  font: 600 12px/1 var(--font-sans);
+}
+
+.usageLabel strong {
+  color: var(--cx-ink-700);
+  font: 600 10.5px/1 var(--font-mono);
+}
+
+.progressTrack {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--cx-surface-3);
+}
+
+.progressTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cx-accent);
+}
+
+@media (max-width: 1060px) {
+  .dashboardGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: 34px 18px 42px;
+  }
+
+  .heading h1 {
+    font-size: 30px;
+  }
+}
+
+@media (max-width: 560px) {
+  .page {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .planCard,
+  .usageCard {
+    padding: 17px;
+  }
+
+  .banner {
+    align-items: flex-start;
+  }
+
+  .sectionHeading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .actionRow button {
+    width: 100%;
+  }
+}

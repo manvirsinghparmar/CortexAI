@@ -9,13 +9,17 @@ interface AccountMenuProps {
   loggedIn: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
+  planLabel?: string;
+  billingActionLabel?: string;
+  billingPastDue?: boolean;
+  onBilling?: () => void;
   onModels?: () => void;
   onUsageInsights?: () => void;
   theme?: AppTheme;
   onToggleTheme?: () => void;
 }
 
-type AccountMenuActionKey = "login" | "logout" | "models" | "theme" | "usage";
+type AccountMenuActionKey = "billing" | "login" | "logout" | "models" | "theme" | "usage";
 
 interface AccountMenuAction {
   key: AccountMenuActionKey;
@@ -24,6 +28,7 @@ interface AccountMenuAction {
   ariaLabel?: string;
   icon?: CortexIconName;
   accent?: boolean;
+  warning?: boolean;
 }
 
 export function AccountMenu({
@@ -31,6 +36,10 @@ export function AccountMenu({
   loggedIn,
   onLogin,
   onLogout,
+  planLabel,
+  billingActionLabel,
+  billingPastDue = false,
+  onBilling,
   onModels,
   onUsageInsights,
   theme,
@@ -41,13 +50,25 @@ export function AccountMenu({
   const closeTimerRef = useRef<number | null>(null);
   const canLogin = authEnabled && !!onLogin;
   const canLogout = !!onLogout;
+  const canOpenBilling = !!planLabel && !!billingActionLabel && !!onBilling;
   const canOpenModels = !!onModels;
   const canOpenUsage = !!onUsageInsights;
   const canToggleTheme = !!theme && !!onToggleTheme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const menuActions: AccountMenuAction[] = [];
   const modelSummary = getModelsCatalogSummary();
-  if (canOpenModels) {
+  if (canOpenBilling) {
+    menuActions.push({
+      key: "billing",
+      label: planLabel,
+      subtitle: billingPastDue ? `Past due · ${billingActionLabel}` : billingActionLabel,
+      ariaLabel: `${planLabel}, ${billingPastDue ? "Past due, " : ""}${billingActionLabel}`,
+      icon: "cost",
+      accent: true,
+      warning: billingPastDue,
+    });
+  }
+  if (canOpenModels && !canOpenBilling) {
     menuActions.push({
       key: "models",
       label: "Models",
@@ -64,6 +85,14 @@ export function AccountMenu({
       key: "usage",
       label: "Usage & insights",
       icon: "usage",
+    });
+  }
+  if (canOpenModels && canOpenBilling) {
+    menuActions.push({
+      key: "models",
+      label: "Models",
+      subtitle: `${modelSummary.modelCount} across ${modelSummary.providerCount} providers`,
+      icon: "models",
     });
   }
   if (canToggleTheme) {
@@ -137,6 +166,8 @@ export function AccountMenu({
     closeMenu();
     if (action === "logout") {
       onLogout?.();
+    } else if (action === "billing") {
+      onBilling?.();
     } else if (action === "models") {
       onModels?.();
     } else if (action === "theme") {
@@ -185,7 +216,7 @@ export function AccountMenu({
               key={action.key}
               type="button"
               role="menuitem"
-              className={`${styles.menuItem} ${action.accent ? styles.menuItemAccent : ""}`}
+              className={`${styles.menuItem} ${action.accent ? styles.menuItemAccent : ""} ${action.warning ? styles.menuItemWarning : ""}`}
               aria-label={action.ariaLabel}
               onClick={() => handleAction(action.key)}
             >

@@ -269,7 +269,7 @@
             "method": "GET",
             "header": [],
             "url": "{{base_url}}/v1/billing/plans",
-            "description": "Public display-safe Free/Plus/Pro catalogue. Returns server-owned USD prices, feature/model access, and core allowances without Stripe Price IDs, Customers, or provider objects."
+            "description": "Public display-safe Free/Plus/Pro catalogue. Returns server-owned USD prices, feature/model access, core allowances, and boolean billing_enabled without Stripe Price IDs, Customers, secrets, or provider objects."
           },
           "event": [
             {
@@ -282,6 +282,7 @@
                   "pm.test('display-safe plans response shape', function () {",
                   "  pm.expect(body.currency).to.eql('USD');",
                   "  pm.expect(body.billing_period).to.eql('monthly');",
+                  "  pm.expect(body.billing_enabled).to.be.a('boolean');",
                   "  pm.expect(body.plans).to.be.an('array').that.is.not.empty;",
                   "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('price_id');",
                   "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('customer');",

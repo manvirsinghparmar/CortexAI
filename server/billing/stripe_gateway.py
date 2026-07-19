@@ -66,6 +66,13 @@ def _billing_enabled(environment: Mapping[str, str]) -> bool:
     )
 
 
+def stripe_billing_is_enabled(
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Return the validated public availability flag without loading Stripe secrets."""
+    return _billing_enabled(environment if environment is not None else os.environ)
+
+
 def _required_environment_value(environment: Mapping[str, str], name: str) -> str:
     value = str(environment.get(name, "") or "").strip()
     if not value:

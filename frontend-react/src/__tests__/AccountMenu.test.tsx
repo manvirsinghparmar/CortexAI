@@ -194,6 +194,53 @@ describe("AccountMenu", () => {
     expect(onModels).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the current plan and opens billing before other account destinations", async () => {
+    const user = userEvent.setup();
+    const onBilling = vi.fn();
+
+    render(
+      <AccountMenu
+        authEnabled
+        loggedIn
+        planLabel="Plus plan"
+        billingActionLabel="Manage plan"
+        onBilling={onBilling}
+        onModels={vi.fn()}
+        onUsageInsights={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Account" }));
+    const menu = screen.getByRole("menu", { name: "Account menu" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items[0]).toHaveTextContent("Plus plan");
+    expect(items[0]).toHaveTextContent("Manage plan");
+
+    await user.click(within(menu).getByRole("menuitem", { name: "Plus plan, Manage plan" }));
+    expect(onBilling).toHaveBeenCalledTimes(1);
+  });
+
+  it("identifies past-due plan state without exposing detailed counters", async () => {
+    const user = userEvent.setup();
+    render(
+      <AccountMenu
+        authEnabled
+        loggedIn
+        planLabel="Plus plan"
+        billingActionLabel="Update payment"
+        billingPastDue
+        onBilling={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Account" }));
+    const billingItem = screen.getByRole("menuitem", {
+      name: "Plus plan, Past due, Update payment",
+    });
+    expect(billingItem).toHaveTextContent("Past due · Update payment");
+    expect(billingItem).not.toHaveTextContent("124 / 400");
+  });
+
   it("updates the theme switch label for dark mode", async () => {
     const user = userEvent.setup();
 

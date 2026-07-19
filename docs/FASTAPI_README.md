@@ -220,7 +220,7 @@ The endpoint returns `plan`, `features`, `model_access`, `allowances`, and `peri
 
 The hosted Checkout and Portal routes require signed-session or Cognito bearer identity; API-key-only authentication returns `403 session_auth_required`. The webhook route uses Stripe signature verification instead of user authentication.
 
-`GET /v1/billing/plans` is public and returns only display-safe catalogue fields: USD monthly price, Plus recommendation state, model billing classes, feature availability, and core allowances. Price IDs, configured environment-variable names, Customers, and provider objects are omitted.
+`GET /v1/billing/plans` is public and returns only display-safe catalogue fields: USD monthly price, Plus recommendation state, model billing classes, feature availability, core allowances, and boolean `billing_enabled`. The availability flag supports a truthful disabled Checkout state without exposing or probing configuration. Price IDs, configured environment-variable names, Customers, secrets, and provider objects are omitted.
 
 `GET /v1/billing/subscription` requires signed-session or Cognito identity and database mode. It returns the effective plan code/status, provider label, current period, cancellation state, and `can_manage` without exposing a provider subscription ID. Its effective state comes from `subscription_service.py`, so disabled billing and unsafe lifecycle states still resolve conservatively.
 
@@ -247,9 +247,9 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PLUS_MONTHLY_PRICE_ID=
 STRIPE_PRO_MONTHLY_PRICE_ID=
-STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success
-STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/plans?checkout=canceled
-STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
+STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/account/billing?checkout=success
+STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
+STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 # STRIPE_API_VERSION=  # optional
 # DEV_SUBSCRIPTION_PLAN=pro  # local/dev only; never production
 ```
@@ -257,6 +257,8 @@ STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
 See `docs/runbooks/stripe-billing.md` for the enablement checklist. Do not place Stripe secrets in frontend runtime configuration or commit them.
 
 React consumes these contracts through `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, and the auth-aware `useSubscription` hook. Signed-out hooks call only the public plans endpoint. Checkout-success polling remains bounded and considers payment confirmed only after `/v1/entitlements` reports a paid effective plan; browser storage and the return query string are never plan authority.
+
+React exposes `/pricing` for the public Free/Plus/Pro catalogue and `/account/billing` for authenticated plan status, lifecycle notices, allowance progress, and Portal management. Billing-disabled, Free, active paid, past-due, cancel-at-period-end, fully cancelled, and delayed Checkout-confirmation states render from these server contracts. Account-menu plan context stays summary-only.
 
 Session-scoped endpoints are session-scoped:
 - `/v1/chat*`

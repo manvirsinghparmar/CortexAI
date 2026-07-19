@@ -37,6 +37,7 @@ from server.billing.stripe_gateway import (
     StripeBillingConfig,
     StripeGateway,
     require_stripe_billing_config,
+    stripe_billing_is_enabled,
 )
 from server.billing.webhook_service import process_stripe_webhook
 from server.dependencies import AuthResult, get_auth
@@ -132,6 +133,7 @@ async def billing_plans():
     """Return display-safe, server-owned plan information without Stripe identifiers."""
     catalog = get_plan_catalog()
     return BillingPlansResponseDTO(
+        billing_enabled=stripe_billing_is_enabled(),
         plans=[
             PublicBillingPlanDTO(
                 code=plan.code,

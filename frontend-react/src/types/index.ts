@@ -174,6 +174,7 @@ export interface PublicBillingPlan {
 export interface BillingPlansResponse {
   currency: "USD";
   billing_period: "monthly";
+  billing_enabled: boolean;
   plans: PublicBillingPlan[];
 }
 

@@ -41,6 +41,7 @@ from server.billing.stripe_gateway import (
     StripeBillingConfig,
     StripeGateway,
     load_stripe_billing_config,
+    stripe_billing_is_enabled,
 )
 from server.dependencies import AuthResult, get_auth
 from server.routes import billing as billing_route
@@ -67,6 +68,21 @@ def test_disabled_billing_config_requires_no_stripe_values():
     assert config.enabled is False
     assert config.secret_key is None
     assert dict(config.price_ids) == {}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [("true", True), ("false", False)],
+)
+def test_public_billing_availability_flag_uses_validated_boolean(raw_value, expected):
+    assert stripe_billing_is_enabled({"BILLING_ENABLED": raw_value}) is expected
+
+
+@pytest.mark.unit
+def test_public_billing_availability_flag_rejects_ambiguous_values():
+    with pytest.raises(BillingConfigurationError, match="BILLING_ENABLED"):
+        stripe_billing_is_enabled({"BILLING_ENABLED": "maybe"})
 
 
 @pytest.mark.unit
@@ -424,6 +440,7 @@ def test_public_plans_returns_display_safe_server_catalogue(
     payload = response.json()
     assert payload["currency"] == "USD"
     assert payload["billing_period"] == "monthly"
+    assert payload["billing_enabled"] is False
     assert [plan["code"] for plan in payload["plans"]] == ["free", "plus", "pro"]
     assert [plan["monthly_price"] for plan in payload["plans"]] == [0.0, 6.99, 12.99]
     assert [plan["code"] for plan in payload["plans"] if plan["recommended"]] == ["plus"]

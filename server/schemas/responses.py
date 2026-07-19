@@ -413,6 +413,7 @@ class PublicBillingPlanDTO(BaseModel):
 class BillingPlansResponseDTO(BaseModel):
     currency: Literal["USD"] = "USD"
     billing_period: Literal["monthly"] = "monthly"
+    billing_enabled: bool
     plans: List[PublicBillingPlanDTO] = Field(default_factory=list)
 
 

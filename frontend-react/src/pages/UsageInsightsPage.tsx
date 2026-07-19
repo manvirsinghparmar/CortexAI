@@ -11,9 +11,11 @@ import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
+import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { useUsageSummary } from "../hooks/useUsageSummary";
 import { useChatStore } from "../store/chatStore";
+import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
 import type { ChatMode, HistoryThread, UsageSummary, UsageSummaryPeriod } from "../types";
 import styles from "./UsageInsightsPage.module.css";
 
@@ -38,6 +40,11 @@ export function UsageInsightsPage() {
   const usageParams = useMemo(() => buildUsagePeriodParams(selectedPeriodKey), [selectedPeriodKey]);
   const { summary, loading: usageLoading, error: usageError, reload } = useUsageSummary(usageParams);
   const authEnabled = cognitoConfig?.enabled ?? false;
+  const subscriptionState = useSubscription({ authLoading, loggedIn });
+  const accountSubscription = getAccountMenuSubscriptionPresentation(
+    subscriptionState.entitlements,
+  );
+  const accountBillingDestination = accountSubscription.billingDestination;
   const periodLabel = summary?.period.label ?? selectedPeriod.label;
   const periodControlLabel = selectedPeriod.label;
   const empty = summary ? isUsageSummaryEmpty(summary) : false;
@@ -217,6 +224,12 @@ export function UsageInsightsPage() {
                 loggedIn={loggedIn}
                 onLogin={authEnabled ? login : undefined}
                 onLogout={handleLogout}
+                planLabel={accountSubscription.planLabel}
+                billingActionLabel={accountSubscription.billingActionLabel}
+                billingPastDue={accountSubscription.billingPastDue}
+                onBilling={
+                  accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+                }
                 onModels={() => navigate("/models")}
                 theme={theme}
                 onToggleTheme={toggleTheme}

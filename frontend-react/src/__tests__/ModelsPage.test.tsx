@@ -38,6 +38,10 @@ vi.mock("../hooks/useChat", () => ({
   useChat: () => ({ cancel: hookMocks.cancel }),
 }));
 
+vi.mock("../hooks/useSubscription", () => ({
+  useSubscription: () => ({ entitlements: null }),
+}));
+
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ theme: "light", toggleTheme: hookMocks.toggleTheme }),
 }));

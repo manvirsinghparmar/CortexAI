@@ -320,6 +320,7 @@ function plansResponse(): BillingPlansResponse {
   return {
     currency: "USD",
     billing_period: "monthly",
+    billing_enabled: true,
     plans: (
       [
         ["free", "Free", 0, false, ["standard", "advanced"]],

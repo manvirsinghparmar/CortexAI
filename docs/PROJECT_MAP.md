@@ -47,13 +47,14 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Ask/Compare/Optimize/upload authorization, conservative Smart premium-envelope reservation, and actual-success finalization: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`, `server/routes/optimize.py`, `server/routes/files.py`
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
+- Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; hosted-session endpoints: `server/routes/billing.py`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
 
 - SQLAlchemy table reflection and repository access: `db/`
 - B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
-- Billing constraint/lifecycle/entitlement/metering/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
+- Billing constraint/lifecycle/entitlement/metering/Stripe-session/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
@@ -162,6 +163,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Keep feature/model/file checks and required allowance quantities in `server/billing/entitlement_service.py`; atomic reserve/settle/release/expiry mutations belong in `server/billing/metering_service.py`
   4. Update `server/schemas/responses.py`, `/v1/entitlements`, `/v1/whoami`, Postman, and `tests/test_billing_entitlements.py` together
   5. Preserve the separation between smart-routing tiers and subscription billing classes, and fail unknown plan/class/status data conservatively
+
+- Change Stripe Checkout or Customer Portal behavior:
+  1. Keep credentials, paid-plan Price mapping, and all redirect URLs in `server/billing/stripe_gateway.py`; never accept those values from request bodies
+  2. Keep short DB units of work and provider calls separated in `server/billing/session_service.py`; Customer claiming must remain compare-and-set and Customer/Checkout creation idempotent
+  3. Keep routes session-scoped and provider-safe in `server/routes/billing.py`; existing provider-live subscriptions must route to Portal instead of creating Checkout
+  4. Update strict request/response schemas, `.env.example`, `docs/runbooks/stripe-billing.md`, README/FastAPI docs, Postman, and `tests/test_stripe_billing.py` together
+  5. Hosted-session creation never grants paid access; only the verified webhook lifecycle may update paid subscription state
 
 - Change atomic subscription metering:
   1. Keep transaction orchestration and transition rules in `server/billing/metering_service.py`; keep SQL row locks and counter mutations in `db/billing_repository.py`

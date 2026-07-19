@@ -251,6 +251,18 @@ def test_duplicate_stripe_customer_is_rejected(billing_db):
 
 
 @pytest.mark.unit
+def test_claim_stripe_customer_id_sets_once_without_overwriting_winner(billing_db):
+    db, _ = billing_db
+    account = repository.get_or_create_billing_account_for_user(db, uuid4())
+
+    claimed = repository.claim_stripe_customer_id(db, account["id"], "cus_first")
+    existing = repository.claim_stripe_customer_id(db, account["id"], "cus_second")
+
+    assert claimed["stripe_customer_id"] == "cus_first"
+    assert existing["stripe_customer_id"] == "cus_first"
+
+
+@pytest.mark.unit
 def test_subscription_upsert_is_idempotent_and_prevents_cross_account_reassignment(billing_db):
     db, tables = billing_db
     first_account = repository.get_or_create_billing_account_for_user(db, uuid4())

@@ -110,6 +110,13 @@ PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 # B2C subscription resolution and metering
 BILLING_ENABLED=false               # false => Free for every account
 SUBSCRIPTION_PAYMENT_GRACE_DAYS=3   # fallback past_due grace window
+STRIPE_SECRET_KEY=                  # server-only; required when billing is enabled
+STRIPE_PLUS_MONTHLY_PRICE_ID=       # server-owned Price mapping
+STRIPE_PRO_MONTHLY_PRICE_ID=        # server-owned Price mapping
+STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success
+STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/plans?checkout=canceled
+STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
+# STRIPE_API_VERSION=               # optional; default is the SDK-pinned version
 # DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; ignored in production and when billing is enabled
 
 # Tavily research retrieval
@@ -182,7 +189,8 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
-- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; the current foundation has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
+- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. It also keeps Stripe lazy and makes Checkout/Portal return `503 billing_not_configured` without requiring Stripe credentials. WP7 adds the pinned Stripe SDK plus server-owned Checkout and Customer Portal creation, but it does not grant paid access: keep billing disabled in production until WP8 verified-webhook synchronization is deployed. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
+- When billing is enabled, startup validates the Stripe secret-key shape, every paid plan's configured Price ID, the three backend redirect URLs, and any explicit API version. The client can submit only `plan_code` and `billing_period`; extra Price, amount, currency, Customer, or redirect fields are rejected. Stripe webhooks remain the future authority for paid state.
 - DB-mode Ask, Compare, Optimize, and upload/file-analysis paths now use the same short reserve/settle/release lifecycle. Ask/Compare reserve before provider work, settle only actual successful model classes and performed research, and settle one file-analysis turn only when an attachment-backed turn produces billable output. `/v1/optimize` reserves before the explicit UI optimizer and settles once whenever invocation starts, including timeout or valid fallback; submitting its returned prompt to Ask/Compare does not charge another optimization turn. Upload reserves the server-observed raw-body byte count before object storage, settles it only after a successful upload, and releases it on validation or storage failure. Usage-export enforcement remains later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
@@ -393,6 +401,8 @@ Response includes:
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
 - `GET /v1/entitlements`
+- `POST /v1/billing/checkout-session`
+- `POST /v1/billing/portal-session`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -425,6 +435,20 @@ Lifecycle resolution is conservative: `trialing`/`active` grant paid access for 
 Ask and Compare enforcement is backend-authoritative in database mode. Entitlement/model denials happen before provider execution and return structured `403`, exhausted monthly meters return `429`, and unsafe billing configuration returns a provider-safe `500`. Compare accepts two or three targets at the platform boundary; Free and Plus allow two, while Pro allows three. Streaming reservations are finalized inside the response generator: model units settle after meaningful output is emitted, disconnects before output release them, performed research still settles once, and Compare disconnects aggregate only targets whose output started.
 
 Smart Ask receives `allowed_billing_classes` as a routing constraint. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's billing classes are removed. The initial conservative policy reserves one response plus the premium-meter envelope through the highest billing class Smart may select, then settles only the class of the actual successful model and releases unused premium reservations. The envelope is required because the existing atomic reservation schema cannot transfer a reservation between meter keys when Smart falls back from Ultra to Advanced.
+
+### Stripe Checkout and Customer Portal
+
+`POST /v1/billing/checkout-session` is session-scoped and accepts only:
+
+```json
+{"plan_code":"plus","billing_period":"monthly"}
+```
+
+The backend resolves the paid plan through `config/subscription_plans.yaml`, reads its Price ID from the named server environment variable, creates or reuses the authenticated user's Stripe Customer, and returns a short-lived `checkout_url`. It never accepts a Price ID, amount, currency, Customer ID, success URL, or cancel URL from the browser. Customer creation and Checkout use stable account-scoped idempotency keys. If the account already has any provider-live subscription, the route creates a Portal session instead and returns `destination: "portal"` without creating another Checkout subscription.
+
+`POST /v1/billing/portal-session` accepts an omitted or empty strict body and returns `portal_url` only for the persisted Stripe Customer. Its return URL is server configuration. An account without a Customer receives `409 stripe_customer_required`; Stripe failures become a provider-safe `502 billing_provider_unavailable`. Neither route stores hosted URLs.
+
+These routes create hosted sessions only. They do not write paid subscription state or grant entitlements; verified Stripe webhooks in WP8 must authoritatively update the local subscription snapshot. See `docs/runbooks/stripe-billing.md` for configuration and safe enablement.
 
 ### Cognito (Gmail) sign-in
 
@@ -731,6 +755,11 @@ Common `detail.code` values:
 - `bad_request`
 - `invalid_model`
 - `unauthorized`
+- `billing_not_configured`
+- `invalid_subscription_plan`
+- `paid_subscription_plan_required`
+- `stripe_customer_required`
+- `billing_provider_unavailable`
 
 Provider-model failures that originate from upstream APIs are normalized before
 they reach API/stream/frontend surfaces. `error.details.kind` carries the stable
@@ -948,6 +977,11 @@ Run B2B launch tests only:
 python -m pytest tests/test_b2b_launch_features.py -q
 ```
 
+Run Stripe gateway/session contract tests without making real Stripe calls:
+```bash
+python -m pytest tests/test_stripe_billing.py tests/test_billing_repository.py -q
+```
+
 Run full B2B API checklist against a live server:
 ```bash
 python scripts/e2e_b2b_checklist.py --base-url http://127.0.0.1:8000 --api-key dev-key-1
@@ -1144,11 +1178,14 @@ OpenAIProject/
       errors.py
       models.py
       plan_catalog.py
+      session_service.py
+      stripe_gateway.py
       subscription_service.py
     routes/
       __init__.py
       admin.py
       byok.py
+      billing.py
       catalog.py
       chat.py
       compare.py
@@ -1267,10 +1304,11 @@ OpenAIProject/
 - Add DB tables/columns/indexes: create SQL migration in `db/migrations/`, then update reflected usage in `db/tables.py` and queries in `db/repository.py`.
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).
 - Change usage/savings/BYOK behavior: `server/usage_reporting.py`, `server/savings.py`, `server/byok_service.py`, and related routes under `server/routes/`.
+- Change Stripe hosted-session behavior: `server/billing/stripe_gateway.py`, `server/billing/session_service.py`, `server/routes/billing.py`, strict billing schemas, `.env.example`, `docs/runbooks/stripe-billing.md`, Postman, and `tests/test_stripe_billing.py`. Never move Price, amount, Customer, or redirect authority into the client.
 - Add/adjust guardrails: `server/rate_limit.py`, `server/circuit_breaker.py`, privacy policy in `server/privacy.py`.
 - Update CI/workflow behavior: `.github/workflows/ci.yml`, `.github/workflows/live-e2e.yml`, `.github/workflows/incident-regression-38.yml`.
 - Add tenant/dev tooling scripts: `scripts/` (runtime checks/reporting) and `tools/` (operator/dev helpers).
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-05-23
+Last updated: 2026-07-19

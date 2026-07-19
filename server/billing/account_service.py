@@ -20,6 +20,7 @@ class BillingAccount:
     stripe_customer_id: str | None
     currency: str
     country: str | None
+    email: str | None
 
 
 def get_or_create_user_billing_account(db: Session, user_id: UUID) -> BillingAccount:
@@ -28,10 +29,10 @@ def get_or_create_user_billing_account(db: Session, user_id: UUID) -> BillingAcc
 
     try:
         users = get_table("users")
-        user_exists = db.execute(
-            select(users.c.id).where(users.c.id == user_id)
-        ).scalar_one_or_none()
-        if user_exists is None:
+        user_row = db.execute(
+            select(users.c.id, users.c.email).where(users.c.id == user_id)
+        ).first()
+        if user_row is None:
             raise BillingIdentityError("Authenticated user does not exist")
 
         record = get_or_create_billing_account_for_user(db, user_id)
@@ -42,6 +43,7 @@ def get_or_create_user_billing_account(db: Session, user_id: UUID) -> BillingAcc
             stripe_customer_id=record.get("stripe_customer_id"),
             currency=str(record.get("currency") or "USD"),
             country=record.get("country"),
+            email=str(user_row.email).strip() if user_row.email else None,
         )
     except BillingIdentityError:
         raise

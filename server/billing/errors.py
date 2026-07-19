@@ -16,6 +16,26 @@ class BillingConfigurationError(RuntimeError):
     """Billing persistence or configuration is internally inconsistent."""
 
 
+class BillingNotConfiguredError(RuntimeError):
+    """Stripe billing is intentionally disabled in this environment."""
+
+
+class BillingProviderError(RuntimeError):
+    """Stripe could not create a safe hosted billing session."""
+
+
+class BillingPlanSelectionError(ValueError):
+    """A Checkout request selected an unknown or unsupported plan option."""
+
+    def __init__(self, *, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class StripeCustomerRequiredError(RuntimeError):
+    """A Customer Portal operation has no persisted Stripe customer identity."""
+
+
 class EntitlementDeniedError(RuntimeError):
     """A subscription entitlement decision denied provider execution."""
 
@@ -167,5 +187,42 @@ def billing_database_required_http_exception() -> HTTPException:
         detail={
             "code": "billing_database_required",
             "message": "Subscription entitlements require database-backed runtime mode.",
+        },
+    )
+
+
+def billing_not_configured_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "billing_not_configured",
+            "message": "Billing is not configured in this environment.",
+        },
+    )
+
+
+def billing_provider_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "code": "billing_provider_unavailable",
+            "message": "The billing provider is temporarily unavailable. Please try again.",
+        },
+    )
+
+
+def billing_plan_selection_http_exception(error: BillingPlanSelectionError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": error.code, "message": str(error)},
+    )
+
+
+def stripe_customer_required_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "stripe_customer_required",
+            "message": "No billing profile is available to manage for this account.",
         },
     )

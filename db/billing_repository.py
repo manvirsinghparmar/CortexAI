@@ -205,6 +205,44 @@ def set_stripe_customer_id(
     return _first_record(db.execute(stmt))
 
 
+def claim_stripe_customer_id(
+    db: Session,
+    billing_account_id: UUID,
+    stripe_customer_id: str,
+) -> BillingRecord:
+    """Set a Stripe Customer exactly once and return the winning account row.
+
+    Concurrent Checkout requests use the same provider idempotency key. This
+    compare-and-set prevents either request from overwriting a Customer already
+    persisted by the other transaction.
+    """
+    billing_accounts = _table("billing_accounts")
+    customer_id = _required_text(stripe_customer_id, "stripe_customer_id")
+    stmt = (
+        update(billing_accounts)
+        .where(
+            and_(
+                billing_accounts.c.id == billing_account_id,
+                billing_accounts.c.stripe_customer_id.is_(None),
+            )
+        )
+        .values(stripe_customer_id=customer_id, updated_at=func.now())
+        .returning(*billing_accounts.c)
+    )
+    claimed = _first_record(db.execute(stmt))
+    if claimed is not None:
+        return claimed
+
+    existing = _first_record(
+        db.execute(select(billing_accounts).where(billing_accounts.c.id == billing_account_id))
+    )
+    if existing is None:
+        raise RuntimeError("Billing account could not be read while claiming Stripe customer")
+    if not existing.get("stripe_customer_id"):
+        raise RuntimeError("Stripe customer claim completed without a persisted customer")
+    return existing
+
+
 def get_subscription_by_provider_id(
     db: Session,
     provider: str,

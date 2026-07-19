@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, effective subscription entitlements, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, effective subscription entitlements, server-owned Stripe Checkout/Portal sessions, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -253,6 +253,85 @@
                   "  var setCookie = pm.response.headers.get('Set-Cookie') || '';",
                   "  pm.test('sets cortex_session cookie', function () { pm.expect(setCookie).to.include('cortex_session='); });",
                   "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "POST /v1/billing/checkout-session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan_code\": \"plus\",\n  \"billing_period\": \"monthly\"\n}"
+            },
+            "url": "{{base_url}}/v1/billing/checkout-session",
+            "description": "Creates a server-owned Stripe Checkout URL. Existing provider-live subscribers receive a Portal destination instead. Never add Price, amount, Customer, or redirect fields to this request. Use Stripe test mode; BILLING_ENABLED=false returns 503."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects checkout, customer state, or disabled billing', function () { pm.expect([200, 409, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('hosted billing redirect shape', function () {",
+                  "    pm.expect(body.checkout_url).to.be.a('string');",
+                  "    pm.expect(['checkout', 'portal']).to.include(body.destination);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/billing/portal-session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": "{{base_url}}/v1/billing/portal-session",
+            "description": "Creates a short-lived Portal URL for the persisted Stripe Customer. Customer ID and return URL are server-owned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects portal, missing customer, or disabled billing', function () { pm.expect([200, 409, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('portal response shape', function () { pm.expect(pm.response.json().portal_url).to.be.a('string'); }); }"
                 ]
               }
             }

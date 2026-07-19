@@ -1,9 +1,9 @@
 """Pydantic request models for FastAPI endpoints."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from config.provider_catalog import get_provider_ids
 
@@ -149,3 +149,23 @@ class ByokUpdateRequest(BaseModel):
         if self.baseline_model and not self.baseline_provider:
             raise ValueError("baseline_provider is required when baseline_model is provided")
         return self
+
+
+class CheckoutSessionRequest(BaseModel):
+    """Server-resolved subscription Checkout selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_code: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")
+    billing_period: Literal["monthly"] = "monthly"
+
+    @field_validator("plan_code")
+    @classmethod
+    def normalize_plan_code(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class PortalSessionRequest(BaseModel):
+    """Empty, strict body for server-owned Customer Portal creation."""
+
+    model_config = ConfigDict(extra="forbid")

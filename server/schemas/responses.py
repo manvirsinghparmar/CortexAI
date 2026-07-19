@@ -1,7 +1,7 @@
 """Pydantic response models (DTOs) for FastAPI endpoints."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 
 class TokenUsageDTO(BaseModel):
@@ -382,6 +382,15 @@ class EntitlementsResponseDTO(BaseModel):
     model_access: EntitlementModelAccessDTO
     allowances: Dict[str, EntitlementAllowanceDTO] = Field(default_factory=dict)
     period: EntitlementPeriodDTO
+
+
+class CheckoutSessionResponseDTO(BaseModel):
+    checkout_url: str
+    destination: Literal["checkout", "portal"] = "checkout"
+
+
+class PortalSessionResponseDTO(BaseModel):
+    portal_url: str
 
 
 class FileBaseDTO(BaseModel):

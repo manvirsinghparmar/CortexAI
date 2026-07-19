@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from server.frontend_runtime_config import render_frontend_runtime_config_js
 from server.billing.plan_catalog import get_plan_catalog
+from server.billing.stripe_gateway import load_stripe_billing_config
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
 from server.routes import (
     admin,
     auth as auth_routes,
+    billing,
     byok,
     catalog,
     chat,
@@ -94,6 +96,17 @@ async def lifespan(app: FastAPI):
             "extra_fields": {
                 "catalog_version": plan_catalog.version,
                 "plan_codes": [plan.code for plan in plan_catalog.list_plans()],
+            }
+        },
+    )
+    stripe_billing_config = load_stripe_billing_config(catalog=plan_catalog)
+    logger.info(
+        "Stripe billing configuration validated",
+        extra={
+            "extra_fields": {
+                "billing_enabled": stripe_billing_config.enabled,
+                "configured_plan_codes": sorted(stripe_billing_config.price_ids),
+                "explicit_api_version": bool(stripe_billing_config.api_version),
             }
         },
     )
@@ -245,6 +258,7 @@ def create_app() -> FastAPI:
     app.include_router(byok.router)
     app.include_router(whoami.router)
     app.include_router(entitlements.router)
+    app.include_router(billing.router)
     app.include_router(catalog.router)
     app.include_router(files.router)
 

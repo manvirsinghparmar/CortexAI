@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -13,6 +14,52 @@ class BillingIdentityError(RuntimeError):
 
 class BillingConfigurationError(RuntimeError):
     """Billing persistence or configuration is internally inconsistent."""
+
+
+class UsageReservationConflictError(RuntimeError):
+    """An idempotency key was reused for a different metering operation."""
+
+    code = "usage_reservation_conflict"
+
+
+class UsageReservationNotFoundError(LookupError):
+    """A requested usage reservation does not exist."""
+
+    code = "usage_reservation_not_found"
+
+
+class UsageReservationStateError(RuntimeError):
+    """A terminal reservation cannot perform the requested transition."""
+
+    code = "usage_reservation_state_conflict"
+
+
+class UsageAllowanceExceededError(RuntimeError):
+    """A reservation would exceed one server-owned plan allowance."""
+
+    code = "monthly_allowance_exhausted"
+
+    def __init__(
+        self,
+        *,
+        meter: str,
+        requested: int,
+        used: int,
+        reserved: int,
+        limit: int,
+        plan_code: str,
+        reset_at: datetime,
+    ) -> None:
+        self.meter = meter
+        self.requested = requested
+        self.used = used
+        self.reserved = reserved
+        self.limit = limit
+        self.remaining = max(0, limit - used - reserved)
+        self.plan_code = plan_code
+        self.current_plan = plan_code
+        self.reset_at = reset_at
+        super().__init__(f"The {plan_code} plan's monthly {meter} allowance has been exhausted.")
 
 
 _ENTITLEMENT_STATUS_CODES = {

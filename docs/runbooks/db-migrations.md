@@ -136,9 +136,25 @@ ORDER BY tablename, indexname;
 Run the repository tests and, when a disposable PostgreSQL database is available, the real reflection/locking tests:
 
 ```bash
-python -m pytest tests/test_billing_repository.py -q
+python -m pytest tests/test_billing_repository.py tests/test_billing_metering.py -q
 BILLING_TEST_DATABASE_URL="postgresql+psycopg://..." python -m pytest tests/test_billing_postgres_integration.py -q
 ```
+
+### Atomic metering operations
+
+Work Package 4 uses the existing `usage_counters` and `usage_reservations` tables; it does not require another migration. `server/billing/metering_service.py` reserves, settles, releases, and expires usage inside the caller-owned transaction. Keep these transactions short and commit the reservation before starting a provider call.
+
+Stale cleanup defaults to reservations older than 30 minutes and uses `SELECT ... FOR UPDATE SKIP LOCKED` before releasing counter quantities. No background scheduler is installed in this package; a future worker or operational task must call `expire_stale_reservations`. Inspect candidates without mutating them:
+
+```sql
+SELECT id, billing_account_id, request_id, operation_type, created_at
+FROM public.usage_reservations
+WHERE state = 'reserved'
+  AND created_at < NOW() - INTERVAL '30 minutes'
+ORDER BY created_at;
+```
+
+Do not repair `reserved_quantity` with ad hoc SQL. Run the metering cleanup in a reviewed caller-owned unit of work so each reservation and every related counter transition remain atomic and auditable.
 
 ### Billing rollback
 

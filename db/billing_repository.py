@@ -119,8 +119,11 @@ def _normalize_quantities(
     *,
     field_name: str,
     require_positive: bool,
+    allow_empty: bool = False,
 ) -> dict[str, int]:
-    if not isinstance(quantities, Mapping) or not quantities:
+    if not isinstance(quantities, Mapping):
+        raise ValueError(f"{field_name} must be a mapping")
+    if not quantities and not allow_empty:
         raise ValueError(f"{field_name} must be a non-empty mapping")
 
     normalized: dict[str, int] = {}
@@ -133,7 +136,11 @@ def _normalize_quantities(
         if quantity < minimum:
             comparator = "positive" if require_positive else "nonnegative"
             raise ValueError(f"{field_name}.{meter_key} must be {comparator}")
+        if not require_positive and quantity == 0:
+            continue
         normalized[meter_key] = quantity
+    if not normalized and not allow_empty:
+        raise ValueError(f"{field_name} must contain at least one positive quantity")
     return normalized
 
 
@@ -144,6 +151,20 @@ def get_billing_account_for_user(db: Session, user_id: UUID) -> BillingRecord | 
             billing_accounts.c.owner_type == "user",
             billing_accounts.c.owner_id == user_id,
         )
+    )
+    return _first_record(db.execute(stmt))
+
+
+def lock_billing_account(
+    db: Session,
+    billing_account_id: UUID,
+) -> BillingRecord | None:
+    """Lock one billing owner while a reservation idempotency key is claimed."""
+    billing_accounts = _table("billing_accounts")
+    stmt = (
+        select(billing_accounts)
+        .where(billing_accounts.c.id == billing_account_id)
+        .with_for_update()
     )
     return _first_record(db.execute(stmt))
 
@@ -499,6 +520,128 @@ def lock_usage_counters(
     return rows
 
 
+def reserve_usage_quantities(
+    db: Session,
+    usage_period_id: UUID,
+    quantities: Mapping[str, int],
+) -> list[BillingRecord]:
+    """Increment already-locked reservation counters without committing."""
+    normalized = _normalize_quantities(
+        quantities,
+        field_name="quantities",
+        require_positive=True,
+    )
+    usage_counters = _table("usage_counters")
+    persisted: list[BillingRecord] = []
+    for meter_key in sorted(normalized):
+        stmt = (
+            update(usage_counters)
+            .where(
+                and_(
+                    usage_counters.c.usage_period_id == usage_period_id,
+                    usage_counters.c.meter_key == meter_key,
+                )
+            )
+            .values(
+                reserved_quantity=(usage_counters.c.reserved_quantity + normalized[meter_key]),
+                updated_at=func.now(),
+            )
+            .returning(*usage_counters.c)
+        )
+        row = _first_record(db.execute(stmt))
+        if row is None:
+            raise LookupError(f"Usage counter was not found: {meter_key}")
+        persisted.append(row)
+    return persisted
+
+
+def settle_usage_quantities(
+    db: Session,
+    usage_period_id: UUID,
+    *,
+    requested_quantities: Mapping[str, int],
+    successful_quantities: Mapping[str, int],
+) -> list[BillingRecord]:
+    """Move an already-locked reservation from reserved to finalized usage."""
+    requested = _normalize_quantities(
+        requested_quantities,
+        field_name="requested_quantities",
+        require_positive=True,
+    )
+    successful = _normalize_quantities(
+        successful_quantities,
+        field_name="successful_quantities",
+        require_positive=False,
+        allow_empty=True,
+    )
+    if any(key not in requested or value > requested[key] for key, value in successful.items()):
+        raise ValueError("Successful quantities cannot exceed the reservation")
+
+    usage_counters = _table("usage_counters")
+    persisted: list[BillingRecord] = []
+    for meter_key in sorted(requested):
+        reserved_quantity = requested[meter_key]
+        used_quantity = successful.get(meter_key, 0)
+        stmt = (
+            update(usage_counters)
+            .where(
+                and_(
+                    usage_counters.c.usage_period_id == usage_period_id,
+                    usage_counters.c.meter_key == meter_key,
+                    usage_counters.c.reserved_quantity >= reserved_quantity,
+                )
+            )
+            .values(
+                used_quantity=usage_counters.c.used_quantity + used_quantity,
+                reserved_quantity=(usage_counters.c.reserved_quantity - reserved_quantity),
+                updated_at=func.now(),
+            )
+            .returning(*usage_counters.c)
+        )
+        row = _first_record(db.execute(stmt))
+        if row is None:
+            raise RuntimeError(f"Usage counter cannot settle the reserved quantity: {meter_key}")
+        persisted.append(row)
+    return persisted
+
+
+def release_usage_quantities(
+    db: Session,
+    usage_period_id: UUID,
+    quantities: Mapping[str, int],
+) -> list[BillingRecord]:
+    """Release quantities from already-locked counters without changing usage."""
+    normalized = _normalize_quantities(
+        quantities,
+        field_name="quantities",
+        require_positive=True,
+    )
+    usage_counters = _table("usage_counters")
+    persisted: list[BillingRecord] = []
+    for meter_key in sorted(normalized):
+        quantity = normalized[meter_key]
+        stmt = (
+            update(usage_counters)
+            .where(
+                and_(
+                    usage_counters.c.usage_period_id == usage_period_id,
+                    usage_counters.c.meter_key == meter_key,
+                    usage_counters.c.reserved_quantity >= quantity,
+                )
+            )
+            .values(
+                reserved_quantity=usage_counters.c.reserved_quantity - quantity,
+                updated_at=func.now(),
+            )
+            .returning(*usage_counters.c)
+        )
+        row = _first_record(db.execute(stmt))
+        if row is None:
+            raise RuntimeError(f"Usage counter cannot release the reserved quantity: {meter_key}")
+        persisted.append(row)
+    return persisted
+
+
 def create_usage_reservation(
     db: Session,
     *,
@@ -565,6 +708,40 @@ def get_usage_reservation(
     )
 
 
+def get_usage_reservation_by_id(
+    db: Session,
+    reservation_id: UUID,
+    *,
+    for_update: bool = False,
+) -> BillingRecord | None:
+    usage_reservations = _table("usage_reservations")
+    stmt = select(usage_reservations).where(usage_reservations.c.id == reservation_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    return _first_record(db.execute(stmt))
+
+
+def lock_stale_usage_reservations(
+    db: Session,
+    *,
+    older_than: datetime,
+) -> list[BillingRecord]:
+    """Lock clearly stale reservations while skipping rows owned by active workers."""
+    usage_reservations = _table("usage_reservations")
+    stmt = (
+        select(usage_reservations)
+        .where(
+            and_(
+                usage_reservations.c.state == "reserved",
+                usage_reservations.c.created_at < older_than,
+            )
+        )
+        .order_by(usage_reservations.c.created_at, usage_reservations.c.id)
+        .with_for_update(skip_locked=True)
+    )
+    return [dict(row) for row in db.execute(stmt).mappings().all()]
+
+
 def settle_usage_reservation(
     db: Session,
     *,
@@ -576,6 +753,7 @@ def settle_usage_reservation(
         settled_quantities,
         field_name="settled_quantities",
         require_positive=False,
+        allow_empty=True,
     )
     existing = _get_usage_reservation(
         db,
@@ -656,6 +834,35 @@ def release_usage_reservation(
     persisted = _first_record(db.execute(stmt))
     if persisted is None:
         raise RuntimeError("Usage reservation state changed during release")
+    return persisted
+
+
+def expire_usage_reservation(
+    db: Session,
+    *,
+    reservation_id: UUID,
+    release_reason: str,
+) -> BillingRecord:
+    """Mark one locked, still-reserved row expired without committing."""
+    usage_reservations = _table("usage_reservations")
+    stmt = (
+        update(usage_reservations)
+        .where(
+            and_(
+                usage_reservations.c.id == reservation_id,
+                usage_reservations.c.state == "reserved",
+            )
+        )
+        .values(
+            state="expired",
+            release_reason=_required_text(release_reason, "release_reason"),
+            released_at=func.now(),
+        )
+        .returning(*usage_reservations.c)
+    )
+    persisted = _first_record(db.execute(stmt))
+    if persisted is None:
+        raise RuntimeError("Usage reservation state changed during expiry")
     return persisted
 
 

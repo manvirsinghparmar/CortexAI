@@ -107,7 +107,7 @@ PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2 # explicit /v1/optimize attempt count
 PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450 # compact optimizer output cap
 PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 
-# B2C subscription resolution (WP3)
+# B2C subscription resolution and metering
 BILLING_ENABLED=false               # false => Free for every account
 SUBSCRIPTION_PAYMENT_GRACE_DAYS=3   # fallback past_due grace window
 # DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; ignored in production and when billing is enabled
@@ -180,14 +180,15 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
 - Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
-- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` now resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and future reservation quantities without mutating counters.
-- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; WP3 has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
-- Ask, Compare, optimize, upload, and export routes are not yet wired to reserve or enforce these allowances; that integration remains in later work packages. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
+- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
+- `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
+- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; the current foundation has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
+- Ask, Compare, optimize, upload, and export routes are not yet wired to call the metering service; backend route enforcement remains Work Packages 5 and 6. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
 python -m pytest tests/test_registry_pricing_alignment.py tests/test_subscription_plan_catalog.py -q
-python -m pytest tests/test_billing_entitlements.py tests/test_billing_repository.py -q
+python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_billing_repository.py -q
 ```
 
 ## Run

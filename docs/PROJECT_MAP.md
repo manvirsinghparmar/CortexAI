@@ -44,6 +44,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Consumer subscription plans: `config/subscription_plans.yaml`
 - Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
 - Effective account/subscription lifecycle and entitlement decisions: `server/billing/account_service.py`, `server/billing/subscription_service.py`, `server/billing/entitlement_service.py`, `server/billing/errors.py`
+- Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
 - Cost tables: `config/pricing.py`
 
@@ -51,7 +52,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 - SQLAlchemy table reflection and repository access: `db/`
 - B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
-- Billing constraint/lifecycle/entitlement coverage and opt-in PostgreSQL locking coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_postgres_integration.py`
+- Billing constraint/lifecycle/entitlement/metering coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
@@ -157,9 +158,15 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Change effective subscription or entitlement behavior:
   1. Keep account validation/lazy creation in `server/billing/account_service.py`
   2. Keep lifecycle state, Free fallback, development override guards, and period selection in `server/billing/subscription_service.py`
-  3. Keep feature/model/file checks and required allowance quantities in `server/billing/entitlement_service.py`; metering mutations belong to the later atomic metering service
+  3. Keep feature/model/file checks and required allowance quantities in `server/billing/entitlement_service.py`; atomic reserve/settle/release/expiry mutations belong in `server/billing/metering_service.py`
   4. Update `server/schemas/responses.py`, `/v1/entitlements`, `/v1/whoami`, Postman, and `tests/test_billing_entitlements.py` together
   5. Preserve the separation between smart-routing tiers and subscription billing classes, and fail unknown plan/class/status data conservatively
+
+- Change atomic subscription metering:
+  1. Keep transaction orchestration and transition rules in `server/billing/metering_service.py`; keep SQL row locks and counter mutations in `db/billing_repository.py`
+  2. Preserve caller-owned commit/rollback boundaries, deterministic counter lock ordering, account-scoped request idempotency, nonnegative counters, and conservative configuration failures
+  3. Validate portable transitions in `tests/test_billing_metering.py` and real concurrent overuse prevention with `BILLING_TEST_DATABASE_URL` in `tests/test_billing_postgres_integration.py`
+  4. Route-level provider enforcement remains separate and must reserve before calls, settle successful work, and release failures when Work Packages 5 and 6 integrate the service
 
 - Investigate production logging incidents on AWS EC2:
   1. Follow `docs/runbooks/aws-ec2-logging.md`

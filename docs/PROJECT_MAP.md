@@ -47,7 +47,8 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Ask/Compare/Optimize/upload authorization, conservative Smart premium-envelope reservation, and actual-success finalization: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`, `server/routes/optimize.py`, `server/routes/files.py`
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
-- Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; billing endpoints: `server/routes/billing.py`
+- Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; public plans, effective subscription, hosted-session, and webhook endpoints: `server/routes/billing.py`
+- React subscription transport and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`; contract tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
@@ -170,6 +171,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Keep routes session-scoped and provider-safe in `server/routes/billing.py`; existing provider-live subscriptions must route to Portal instead of creating Checkout
   4. Update strict request/response schemas, `.env.example`, `docs/runbooks/stripe-billing.md`, README/FastAPI docs, Postman, and `tests/test_stripe_billing.py` together
   5. Hosted-session creation never grants paid access; only the verified webhook lifecycle may update paid subscription state
+
+- Change the React subscription data layer:
+  1. Keep public plan, current subscription, entitlement, Checkout, and Portal transport in `frontend-react/src/api/billing.ts` and `frontend-react/src/api/entitlements.ts`
+  2. Keep structured billing error parsing in `frontend-react/src/subscription/subscriptionErrors.ts`; do not parse provider payloads or expose secrets in React
+  3. Keep auth-aware, memory-only subscription state and bounded Checkout-return polling in `frontend-react/src/hooks/useSubscription.ts`; signed-out users must not call authenticated billing endpoints
+  4. Treat return query parameters as refresh hints only; paid access remains the `/v1/entitlements` result synchronized by verified webhooks
+  5. Validate API calls, typed errors, redirects, polling, and browser-storage non-authority in `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`
 
 - Change Stripe webhook or reconciliation behavior:
   1. Keep raw-body signature verification and Stripe API access in `server/billing/stripe_gateway.py`; never deserialize or mutate the request before verification

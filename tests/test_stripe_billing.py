@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -404,6 +405,85 @@ def billing_route_harness(monkeypatch):
 
 
 @pytest.mark.integration
+def test_public_plans_returns_display_safe_server_catalogue(
+    billing_route_harness,
+    monkeypatch,
+):
+    client, _, _, _, app, _ = billing_route_harness
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    monkeypatch.setattr(billing_route, "API_DB_ENABLED", False)
+    app.dependency_overrides[get_auth] = lambda: AuthResult(
+        api_key=None,
+        cognito_claims=None,
+        user_id=None,
+    )
+
+    response = client.get("/v1/billing/plans")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["currency"] == "USD"
+    assert payload["billing_period"] == "monthly"
+    assert [plan["code"] for plan in payload["plans"]] == ["free", "plus", "pro"]
+    assert [plan["monthly_price"] for plan in payload["plans"]] == [0.0, 6.99, 12.99]
+    assert [plan["code"] for plan in payload["plans"] if plan["recommended"]] == ["plus"]
+    serialized = json.dumps(payload).lower()
+    assert "stripe" not in serialized
+    assert "price_id" not in serialized
+    assert "customer" not in serialized
+
+
+@pytest.mark.integration
+def test_current_subscription_returns_effective_provider_safe_state(
+    billing_route_harness,
+    monkeypatch,
+):
+    client, _, _, _, _, _ = billing_route_harness
+    effective = SimpleNamespace(
+        plan=SimpleNamespace(code="plus"),
+        status="active",
+        provider="stripe",
+        provider_subscription_id="sub_secret123",
+        current_period_start=datetime(2026, 7, 18, tzinfo=UTC),
+        current_period_end=datetime(2026, 8, 18, tzinfo=UTC),
+        cancel_at_period_end=False,
+    )
+    monkeypatch.setattr(
+        billing_route,
+        "resolve_effective_subscription",
+        lambda *_args, **_kwargs: effective,
+    )
+
+    response = client.get("/v1/billing/subscription")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "plan_code": "plus",
+        "status": "active",
+        "provider": "stripe",
+        "current_period_start": "2026-07-18T00:00:00Z",
+        "current_period_end": "2026-08-18T00:00:00Z",
+        "cancel_at_period_end": False,
+        "can_manage": True,
+    }
+    assert "sub_secret123" not in response.text
+
+
+@pytest.mark.integration
+def test_current_subscription_requires_database_mode(
+    billing_route_harness,
+    monkeypatch,
+):
+    client, _, _, _, _, _ = billing_route_harness
+    monkeypatch.setattr(billing_route, "API_DB_ENABLED", False)
+
+    response = client.get("/v1/billing/subscription")
+
+    assert response.status_code == 501
+    assert response.json()["detail"]["code"] == "billing_database_required"
+
+
+@pytest.mark.integration
 def test_checkout_creates_and_reuses_customer_with_server_price(billing_route_harness):
     client, db, tables, gateway, _, user_id = billing_route_harness
 
@@ -601,9 +681,12 @@ def test_billing_routes_reject_api_key_only_auth(billing_route_harness):
         "/v1/billing/checkout-session",
         json={"plan_code": "plus", "billing_period": "monthly"},
     )
+    subscription = client.get("/v1/billing/subscription")
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "session_auth_required"
+    assert subscription.status_code == 403
+    assert subscription.json()["detail"]["code"] == "session_auth_required"
     assert gateway.customers == []
 
 

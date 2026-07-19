@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, effective subscription entitlements, server-owned Stripe Checkout/Portal sessions, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -263,6 +263,68 @@
     {
       "name": "Billing",
       "item": [
+        {
+          "name": "GET /v1/billing/plans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/billing/plans",
+            "description": "Public display-safe Free/Plus/Pro catalogue. Returns server-owned USD prices, feature/model access, and core allowances without Stripe Price IDs, Customers, or provider objects."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('display-safe plans response shape', function () {",
+                  "  pm.expect(body.currency).to.eql('USD');",
+                  "  pm.expect(body.billing_period).to.eql('monthly');",
+                  "  pm.expect(body.plans).to.be.an('array').that.is.not.empty;",
+                  "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('price_id');",
+                  "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('customer');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/billing/subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/billing/subscription",
+            "description": "Returns the authenticated user's effective provider-safe plan/status, current period, cancellation state, and manage capability. Provider subscription IDs are never returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects subscription or runtime auth/database requirements', function () { pm.expect([200, 401, 403, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('provider-safe subscription shape', function () {",
+                  "    pm.expect(body.plan_code).to.be.a('string');",
+                  "    pm.expect(body.status).to.be.a('string');",
+                  "    pm.expect(body.can_manage).to.be.a('boolean');",
+                  "    pm.expect(body).not.to.have.property('provider_subscription_id');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "POST /v1/billing/checkout-session",
           "request": {

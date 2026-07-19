@@ -115,6 +115,117 @@ export interface CompareResponse {
 
 export type ModelBillingClass = "standard" | "advanced" | "ultra";
 
+export type SubscriptionPlanCode = "free" | "plus" | "pro";
+
+export type SubscriptionStatus =
+  | "free"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "unpaid"
+  | "canceled"
+  | "incomplete"
+  | "incomplete_expired"
+  | "paused"
+  | "configuration_error";
+
+export type SubscriptionMeterKey =
+  | "model_responses"
+  | "advanced_model_responses"
+  | "ultra_model_responses"
+  | "research_turns"
+  | "optimization_turns"
+  | "file_analysis_turns"
+  | "uploaded_bytes";
+
+export interface AllowanceCounter {
+  used: number;
+  reserved: number;
+  limit: number;
+  remaining: number;
+}
+
+export interface PublicBillingPlanFeatures {
+  max_compare_models: number;
+  research_enabled: boolean;
+  prompt_improvement_enabled: boolean;
+  file_analysis_enabled: boolean;
+  allowed_billing_classes: ModelBillingClass[];
+}
+
+export interface PublicBillingPlanAllowances {
+  model_responses: number;
+  advanced_model_responses: number;
+  ultra_model_responses: number;
+  research_turns: number;
+  optimization_turns: number;
+  file_analysis_turns: number;
+}
+
+export interface PublicBillingPlan {
+  code: SubscriptionPlanCode;
+  display_name: string;
+  monthly_price: number;
+  recommended: boolean;
+  features: PublicBillingPlanFeatures;
+  allowances: PublicBillingPlanAllowances;
+}
+
+export interface BillingPlansResponse {
+  currency: "USD";
+  billing_period: "monthly";
+  plans: PublicBillingPlan[];
+}
+
+export interface BillingSubscriptionResponse {
+  plan_code: SubscriptionPlanCode;
+  status: SubscriptionStatus;
+  provider: string | null;
+  current_period_start: string;
+  current_period_end: string;
+  cancel_at_period_end: boolean;
+  can_manage: boolean;
+}
+
+export interface EntitlementsResponse {
+  plan: {
+    code: SubscriptionPlanCode;
+    display_name: string;
+    status: SubscriptionStatus;
+    source: string;
+    renews_at: string;
+    cancel_at_period_end: boolean;
+    grace_until: string | null;
+  };
+  features: {
+    compare_enabled: boolean;
+    max_compare_models: number;
+    research_enabled: boolean;
+    prompt_improvement_enabled: boolean;
+    file_analysis_enabled: boolean;
+    usage_export_enabled: boolean;
+    saved_history_enabled: boolean;
+    models_catalog_enabled: boolean;
+  };
+  model_access: {
+    allowed_billing_classes: ModelBillingClass[];
+  };
+  allowances: Partial<Record<SubscriptionMeterKey, AllowanceCounter>>;
+  period: {
+    starts_at: string;
+    ends_at: string;
+  };
+}
+
+export interface CheckoutSessionResponse {
+  checkout_url: string;
+  destination: "checkout" | "portal";
+}
+
+export interface PortalSessionResponse {
+  portal_url: string;
+}
+
 export interface ModelCatalogItem {
   provider: string;
   model: string;

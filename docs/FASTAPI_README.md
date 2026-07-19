@@ -220,6 +220,10 @@ The endpoint returns `plan`, `features`, `model_access`, `allowances`, and `peri
 
 The hosted Checkout and Portal routes require signed-session or Cognito bearer identity; API-key-only authentication returns `403 session_auth_required`. The webhook route uses Stripe signature verification instead of user authentication.
 
+`GET /v1/billing/plans` is public and returns only display-safe catalogue fields: USD monthly price, Plus recommendation state, model billing classes, feature availability, and core allowances. Price IDs, configured environment-variable names, Customers, and provider objects are omitted.
+
+`GET /v1/billing/subscription` requires signed-session or Cognito identity and database mode. It returns the effective plan code/status, provider label, current period, cancellation state, and `can_manage` without exposing a provider subscription ID. Its effective state comes from `subscription_service.py`, so disabled billing and unsafe lifecycle states still resolve conservatively.
+
 `POST /v1/billing/checkout-session` accepts the strict body `{"plan_code":"plus","billing_period":"monthly"}`. The server validates that the plan exists and is paid, resolves its Price ID from `config/subscription_plans.yaml` plus environment, creates/reuses the account Customer, and returns:
 
 ```json
@@ -251,6 +255,8 @@ STRIPE_PORTAL_RETURN_URL=https://app.example.com/settings/billing
 ```
 
 See `docs/runbooks/stripe-billing.md` for the enablement checklist. Do not place Stripe secrets in frontend runtime configuration or commit them.
+
+React consumes these contracts through `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, and the auth-aware `useSubscription` hook. Signed-out hooks call only the public plans endpoint. Checkout-success polling remains bounded and considers payment confirmed only after `/v1/entitlements` reports a paid effective plan; browser storage and the return query string are never plan authority.
 
 Session-scoped endpoints are session-scoped:
 - `/v1/chat*`

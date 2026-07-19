@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
@@ -30,6 +31,8 @@ from server.billing.session_service import (
     create_checkout_redirect,
     create_portal_redirect,
 )
+from server.billing.plan_catalog import get_plan_catalog
+from server.billing.subscription_service import resolve_effective_subscription
 from server.billing.stripe_gateway import (
     StripeBillingConfig,
     StripeGateway,
@@ -40,9 +43,14 @@ from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import CheckoutSessionRequest, PortalSessionRequest
 from server.schemas.responses import (
+    BillingPlansResponseDTO,
+    BillingSubscriptionResponseDTO,
     BillingWebhookResponseDTO,
     CheckoutSessionResponseDTO,
     PortalSessionResponseDTO,
+    PublicBillingPlanAllowancesDTO,
+    PublicBillingPlanDTO,
+    PublicBillingPlanFeaturesDTO,
 )
 from utils.logger import get_logger
 
@@ -111,6 +119,95 @@ def _authenticated_user_id(auth: AuthResult, *, request_id: str) -> UUID:
             db_session=db_session,
         )
         return identity.user_id
+
+
+def _iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+@router.get("/plans", response_model=BillingPlansResponseDTO)
+async def billing_plans():
+    """Return display-safe, server-owned plan information without Stripe identifiers."""
+    catalog = get_plan_catalog()
+    return BillingPlansResponseDTO(
+        plans=[
+            PublicBillingPlanDTO(
+                code=plan.code,
+                display_name=plan.display_name,
+                monthly_price=float(plan.monthly_price_usd),
+                recommended=plan.code == "plus",
+                features=PublicBillingPlanFeaturesDTO(
+                    max_compare_models=plan.entitlements.max_compare_models,
+                    research_enabled=plan.entitlements.research_enabled,
+                    prompt_improvement_enabled=(
+                        plan.entitlements.prompt_improvement_enabled
+                    ),
+                    file_analysis_enabled=plan.entitlements.file_analysis_enabled,
+                    allowed_billing_classes=sorted(
+                        plan.entitlements.allowed_billing_classes
+                    ),
+                ),
+                allowances=PublicBillingPlanAllowancesDTO(
+                    model_responses=plan.allowances.model_responses,
+                    advanced_model_responses=(
+                        plan.allowances.advanced_model_responses
+                    ),
+                    ultra_model_responses=plan.allowances.ultra_model_responses,
+                    research_turns=plan.allowances.research_turns,
+                    optimization_turns=plan.allowances.optimization_turns,
+                    file_analysis_turns=plan.allowances.file_analysis_turns,
+                ),
+            )
+            for plan in catalog.list_plans()
+        ]
+    )
+
+
+@router.get("/subscription", response_model=BillingSubscriptionResponseDTO)
+async def current_subscription(
+    request: Request,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Return the authenticated user's effective, provider-safe subscription state."""
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    if not API_DB_ENABLED:
+        raise billing_database_required_http_exception()
+
+    try:
+        with _db_uow() as db_session:
+            identity = _resolve_identity(
+                auth=auth,
+                request_id=request_id,
+                db_session=db_session,
+            )
+            effective = resolve_effective_subscription(
+                db_session,
+                identity.user_id,
+                now=datetime.now(UTC),
+            )
+    except BillingIdentityError as exc:
+        raise billing_identity_http_exception() from exc
+    except BillingConfigurationError as exc:
+        logger.exception(
+            "Current subscription resolution failed",
+            extra={"extra_fields": {"request_id": request_id}},
+        )
+        raise billing_configuration_http_exception() from exc
+
+    return BillingSubscriptionResponseDTO(
+        plan_code=effective.plan.code,
+        status=effective.status,
+        provider=effective.provider,
+        current_period_start=_iso(effective.current_period_start),
+        current_period_end=_iso(effective.current_period_end),
+        cancel_at_period_end=effective.cancel_at_period_end,
+        can_manage=bool(
+            effective.provider == "stripe" and effective.provider_subscription_id
+        ),
+    )
 
 
 @router.post(

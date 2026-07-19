@@ -384,6 +384,48 @@ class EntitlementsResponseDTO(BaseModel):
     period: EntitlementPeriodDTO
 
 
+class PublicBillingPlanFeaturesDTO(BaseModel):
+    max_compare_models: int
+    research_enabled: bool
+    prompt_improvement_enabled: bool
+    file_analysis_enabled: bool
+    allowed_billing_classes: List[str] = Field(default_factory=list)
+
+
+class PublicBillingPlanAllowancesDTO(BaseModel):
+    model_responses: int
+    advanced_model_responses: int
+    ultra_model_responses: int
+    research_turns: int
+    optimization_turns: int
+    file_analysis_turns: int
+
+
+class PublicBillingPlanDTO(BaseModel):
+    code: str
+    display_name: str
+    monthly_price: float
+    recommended: bool = False
+    features: PublicBillingPlanFeaturesDTO
+    allowances: PublicBillingPlanAllowancesDTO
+
+
+class BillingPlansResponseDTO(BaseModel):
+    currency: Literal["USD"] = "USD"
+    billing_period: Literal["monthly"] = "monthly"
+    plans: List[PublicBillingPlanDTO] = Field(default_factory=list)
+
+
+class BillingSubscriptionResponseDTO(BaseModel):
+    plan_code: str
+    status: str
+    provider: Optional[str] = None
+    current_period_start: str
+    current_period_end: str
+    cancel_at_period_end: bool
+    can_manage: bool
+
+
 class CheckoutSessionResponseDTO(BaseModel):
     checkout_url: str
     destination: Literal["checkout", "portal"] = "checkout"

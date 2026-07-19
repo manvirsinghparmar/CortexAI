@@ -441,6 +441,10 @@ Smart Ask receives `allowed_billing_classes` as a routing constraint. The router
 
 ### Stripe Checkout and Customer Portal
 
+`GET /v1/billing/plans` is public and returns the display-safe, server-owned Free/Plus/Pro catalogue: USD monthly prices, the Plus recommendation marker, model-class access, feature availability, and core monthly allowances. It never returns Stripe Price IDs, environment-variable names, Customer IDs, or provider objects.
+
+`GET /v1/billing/subscription` is session-scoped and returns the authenticated user's effective plan/status, provider label, current period, cancellation state, and whether the account has a manageable Stripe subscription. It applies the same conservative lifecycle resolution as `/v1/entitlements` and never exposes the provider subscription ID.
+
 `POST /v1/billing/checkout-session` is session-scoped and accepts only:
 
 ```json
@@ -454,6 +458,12 @@ The backend resolves the paid plan through `config/subscription_plans.yaml`, rea
 The hosted-session routes do not write paid state. `POST /v1/billing/webhook` is intentionally unauthenticated by user credentials and instead requires Stripe's signature over the exact raw body. It accepts the required Checkout, subscription, and invoice lifecycle events, records valid unknown events as ignored, returns `400 invalid_webhook_signature` before persistence for invalid payloads/signatures, and returns a non-2xx response when verified processing fails so Stripe can retry. Duplicate provider event IDs are harmless; failed rows can be retried; older subscription snapshots cannot overwrite newer ones. Subscription Price IDs are reverse-mapped through server configuration, never event metadata.
 
 Paid usage periods follow Stripe period boundaries. Repeated events and multiple lifecycle events for the same period reuse the existing period row and preserve settled counters; plan changes with the same period start update that row without resetting usage. `invoice.payment_failed` grants the configured grace only when a fresh authoritative Subscription remains `past_due`; cancellation resolution downgrades through the existing conservative lifecycle service without deleting account or conversation data. See `docs/runbooks/stripe-billing.md` and `docs/runbooks/subscription-incidents.md` for configuration, replay, and recovery guidance.
+
+### React subscription data layer
+
+The React client owns subscription transport in `frontend-react/src/api/billing.ts` and `frontend-react/src/api/entitlements.ts`, structured error normalization in `frontend-react/src/subscription/subscriptionErrors.ts`, and auth-aware in-memory state in `frontend-react/src/hooks/useSubscription.ts`. Signed-out users may load only the public plan catalogue; subscription and entitlement requests wait for authentication bootstrap and require a logged-in user. Billing state is never read from `localStorage`.
+
+`useSubscription` exposes effective entitlements, current subscription state, plan data, allowance/model/feature helpers, explicit reload, Checkout and Portal actions, and bounded Checkout-success polling. A successful Checkout redirect is treated only as a refresh hint: the hook reports `confirming` until `/v1/entitlements` returns a paid effective plan, then `confirmed`; if the webhook remains delayed after ten bounded attempts, it reports `pending` so future billing UI can show a safe refresh action. React follows only validated HTTPS hosted URLs returned by the backend and never calls Stripe directly.
 
 ### Cognito (Gmail) sign-in
 

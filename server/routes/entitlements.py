@@ -21,6 +21,7 @@ from server.dependencies import AuthResult, get_auth
 from server.schemas.responses import (
     EntitlementAllowanceDTO,
     EntitlementFeaturesDTO,
+    EntitlementLimitsDTO,
     EntitlementModelAccessDTO,
     EntitlementPeriodDTO,
     EntitlementPlanDTO,
@@ -106,6 +107,10 @@ async def entitlements(
         ),
         model_access=EntitlementModelAccessDTO(
             allowed_billing_classes=sorted(plan_entitlements.allowed_billing_classes)
+        ),
+        limits=EntitlementLimitsDTO(
+            max_files_per_request=effective.plan.limits.max_files_per_request,
+            max_file_bytes=effective.plan.limits.max_file_bytes,
         ),
         allowances={
             meter: EntitlementAllowanceDTO(

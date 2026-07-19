@@ -205,7 +205,7 @@ Invalid or missing credentials return `401`.
 
 ### Effective subscription and entitlements
 
-`GET /v1/entitlements` uses API-key, Cognito bearer, or signed-session authentication. It commits lazy account/usage-period creation and returns all seven allowance counters with `used`, `reserved`, `limit`, and nonnegative `remaining` values. Free periods are UTC calendar months; paid periods use stored provider boundaries.
+`GET /v1/entitlements` uses API-key, Cognito bearer, or signed-session authentication. It commits lazy account/usage-period creation and returns all seven allowance counters with `used`, `reserved`, `limit`, and nonnegative `remaining` values. It also returns the effective plan's server-owned `limits.max_files_per_request` and `limits.max_file_bytes` so clients can explain file denials without copying plan configuration. Free periods are UTC calendar months; paid periods use stored provider boundaries.
 
 Effective lifecycle rules are server-side and conservative:
 
@@ -214,7 +214,7 @@ Effective lifecycle rules are server-side and conservative:
 - `canceled`: paid plan only when `cancel_at_period_end=true` and the stored period has not ended
 - `unpaid`, `incomplete`, `incomplete_expired`, `paused`, expired cancellation, unknown status, or unknown plan: Free
 
-The endpoint returns `plan`, `features`, `model_access`, `allowances`, and `period` sections and never exposes provider subscription IDs, Stripe price IDs, customer IDs, amounts, or secrets. `/v1/whoami.plan_tier` remains a compatibility display field populated from the effective plan in database mode; new integrations should use `/v1/entitlements` plus `/v1/whoami.billing.plan_code`.
+The endpoint returns `plan`, `features`, `model_access`, `limits`, `allowances`, and `period` sections and never exposes provider subscription IDs, Stripe price IDs, customer IDs, amounts, or secrets. `/v1/whoami.plan_tier` remains a compatibility display field populated from the effective plan in database mode; new integrations should use `/v1/entitlements` plus `/v1/whoami.billing.plan_code`.
 
 ### Stripe hosted billing sessions
 
@@ -259,6 +259,8 @@ See `docs/runbooks/stripe-billing.md` for the enablement checklist. Do not place
 React consumes these contracts through `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, and the auth-aware `useSubscription` hook. Signed-out hooks call only the public plans endpoint. Checkout-success polling remains bounded and considers payment confirmed only after `/v1/entitlements` reports a paid effective plan; browser storage and the return query string are never plan authority.
 
 React exposes `/pricing` for the public Free/Plus/Pro catalogue and `/account/billing` for authenticated plan status, lifecycle notices, allowance progress, and Portal management. Billing-disabled, Free, active paid, past-due, cancel-at-period-end, fully cancelled, and delayed Checkout-confirmation states render from these server contracts. Account-menu plan context stays summary-only.
+
+React model/composer/file locks are user-experience controls only. They join static catalogue IDs to live `/v1/models.billing_class`, show the Pro-only third Compare target, display Web/Improve/file allowances, and open contextual dialogs for structured backend denials. Unknown model billing metadata is unavailable rather than optimistically allowed. Prompt text and attachments are cleared only after a stream is accepted, so a preflight denial remains editable; restored historical responses are not filtered after downgrade. Usage & insights shows the seven subscription counters separately from provider token/cost analytics.
 
 Session-scoped endpoints are session-scoped:
 - `/v1/chat*`

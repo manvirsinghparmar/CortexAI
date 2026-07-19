@@ -48,8 +48,9 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
 - Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; public plans, effective subscription, hosted-session, and webhook endpoints: `server/routes/billing.py`
-- React subscription transport and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`; contract tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`
+- React subscription transport, access presentation, and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`, `frontend-react/src/subscription/subscriptionAccess.ts`; contract/denial tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`, `subscriptionDenialDraft.test.tsx`
 - React consumer plan management: route wiring in `frontend-react/src/App.tsx`; public catalogue in `frontend-react/src/pages/PricingPage.tsx`; authenticated lifecycle/allowance view in `frontend-react/src/pages/BillingPage.tsx`; shared responsive account shell in `frontend-react/src/components/subscription/SubscriptionPageShell.tsx`; backend-plan-to-menu mapping in `frontend-react/src/subscription/accountMenuPresentation.ts`; summary navigation in `frontend-react/src/components/layout/AccountMenu.tsx` across Chat, Models, Usage, Pricing, and Billing; state/route tests in `frontend-react/src/__tests__/subscriptionPages.test.tsx`, `accountMenuPresentation.test.ts`, and `subscriptionRoutes.test.tsx`
+- React entitlement UX: reusable dialog/badge/allowance/banner components in `frontend-react/src/components/subscription/`; model/Compare/Web/Improve/file controls in `frontend-react/src/components/composer/`; draft-safe backend denial handling in `frontend-react/src/hooks/useChat.ts` and `store/chatStore.ts`; static-to-live model-class join in `frontend-react/src/pages/ModelsPage.tsx`; Usage allowance panel in `frontend-react/src/pages/UsageInsightsPage.tsx`; behavior/accessibility/mobile coverage in `frontend-react/src/__tests__/subscriptionGating.test.tsx`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
@@ -74,7 +75,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
-  - Task-first Models destination and static catalog contract: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/modelsCatalog.ts`
+  - Task-first Models destination, static display catalogue, and live billing-class access join: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/modelsCatalog.ts`, `frontend-react/src/hooks/useModels.ts`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
@@ -179,6 +180,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Keep auth-aware, memory-only subscription state and bounded Checkout-return polling in `frontend-react/src/hooks/useSubscription.ts`; signed-out users must not call authenticated billing endpoints
   4. Treat return query parameters as refresh hints only; paid access remains the `/v1/entitlements` result synchronized by verified webhooks
   5. Validate API calls, typed errors, redirects, polling, and browser-storage non-authority in `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`
+
+- Change React subscription gating UX:
+  1. Derive model classes, feature flags, file limits, counters, and recommended plans only from `/v1/models`, `/v1/entitlements`, and `/v1/billing/plans`; never duplicate plan YAML values in React
+  2. Keep locked premium models and restored history visible; unknown live billing metadata must fail conservatively without deleting or filtering prior content
+  3. Keep backend enforcement authoritative and route structured access/allowance/payment denials through `subscriptionErrors.ts`, `subscriptionAccess.ts`, and `UpgradeDialog.tsx`
+  4. Preserve prompt text and attachments until the backend accepts the stream; provider/file compatibility errors remain separate from subscription denials
+  5. Validate composer, model catalogue, Usage allowances, keyboard dialog behavior, and narrow layouts with `subscriptionGating.test.tsx`, `subscriptionDenialDraft.test.tsx`, and affected page/component tests
 
 - Change Stripe webhook or reconciliation behavior:
   1. Keep raw-body signature verification and Stripe API access in `server/billing/stripe_gateway.py`; never deserialize or mutate the request before verification

@@ -14,6 +14,12 @@ interface FeatureChipsProps {
   onSmartToggle: (v: boolean) => void;
   onResearchToggle: (v: boolean) => void;
   onOptimizeToggle: (v: boolean) => void;
+  researchBlocked?: boolean;
+  optimizeBlocked?: boolean;
+  researchAllowanceLabel?: string;
+  optimizeAllowanceLabel?: string;
+  onResearchBlocked?: () => void;
+  onOptimizeBlocked?: () => void;
 }
 
 export function FeatureChips({
@@ -25,6 +31,12 @@ export function FeatureChips({
   onSmartToggle,
   onResearchToggle,
   onOptimizeToggle,
+  researchBlocked = false,
+  optimizeBlocked = false,
+  researchAllowanceLabel,
+  optimizeAllowanceLabel,
+  onResearchBlocked,
+  onOptimizeBlocked,
 }: FeatureChipsProps) {
   const [touchTooltipId, setTouchTooltipId] = useState<string | null>(null);
   const touchTooltipTimer = useRef<number | null>(null);
@@ -81,13 +93,15 @@ export function FeatureChips({
       active={researchMode}
       label={compareMode ? "With sources" : "Web"}
       icon={compareMode ? "sources" : "web"}
-      tooltip="Uses latest information from the web"
+      tooltip={`Uses latest information from the web${researchAllowanceLabel ? ` · ${researchAllowanceLabel}` : ""}`}
       tooltipAlign={compareMode ? "start" : "center"}
       onToggle={onResearchToggle}
       ariaLabel={compareMode ? "Compare with sources" : "Research mode"}
       touchTooltipId={touchTooltipId}
       onTouchTooltip={showTouchTooltip}
       tone={variant === "sourcesOnly" ? "ghost" : "segment"}
+      blocked={researchBlocked}
+      onBlocked={onResearchBlocked}
     />
   ) : null;
 
@@ -97,13 +111,15 @@ export function FeatureChips({
       active={optimizeMode}
       label="Improve"
       icon="improve"
-      tooltip="Helps you ask better for better results"
+      tooltip={`Helps you ask better for better results${optimizeAllowanceLabel ? ` · ${optimizeAllowanceLabel}` : ""}`}
       tooltipAlign="end"
       onToggle={onOptimizeToggle}
       ariaLabel="Prompt optimization"
       touchTooltipId={touchTooltipId}
       onTouchTooltip={showTouchTooltip}
       tone="ghost"
+      blocked={optimizeBlocked}
+      onBlocked={onOptimizeBlocked}
     />
   ) : null;
 
@@ -133,6 +149,8 @@ interface ChipProps {
   onTouchTooltip: (tooltipId: string) => void;
   tone: "segment" | "ghost";
   id?: string;
+  blocked?: boolean;
+  onBlocked?: () => void;
 }
 
 function Chip({
@@ -147,6 +165,8 @@ function Chip({
   onTouchTooltip,
   tone,
   id,
+  blocked = false,
+  onBlocked,
 }: ChipProps) {
   const tooltipId = `${id ?? label.toLowerCase().replace(/\s+/g, "-")}-tooltip`;
   const touchVisible = touchTooltipId === tooltipId;
@@ -154,6 +174,7 @@ function Chip({
     styles.chip,
     styles[`${tone}Chip`],
     active ? styles.active : "",
+    blocked ? styles.blocked : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -165,6 +186,7 @@ function Chip({
         type="button"
         role="switch"
         aria-checked={active}
+        aria-disabled={blocked && !active}
         aria-label={ariaLabel}
         aria-describedby={tooltipId}
         className={chipClass}
@@ -173,7 +195,13 @@ function Chip({
             onTouchTooltip(tooltipId);
           }
         }}
-        onClick={() => onToggle(!active)}
+        onClick={() => {
+          if (blocked && !active) {
+            onBlocked?.();
+            return;
+          }
+          onToggle(!active);
+        }}
       >
         <CortexIcon name={icon} />
         <span>{label}</span>

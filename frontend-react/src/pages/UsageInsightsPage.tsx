@@ -6,6 +6,8 @@ import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { CortexIcon, type CortexIconName } from "../components/shared/CortexIcon";
+import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
+import { UsageAllowance } from "../components/subscription/UsageAllowance";
 import { getModelPresentation } from "../config/modelPresentation";
 import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
@@ -238,7 +240,14 @@ export function UsageInsightsPage() {
             </div>
           </div>
         </header>
+        <SubscriptionBanner
+          entitlements={subscriptionState.entitlements}
+          onManageBilling={() => navigate("/account/billing")}
+        />
         <section className={styles.body} aria-label="Usage dashboard content">
+          {subscriptionState.entitlements ? (
+            <UsageAllowance entitlements={subscriptionState.entitlements} />
+          ) : null}
           {usageLoading ? (
             <UsageLoadingState />
           ) : usageError ? (

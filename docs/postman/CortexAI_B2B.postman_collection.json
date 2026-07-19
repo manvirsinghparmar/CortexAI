@@ -202,7 +202,7 @@
               }
             ],
             "url": "{{base_url}}/v1/entitlements",
-            "description": "Returns the server-resolved plan, lifecycle state, features, model billing classes, current period, and all seven allowance counters. BILLING_ENABLED=false resolves Free without Stripe."
+            "description": "Returns the server-resolved plan, lifecycle state, features, model billing classes, server-owned file limits, current period, and all seven allowance counters. BILLING_ENABLED=false resolves Free without Stripe."
           },
           "event": [
             {
@@ -216,6 +216,9 @@
                   "  pm.expect(body).to.have.property('plan');",
                   "  pm.expect(body).to.have.property('features');",
                   "  pm.expect(body).to.have.property('model_access');",
+                  "  pm.expect(body).to.have.property('limits');",
+                  "  pm.expect(body.limits.max_files_per_request).to.be.above(0);",
+                  "  pm.expect(body.limits.max_file_bytes).to.be.above(0);",
                   "  pm.expect(body).to.have.property('allowances');",
                   "  pm.expect(body).to.have.property('period');",
                   "  pm.expect(Object.keys(body.allowances)).to.have.lengthOf(7);",

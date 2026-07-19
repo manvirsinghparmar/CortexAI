@@ -50,6 +50,7 @@ function entitlements(
       models_catalog_enabled: true,
     },
     model_access: { allowed_billing_classes: ["standard"] },
+    limits: { max_files_per_request: 1, max_file_bytes: 10_000_000 },
     allowances: {},
     period: {
       starts_at: "2026-07-18T00:00:00Z",

@@ -674,6 +674,10 @@ def test_entitlements_endpoint_lazy_creates_free_snapshot_with_all_counters(
     assert payload["plan"]["code"] == "free"
     assert set(payload["allowances"]) == repository.ALLOWED_USAGE_METERS
     assert all(item["remaining"] >= 0 for item in payload["allowances"].values())
+    assert payload["limits"] == {
+        "max_files_per_request": 1,
+        "max_file_bytes": 10_000_000,
+    }
     assert payload["period"]["starts_at"].endswith("Z")
     assert payload["period"]["ends_at"].endswith("Z")
     assert len(db.execute(select(tables["usage_counters"])).all()) == 7

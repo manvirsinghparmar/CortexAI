@@ -84,6 +84,17 @@
     var(--cx-shadow-sm);
 }
 
+.blocked {
+  border-style: dashed;
+  color: var(--cx-ink-400);
+}
+
+.blocked::after {
+  content: "\1F512";
+  font-size: 9px;
+  line-height: 1;
+}
+
 .active:hover {
   background: var(--cx-feature-active-hover);
   color: var(--cx-feature-active-fg);

@@ -83,6 +83,39 @@ export function isAbortError(error: unknown): boolean {
   );
 }
 
+export function isSubscriptionDenial(error: unknown): error is SubscriptionError {
+  const resolved = error instanceof SubscriptionError ? error : toSubscriptionError(error);
+  return (
+    resolved.kind === "access" ||
+    resolved.kind === "allowance" ||
+    resolved.kind === "payment"
+  );
+}
+
+export function localSubscriptionDenial(options: {
+  code: "feature_not_in_plan" | "model_not_in_plan" | "monthly_allowance_exhausted";
+  message: string;
+  details?: Record<string, unknown>;
+}): SubscriptionError {
+  const status = options.code === "monthly_allowance_exhausted" ? 429 : 403;
+  return new SubscriptionError({
+    code: options.code,
+    message: options.message,
+    status,
+    kind: options.code === "monthly_allowance_exhausted" ? "allowance" : "access",
+    retryable: false,
+    details: options.details,
+  });
+}
+
+export function detailString(
+  error: SubscriptionError,
+  key: string,
+): string | null {
+  const value = error.details[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 interface StructuredDetail {
   code?: string;
   message?: string;

@@ -211,6 +211,10 @@ export interface EntitlementsResponse {
   model_access: {
     allowed_billing_classes: ModelBillingClass[];
   };
+  limits: {
+    max_files_per_request: number;
+    max_file_bytes: number;
+  };
   allowances: Partial<Record<SubscriptionMeterKey, AllowanceCounter>>;
   period: {
     starts_at: string;

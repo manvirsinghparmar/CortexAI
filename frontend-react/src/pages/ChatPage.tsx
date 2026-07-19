@@ -10,6 +10,8 @@ import { CortexIcon } from "../components/shared/CortexIcon";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
+import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
+import { UpgradeDialog } from "../components/subscription/UpgradeDialog";
 import { DEFAULT_MODELS } from "../config/defaultModels";
 import { getModelPresentation } from "../config/modelPresentation";
 import { formatHistoryDateTime } from "../history/historyDate";
@@ -55,6 +57,8 @@ export function ChatPage() {
   const streaming = useChatStore((s) => s.streaming);
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
+  const subscriptionError = useChatStore((s) => s.subscriptionError);
+  const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
   const hydrateFromHistoryThread = useChatStore((s) => s.hydrateFromHistoryThread);
   const mode = useChatStore((s) => s.mode);
   const sessionId = useChatStore((s) => s.sessionId);
@@ -76,6 +80,12 @@ export function ChatPage() {
     if (streaming && !prevStreamingRef.current) setComposerCollapsed(true);
     prevStreamingRef.current = streaming;
   }, [streaming]);
+
+  useEffect(() => {
+    if (!subscriptionError) return;
+    setMobilePanel("chat");
+    setComposerCollapsed(false);
+  }, [subscriptionError]);
 
   useEffect(() => {
     if (!hasTurns) setComposerCollapsed(false);
@@ -241,6 +251,11 @@ export function ChatPage() {
           </div>
         </header>
 
+        <SubscriptionBanner
+          entitlements={subscriptionState.entitlements}
+          onManageBilling={() => navigate("/account/billing")}
+        />
+
         <div className={styles.canvas}>
           {authLoading ? (
             <WorkspaceLoading />
@@ -295,7 +310,7 @@ export function ChatPage() {
                   <CortexIcon name="chevron-down" size={18} />
                 </button>
               </div>
-              <PromptComposer models={models} />
+              <PromptComposer models={models} subscription={subscriptionState} />
             </div>
 
             {/* Docked mobile composer pill, shown when the sheet is collapsed */}
@@ -342,6 +357,19 @@ export function ChatPage() {
             </button>
           </nav>
         )}
+
+        <UpgradeDialog
+          error={subscriptionError}
+          onClose={() => setSubscriptionError(null)}
+          onViewPlans={() => {
+            setSubscriptionError(null);
+            navigate("/pricing");
+          }}
+          onManageBilling={() => {
+            setSubscriptionError(null);
+            navigate("/account/billing");
+          }}
+        />
       </main>
     </div>
   );

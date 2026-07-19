@@ -19,6 +19,7 @@ import {
   normalizeSessionId,
   persistActiveSessionId,
 } from "../session/activeSession";
+import type { SubscriptionError } from "../subscription/subscriptionErrors";
 
 interface BeginTurnInput {
   mode: ChatMode;
@@ -84,6 +85,7 @@ interface ChatStoreState {
     patch?: Partial<ChatResponse>,
   ) => void;
   setTurnStatus: (turnId: string, status: TurnStatus) => void;
+  discardTurn: (turnId: string) => void;
   setTurnCompareSummary: (turnId: string, summary: CompareResponse) => void;
   hydrateFromHistoryThread: (thread: HistoryThread) => void;
   startNewChat: () => void;
@@ -101,6 +103,8 @@ interface ChatStoreState {
 
   error: string | null;
   setError: (err: string | null) => void;
+  subscriptionError: SubscriptionError | null;
+  setSubscriptionError: (err: SubscriptionError | null) => void;
 
   history: HistoryEntry[];
   setHistory: (entries: HistoryEntry[]) => void;
@@ -258,6 +262,18 @@ export const useChatStore = create<ChatStoreState>((set) => ({
             ? false
             : state.streaming,
     })),
+  discardTurn: (turnId) =>
+    set((state) => {
+      const turns = state.turns.filter((turn) => turn.id !== turnId);
+      const nextActive = turns[turns.length - 1] ?? null;
+      return {
+        turns,
+        activeTurnId: nextActive?.id ?? null,
+        responses: nextActive?.responses ?? [],
+        streaming: false,
+        streamingText: "",
+      };
+    }),
   setTurnCompareSummary: (turnId, summary) =>
     set((state) => {
       let activeResponses = state.responses;
@@ -294,6 +310,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       sessionId,
       pendingNewSession: !sessionId,
       error: null,
+      subscriptionError: null,
     });
   },
   startNewChat: () => {
@@ -307,6 +324,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       streamingText: "",
       streaming: false,
       error: null,
+      subscriptionError: null,
       sessionId: null,
       pendingNewSession: true,
     });
@@ -326,6 +344,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
 
   error: null,
   setError: (err) => set({ error: err }),
+  subscriptionError: null,
+  setSubscriptionError: (err) => set({ subscriptionError: err }),
 
   history: [],
   setHistory: (entries) => set({ history: entries }),

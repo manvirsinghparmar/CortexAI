@@ -364,6 +364,11 @@ class EntitlementModelAccessDTO(BaseModel):
     allowed_billing_classes: List[str] = Field(default_factory=list)
 
 
+class EntitlementLimitsDTO(BaseModel):
+    max_files_per_request: int
+    max_file_bytes: int
+
+
 class EntitlementAllowanceDTO(BaseModel):
     used: int
     reserved: int
@@ -380,6 +385,7 @@ class EntitlementsResponseDTO(BaseModel):
     plan: EntitlementPlanDTO
     features: EntitlementFeaturesDTO
     model_access: EntitlementModelAccessDTO
+    limits: EntitlementLimitsDTO
     allowances: Dict[str, EntitlementAllowanceDTO] = Field(default_factory=dict)
     period: EntitlementPeriodDTO
 

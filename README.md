@@ -430,6 +430,7 @@ The response contains:
 - `plan`: effective code/display name, lifecycle status/source, renewal/reset time, cancellation-at-period-end state, and optional grace deadline
 - `features`: Compare, research, prompt improvement, file analysis, usage export, saved history, and model-catalog access
 - `model_access.allowed_billing_classes`: `standard`, `advanced`, and/or `ultra`
+- `limits`: server-owned `max_files_per_request` and `max_file_bytes` values for the effective plan
 - `allowances`: `used`, `reserved`, `limit`, and nonnegative `remaining` for model responses, advanced/ultra responses, research, optimization, file analysis, and uploaded bytes
 - `period.starts_at` / `period.ends_at`
 
@@ -468,6 +469,10 @@ The React client owns subscription transport in `frontend-react/src/api/billing.
 `useSubscription` exposes effective entitlements, current subscription state, plan data, allowance/model/feature helpers, explicit reload, Checkout and Portal actions, and bounded Checkout-success polling. A successful Checkout redirect is treated only as a refresh hint: the hook reports `confirming` until `/v1/entitlements` returns a paid effective plan, then `confirmed`; if the webhook remains delayed after ten bounded attempts, it reports `pending` so future billing UI can show a safe refresh action. React follows only validated HTTPS hosted URLs returned by the backend and never calls Stripe directly.
 
 The React consumer plan surfaces are `/pricing` and `/account/billing`. Pricing renders the server catalogue, current-plan state, monthly allowances, billing-disabled state, and auth/lifecycle-aware Checkout or Portal actions. Billing renders effective plan status, renewal or cancellation dates, payment-grace warnings, and allowance progress. Signed-out users can read public pricing but must authenticate for account billing. The shared account menu shows only the plan label, past-due state, and Upgrade/Manage action; it intentionally omits detailed counters. Paid access is displayed only from the webhook-synchronized subscription and entitlement responses, including after `?checkout=success`.
+
+Composer and catalogue gating is explanatory UX over the same backend authority. Manual model pickers and the static Models catalogue join model IDs to live `/v1/models.billing_class` values; disallowed models remain visible with the server-derived required plan, while missing live billing metadata is shown conservatively as unavailable. Free/Plus users see a Pro action instead of silently adding a third Compare target. Web, Improve, file count/size, uploaded bytes, and response allowances use the current `/v1/entitlements` snapshot for preflight messaging, but every request is still enforced and reserved by the backend.
+
+Structured subscription denials open an accessible contextual dialog and keep the current prompt and attachments intact. The composer clears only after the stream is accepted; an HTTP `model_not_in_plan`, `feature_not_in_plan`, `monthly_allowance_exhausted`, or `subscription_payment_required` response removes the optimistic placeholder and restores no client-side authority. Existing premium history is never filtered or deleted after downgrade. Usage & insights renders the current plan's seven allowance counters and reset date above the existing provider-usage analytics, with responsive two-column/one-column layouts on narrow screens.
 
 ### Cognito (Gmail) sign-in
 

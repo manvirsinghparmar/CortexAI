@@ -55,6 +55,12 @@
   min-width: 0;
 }
 
+.selectedLock {
+  margin-left: auto;
+  color: var(--cx-ink-400);
+  font-size: 12px;
+}
+
 .selectedText strong,
 .selectedText small,
 .optionText strong,
@@ -122,6 +128,14 @@
 .option:disabled {
   cursor: not-allowed;
   opacity: 0.42;
+}
+
+.optionLocked {
+  color: var(--cx-ink-500);
+}
+
+.optionLocked:hover {
+  background: var(--cx-accent-soft);
 }
 
 .optionActive {

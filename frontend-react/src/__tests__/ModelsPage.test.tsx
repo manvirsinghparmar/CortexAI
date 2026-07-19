@@ -4,6 +4,11 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelsCatalogScreen, ModelsPage } from "../pages/ModelsPage";
 import { useChatStore } from "../store/chatStore";
+import type {
+  BillingPlansResponse,
+  EntitlementsResponse,
+  ModelCatalogItem,
+} from "../types";
 
 const hookMocks = vi.hoisted(() => ({
   loadHistory: vi.fn(),
@@ -13,6 +18,9 @@ const hookMocks = vi.hoisted(() => ({
   login: vi.fn(),
   logout: vi.fn(),
   toggleTheme: vi.fn(),
+  subscriptionState: {
+    current: { entitlements: null as EntitlementsResponse | null, plans: null as BillingPlansResponse | null },
+  },
 }));
 
 vi.mock("../hooks/useAuth", () => ({
@@ -39,7 +47,11 @@ vi.mock("../hooks/useChat", () => ({
 }));
 
 vi.mock("../hooks/useSubscription", () => ({
-  useSubscription: () => ({ entitlements: null }),
+  useSubscription: () => hookMocks.subscriptionState.current,
+}));
+
+vi.mock("../hooks/useModels", () => ({
+  useModels: () => ({ models: [], loading: false, error: null }),
 }));
 
 vi.mock("../hooks/useTheme", () => ({
@@ -49,6 +61,7 @@ vi.mock("../hooks/useTheme", () => ({
 describe("ModelsPage", () => {
   beforeEach(() => {
     resetStore();
+    hookMocks.subscriptionState.current = { entitlements: null, plans: null };
   });
 
   afterEach(() => {
@@ -132,6 +145,29 @@ describe("ModelsPage", () => {
 
     expect(screen.getByLabelText("Loading models")).toHaveAttribute("aria-busy", "true");
   });
+
+  it("joins live billing classes to the static catalogue and keeps locked models visible", async () => {
+    const user = userEvent.setup();
+    const onAccessDenied = vi.fn();
+    render(
+      <ModelsCatalogScreen
+        entitlements={entitlementFixture()}
+        plans={plansFixture()}
+        liveModels={[liveUltraModel()]}
+        onAccessDenied={onAccessDenied}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: "GPT-5.4 details" }).closest("article");
+    expect(row).not.toBeNull();
+    expect(within(row!).getByText("Pro plan")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "GPT-5.4 details" }));
+    await user.click(within(row!).getByRole("button", { name: "See plan options" }));
+    expect(onAccessDenied).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "model_not_in_plan" }),
+    );
+  });
 });
 
 function renderPage() {
@@ -147,4 +183,94 @@ function resetStore() {
   useChatStore.getState().setHistory([]);
   useChatStore.getState().setHistorySearch("");
   useChatStore.getState().setMode("single");
+}
+
+function entitlementFixture(): EntitlementsResponse {
+  return {
+    plan: {
+      code: "free",
+      display_name: "Free",
+      status: "free",
+      source: "default",
+      renews_at: "2026-08-19T00:00:00Z",
+      cancel_at_period_end: false,
+      grace_until: null,
+    },
+    features: {
+      compare_enabled: true,
+      max_compare_models: 2,
+      research_enabled: true,
+      prompt_improvement_enabled: true,
+      file_analysis_enabled: true,
+      usage_export_enabled: true,
+      saved_history_enabled: true,
+      models_catalog_enabled: true,
+    },
+    model_access: { allowed_billing_classes: ["standard", "advanced"] },
+    limits: { max_files_per_request: 1, max_file_bytes: 10_000_000 },
+    allowances: {},
+    period: { starts_at: "2026-07-19T00:00:00Z", ends_at: "2026-08-19T00:00:00Z" },
+  };
+}
+
+function plansFixture(): BillingPlansResponse {
+  const baseAllowances = {
+    model_responses: 30,
+    advanced_model_responses: 5,
+    ultra_model_responses: 0,
+    research_turns: 5,
+    optimization_turns: 10,
+    file_analysis_turns: 3,
+  };
+  return {
+    currency: "USD",
+    billing_period: "monthly",
+    billing_enabled: true,
+    plans: [
+      {
+        code: "free",
+        display_name: "Free",
+        monthly_price: 0,
+        recommended: false,
+        features: {
+          max_compare_models: 2,
+          research_enabled: true,
+          prompt_improvement_enabled: true,
+          file_analysis_enabled: true,
+          allowed_billing_classes: ["standard", "advanced"],
+        },
+        allowances: baseAllowances,
+      },
+      {
+        code: "pro",
+        display_name: "Pro",
+        monthly_price: 12.99,
+        recommended: false,
+        features: {
+          max_compare_models: 3,
+          research_enabled: true,
+          prompt_improvement_enabled: true,
+          file_analysis_enabled: true,
+          allowed_billing_classes: ["standard", "advanced", "ultra"],
+        },
+        allowances: { ...baseAllowances, ultra_model_responses: 40 },
+      },
+    ],
+  };
+}
+
+function liveUltraModel(): ModelCatalogItem {
+  return {
+    provider: "openai",
+    model: "gpt-5.4",
+    tier: "frontier",
+    billing_class: "ultra",
+    input_cost_per_1m: 0,
+    output_cost_per_1m: 0,
+    context_limit: 128_000,
+    tags: [],
+    enabled: true,
+    supports_image_input: true,
+    supported_attachment_mime_types: [],
+  };
 }

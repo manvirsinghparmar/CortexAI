@@ -13,6 +13,10 @@ import {
 } from "../optimization/promptOptimization";
 import { makePlaceholderResponse, useChatStore } from "../store/chatStore";
 import { StreamDeltaBuffer } from "../streaming/streamDeltaBuffer";
+import {
+  isSubscriptionDenial,
+  toSubscriptionError,
+} from "../subscription/subscriptionErrors";
 import { parseModelKey } from "./useSmartRouting";
 import type {
   ApiError,
@@ -52,9 +56,11 @@ export function useChat() {
       return;
     }
 
+    const previousActiveTurnId = state.activeTurnId;
     const controller = beginRequestController();
 
     state.setError(null);
+    state.setSubscriptionError(null);
     state.setStreamingText("");
 
     let finalPrompt = rawPrompt;
@@ -88,11 +94,6 @@ export function useChat() {
           status: "optimizing",
           optimization,
         });
-        if (clearComposer) {
-          state.setPrompt("");
-          state.clearAttachments();
-        }
-
         try {
           const optimized = await optimizePrompt(
             buildOptimizeRequest({
@@ -109,6 +110,7 @@ export function useChat() {
           optimization = resolved.optimization;
         } catch (err) {
           if (controller.signal.aborted) return;
+          if (isSubscriptionDenial(err)) throw toSubscriptionError(err);
           console.warn("Prompt optimization failed; continuing with original prompt", err);
           const resolved = resolveOptimizationFailure(rawPrompt);
           finalPrompt = resolved.finalPrompt;
@@ -148,6 +150,16 @@ export function useChat() {
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const latest = useChatStore.getState();
+      if (isSubscriptionDenial(err)) {
+        const denial = toSubscriptionError(err);
+        if (latest.activeTurnId && latest.activeTurnId !== previousActiveTurnId) {
+          latest.discardTurn(latest.activeTurnId);
+        }
+        latest.setSubscriptionError(denial);
+        latest.setError(null);
+        latest.setStreaming(false);
+        return;
+      }
       const message = toFriendlyError(err);
       if (latest.activeTurnId) {
         markTurnResponsesFailed(latest.activeTurnId, message);
@@ -192,7 +204,9 @@ export function useChat() {
     const controller = beginRequestController();
 
     state.setError(null);
+    state.setSubscriptionError(null);
     state.setStreamingText("");
+    state.setStreaming(true);
 
     try {
       await runRegenerateResponse({
@@ -209,6 +223,12 @@ export function useChat() {
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const latest = useChatStore.getState();
+      if (isSubscriptionDenial(err)) {
+        latest.setSubscriptionError(toSubscriptionError(err));
+        latest.setError(null);
+        latest.setStreaming(false);
+        return;
+      }
       const message = toFriendlyError(err);
       if (latest.activeTurnId) {
         markTurnResponsesFailed(latest.activeTurnId, message);
@@ -308,20 +328,17 @@ async function runAskTurn({
       responses: [placeholder],
       optimization,
     });
-  } else {
-    if (clearComposer) {
-      state.setPrompt("");
-      state.clearAttachments();
-    }
   }
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
+  const commitComposer = deferredComposerClear(clearComposer);
   // finally guarantees no orphaned timeout can mutate a turn after the
   // cancel/error path has settled it.
   try {
     for await (const chunk of streamChat(request, signal)) {
       if (signal.aborted) break;
+      commitComposer();
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(0, chunk.text);
         continue;
@@ -467,17 +484,14 @@ async function runCompareTurn({
       responses: placeholders,
       optimization,
     });
-  } else {
-    if (clearComposer) {
-      state.setPrompt("");
-      state.clearAttachments();
-    }
   }
 
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
+  const commitComposer = deferredComposerClear(clearComposer);
   try {
     for await (const chunk of streamCompare(request, signal)) {
       if (signal.aborted) break;
+      commitComposer();
       const index = chunk.index ?? 0;
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(index, chunk.text);
@@ -572,13 +586,21 @@ async function runRegenerateResponse({
     state.sessionId,
     { startedAt },
   );
-  state.prepareTurnResponseForStreaming(turnId, responseIndex, placeholder);
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(turnId);
+  let prepared = false;
   try {
     for await (const chunk of streamChat(request, signal)) {
       if (signal.aborted) break;
+      if (!prepared) {
+        useChatStore.getState().prepareTurnResponseForStreaming(
+          turnId,
+          responseIndex,
+          placeholder,
+        );
+        prepared = true;
+      }
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(responseIndex, chunk.text);
         continue;
@@ -768,6 +790,17 @@ function toAttachmentItems(attachments: FileUploadResponse[]): AttachmentRequest
     usage_role: "primary",
     transform_mode: "auto",
   }));
+}
+
+function deferredComposerClear(enabled: boolean): () => void {
+  let committed = !enabled;
+  return () => {
+    if (committed) return;
+    committed = true;
+    const state = useChatStore.getState();
+    state.setPrompt("");
+    state.clearAttachments();
+  };
 }
 
 async function refreshHistory() {

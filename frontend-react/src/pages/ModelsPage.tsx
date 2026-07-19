@@ -5,6 +5,9 @@ import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { CortexIcon } from "../components/shared/CortexIcon";
+import { PlanBadge } from "../components/subscription/PlanBadge";
+import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
+import { UpgradeDialog } from "../components/subscription/UpgradeDialog";
 import {
   MODELS_CATALOG,
   findCatalogModelById,
@@ -23,11 +26,23 @@ import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
+import { useModels } from "../hooks/useModels";
 import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { useChatStore } from "../store/chatStore";
 import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
-import type { ChatMode, HistoryThread } from "../types";
+import {
+  modelAccessError,
+  requiredPlanForModel,
+} from "../subscription/subscriptionAccess";
+import type { SubscriptionError } from "../subscription/subscriptionErrors";
+import type {
+  BillingPlansResponse,
+  ChatMode,
+  EntitlementsResponse,
+  HistoryThread,
+  ModelCatalogItem,
+} from "../types";
 import styles from "./ModelsPage.module.css";
 
 type ProviderStyle = CSSProperties & {
@@ -42,6 +57,12 @@ type MeterStyle = CSSProperties & {
 interface FilteredProvider {
   provider: CatalogProvider;
   models: CatalogModel[];
+}
+
+interface CatalogModelAccess {
+  locked: boolean;
+  label: string | null;
+  error: SubscriptionError | null;
 }
 
 export function ModelsPage() {
@@ -62,6 +83,10 @@ export function ModelsPage() {
     subscriptionState.entitlements,
   );
   const accountBillingDestination = accountSubscription.billingDestination;
+  const { models: liveModels, loading: modelsLoading } = useModels(
+    !authLoading && (!authEnabled || loggedIn),
+  );
+  const [accessError, setAccessError] = useState<SubscriptionError | null>(null);
 
   useEffect(() => {
     if (!authLoading) void loadHistory({ restoreActiveTranscript: false });
@@ -147,7 +172,28 @@ export function ModelsPage() {
           />
         </header>
 
-        <ModelsCatalogScreen />
+        <SubscriptionBanner
+          entitlements={subscriptionState.entitlements}
+          onManageBilling={() => navigate("/account/billing")}
+        />
+        <ModelsCatalogScreen
+          entitlements={subscriptionState.entitlements}
+          plans={subscriptionState.plans}
+          liveModels={modelsLoading ? undefined : liveModels}
+          onAccessDenied={setAccessError}
+        />
+        <UpgradeDialog
+          error={accessError}
+          onClose={() => setAccessError(null)}
+          onViewPlans={() => {
+            setAccessError(null);
+            navigate("/pricing");
+          }}
+          onManageBilling={() => {
+            setAccessError(null);
+            navigate("/account/billing");
+          }}
+        />
       </main>
     </div>
   );
@@ -156,9 +202,17 @@ export function ModelsPage() {
 export function ModelsCatalogScreen({
   catalog = MODELS_CATALOG,
   loading = false,
+  entitlements = null,
+  plans = null,
+  liveModels,
+  onAccessDenied,
 }: {
   catalog?: ModelsCatalog;
   loading?: boolean;
+  entitlements?: EntitlementsResponse | null;
+  plans?: BillingPlansResponse | null;
+  liveModels?: ModelCatalogItem[];
+  onAccessDenied?: (error: SubscriptionError) => void;
 }) {
   const [selectedTask, setSelectedTask] = useState(catalog.tasks[0] ?? "All");
   const [searchQuery, setSearchQuery] = useState("");
@@ -247,6 +301,16 @@ export function ModelsCatalogScreen({
         <RecommendationCallout
           selectedTask={selectedTask}
           recommendation={recommendation}
+          access={
+            recommendation
+              ? resolveCatalogModelAccess(
+                  recommendation.model,
+                  liveModels,
+                  entitlements,
+                  plans,
+                )
+              : null
+          }
         />
 
         {shownCount === 0 ? (
@@ -265,10 +329,14 @@ export function ModelsCatalogScreen({
                 provider={provider}
                 recId={recId}
                 selectedTask={selectedTask}
+                entitlements={entitlements}
+                plans={plans}
+                liveModels={liveModels}
                 key={provider.key}
                 onToggle={(modelId) =>
                   setExpandedId((current) => (current === modelId ? null : modelId))
                 }
+                onAccessDenied={onAccessDenied}
               />
             ))}
           </section>
@@ -281,9 +349,11 @@ export function ModelsCatalogScreen({
 function RecommendationCallout({
   selectedTask,
   recommendation,
+  access,
 }: {
   selectedTask: string;
   recommendation: ReturnType<typeof findCatalogModelById>;
+  access: CatalogModelAccess | null;
 }) {
   if (!recommendation) {
     return (
@@ -314,7 +384,12 @@ function RecommendationCallout({
       <ProviderGlyphTile provider={provider} size={44} />
       <div className={styles.recommendationCopy}>
         <span>★ BEST FOR {selectedTask.toUpperCase()}</span>
-        <h2>{model.name}</h2>
+        <h2>
+          {model.name}
+          {access?.locked ? (
+            <PlanBadge label={access.label ?? "Unavailable"} tone="locked" />
+          ) : null}
+        </h2>
         <p>{model.bestFor}</p>
       </div>
       <div className={styles.recommendationMeters}>
@@ -342,6 +417,10 @@ function ProviderGroup({
   recId,
   expandedId,
   onToggle,
+  entitlements,
+  plans,
+  liveModels,
+  onAccessDenied,
 }: {
   provider: CatalogProvider;
   models: CatalogModel[];
@@ -349,6 +428,10 @@ function ProviderGroup({
   recId?: string;
   expandedId: string | null;
   onToggle: (modelId: string) => void;
+  entitlements: EntitlementsResponse | null;
+  plans: BillingPlansResponse | null;
+  liveModels?: ModelCatalogItem[];
+  onAccessDenied?: (error: SubscriptionError) => void;
 }) {
   const providerStyle = buildProviderStyle(provider);
 
@@ -365,6 +448,7 @@ function ProviderGroup({
       <div className={styles.modelRows}>
         {models.map((model) => (
           <ModelRow
+            access={resolveCatalogModelAccess(model, liveModels, entitlements, plans)}
             expanded={expandedId === model.id}
             key={model.id}
             model={model}
@@ -372,6 +456,7 @@ function ProviderGroup({
             recommended={selectedTask !== "All" && model.id === recId}
             selectedTask={selectedTask}
             onToggle={() => onToggle(model.id)}
+            onAccessDenied={onAccessDenied}
           />
         ))}
       </div>
@@ -386,6 +471,8 @@ function ModelRow({
   recommended,
   expanded,
   onToggle,
+  access,
+  onAccessDenied,
 }: {
   provider: CatalogProvider;
   model: CatalogModel;
@@ -393,6 +480,8 @@ function ModelRow({
   recommended: boolean;
   expanded: boolean;
   onToggle: () => void;
+  access: CatalogModelAccess | null;
+  onAccessDenied?: (error: SubscriptionError) => void;
 }) {
   const providerStyle = buildProviderStyle(provider);
   const depth = getDepthInfo(model.tier);
@@ -419,6 +508,9 @@ function ModelRow({
           <span className={styles.modelNameLine}>
             <span className={styles.modelName}>{model.name}</span>
             {recommended ? <span className={styles.topBadge}>★ TOP</span> : null}
+            {access?.locked ? (
+              <PlanBadge label={access.label ?? "Unavailable"} tone="locked" />
+            ) : null}
           </span>
           <span className={styles.modelTier}>{model.tier}</span>
         </span>
@@ -458,6 +550,15 @@ function ModelRow({
           <code>{model.id}</code>
           {recommended ? (
             <span className={styles.recommendedNote}>Recommended for {selectedTask}</span>
+          ) : null}
+          {access?.locked && access.error && onAccessDenied ? (
+            <button
+              type="button"
+              className={styles.accessAction}
+              onClick={() => onAccessDenied(access.error!)}
+            >
+              See plan options
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -578,4 +679,31 @@ function buildProviderStyle(provider: CatalogProvider): ProviderStyle {
 
 function formatCatalogSummary(summary: ReturnType<typeof getModelsCatalogSummary>): string {
   return `${summary.modelCount} across ${summary.providerCount} providers`;
+}
+
+function resolveCatalogModelAccess(
+  model: CatalogModel,
+  liveModels: ModelCatalogItem[] | undefined,
+  entitlements: EntitlementsResponse | null,
+  plans: BillingPlansResponse | null,
+): CatalogModelAccess | null {
+  if (!entitlements || !liveModels) return null;
+  const liveModel = liveModels.find(
+    (candidate) => `${candidate.provider}:${candidate.model}` === model.id,
+  );
+  if (!liveModel) {
+    return { locked: true, label: "Unavailable", error: null };
+  }
+  const error = modelAccessError(liveModel, entitlements, plans);
+  if (!error) return { locked: false, label: null, error: null };
+  const requiredPlan = requiredPlanForModel(liveModel.billing_class, entitlements, plans);
+  return {
+    locked: true,
+    label: requiredPlan ? `${capitalize(requiredPlan)} plan` : "Unavailable",
+    error,
+  };
+}
+
+function capitalize(value: string): string {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }

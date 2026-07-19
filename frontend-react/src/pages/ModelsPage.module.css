@@ -214,10 +214,19 @@
 }
 
 .recommendationCopy h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 6px 0 0;
   color: var(--cx-ink-900);
   font: 700 16px/1.2 var(--font-display);
   letter-spacing: 0;
+}
+
+.recommendationCopy h2 > span {
+  display: inline-flex;
+  color: var(--cx-ink-500);
+  letter-spacing: 0.04em;
 }
 
 .recommendationCopy p {
@@ -504,6 +513,24 @@
   font: 600 10px/1 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.accessAction {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 34px;
+  border: 1px solid var(--cx-accent-border);
+  border-radius: 10px;
+  background: var(--cx-accent-soft);
+  color: var(--cx-accent);
+  cursor: pointer;
+  font: 800 11px/1 var(--font-sans);
+  padding: 0 12px;
+}
+
+.accessAction:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
 }
 
 .noMatches {

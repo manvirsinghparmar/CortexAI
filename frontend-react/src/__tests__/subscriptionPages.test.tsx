@@ -366,6 +366,10 @@ function entitlementsResponse(
       allowed_billing_classes:
         planCode === "pro" ? ["standard", "advanced", "ultra"] : ["standard", "advanced"],
     },
+    limits: {
+      max_files_per_request: planCode === "free" ? 1 : 10,
+      max_file_bytes: planCode === "free" ? 10_000_000 : 25_000_000,
+    },
     allowances: {
       model_responses: counters(planCode === "plus" ? 124 : 4, limits[0]),
       advanced_model_responses: counters(planCode === "plus" ? 17 : 1, limits[1]),

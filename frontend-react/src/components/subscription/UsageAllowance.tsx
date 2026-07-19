@@ -1,0 +1,117 @@
+import type {
+  AllowanceCounter,
+  EntitlementsResponse,
+  SubscriptionMeterKey,
+} from "../../types";
+import { PlanBadge } from "./PlanBadge";
+import styles from "./UsageAllowance.module.css";
+
+const METER_PRESENTATION: Array<{
+  key: SubscriptionMeterKey;
+  label: string;
+  shortLabel: string;
+}> = [
+  { key: "model_responses", label: "Model responses", shortLabel: "Responses" },
+  { key: "advanced_model_responses", label: "Advanced models", shortLabel: "Advanced" },
+  { key: "ultra_model_responses", label: "Ultra models", shortLabel: "Ultra" },
+  { key: "research_turns", label: "Web research", shortLabel: "Web" },
+  { key: "optimization_turns", label: "Prompt improvement", shortLabel: "Improve" },
+  { key: "file_analysis_turns", label: "File analysis", shortLabel: "Files" },
+  { key: "uploaded_bytes", label: "Uploaded data", shortLabel: "Uploads" },
+];
+
+export function UsageAllowance({
+  entitlements,
+  compact = false,
+}: {
+  entitlements: EntitlementsResponse;
+  compact?: boolean;
+}) {
+  const meters = METER_PRESENTATION.filter(
+    ({ key }) => entitlements.allowances[key] !== undefined,
+  );
+
+  return (
+    <section
+      className={`${styles.panel} ${compact ? styles.compact : ""}`}
+      aria-labelledby="subscription-allowances-title"
+    >
+      <header className={styles.header}>
+        <div>
+          <span className={styles.eyebrow}>Current billing period</span>
+          <h2 id="subscription-allowances-title">Plan allowances</h2>
+        </div>
+        <div className={styles.planMeta}>
+          <PlanBadge label={entitlements.plan.display_name} tone="current" />
+          <span>Resets {formatDate(entitlements.period.ends_at)}</span>
+        </div>
+      </header>
+
+      <div className={styles.grid}>
+        {meters.map(({ key, label, shortLabel }) => (
+          <AllowanceItem
+            counter={entitlements.allowances[key]!}
+            key={key}
+            label={compact ? shortLabel : label}
+            meter={key}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AllowanceItem({
+  counter,
+  label,
+  meter,
+}: {
+  counter: AllowanceCounter;
+  label: string;
+  meter: SubscriptionMeterKey;
+}) {
+  const consumed = Math.max(0, counter.used + counter.reserved);
+  const percent = counter.limit > 0 ? Math.min(100, (consumed / counter.limit) * 100) : 100;
+  const exhausted = counter.remaining <= 0;
+  const value = `${formatQuantity(counter.remaining, meter)} left of ${formatQuantity(
+    counter.limit,
+    meter,
+  )}`;
+
+  return (
+    <article className={styles.item} data-exhausted={exhausted ? "true" : "false"}>
+      <div className={styles.itemTop}>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <div
+        className={styles.track}
+        role="progressbar"
+        aria-label={`${label}: ${value}`}
+        aria-valuemin={0}
+        aria-valuemax={counter.limit}
+        aria-valuenow={consumed}
+      >
+        <span style={{ width: `${percent}%` }} />
+      </div>
+    </article>
+  );
+}
+
+function formatQuantity(value: number, meter: SubscriptionMeterKey): string {
+  if (meter !== "uploaded_bytes") return new Intl.NumberFormat().format(value);
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)} MB`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} KB`;
+  return `${value} B`;
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "at period end";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}

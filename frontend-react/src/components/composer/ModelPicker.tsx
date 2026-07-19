@@ -11,6 +11,7 @@ import type { ModelCatalogItem } from "../../types";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { ProviderLogo } from "../shared/ProviderLogo";
 import { CortexIcon } from "../shared/CortexIcon";
+import { PlanBadge } from "../subscription/PlanBadge";
 import styles from "./ModelPicker.module.css";
 
 export type ModelPickerPlacement = "up" | "down";
@@ -30,6 +31,9 @@ interface ModelPickerProps {
   listboxLabel?: string;
   selectedKeys?: string[];
   disabledKeys?: string[];
+  lockedKeys?: string[];
+  lockedLabels?: Record<string, string>;
+  onLockedSelect?: (key: string) => void;
   align?: ModelPickerAlignment;
   placement?: ModelPickerPlacement;
   className?: string;
@@ -47,6 +51,9 @@ export function ModelPicker({
   listboxLabel = "Model options",
   selectedKeys = [],
   disabledKeys = [],
+  lockedKeys = [],
+  lockedLabels = {},
+  onLockedSelect,
   align = "left",
   placement = "up",
   className,
@@ -67,6 +74,7 @@ export function ModelPicker({
   );
   const listboxId = `${id}Options`;
   const disabledSet = new Set(disabledKeys);
+  const lockedSet = new Set(lockedKeys);
   const selectedSet = new Set(selectedKeys.filter((key) => key !== value));
 
   const updateMenuPosition = useCallback(() => {
@@ -171,7 +179,14 @@ export function ModelPicker({
         id={id}
         className={`${styles.nativeSelect} ${selectClassName ?? ""}`}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => {
+          const nextKey = event.target.value;
+          if (lockedSet.has(nextKey)) {
+            onLockedSelect?.(nextKey);
+            return;
+          }
+          onChange(nextKey);
+        }}
         aria-hidden="true"
         tabIndex={-1}
       >
@@ -181,7 +196,9 @@ export function ModelPicker({
             <option
               key={key}
               value={key}
-              disabled={selectedSet.has(key) || disabledSet.has(key)}
+              disabled={
+                selectedSet.has(key) || disabledSet.has(key) || lockedSet.has(key)
+              }
             >
               {getModelPresentation(model.provider, model.model).label}
             </option>
@@ -216,6 +233,11 @@ export function ModelPicker({
           <strong>{selectedMeta.label}</strong>
           <small>{selectedMeta.model}</small>
         </span>
+        {lockedSet.has(value) ? (
+          <span className={styles.selectedLock} aria-label="Locked on current plan">
+            &#128274;
+          </span>
+        ) : null}
         <span className={styles.caret} aria-hidden="true" />
       </button>
 
@@ -235,17 +257,25 @@ export function ModelPicker({
               const meta = getModelPresentation(model.provider, model.model);
               const isSelected = key === value;
               const isDisabled = selectedSet.has(key) || disabledSet.has(key);
+              const isLocked = lockedSet.has(key);
               return (
                 <button
                   key={key}
                   type="button"
-                  className={`${styles.option} ${isSelected ? styles.optionActive : ""}`}
+                  className={`${styles.option} ${isSelected ? styles.optionActive : ""} ${
+                    isLocked ? styles.optionLocked : ""
+                  }`}
                   role="option"
                   aria-selected={isSelected}
-                  aria-disabled={isDisabled}
+                  aria-disabled={isDisabled || isLocked}
                   disabled={isDisabled}
                   title={`${meta.label}\n${meta.model}`}
                   onClick={() => {
+                    if (isLocked) {
+                      onLockedSelect?.(key);
+                      setIsOpen(false);
+                      return;
+                    }
                     onChange(key);
                     setIsOpen(false);
                   }}
@@ -263,6 +293,12 @@ export function ModelPicker({
                   {isSelected && (
                     <CortexIcon name="check" className={styles.checkIcon} />
                   )}
+                  {isLocked ? (
+                    <PlanBadge
+                      label={lockedLabels[key] ?? "Upgrade"}
+                      tone="locked"
+                    />
+                  ) : null}
                 </button>
               );
             })}

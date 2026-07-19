@@ -391,6 +391,10 @@ function entitlementsResponse(planCode: SubscriptionPlanCode = "free"): Entitlem
       allowed_billing_classes:
         planCode === "pro" ? ["standard", "advanced", "ultra"] : ["standard", "advanced"],
     },
+    limits: {
+      max_files_per_request: paid ? 10 : 1,
+      max_file_bytes: paid ? 25_000_000 : 10_000_000,
+    },
     allowances: {
       model_responses: { used: 1, reserved: 0, limit: paid ? 400 : 30, remaining: 29 },
     },

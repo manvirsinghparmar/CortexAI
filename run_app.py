@@ -14,11 +14,17 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
+from dotenv import dotenv_values
+
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_REACT_DIR = ROOT / "frontend-react"
 PRODUCTION_ENVIRONMENT_VALUES = {"prod", "production"}
 PRODUCTION_ENVIRONMENT_NAMES = ("APP_ENV", "ENVIRONMENT", "ENV")
+VITE_GUARD_ENVIRONMENT_NAMES = (
+    *PRODUCTION_ENVIRONMENT_NAMES,
+    "ALLOW_PUBLIC_VITE_DEV_SERVER",
+)
 
 
 @dataclass
@@ -59,6 +65,20 @@ def _check_frontend_ready() -> None:
 def _is_loopback_host(host: str) -> bool:
     normalized = str(host or "").strip().strip("[]").lower()
     return normalized == "localhost" or normalized == "::1" or normalized.startswith("127.")
+
+
+def _load_vite_guard_environment(
+    *,
+    process_environment: dict[str, str] | None = None,
+    dotenv_path: Path | None = None,
+) -> dict[str, str]:
+    environment = dict(os.environ if process_environment is None else process_environment)
+    root_values = dotenv_values(dotenv_path or ROOT / ".env")
+    for name in VITE_GUARD_ENVIRONMENT_NAMES:
+        value = root_values.get(name)
+        if name not in environment and value is not None:
+            environment[name] = value
+    return environment
 
 
 def _validate_vite_dev_server(
@@ -214,12 +234,13 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     env = os.environ.copy()
+    guard_env = _load_vite_guard_environment(process_environment=env)
 
     try:
         _validate_vite_dev_server(
             frontend_host=args.frontend_host,
             allow_public_dev_server=args.allow_public_dev_server,
-            env=env,
+            env=guard_env,
         )
         npm = _resolve_npm(args.npm)
         _check_frontend_ready()

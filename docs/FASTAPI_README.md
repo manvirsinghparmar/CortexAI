@@ -63,7 +63,7 @@ REACT_FRONTEND=false
 python run_app.py
 ```
 
-This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port. This is a local-development command: it refuses production-like `APP_ENV`/`ENVIRONMENT`/`ENV` values and rejects a non-loopback frontend host unless `--allow-public-dev-server` is explicitly supplied for trusted-network development.
+This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port. This is a local-development command: it reads production markers from the repository-root `.env` and process environment, refuses production-like `APP_ENV`/`ENVIRONMENT`/`ENV` values, and rejects a non-loopback frontend host unless `--allow-public-dev-server` is explicitly supplied for trusted-network development.
 
 For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.env` or run:
 ```bash

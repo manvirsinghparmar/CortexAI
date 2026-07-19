@@ -1,8 +1,29 @@
+// @vitest-environment node
+
 import { describe, expect, it } from "vitest";
 
-import { assertViteDevServerAllowed, isLoopbackViteHost } from "./viteDevServerGuard";
+import {
+  assertViteDevServerAllowed,
+  isLoopbackViteHost,
+  loadRepositoryRuntimeEnvironment,
+} from "./viteDevServerGuard";
 
 describe("Vite development server guard", () => {
+  it("loads runtime settings from the repository-root env files", () => {
+    const environment = loadRepositoryRuntimeEnvironment("example", {});
+
+    expect(environment.SERVE_FRONTEND).toBe("true");
+    expect(environment.APP_ENV).toBe("local");
+  });
+
+  it("keeps explicit process settings above repository env files", () => {
+    const environment = loadRepositoryRuntimeEnvironment("example", {
+      APP_ENV: "production",
+    });
+
+    expect(environment.APP_ENV).toBe("production");
+  });
+
   it.each([undefined, false, "localhost", "127.0.0.1", "127.10.20.30", "::1", "[::1]"])(
     "accepts the loopback host %s",
     (host) => {

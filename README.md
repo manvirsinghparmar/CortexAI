@@ -196,7 +196,7 @@ For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.e
 python run_app.py --enable-dev-login
 ```
 
-`run_app.py` is local-development-only. It starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port. It refuses to start Vite when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`, because Vite's HMR client can automatically reload browser pages. It also rejects non-loopback frontend hosts by default; use `--allow-public-dev-server` only for intentional development on a trusted network.
+`run_app.py` is local-development-only. It starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port. It refuses to start Vite when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`, loading those markers from the repository-root `.env` as well as the process environment, because Vite's HMR client can automatically reload browser pages. It also rejects non-loopback frontend hosts by default; use `--allow-public-dev-server` only for intentional development on a trusted network.
 Before launching either process, the runner verifies that both requested ports are available and reports a clear error when another process owns one. On Windows, shutdown terminates the complete FastAPI/Vite process trees so failed startup or `Ctrl+C` does not leave an orphaned Vite listener.
 
 Run the API server by itself:

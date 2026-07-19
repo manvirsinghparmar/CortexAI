@@ -1,8 +1,11 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import { loadEnv, type Plugin } from "vite";
+import type { Plugin } from "vite";
 
-import { assertViteDevServerAllowed } from "./viteDevServerGuard";
+import {
+  assertViteDevServerAllowed,
+  loadRepositoryRuntimeEnvironment,
+} from "./viteDevServerGuard";
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -26,7 +29,7 @@ function localDevServerGuard(
 }
 
 export default defineConfig(({ command, mode }) => {
-  const environment = { ...loadEnv(mode, ".", ""), ...process.env };
+  const environment = loadRepositoryRuntimeEnvironment(mode, process.env);
   const apiProxyTarget = environment.CORTEX_API_PROXY_TARGET ?? "http://localhost:8000";
 
   return {

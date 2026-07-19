@@ -75,3 +75,31 @@ def test_vite_dev_server_accepts_public_host_for_trusted_network_development():
         allow_public_dev_server=True,
         env={"APP_ENV": "local"},
     )
+
+
+def test_vite_guard_environment_loads_production_marker_from_root_dotenv(tmp_path):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "APP_ENV=production\nAPI_KEYS=must-not-be-forwarded\n",
+        encoding="utf-8",
+    )
+
+    environment = run_app._load_vite_guard_environment(
+        process_environment={},
+        dotenv_path=dotenv_path,
+    )
+
+    assert environment["APP_ENV"] == "production"
+    assert "API_KEYS" not in environment
+
+
+def test_vite_guard_environment_prefers_explicit_process_marker(tmp_path):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("APP_ENV=production\n", encoding="utf-8")
+
+    environment = run_app._load_vite_guard_environment(
+        process_environment={"APP_ENV": "staging"},
+        dotenv_path=dotenv_path,
+    )
+
+    assert environment["APP_ENV"] == "staging"

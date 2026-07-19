@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom";
 
-if (!window.matchMedia) {
+if (typeof window !== "undefined" && !window.matchMedia) {
   window.matchMedia = (query: string) =>
     ({
       matches: false,

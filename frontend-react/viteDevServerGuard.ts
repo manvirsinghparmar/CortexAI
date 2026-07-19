@@ -1,6 +1,20 @@
+import { loadEnv } from "vite";
+
 const PRODUCTION_ENVIRONMENT_VALUES = new Set(["prod", "production"]);
+// npm run --prefix frontend-react executes Vite with frontend-react as its working directory.
+export const REPOSITORY_ENV_DIRECTORY = "..";
 
 type RuntimeEnvironment = Record<string, string | undefined>;
+
+export function loadRepositoryRuntimeEnvironment(
+  mode: string,
+  processEnvironment: RuntimeEnvironment,
+): RuntimeEnvironment {
+  return {
+    ...loadEnv(mode, REPOSITORY_ENV_DIRECTORY, ""),
+    ...processEnvironment,
+  };
+}
 
 function isEnabled(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());

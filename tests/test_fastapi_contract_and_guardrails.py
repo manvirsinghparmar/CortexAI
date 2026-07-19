@@ -316,11 +316,15 @@ def app(monkeypatch):
     # Keep these tests DB-agnostic and deterministic.
     from server.routes import chat as chat_route
     from server.routes import compare as compare_route
+    from server.routes import files as files_route
     from server.routes import history as history_route
+    from server.routes import optimize as optimize_route
 
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
+    files_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
+    optimize_route.API_DB_ENABLED = False
 
     from server import dependencies as deps
 
@@ -924,6 +928,9 @@ def test_optimize_preserves_unchanged_after_retry_fallback_reason(client, monkey
 def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     from server.routes import optimize as optimize_route
 
+    reservation = object()
+    settled: list[dict[str, Any]] = []
+
     class SlowOptimizer:
         def optimize_prompt(self, payload):
             time.sleep(0.05)
@@ -931,7 +938,18 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
 
     monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
     monkeypatch.setenv("PROMPT_OPTIMIZER_TIMEOUT_MS", "1")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
     monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: SlowOptimizer())
+    monkeypatch.setattr(
+        optimize_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
 
     r = client.post(
         "/v1/optimize",
@@ -946,6 +964,159 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     assert body["server_optimization_enabled"] is True
     assert body["optimization_status"] == "timeout"
     assert body["fallback_reason"] == "timeout"
+    assert settled[0]["reservation"] is reservation
+    assert settled[0]["optimization_performed"] is True
+
+
+def test_optimize_setup_failure_releases_before_invocation(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    reservation = object()
+    released: list[dict[str, Any]] = []
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        optimize_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_get_optimizer",
+        lambda: (_ for _ in ()).throw(RuntimeError("optimizer setup failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="optimizer setup failed"):
+        client.post(
+            "/v1/optimize",
+            json={"prompt": "make this prompt better"},
+            cookies={"cortex_session": "test-session-cookie"},
+        )
+
+    assert released == [
+        {
+            "reservation": reservation,
+            "reason": "optimizer_setup_failed_before_invocation",
+        }
+    ]
+
+
+def test_optimize_entitlement_denial_prevents_optimizer_invocation(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    optimizer_called = False
+
+    class FakeOptimizer:
+        def optimize_prompt(self, payload):
+            del payload
+            nonlocal optimizer_called
+            optimizer_called = True
+            return {"optimized_prompt": "should not run"}
+
+    def deny_usage(**_kwargs):
+        raise EntitlementDeniedError(
+            EntitlementDenial(
+                code="monthly_allowance_exhausted",
+                message="The monthly optimization allowance has been exhausted.",
+                meter="optimization_turns",
+                current_plan="free",
+                recommended_plan="plus",
+                used=10,
+                limit=10,
+                remaining=0,
+            )
+        )
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+    monkeypatch.setattr(optimize_route, "_reserve_subscription_usage", deny_usage)
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["meter"] == "optimization_turns"
+    assert optimizer_called is False
+
+
+def test_explicit_improve_settles_fallback_once_and_chat_does_not_recount(
+    client,
+    monkeypatch,
+):
+    from server.routes import optimize as optimize_route
+
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    optimize_reservation = ReservedRequestUsage(
+        reservation_id=uuid4(),
+        request_id="test-optimize",
+        operation_type="optimize",
+        requested_quantities={"optimization_turns": 1},
+        allowed_billing_classes=frozenset({"standard", "advanced"}),
+        current_plan="free",
+        reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    optimize_reserves: list[dict[str, Any]] = []
+    optimize_settles: list[dict[str, Any]] = []
+    chat_reserves: list[dict[str, Any]] = []
+
+    class FallbackOptimizer:
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": payload["prompt"],
+                "fallback_reason": "already_clear",
+            }
+
+    def reserve_optimize(**kwargs):
+        optimize_reserves.append(kwargs)
+        return optimize_reservation
+
+    def reserve_chat(**kwargs):
+        chat_reserves.append(kwargs)
+        return _test_reservation("ask")
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FallbackOptimizer())
+    monkeypatch.setattr(optimize_route, "_reserve_subscription_usage", reserve_optimize)
+    monkeypatch.setattr(
+        optimize_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: optimize_settles.append(kwargs),
+    )
+    monkeypatch.setattr(chat_route, "_reserve_subscription_usage", reserve_chat)
+    monkeypatch.setattr(chat_route, "_finalize_subscription_usage", lambda **_kwargs: None)
+
+    optimize_response = client.post(
+        "/v1/optimize",
+        json={"prompt": "already clear prompt"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+    chat_response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": optimize_response.json()["optimized_prompt"],
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert optimize_response.status_code == 200
+    assert optimize_response.json()["optimization_status"] == "kept_original"
+    assert chat_response.status_code == 200
+    assert optimize_reserves[0]["optimization_enabled"] is True
+    assert optimize_settles[0]["optimization_performed"] is True
+    assert "optimization_enabled" not in chat_reserves[0]
 
 
 def test_compare_rejects_too_many_targets(client):
@@ -2085,6 +2256,150 @@ def _test_reservation(operation_type: str, *, allowed=frozenset({"standard", "ad
         current_plan="free",
         reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
     )
+
+
+def _resolved_attachment(*, size_bytes: int = 1024):
+    from server.attachments import ResolvedAttachment
+
+    return ResolvedAttachment(
+        file_id=uuid4(),
+        usage_role="primary",
+        transform_mode="auto",
+        order_index=0,
+        original_filename="notes.txt",
+        mime_type="text/plain",
+        size_bytes=size_bytes,
+        status="ready",
+        storage_bucket="test-bucket",
+        storage_key="test-key",
+    )
+
+
+def test_chat_with_attachment_reserves_file_facts_and_settles_one_analysis_turn(
+    client,
+    monkeypatch,
+):
+    from server import attachments as attachments_service
+
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    attachment = _resolved_attachment(size_bytes=2048)
+    reserved: list[dict[str, Any]] = []
+    settled: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        attachments_service,
+        "resolve_request_attachments",
+        lambda **_kwargs: [attachment],
+    )
+    monkeypatch.setattr(
+        attachments_service,
+        "compatible_providers_for_attachments",
+        lambda _attachments: ["openai"],
+    )
+    monkeypatch.setattr(
+        attachments_service,
+        "enforce_model_attachment_compatibility",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        attachments_service,
+        "materialize_inference_attachments",
+        lambda _attachments: [{"mime_type": "text/plain", "text": "hello"}],
+    )
+    monkeypatch.setattr(
+        attachments_service,
+        "build_request_attachment_persistence_items",
+        lambda **_kwargs: [],
+    )
+
+    def reserve(**kwargs):
+        reserved.append(kwargs)
+        return _test_reservation("ask")
+
+    monkeypatch.setattr(chat_route, "_reserve_subscription_usage", reserve)
+    monkeypatch.setattr(
+        chat_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "summarize this",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "attachments": [{"file_id": str(attachment.file_id)}],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert reserved[0]["attachment_count"] == 1
+    assert reserved[0]["total_attachment_bytes"] == 2048
+    assert reserved[0]["attachment_sizes"] == (2048,)
+    assert settled[0]["file_analysis_performed"] is True
+
+
+def test_attachment_provider_compatibility_error_remains_distinct_from_plan_denial(
+    client,
+    app,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    from server import attachments as attachments_service
+
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    attachment = _resolved_attachment()
+    reserve_called = False
+
+    monkeypatch.setattr(
+        attachments_service,
+        "resolve_request_attachments",
+        lambda **_kwargs: [attachment],
+    )
+    monkeypatch.setattr(
+        attachments_service,
+        "compatible_providers_for_attachments",
+        lambda _attachments: ["openai"],
+    )
+
+    def reject_compatibility(**_kwargs):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "attachment_model_incompatible",
+                "message": "The selected model does not support attachment inputs.",
+            },
+        )
+
+    def reserve(**_kwargs):
+        nonlocal reserve_called
+        reserve_called = True
+        return _test_reservation("ask")
+
+    monkeypatch.setattr(
+        attachments_service,
+        "enforce_model_attachment_compatibility",
+        reject_compatibility,
+    )
+    monkeypatch.setattr(chat_route, "_reserve_subscription_usage", reserve)
+
+    response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "summarize this",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "attachments": [{"file_id": str(attachment.file_id)}],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "attachment_model_incompatible"
+    assert reserve_called is False
+    assert app.state.fake_orchestrator.last_ask_prompt is None
 
 
 def test_chat_entitlement_denial_prevents_provider_execution(client, app, monkeypatch):

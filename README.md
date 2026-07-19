@@ -183,7 +183,7 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
 - `BILLING_ENABLED=false` is the safe default and resolves every account to Free. Keep it false in production until verified Stripe webhook synchronization is deployed; the current foundation has no Stripe SDK or webhook dependency. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
-- DB-mode Ask and Compare routes, including both NDJSON streaming variants, now authorize and reserve subscription usage before any provider call. Successful model targets settle against their actual server-owned billing class, provider failures release model-response units, research settles only when response metadata confirms it ran, and partial Compare runs settle only successful targets. Optimize, upload/file-analysis, and export enforcement remain later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
+- DB-mode Ask, Compare, Optimize, and upload/file-analysis paths now use the same short reserve/settle/release lifecycle. Ask/Compare reserve before provider work, settle only actual successful model classes and performed research, and settle one file-analysis turn only when an attachment-backed turn produces billable output. `/v1/optimize` reserves before the explicit UI optimizer and settles once whenever invocation starts, including timeout or valid fallback; submitting its returned prompt to Ask/Compare does not charge another optimization turn. Upload reserves the server-observed raw-body byte count before object storage, settles it only after a successful upload, and releases it on validation or storage failure. Usage-export enforcement remains later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
@@ -450,6 +450,8 @@ To enable "Sign in with Google" via Amazon Cognito:
 
 `POST /v1/files/upload` accepts raw bytes in the request body.
 
+In DB mode, upload access, the plan per-file limit, and the monthly `uploaded_bytes` allowance are enforced from the authenticated user's server-resolved plan. The raw-body contract means the authoritative byte count is known after the request body is read but before object storage or metadata persistence. A successful accepted upload settles that observed byte count; validation/storage failures release the reservation. Upload does not consume `file_analysis_turns`.
+
 Authentication (session-scoped routes):
 - `cortex_session` cookie, or
 - `Authorization: Bearer <gateway-bearer-token>`
@@ -504,6 +506,7 @@ Use attachments in chat/compare payloads by passing file references:
 Current guardrail behavior:
 - attachments require `DATABASE_URL` (DB mode)
 - all attachment `file_id` values must belong to the same API key owner
+- the plan's `max_files_per_request` and `max_file_bytes` are enforced for Ask/Compare attachments, and exhausted `file_analysis_turns` returns a structured subscription denial before provider execution
 - model compatibility is validated before orchestration starts
 - same-user deduplication is hash+size based (no cross-user dedup)
 - provider adapter support in this release:
@@ -531,6 +534,8 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 Prompt optimization (`/v1/optimize`):
 - disabled by default unless `ENABLE_PROMPT_OPTIMIZATION=true`
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
+- in DB mode, the explicit endpoint checks `prompt_improvement_enabled` and reserves one `optimization_turns` unit before optimizer setup; it releases setup failures before invocation and settles once after invocation begins, including timeout, rejection, or kept-original fallback
+- a later Ask/Compare submission of the returned prompt does not reserve `optimization_turns` again
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
 - uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
 - `/v1/optimize` has an optimize-specific hard deadline from `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) and explicit-route retry count from `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`)

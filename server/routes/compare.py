@@ -179,6 +179,7 @@ def _reserve_compare_usage(
     request: CompareRequest,
     research_enabled: bool,
     orchestrator: CortexOrchestrator,
+    resolved_attachments: list[attachments_service.ResolvedAttachment],
 ) -> ReservedRequestUsage:
     try:
         targets = tuple(
@@ -196,6 +197,9 @@ def _reserve_compare_usage(
             model_targets=targets,
             research_enabled=research_enabled,
             smart_routing=False,
+            attachment_count=len(resolved_attachments),
+            total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
+            attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
         )
     except HTTPException:
         raise
@@ -215,19 +219,22 @@ def _finalize_compare_usage(
     responses: list[UnifiedResponse],
     orchestrator: CortexOrchestrator,
     research_performed: bool | None = None,
+    attachments_present: bool = False,
 ) -> None:
     try:
+        successful_targets = _successful_billing_targets(
+            responses,
+            orchestrator=orchestrator,
+        )
         _finalize_subscription_usage(
             reservation=reservation,
-            successful_targets=_successful_billing_targets(
-                responses,
-                orchestrator=orchestrator,
-            ),
+            successful_targets=successful_targets,
             research_performed=(
                 _research_was_performed(responses)
                 if research_performed is None
                 else research_performed
             ),
+            file_analysis_performed=attachments_present and bool(successful_targets),
         )
     except Exception as exc:
         logger.exception("Compare subscription usage finalization failed")
@@ -440,6 +447,7 @@ async def compare(
             request=request,
             research_enabled=research_mode,
             orchestrator=orchestrator,
+            resolved_attachments=resolved_attachments,
         )
 
     provider_completed = False
@@ -473,6 +481,7 @@ async def compare(
                 reservation=billing_reservation,
                 responses=[item for item in response.responses if item is not None],
                 orchestrator=orchestrator,
+                attachments_present=bool(resolved_attachments),
             )
     except BaseException:
         if not provider_completed:
@@ -604,6 +613,7 @@ async def compare_stream(
             request=request,
             research_enabled=research_mode,
             orchestrator=orchestrator,
+            resolved_attachments=resolved_attachments,
         )
 
     async def event_stream():
@@ -813,6 +823,7 @@ async def compare_stream(
                     responses=raw_responses,
                     orchestrator=orchestrator,
                     research_performed=prepared_research or _research_was_performed(raw_responses),
+                    attachments_present=bool(resolved_attachments),
                 )
             resolved_session_id = requested_session_id
             if API_DB_ENABLED and persistence_resolution is not None:
@@ -883,6 +894,7 @@ async def compare_stream(
                                 responses=partial_responses,
                                 orchestrator=orchestrator,
                                 research_performed=research_performed,
+                                attachments_present=bool(resolved_attachments),
                             )
                     except Exception:
                         logger.exception("Compare stream partial subscription finalization failed")
@@ -922,6 +934,7 @@ async def compare_stream(
                                 responses=partial_responses,
                                 orchestrator=orchestrator,
                                 research_performed=research_performed,
+                                attachments_present=bool(resolved_attachments),
                             )
                     except Exception:
                         logger.exception("Compare stream partial subscription finalization failed")

@@ -364,8 +364,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200, 401, or 404 (attachments disabled)', function () {",
-                  "  pm.expect([200, 401, 404]).to.include(pm.response.code);",
+                  "pm.test('status reflects upload, auth, feature, or subscription outcome', function () {",
+                  "  pm.expect([200, 401, 403, 404, 429, 501]).to.include(pm.response.code);",
                   "});",
                   "if (pm.response.code === 200) {",
                   "  var body = pm.response.json();",
@@ -373,6 +373,13 @@
                   "    pm.expect(body.file_id).to.be.a('string');",
                   "  });",
                   "  pm.collectionVariables.set('file_id', body.file_id);",
+                  "} else if ([403, 429].includes(pm.response.code)) {",
+                  "  var denial = pm.response.json().detail;",
+                  "  pm.test('subscription denial is structured', function () {",
+                  "    pm.expect(denial.code).to.be.a('string');",
+                  "    pm.expect(denial.message).to.be.a('string');",
+                  "    pm.expect(denial.current_plan).to.be.a('string');",
+                  "  });",
                   "}"
                 ]
               }
@@ -1092,15 +1099,23 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status reflects optimize or subscription outcome', function () { pm.expect([200, 403, 429]).to.include(pm.response.code); });",
                   "var body = pm.response.json();",
-                  "pm.test('optimize response schema', function () {",
-                  "  pm.expect(body).to.have.property('original_prompt');",
-                  "  pm.expect(body).to.have.property('optimized_prompt');",
-                  "  pm.expect(body).to.have.property('was_optimized');",
-                  "  pm.expect(body).to.have.property('optimization_status');",
-                  "  pm.expect(body).to.have.property('fallback_reason');",
-                  "});"
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('optimize response schema', function () {",
+                  "    pm.expect(body).to.have.property('original_prompt');",
+                  "    pm.expect(body).to.have.property('optimized_prompt');",
+                  "    pm.expect(body).to.have.property('was_optimized');",
+                  "    pm.expect(body).to.have.property('optimization_status');",
+                  "    pm.expect(body).to.have.property('fallback_reason');",
+                  "  });",
+                  "} else {",
+                  "  pm.test('subscription denial is structured', function () {",
+                  "    pm.expect(body.detail.code).to.be.a('string');",
+                  "    pm.expect(body.detail.message).to.be.a('string');",
+                  "    pm.expect(body.detail.current_plan).to.be.a('string');",
+                  "  });",
+                  "}"
                 ]
               }
             }

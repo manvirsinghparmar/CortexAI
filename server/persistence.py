@@ -626,6 +626,10 @@ def reserve_subscription_usage(
     model_targets: Iterable[ModelTargetIntent],
     research_enabled: bool,
     smart_routing: bool = False,
+    optimization_enabled: bool = False,
+    attachment_count: int = 0,
+    total_attachment_bytes: int = 0,
+    attachment_sizes: Iterable[int] = (),
 ) -> ReservedRequestUsage:
     """Authorize and atomically reserve subscription usage before provider work."""
     with db_uow() as db_session:
@@ -637,6 +641,10 @@ def reserve_subscription_usage(
             model_targets=tuple(model_targets),
             research_enabled=research_enabled,
             smart_routing=smart_routing,
+            optimization_enabled=optimization_enabled,
+            attachment_count=attachment_count,
+            total_attachment_bytes=total_attachment_bytes,
+            attachment_sizes=tuple(attachment_sizes),
         )
 
 
@@ -645,6 +653,9 @@ def finalize_subscription_usage(
     reservation: ReservedRequestUsage,
     successful_targets: Iterable[ModelTargetIntent],
     research_performed: bool,
+    optimization_performed: bool = False,
+    file_analysis_performed: bool = False,
+    uploaded_bytes: int = 0,
     release_reason: str = "provider_failed_before_billable_output",
 ) -> None:
     """Settle successful subscription units and release unused units."""
@@ -654,6 +665,9 @@ def finalize_subscription_usage(
             reservation=reservation,
             successful_targets=tuple(successful_targets),
             research_performed=research_performed,
+            optimization_performed=optimization_performed,
+            file_analysis_performed=file_analysis_performed,
+            uploaded_bytes=uploaded_bytes,
             release_reason=release_reason,
         )
 

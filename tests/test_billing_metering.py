@@ -633,3 +633,125 @@ def test_provider_failure_releases_model_units_but_completed_research_settles(
     )
     assert (model_counter["used_quantity"], model_counter["reserved_quantity"]) == (0, 0)
     assert (research_counter["used_quantity"], research_counter["reserved_quantity"]) == (1, 0)
+
+
+@pytest.mark.unit
+def test_optimizer_invocation_reserves_and_settles_one_turn(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-optimize",
+        operation_type="optimize",
+        model_targets=(),
+        research_enabled=False,
+        optimization_enabled=True,
+    )
+
+    assert reservation.requested_quantities == {"optimization_turns": 1}
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(),
+        research_performed=False,
+        optimization_performed=True,
+    )
+
+    counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "optimization_turns",
+    )
+    assert (counter["used_quantity"], counter["reserved_quantity"]) == (1, 0)
+
+
+@pytest.mark.unit
+def test_successful_upload_settles_actual_uploaded_bytes(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-file-upload",
+        operation_type="file_upload",
+        model_targets=(),
+        research_enabled=False,
+        attachment_count=1,
+        total_attachment_bytes=2048,
+        attachment_sizes=(2048,),
+    )
+
+    assert reservation.requested_quantities == {"uploaded_bytes": 2048}
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(),
+        research_performed=False,
+        uploaded_bytes=2048,
+    )
+
+    counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "uploaded_bytes",
+    )
+    assert (counter["used_quantity"], counter["reserved_quantity"]) == (2048, 0)
+
+
+@pytest.mark.unit
+def test_compare_with_files_settles_one_analysis_turn_after_partial_success(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    monkeypatch.setenv("BILLING_ENABLED", "false")
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="req-compare-file",
+        operation_type="compare",
+        model_targets=(
+            ModelTargetIntent("openai", "standard-model", "standard"),
+            ModelTargetIntent("gemini", "advanced-model", "advanced"),
+        ),
+        research_enabled=False,
+        attachment_count=1,
+        total_attachment_bytes=4096,
+        attachment_sizes=(4096,),
+    )
+
+    assert reservation.requested_quantities["file_analysis_turns"] == 1
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        successful_targets=(ModelTargetIntent("openai", "standard-model", "standard"),),
+        research_performed=False,
+        file_analysis_performed=True,
+    )
+
+    file_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "file_analysis_turns",
+    )
+    model_counter = _reservation_counter(
+        db,
+        tables,
+        reservation.reservation_id,
+        "model_responses",
+    )
+    assert (file_counter["used_quantity"], file_counter["reserved_quantity"]) == (1, 0)
+    assert (model_counter["used_quantity"], model_counter["reserved_quantity"]) == (1, 0)

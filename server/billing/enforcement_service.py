@@ -200,6 +200,10 @@ def authorize_and_reserve_usage(
     model_targets: Sequence[ModelTargetIntent],
     research_enabled: bool,
     smart_routing: bool = False,
+    optimization_enabled: bool = False,
+    attachment_count: int = 0,
+    total_attachment_bytes: int = 0,
+    attachment_sizes: Sequence[int] = (),
 ) -> ReservedRequestUsage:
     """Resolve plan, evaluate intent, and reserve all required units atomically."""
     effective = resolve_effective_subscription(db_session, user_id)
@@ -213,6 +217,10 @@ def authorize_and_reserve_usage(
         operation_type=operation_type,
         model_targets=reservation_targets,
         research_enabled=research_enabled,
+        optimization_enabled=optimization_enabled,
+        attachment_count=attachment_count,
+        total_attachment_bytes=total_attachment_bytes,
+        attachment_sizes=tuple(attachment_sizes),
     )
     allowances = load_allowance_usage(db_session, effective)
     decision = evaluate_entitlement(effective, intent, allowances)
@@ -257,14 +265,22 @@ def finalize_reserved_usage(
     reservation: ReservedRequestUsage,
     successful_targets: Sequence[ModelTargetIntent],
     research_performed: bool,
+    optimization_performed: bool = False,
+    file_analysis_performed: bool = False,
+    uploaded_bytes: int = 0,
     release_reason: str = "provider_failed_before_billable_output",
 ) -> None:
     """Settle successful units and release every failed or unused unit."""
+    if uploaded_bytes < 0:
+        raise BillingConfigurationError("Successful uploaded bytes cannot be negative")
     normalized_targets = tuple(_validate_target(target) for target in successful_targets)
     successful_intent = SubscriptionRequestIntent(
         operation_type=reservation.operation_type,
         model_targets=normalized_targets,
         research_enabled=research_performed,
+        optimization_enabled=optimization_performed,
+        attachment_count=1 if file_analysis_performed else 0,
+        total_attachment_bytes=uploaded_bytes,
     )
     quantities = required_quantities(successful_intent)
     if not quantities:
@@ -290,6 +306,9 @@ def finalize_reserved_usage(
                 for target in normalized_targets
             ],
             "research_performed": research_performed,
+            "optimization_performed": optimization_performed,
+            "file_analysis_performed": file_analysis_performed,
+            "uploaded_bytes": uploaded_bytes,
         },
     )
 

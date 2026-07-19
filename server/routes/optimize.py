@@ -6,9 +6,12 @@ import time
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from server import persistence as persistence_service
+from server.billing.enforcement_service import ReservedRequestUsage
+from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import UserContextRequest
@@ -22,6 +25,11 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
     rejection_event="optimize.route.rejected.auth_mode",
     logger=logger,
 )
+API_DB_ENABLED = persistence_service.API_DB_ENABLED
+_resolve_identity = persistence_service.resolve_identity
+_reserve_subscription_usage = persistence_service.reserve_subscription_usage
+_finalize_subscription_usage = persistence_service.finalize_subscription_usage
+_release_subscription_usage = persistence_service.release_subscription_usage
 
 # Singleton optimizer (created once, reused across requests)
 _optimizer: PromptOptimizer | None = None
@@ -101,6 +109,64 @@ def _fallback_reason_from_status(
     return "optimization_failed"
 
 
+def _reserve_optimization_usage(
+    *,
+    auth: AuthResult,
+    request_id: str,
+) -> ReservedRequestUsage:
+    try:
+        resolution = _resolve_identity(auth=auth, request_id=request_id)
+        return _reserve_subscription_usage(
+            user_id=resolution.user_id,
+            request_id=request_id,
+            operation_type="optimize",
+            model_targets=(),
+            research_enabled=False,
+            optimization_enabled=True,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        http_error = enforcement_http_exception(exc)
+        log = logger.exception if http_error.status_code >= 500 else logger.warning
+        log(
+            "Prompt optimization subscription preflight denied",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                }
+            },
+        )
+        raise http_error from exc
+
+
+def _finalize_optimization_usage(reservation: ReservedRequestUsage) -> None:
+    try:
+        _finalize_subscription_usage(
+            reservation=reservation,
+            successful_targets=(),
+            research_performed=False,
+            optimization_performed=True,
+        )
+    except Exception as exc:
+        logger.exception("Prompt optimization subscription finalization failed")
+        raise enforcement_http_exception(exc) from exc
+
+
+def _release_optimization_usage_safely(
+    reservation: ReservedRequestUsage | None,
+    *,
+    reason: str,
+) -> None:
+    if reservation is None:
+        return
+    try:
+        _release_subscription_usage(reservation=reservation, reason=reason)
+    except Exception:
+        logger.exception("Prompt optimization subscription release failed")
+
+
 # ── Request / Response schemas (local to this route for simplicity) ──────────
 
 class OptimizeRequest(BaseModel):
@@ -167,93 +233,112 @@ async def optimize_prompt(
             fallback_reason="optimization_disabled",
         )
 
-    optimizer = _get_optimizer()
-    timeout_seconds = _optimizer_timeout_seconds()
-    max_retries = _optimizer_route_max_retries()
-    payload = {
-        "prompt": request.prompt,
-        "max_retries": max_retries,
-        "deadline_at": time.monotonic() + timeout_seconds,
-    }
-    if request.context_hint:
-        payload["context_hint"] = request.context_hint
-    if request.context:
-        payload["context"] = request.context.model_dump(exclude_none=True)
-
-    try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(optimizer.optimize_prompt, payload),
-            timeout=timeout_seconds,
+    billing_reservation: ReservedRequestUsage | None = None
+    if API_DB_ENABLED:
+        billing_reservation = _reserve_optimization_usage(
+            auth=auth,
+            request_id=req_id,
         )
-    except asyncio.TimeoutError:
+
+    optimizer_invoked = False
+    try:
+        optimizer = _get_optimizer()
+        timeout_seconds = _optimizer_timeout_seconds()
+        max_retries = _optimizer_route_max_retries()
+        payload = {
+            "prompt": request.prompt,
+            "max_retries": max_retries,
+            "deadline_at": time.monotonic() + timeout_seconds,
+        }
+        if request.context_hint:
+            payload["context_hint"] = request.context_hint
+        if request.context:
+            payload["context"] = request.context.model_dump(exclude_none=True)
+
+        optimizer_invoked = True
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(optimizer.optimize_prompt, payload),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "Prompt optimization timed out",
+                extra={
+                    "extra_fields": {
+                        "event": "optimize.route.completed",
+                        "request_id": req_id,
+                        "provider": getattr(optimizer, "provider", None),
+                        "model": getattr(optimizer, "model", None),
+                        "optimization_status": "timeout",
+                        "fallback_reason": "timeout",
+                        "max_retries": max_retries,
+                        "timeout_ms": int(timeout_seconds * 1000),
+                        "duration_ms": duration_ms,
+                    }
+                },
+            )
+            return OptimizeResponse(
+                original_prompt=request.prompt,
+                optimized_prompt=request.prompt,
+                was_optimized=False,
+                server_optimization_enabled=True,
+                optimization_status="timeout",
+                fallback_reason="timeout",
+            )
+
+        if not isinstance(result, dict):
+            result = {
+                "optimized_prompt": request.prompt,
+                "error": {
+                    "code": "optimization_failed",
+                    "message": "Optimizer returned an invalid response",
+                },
+            }
+
+        optimized = str(result.get("optimized_prompt") or request.prompt)
+        status = _status_from_optimizer_result(result, request.prompt, optimized)
+        was_optimized = status == "optimized"
+        fallback_reason = _fallback_reason_from_status(status, result)
         duration_ms = int((time.monotonic() - started_at) * 1000)
-        logger.warning(
-            "Prompt optimization timed out",
+
+        logger.info(
+            "Prompt optimization completed",
             extra={
                 "extra_fields": {
                     "event": "optimize.route.completed",
                     "request_id": req_id,
                     "provider": getattr(optimizer, "provider", None),
                     "model": getattr(optimizer, "model", None),
-                    "optimization_status": "timeout",
-                    "fallback_reason": "timeout",
+                    "optimization_status": status,
+                    "fallback_reason": fallback_reason,
+                    "was_optimized": was_optimized,
+                    "prompt_quality": result.get("prompt_quality"),
+                    "attempt_count": result.get("attempt_count"),
+                    "retry_reasons": result.get("retry_reasons"),
+                    "unchanged_retry_used": result.get("unchanged_retry_used"),
                     "max_retries": max_retries,
                     "timeout_ms": int(timeout_seconds * 1000),
                     "duration_ms": duration_ms,
                 }
             },
         )
+
         return OptimizeResponse(
             original_prompt=request.prompt,
-            optimized_prompt=request.prompt,
-            was_optimized=False,
+            optimized_prompt=optimized,
+            was_optimized=was_optimized,
             server_optimization_enabled=True,
-            optimization_status="timeout",
-            fallback_reason="timeout",
+            optimization_status=status,
+            fallback_reason=fallback_reason,
         )
-
-    if not isinstance(result, dict):
-        result = {
-            "optimized_prompt": request.prompt,
-            "error": {
-                "code": "optimization_failed",
-                "message": "Optimizer returned an invalid response",
-            },
-        }
-
-    optimized = str(result.get("optimized_prompt") or request.prompt)
-    status = _status_from_optimizer_result(result, request.prompt, optimized)
-    was_optimized = status == "optimized"
-    fallback_reason = _fallback_reason_from_status(status, result)
-    duration_ms = int((time.monotonic() - started_at) * 1000)
-
-    logger.info(
-        "Prompt optimization completed",
-        extra={
-            "extra_fields": {
-                "event": "optimize.route.completed",
-                "request_id": req_id,
-                "provider": getattr(optimizer, "provider", None),
-                "model": getattr(optimizer, "model", None),
-                "optimization_status": status,
-                "fallback_reason": fallback_reason,
-                "was_optimized": was_optimized,
-                "prompt_quality": result.get("prompt_quality"),
-                "attempt_count": result.get("attempt_count"),
-                "retry_reasons": result.get("retry_reasons"),
-                "unchanged_retry_used": result.get("unchanged_retry_used"),
-                "max_retries": max_retries,
-                "timeout_ms": int(timeout_seconds * 1000),
-                "duration_ms": duration_ms,
-            }
-        },
-    )
-
-    return OptimizeResponse(
-        original_prompt=request.prompt,
-        optimized_prompt=optimized,
-        was_optimized=was_optimized,
-        server_optimization_enabled=True,
-        optimization_status=status,
-        fallback_reason=fallback_reason,
-    )
+    finally:
+        if billing_reservation is not None:
+            if optimizer_invoked:
+                _finalize_optimization_usage(billing_reservation)
+            else:
+                _release_optimization_usage_safely(
+                    billing_reservation,
+                    reason="optimizer_setup_failed_before_invocation",
+                )

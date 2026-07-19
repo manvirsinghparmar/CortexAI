@@ -501,6 +501,7 @@ def _reserve_chat_usage(
     execution_plan: ChatExecutionPlan,
     research_enabled: bool,
     orchestrator: CortexOrchestrator,
+    resolved_attachments: list[attachments_service.ResolvedAttachment],
 ) -> ReservedRequestUsage:
     try:
         target = resolve_model_target(
@@ -515,6 +516,9 @@ def _reserve_chat_usage(
             model_targets=(target,),
             research_enabled=research_enabled,
             smart_routing=execution_plan.strategy == "smart_orchestrator",
+            attachment_count=len(resolved_attachments),
+            total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
+            attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
         )
     except HTTPException:
         raise
@@ -534,19 +538,22 @@ def _finalize_chat_usage(
     response: object,
     orchestrator: CortexOrchestrator,
     settle_model_response: bool = True,
+    attachments_present: bool = False,
 ) -> None:
     try:
+        successful_targets = (
+            _successful_billing_targets(
+                response,
+                orchestrator=orchestrator,
+            )
+            if settle_model_response
+            else ()
+        )
         _finalize_subscription_usage(
             reservation=reservation,
-            successful_targets=(
-                _successful_billing_targets(
-                    response,
-                    orchestrator=orchestrator,
-                )
-                if settle_model_response
-                else ()
-            ),
+            successful_targets=successful_targets,
             research_performed=_research_was_performed(response),
+            file_analysis_performed=attachments_present and bool(successful_targets),
         )
     except Exception as exc:
         logger.exception("Chat subscription usage finalization failed")
@@ -668,6 +675,7 @@ async def chat(
             execution_plan=execution_plan,
             research_enabled=research_mode,
             orchestrator=orchestrator,
+            resolved_attachments=resolved_attachments,
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:
@@ -715,6 +723,7 @@ async def chat(
                 reservation=billing_reservation,
                 response=response,
                 orchestrator=orchestrator,
+                attachments_present=bool(resolved_attachments),
             )
     except BaseException:
         if not provider_completed:
@@ -848,6 +857,7 @@ async def chat_stream(
             execution_plan=execution_plan,
             research_enabled=research_mode,
             orchestrator=orchestrator,
+            resolved_attachments=resolved_attachments,
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:
@@ -961,6 +971,7 @@ async def chat_stream(
                     reservation=billing_reservation,
                     response=response,
                     orchestrator=orchestrator,
+                    attachments_present=bool(resolved_attachments),
                 )
 
             for line in _iter_stream_lines(stream_text):
@@ -975,6 +986,7 @@ async def chat_stream(
                         reservation=billing_reservation,
                         response=response,
                         orchestrator=orchestrator,
+                        attachments_present=bool(resolved_attachments),
                     )
                 await asyncio.sleep(STREAM_LINE_DELAY_S)
 
@@ -984,6 +996,7 @@ async def chat_stream(
                     reservation=billing_reservation,
                     response=response,
                     orchestrator=orchestrator,
+                    attachments_present=bool(resolved_attachments),
                 )
 
             resolved_session_id = requested_session_id
@@ -1034,6 +1047,7 @@ async def chat_stream(
                             response=response,
                             orchestrator=orchestrator,
                             settle_model_response=meaningful_output_emitted,
+                            attachments_present=bool(resolved_attachments),
                         )
                     except Exception:
                         logger.exception("Chat stream partial subscription finalization failed")
@@ -1062,6 +1076,7 @@ async def chat_stream(
                             response=response,
                             orchestrator=orchestrator,
                             settle_model_response=meaningful_output_emitted,
+                            attachments_present=bool(resolved_attachments),
                         )
                     except Exception:
                         logger.exception("Chat stream partial subscription finalization failed")

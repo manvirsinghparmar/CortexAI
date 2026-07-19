@@ -10,6 +10,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from server import files_service
+from server import persistence as persistence_service
+from server.billing.enforcement_service import ReservedRequestUsage
+from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard, auth_mode as session_auth_mode
 from server.schemas.responses import FileUploadResponseDTO, FileStatusResponseDTO
@@ -24,6 +27,11 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
 )
 
 router = APIRouter(prefix="/v1/files", tags=["Files"])
+API_DB_ENABLED = persistence_service.API_DB_ENABLED
+_resolve_identity = persistence_service.resolve_identity
+_reserve_subscription_usage = persistence_service.reserve_subscription_usage
+_finalize_subscription_usage = persistence_service.finalize_subscription_usage
+_release_subscription_usage = persistence_service.release_subscription_usage
 
 
 _EDGE_HEADER_KEYS = (
@@ -115,6 +123,72 @@ def _edge_context_fields(request: Request, *, request_id: str, auth: AuthResult)
     }
 
 
+def _reserve_upload_usage(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    payload_size: int,
+) -> ReservedRequestUsage:
+    try:
+        resolution = _resolve_identity(auth=auth, request_id=request_id)
+        return _reserve_subscription_usage(
+            user_id=resolution.user_id,
+            request_id=f"{request_id}:file-upload:{uuid4()}",
+            operation_type="file_upload",
+            model_targets=(),
+            research_enabled=False,
+            attachment_count=1,
+            total_attachment_bytes=payload_size,
+            attachment_sizes=(payload_size,),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        http_error = enforcement_http_exception(exc)
+        log = logger.exception if http_error.status_code >= 500 else logger.warning
+        log(
+            "Attachment upload subscription preflight denied",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                    "payload_size_bytes": payload_size,
+                }
+            },
+        )
+        raise http_error from exc
+
+
+def _finalize_upload_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    uploaded_bytes: int,
+) -> None:
+    try:
+        _finalize_subscription_usage(
+            reservation=reservation,
+            successful_targets=(),
+            research_performed=False,
+            uploaded_bytes=uploaded_bytes,
+        )
+    except Exception as exc:
+        logger.exception("Attachment upload subscription finalization failed")
+        raise enforcement_http_exception(exc) from exc
+
+
+def _release_upload_usage_safely(
+    reservation: ReservedRequestUsage | None,
+    *,
+    reason: str,
+) -> None:
+    if reservation is None:
+        return
+    try:
+        _release_subscription_usage(reservation=reservation, reason=reason)
+    except Exception:
+        logger.exception("Attachment upload subscription release failed")
+
+
 @router.post("/upload", response_model=FileUploadResponseDTO)
 async def upload_file(
     request: Request,
@@ -187,6 +261,14 @@ async def upload_file(
             detail={"code": "empty_file", "message": "Request body is empty."},
         )
 
+    billing_reservation: ReservedRequestUsage | None = None
+    if API_DB_ENABLED:
+        billing_reservation = _reserve_upload_usage(
+            auth=auth,
+            request_id=request_id,
+            payload_size=payload_size,
+        )
+
     try:
         result = files_service.upload_user_file(
             auth=auth,
@@ -196,6 +278,10 @@ async def upload_file(
             payload=payload,
         )
     except HTTPException as exc:
+        _release_upload_usage_safely(
+            billing_reservation,
+            reason="upload_validation_or_storage_failed",
+        )
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         logger.warning(
             "Attachment upload route rejected request",
@@ -212,7 +298,11 @@ async def upload_file(
             },
         )
         raise
-    except Exception as exc:
+    except BaseException as exc:
+        _release_upload_usage_safely(
+            billing_reservation,
+            reason="upload_execution_failed",
+        )
         logger.exception(
             "Attachment upload route failed unexpectedly",
             extra={
@@ -227,6 +317,12 @@ async def upload_file(
             },
         )
         raise
+
+    if billing_reservation is not None:
+        _finalize_upload_usage(
+            reservation=billing_reservation,
+            uploaded_bytes=payload_size,
+        )
 
     logger.info(
         "Attachment upload route completed successfully",

@@ -175,7 +175,7 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
 - Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
-- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. It is configuration only in this work package: no paid access, Stripe call, usage metering, or entitlement enforcement is active yet.
+- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. The billing database foundation stores account ownership, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records. These records do not yet resolve an effective plan, grant paid access, call Stripe, or enforce an allowance; those behaviors begin in later work packages.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
@@ -810,6 +810,13 @@ These artifacts are intentionally separate so frontend-only or API-only changes 
 ## DB Migration Runbook
 
 - See `docs/runbooks/db-migrations.md` for migration authoring, apply order, rollback strategy, and verification checks.
+- Apply the additive B2C billing foundation before deploying code that imports `db/billing_repository.py`:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
+```
+
+- The migration creates only `billing_accounts`, `subscriptions`, `usage_periods`, `usage_counters`, `usage_reservations`, and `billing_webhook_events`, plus their constraints and indexes. It does not alter `users`, chat history, or existing LLM request/response tables.
 
 ## Release Gate
 
@@ -989,6 +996,7 @@ OpenAIProject/
 
   db/
     __init__.py
+    billing_repository.py
     engine.py
     schema_public_snapshot.sql
     migrations/
@@ -996,6 +1004,8 @@ OpenAIProject/
       20260218_llm_requests_api_key_owner_guard.sql
       20260222_b2b_launch_tables.sql
       20260222_go_live_hardening.sql
+      20260320_add_attachments_foundation.sql
+      20260718_add_b2c_billing_foundation.sql
     repository.py
     session.py
     tables.py

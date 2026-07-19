@@ -48,6 +48,12 @@ TABLE_NAMES = [
     "uploaded_files",
     "request_attachments",
     "file_deletion_queue",
+    "billing_accounts",
+    "subscriptions",
+    "usage_periods",
+    "usage_counters",
+    "usage_reservations",
+    "billing_webhook_events",
 ]
 
 

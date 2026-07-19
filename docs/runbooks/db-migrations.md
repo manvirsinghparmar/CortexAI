@@ -90,3 +90,76 @@ FROM llm_requests
 ORDER BY created_at DESC
 LIMIT 20;
 ```
+
+## B2C Billing Foundation
+
+Migration:
+
+`db/migrations/20260718_add_b2c_billing_foundation.sql`
+
+Apply it before deploying code that calls `db/billing_repository.py`:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
+```
+
+The migration is additive. It creates six new tables and their constraints/indexes; it does not alter `users`, sessions, messages, `llm_requests`, or `llm_responses`. Verify the schema after apply:
+
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN (
+    'billing_accounts',
+    'subscriptions',
+    'usage_periods',
+    'usage_counters',
+    'usage_reservations',
+    'billing_webhook_events'
+  )
+ORDER BY table_name;
+
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND tablename IN (
+    'billing_accounts',
+    'subscriptions',
+    'usage_periods',
+    'usage_counters',
+    'usage_reservations',
+    'billing_webhook_events'
+  )
+ORDER BY tablename, indexname;
+```
+
+Run the repository tests and, when a disposable PostgreSQL database is available, the real reflection/locking tests:
+
+```bash
+python -m pytest tests/test_billing_repository.py -q
+BILLING_TEST_DATABASE_URL="postgresql+psycopg://..." python -m pytest tests/test_billing_postgres_integration.py -q
+```
+
+### Billing rollback
+
+The preferred application rollback is to redeploy the previous API version and leave the additive, unused tables in place. This preserves any billing evidence and requires no database mutation.
+
+If the tables must be removed before any production billing data exists:
+
+1. Stop billing writers and deploy the previous API version.
+2. Take and verify a database snapshot.
+3. Confirm all six billing tables contain zero rows.
+4. Drop only the billing tables in dependency order inside one transaction:
+
+```sql
+BEGIN;
+DROP TABLE IF EXISTS public.billing_webhook_events;
+DROP TABLE IF EXISTS public.usage_reservations;
+DROP TABLE IF EXISTS public.usage_counters;
+DROP TABLE IF EXISTS public.usage_periods;
+DROP TABLE IF EXISTS public.subscriptions;
+DROP TABLE IF EXISTS public.billing_accounts;
+COMMIT;
+```
+
+Once billing rows exist, do not use the table-drop rollback. Keep the additive schema or restore/repair from the verified snapshot with a reviewed compensating migration. Neither rollback path deletes or modifies historical LLM request/response or chat-history data.

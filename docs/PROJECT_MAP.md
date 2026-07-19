@@ -48,6 +48,8 @@ This map is the quick "where do I change X?" reference for the current API-first
 ## Persistence and Reporting
 
 - SQLAlchemy table reflection and repository access: `db/`
+- B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
+- Billing constraint/unit coverage and opt-in PostgreSQL locking coverage: `tests/test_billing_repository.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
@@ -143,6 +145,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Update repository/table usage under `db/` + `server/`
   3. Follow `docs/runbooks/db-migrations.md`
 
+- Change B2C billing persistence:
+  1. Keep schema constraints/indexes in `db/migrations/20260718_add_b2c_billing_foundation.sql` aligned with `db/billing_repository.py`
+  2. Register new tables for lazy reflection in `db/tables.py` and export public repository functions through `db/__init__.py`
+  3. Keep repository functions transaction-neutral; callers own commit/rollback boundaries
+  4. Validate portable repository behavior in `tests/test_billing_repository.py` and PostgreSQL row locking with `BILLING_TEST_DATABASE_URL`
+  5. Do not infer effective paid access directly from a stored subscription row; lifecycle policy belongs to the subscription service
+
 - Investigate production logging incidents on AWS EC2:
   1. Follow `docs/runbooks/aws-ec2-logging.md`
   2. Correlate CloudFront/WAF logs with `request_id`/`X-Amz-Cf-Id`
@@ -157,4 +166,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-06-07
+Last updated: 2026-07-18

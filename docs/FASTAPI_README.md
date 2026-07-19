@@ -114,7 +114,8 @@ python run_server.py --reload
 - Mobile and desktop completed response-card duration, token, and cost metadata appears directly in the header without a run-details chevron. Loading and failed cards keep a muted elapsed/status line visible on mobile and desktop. The frontend displays the same UI-observed elapsed duration with abbreviated units when live timestamps are available, falls back to API `latency_ms` for restored rows, and keeps unavailable token counts hidden instead of rendering zero-token placeholders.
 - React response headers reuse the model picker's shared provider-logo and model-presentation resolver, including the provider-initial fallback when an image is unavailable.
 - React exposes `/models` for a task-first model selection guide. The screen is currently driven by `frontend-react/src/config/models.data.json`, not `/v1/models`: editing a provider's `models[]` changes the visible catalog, while `tier`, `speed`, and `rec` derive the Depth meter, Speed meter, and recommended row/callout. If this metadata becomes production-owned by the gateway, the frontend should keep the same JSON contract and swap the static import for an API-backed loader.
-- `config/subscription_plans.yaml` is the server-owned Free/Plus/Pro plan catalogue. `server/billing/plan_catalog.py` validates and caches it during API startup, including ranks, prices, Stripe price environment-variable mappings, entitlements, allowances, limits, and allowed billing classes. This foundation does not yet resolve a user's plan or enforce an entitlement.
+- `config/subscription_plans.yaml` is the server-owned Free/Plus/Pro plan catalogue. `server/billing/plan_catalog.py` validates and caches it during API startup, including ranks, prices, Stripe price environment-variable mappings, entitlements, allowances, limits, and allowed billing classes.
+- `db/billing_repository.py` provides transaction-neutral access to billing accounts, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records created by `db/migrations/20260718_add_b2c_billing_foundation.sql`. Stored rows remain data only in WP2: they do not resolve an effective plan or authorize paid behavior.
 - `/v1/models` exposes `billing_class` as `standard`, `advanced`, or `ultra`. This value is independent from the existing smart-routing `tier`; missing legacy classifications use the conservative `advanced` fallback and emit a warning.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
@@ -484,9 +485,12 @@ Apply these when enabling updated persistence flows:
 ```bash
 psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
 psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
 ```
 
 No new DB migration is required for shared Ask/Compare session continuity; that behavior is currently implemented in persistence/session resolution logic.
+
+The B2C billing migration is additive and leaves `users`, sessions, messages, `llm_requests`, and `llm_responses` unchanged. Apply it before deploying code that uses the billing repository. See `docs/runbooks/db-migrations.md` for verification and rollback guidance.
 
 ## OpenAI Compatibility Note
 

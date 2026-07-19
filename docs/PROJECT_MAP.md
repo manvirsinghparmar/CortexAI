@@ -47,14 +47,14 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Ask/Compare/Optimize/upload authorization, conservative Smart premium-envelope reservation, and actual-success finalization: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`, `server/routes/optimize.py`, `server/routes/files.py`
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
 - Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
-- Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; hosted-session endpoints: `server/routes/billing.py`
+- Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; billing endpoints: `server/routes/billing.py`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
 
 - SQLAlchemy table reflection and repository access: `db/`
 - B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
-- Billing constraint/lifecycle/entitlement/metering/Stripe-session/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
+- Billing constraint/lifecycle/entitlement/metering/Stripe-session/webhook/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_stripe_webhooks.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
@@ -170,6 +170,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Keep routes session-scoped and provider-safe in `server/routes/billing.py`; existing provider-live subscriptions must route to Portal instead of creating Checkout
   4. Update strict request/response schemas, `.env.example`, `docs/runbooks/stripe-billing.md`, README/FastAPI docs, Postman, and `tests/test_stripe_billing.py` together
   5. Hosted-session creation never grants paid access; only the verified webhook lifecycle may update paid subscription state
+
+- Change Stripe webhook or reconciliation behavior:
+  1. Keep raw-body signature verification and Stripe API access in `server/billing/stripe_gateway.py`; never deserialize or mutate the request before verification
+  2. Keep event dispatch, provider ownership checks, Price-to-plan mapping, stale-event policy, and reconciliation in `server/billing/webhook_service.py`
+  3. Keep event/Subscription/period row locks and mutations transaction-neutral in `db/billing_repository.py`; callers own commit/rollback
+  4. Keep effective paid/grace/cancellation access in `server/billing/subscription_service.py`; webhook handlers synchronize snapshots but do not invent a second entitlement policy
+  5. Update `.env.example`, billing runbooks, README/FastAPI docs, Postman, and `tests/test_stripe_webhooks.py` together; do not expose cross-account reconciliation until administrator authorization exists
 
 - Change atomic subscription metering:
   1. Keep transaction orchestration and transition rules in `server/billing/metering_service.py`; keep SQL row locks and counter mutations in `db/billing_repository.py`

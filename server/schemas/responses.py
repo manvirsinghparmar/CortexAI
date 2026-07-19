@@ -393,6 +393,10 @@ class PortalSessionResponseDTO(BaseModel):
     portal_url: str
 
 
+class BillingWebhookResponseDTO(BaseModel):
+    received: bool = True
+
+
 class FileBaseDTO(BaseModel):
     file_id: str
     original_filename: str

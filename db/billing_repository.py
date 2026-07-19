@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeAlias
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import RowMapping
@@ -153,6 +153,29 @@ def get_billing_account_for_user(db: Session, user_id: UUID) -> BillingRecord | 
         )
     )
     return _first_record(db.execute(stmt))
+
+
+def get_billing_account_by_id(
+    db: Session,
+    billing_account_id: UUID,
+) -> BillingRecord | None:
+    billing_accounts = _table("billing_accounts")
+    return _first_record(
+        db.execute(select(billing_accounts).where(billing_accounts.c.id == billing_account_id))
+    )
+
+
+def get_billing_account_by_stripe_customer_id(
+    db: Session,
+    stripe_customer_id: str,
+) -> BillingRecord | None:
+    billing_accounts = _table("billing_accounts")
+    customer_id = _required_text(stripe_customer_id, "stripe_customer_id")
+    return _first_record(
+        db.execute(
+            select(billing_accounts).where(billing_accounts.c.stripe_customer_id == customer_id)
+        )
+    )
 
 
 def lock_billing_account(
@@ -329,13 +352,23 @@ def upsert_subscription_snapshot(
     }
     update_payload["updated_at"] = func.now()
 
+    update_condition = subscriptions.c.billing_account_id == snapshot.billing_account_id
+    if snapshot.last_provider_event_at is not None:
+        update_condition = and_(
+            update_condition,
+            or_(
+                subscriptions.c.last_provider_event_at.is_(None),
+                subscriptions.c.last_provider_event_at <= snapshot.last_provider_event_at,
+            ),
+        )
+
     stmt = (
         _dialect_insert(db, subscriptions)
         .values(**insert_payload)
         .on_conflict_do_update(
             index_elements=["provider", "provider_subscription_id"],
             set_=update_payload,
-            where=subscriptions.c.billing_account_id == snapshot.billing_account_id,
+            where=update_condition,
         )
         .returning(*subscriptions.c)
     )
@@ -350,6 +383,21 @@ def upsert_subscription_snapshot(
     )
     if existing is not None and existing["billing_account_id"] != snapshot.billing_account_id:
         raise ValueError("Provider subscription is already assigned to another billing account")
+    if existing is not None and snapshot.last_provider_event_at is not None:
+        existing_event_at = existing.get("last_provider_event_at")
+        if isinstance(existing_event_at, datetime):
+            normalized_existing = (
+                existing_event_at.replace(tzinfo=UTC)
+                if existing_event_at.tzinfo is None
+                else existing_event_at.astimezone(UTC)
+            )
+            normalized_incoming = (
+                snapshot.last_provider_event_at.replace(tzinfo=UTC)
+                if snapshot.last_provider_event_at.tzinfo is None
+                else snapshot.last_provider_event_at.astimezone(UTC)
+            )
+            if normalized_existing > normalized_incoming:
+                return existing
     raise RuntimeError("Subscription snapshot could not be persisted")
 
 
@@ -475,6 +523,55 @@ def get_or_create_usage_period(
     if existing.get("status") != "active":
         raise RuntimeError("Existing usage period has an unsupported state")
     return existing
+
+
+def synchronize_usage_period(
+    db: Session,
+    *,
+    billing_account_id: UUID,
+    plan_code: str,
+    starts_at: datetime,
+    ends_at: datetime,
+    subscription_id: UUID | None = None,
+) -> BillingRecord:
+    """Synchronize one provider period without replacing its usage counters.
+
+    Stripe can change a plan or period end while retaining the same period
+    start. The account/start key identifies that economic period, so updating
+    its definition in place preserves already-settled counters and prevents a
+    second allowance reset.
+    """
+    if ends_at <= starts_at:
+        raise ValueError("ends_at must be after starts_at")
+    usage_periods = _table("usage_periods")
+    normalized_plan = _required_text(plan_code, "plan_code").lower()
+    stmt = (
+        _dialect_insert(db, usage_periods)
+        .values(
+            id=_new_id_for(usage_periods),
+            billing_account_id=billing_account_id,
+            subscription_id=subscription_id,
+            plan_code=normalized_plan,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            status="active",
+        )
+        .on_conflict_do_update(
+            index_elements=["billing_account_id", "starts_at"],
+            set_={
+                "subscription_id": subscription_id,
+                "plan_code": normalized_plan,
+                "ends_at": ends_at,
+                "status": "active",
+                "updated_at": func.now(),
+            },
+        )
+        .returning(*usage_periods.c)
+    )
+    persisted = _first_record(db.execute(stmt))
+    if persisted is None:
+        raise RuntimeError("Usage period could not be synchronized")
+    return persisted
 
 
 def close_usage_period(db: Session, usage_period_id: UUID) -> BillingRecord | None:
@@ -957,6 +1054,28 @@ def create_webhook_event_if_absent(
     if existing["payload_hash"] != digest:
         raise ValueError("Webhook event ID was reused with a different payload hash")
     return existing, False
+
+
+def lock_webhook_event(
+    db: Session,
+    *,
+    provider: str,
+    provider_event_id: str,
+) -> BillingRecord | None:
+    """Serialize webhook retry/duplicate processing for one provider event."""
+    billing_webhook_events = _table("billing_webhook_events")
+    stmt = (
+        select(billing_webhook_events)
+        .where(
+            and_(
+                billing_webhook_events.c.provider == _normalized_provider(provider),
+                billing_webhook_events.c.provider_event_id
+                == _required_text(provider_event_id, "provider_event_id"),
+            )
+        )
+        .with_for_update()
+    )
+    return _first_record(db.execute(stmt))
 
 
 def mark_webhook_event_processed(

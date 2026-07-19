@@ -160,6 +160,8 @@ Do not repair `reserved_quantity` with ad hoc SQL. Run the metering cleanup in a
 
 Work Package 5 also uses the existing billing tables and requires no new migration. Apply and verify `20260718_add_b2c_billing_foundation.sql` before deploying the WP5 API: database-mode `/v1/chat*` and `/v1/compare*` now create Free-plan reservations even while `BILLING_ENABLED=false`. A missing billing table therefore fails the request conservatively before any provider call.
 
+Work Package 8 also requires no new migration. Its verified Stripe webhook lifecycle uses the existing `billing_webhook_events`, `subscriptions`, `usage_periods`, and `usage_counters` columns from `20260718_add_b2c_billing_foundation.sql`. Apply and verify that migration before registering the Stripe webhook endpoint; otherwise verified events return a non-2xx response and remain retryable at Stripe.
+
 Reservation, provider execution, and settlement are deliberately separate transactions. During a rolling deployment, do not drop or rewrite the additive billing tables. If the new API must be rolled back, redeploy the prior application version and retain the billing rows for audit/reconciliation; stale `reserved` rows can be handled by the reviewed cleanup flow above.
 
 ### Billing rollback

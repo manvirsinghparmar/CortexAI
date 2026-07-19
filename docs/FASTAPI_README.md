@@ -119,10 +119,10 @@ python run_server.py --reload
 - `server/billing/account_service.py` validates user ownership and lazily creates B2C accounts. `server/billing/subscription_service.py` applies the server-side lifecycle/grace policy and creates the effective usage period. `server/billing/entitlement_service.py` returns feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` owns atomic allowance mutation. It locks the billing owner for idempotency-key creation, locks required counters in deterministic order, rejects over-limit reservations before mutation, settles only successful quantities, releases unused quantities, and expires clearly stale reservations after a default 30-minute threshold. Every function uses the caller-owned transaction and never commits.
 - `server/billing/enforcement_service.py` composes effective-plan resolution, entitlement evaluation, atomic reservation, and output-aware settlement/release for DB-mode Ask, Compare, Optimize, upload, and attachment analysis. `server/persistence.py` owns the short committing units of work; no billing transaction remains open during a provider, optimizer, or object-storage call.
-- `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout/Portal return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. WP7 includes Stripe hosted-session support but paid access still requires the future verified-webhook lifecycle; do not enable production billing before WP8.
-- With billing enabled, startup validates the secret-key shape, paid-plan Price IDs, server redirect URLs, and optional API version. The API rejects client-supplied Price IDs, amounts, currencies, Customer IDs, and redirects.
+- `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout, Portal, and webhook routes return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development.
+- With billing enabled, startup validates the secret key, webhook signing secret, paid-plan Price IDs, server redirect URLs, and optional API version. The API rejects client-supplied Price IDs, amounts, currencies, Customer IDs, and redirects. `server/billing/webhook_service.py` makes verified Stripe Checkout/subscription/invoice state authoritative, locks provider-event retries, rejects stale snapshots, preserves usage counters across same-period changes, and delegates paid/grace/cancellation access to `subscription_service.py`.
 - `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` reserve model, research, and attachment-analysis quantities before provider execution. They settle only successful model responses by actual billing class, settle one file-analysis turn when an attachment-backed request produces billable output, release failed targets, and settle research once only when it ran. Compare performs aggregate partial settlement. `/v1/optimize` meters one actual explicit optimizer invocation without recounting the later Ask/Compare submission. `/v1/files/upload` enforces file access/size and uploaded-byte allowances before storage and releases failed uploads. Usage-export enforcement remains later work.
-- Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
+- Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_stripe_billing.py tests/test_stripe_webhooks.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
 - `/v1/models` exposes `billing_class` as `standard`, `advanced`, or `ultra`. This value is independent from the existing smart-routing `tier`; missing legacy classifications use the conservative `advanced` fallback and emit a warning.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
 - Smart Ask pending cards remain model-neutral because the `start` provider/model is a routing preview that can differ after research and runtime context are applied. They show `Smart routing` while waiting and adopt the authoritative provider/model from `response_done`.
@@ -157,6 +157,7 @@ python run_server.py --reload
 - `GET /v1/entitlements`
 - `POST /v1/billing/checkout-session`
 - `POST /v1/billing/portal-session`
+- `POST /v1/billing/webhook`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -217,7 +218,7 @@ The endpoint returns `plan`, `features`, `model_access`, `allowances`, and `peri
 
 ### Stripe hosted billing sessions
 
-Both billing routes require signed-session or Cognito bearer identity; API-key-only authentication returns `403 session_auth_required`.
+The hosted Checkout and Portal routes require signed-session or Cognito bearer identity; API-key-only authentication returns `403 session_auth_required`. The webhook route uses Stripe signature verification instead of user authentication.
 
 `POST /v1/billing/checkout-session` accepts the strict body `{"plan_code":"plus","billing_period":"monthly"}`. The server validates that the plan exists and is paid, resolves its Price ID from `config/subscription_plans.yaml` plus environment, creates/reuses the account Customer, and returns:
 
@@ -227,7 +228,11 @@ Both billing routes require signed-session or Cognito bearer identity; API-key-o
 
 An existing provider-live subscription is not duplicated. The same endpoint creates a Portal session and returns its hosted URL with `destination: "portal"`. The browser still follows only the returned short-lived URL and never selects the Customer or redirect target.
 
-`POST /v1/billing/portal-session` accepts no body or `{}` and returns `{"portal_url":"https://billing.stripe.com/..."}` for the persisted Customer. Missing Customer state returns `409 stripe_customer_required`; normalized Stripe errors return `502 billing_provider_unavailable`. Hosted URLs are never persisted, and neither endpoint grants paid access. WP8 verified webhooks remain authoritative.
+`POST /v1/billing/portal-session` accepts no body or `{}` and returns `{"portal_url":"https://billing.stripe.com/..."}` for the persisted Customer. Missing Customer state returns `409 stripe_customer_required`; normalized Stripe errors return `502 billing_provider_unavailable`. Hosted URLs are never persisted, and neither hosted-session endpoint grants paid access.
+
+`POST /v1/billing/webhook` has no user-auth dependency. It reads the raw request bytes, verifies `Stripe-Signature` with `STRIPE_WEBHOOK_SECRET`, rejects invalid signatures with structured `400`, and caps the body at 1 MiB. Valid events are hashed and persisted by Stripe event ID before processing. Unknown valid event types are marked ignored; processed/ignored duplicates return `200`; failed events retain a safe failure code and are retried under a row lock. Required handlers cover `checkout.session.completed`, `customer.subscription.created|updated|deleted`, `invoice.paid`, and `invoice.payment_failed`. The response is always `{"received":true}` after successful or duplicate handling and never exposes Stripe objects or identifiers.
+
+Checkout and invoice handlers retrieve the current Subscription; subscription handlers consume the signed snapshot and compare its event creation time with `last_provider_event_at`. Price IDs are reverse-mapped only through server configuration. Paid periods use the existing `(billing_account_id, starts_at)` identity, so duplicate renewal events cannot reset counters; same-period plan/end changes preserve the row and counters. Payment failure sets grace only when the retrieved Subscription remains `past_due`, and deletion resolves through the existing lifecycle policy to Free without deleting history. The internal `reconcile_billing_account()` helper refreshes an account from Stripe, but no HTTP reconciliation endpoint is exposed because the repository does not yet provide administrator authorization.
 
 Subscription environment controls:
 
@@ -235,6 +240,7 @@ Subscription environment controls:
 BILLING_ENABLED=false
 SUBSCRIPTION_PAYMENT_GRACE_DAYS=3
 STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 STRIPE_PLUS_MONTHLY_PRICE_ID=
 STRIPE_PRO_MONTHLY_PRICE_ID=
 STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success

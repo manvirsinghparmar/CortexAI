@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI):
             "extra_fields": {
                 "billing_enabled": stripe_billing_config.enabled,
                 "configured_plan_codes": sorted(stripe_billing_config.price_ids),
+                "webhook_signing_secret_configured": bool(stripe_billing_config.webhook_secret),
                 "explicit_api_version": bool(stripe_billing_config.api_version),
             }
         },

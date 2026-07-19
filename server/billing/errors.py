@@ -24,6 +24,14 @@ class BillingProviderError(RuntimeError):
     """Stripe could not create a safe hosted billing session."""
 
 
+class InvalidWebhookSignatureError(ValueError):
+    """A Stripe webhook payload or signature could not be verified."""
+
+
+class BillingWebhookProcessingError(RuntimeError):
+    """A verified Stripe event could not be synchronized safely."""
+
+
 class BillingPlanSelectionError(ValueError):
     """A Checkout request selected an unknown or unsupported plan option."""
 
@@ -224,5 +232,25 @@ def stripe_customer_required_http_exception() -> HTTPException:
         detail={
             "code": "stripe_customer_required",
             "message": "No billing profile is available to manage for this account.",
+        },
+    )
+
+
+def invalid_webhook_signature_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "code": "invalid_webhook_signature",
+            "message": "The Stripe webhook signature or payload is invalid.",
+        },
+    )
+
+
+def billing_webhook_processing_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail={
+            "code": "billing_webhook_processing_failed",
+            "message": "The verified billing event could not be processed safely.",
         },
     )

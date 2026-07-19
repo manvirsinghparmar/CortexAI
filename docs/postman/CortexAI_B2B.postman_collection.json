@@ -336,6 +336,41 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST /v1/billing/webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Stripe-Signature",
+                "value": "{{stripe_signature}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_replace_with_captured_test_event\",\n  \"object\": \"event\",\n  \"type\": \"customer.subscription.updated\",\n  \"created\": 0,\n  \"data\": {\n    \"object\": {}\n  }\n}"
+            },
+            "url": "{{base_url}}/v1/billing/webhook",
+            "description": "Stripe-only callback. Replace the body with the exact raw bytes of a captured test-mode event and set stripe_signature to its matching Stripe-Signature header. Never store STRIPE_WEBHOOK_SECRET or a live payload in this collection. Invalid signatures return 400; BILLING_ENABLED=false returns 503."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects valid delivery, invalid signature, payload guard, processing retry, database mode, or disabled billing', function () { pm.expect([200, 400, 413, 500, 501, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('webhook acknowledgement shape', function () { pm.expect(pm.response.json()).to.eql({ received: true }); }); }",
+                  "if (pm.response.code === 400) { pm.test('invalid signature is structured', function () { pm.expect(pm.response.json().detail.code).to.eql('invalid_webhook_signature'); }); }"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

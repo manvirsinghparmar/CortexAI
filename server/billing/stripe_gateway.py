@@ -15,11 +15,13 @@ from server.billing.errors import (
     BillingConfigurationError,
     BillingNotConfiguredError,
     BillingProviderError,
+    InvalidWebhookSignatureError,
 )
 from server.billing.plan_catalog import PlanCatalog, get_plan_catalog
 
 _PRICE_ID_PATTERN = re.compile(r"^price_[A-Za-z0-9]+$")
 _CUSTOMER_ID_PATTERN = re.compile(r"^cus_[A-Za-z0-9]+$")
+_SUBSCRIPTION_ID_PATTERN = re.compile(r"^sub_[A-Za-z0-9]+$")
 _API_VERSION_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}(?:\.[a-z][a-z0-9_]*)?$")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
@@ -30,6 +32,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 class StripeBillingConfig:
     enabled: bool
     secret_key: str | None = field(default=None, repr=False)
+    webhook_secret: str | None = field(default=None, repr=False)
     checkout_success_url: str | None = None
     checkout_cancel_url: str | None = None
     portal_return_url: str | None = None
@@ -43,6 +46,13 @@ class StripeBillingConfig:
                 f"No server-owned Stripe Price is configured for plan '{plan_code}'."
             )
         return price_id
+
+    def require_plan_code_for_price(self, price_id: str) -> str:
+        normalized = str(price_id or "").strip()
+        for plan_code, configured_price_id in self.price_ids.items():
+            if configured_price_id == normalized:
+                return plan_code
+        raise BillingConfigurationError("Stripe subscription uses an unknown Price ID.")
 
 
 def _billing_enabled(environment: Mapping[str, str]) -> bool:
@@ -92,6 +102,11 @@ def load_stripe_billing_config(
         raise BillingConfigurationError(
             "STRIPE_SECRET_KEY must be a Stripe test or live secret key."
         )
+    webhook_secret = _required_environment_value(resolved_environment, "STRIPE_WEBHOOK_SECRET")
+    if not webhook_secret.startswith("whsec_") or len(webhook_secret) <= len("whsec_"):
+        raise BillingConfigurationError(
+            "STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret."
+        )
 
     price_ids: dict[str, str] = {}
     for plan in plan_catalog.list_plans():
@@ -121,6 +136,7 @@ def load_stripe_billing_config(
     return StripeBillingConfig(
         enabled=True,
         secret_key=secret_key,
+        webhook_secret=webhook_secret,
         checkout_success_url=_validated_redirect_url(
             resolved_environment, "STRIPE_CHECKOUT_SUCCESS_URL"
         ),
@@ -144,6 +160,18 @@ def _response_value(response: Any, name: str) -> Any:
     if isinstance(response, Mapping):
         return response.get(name)
     return getattr(response, name, None)
+
+
+def _plain_mapping(response: Any) -> Mapping[str, Any] | None:
+    if isinstance(response, Mapping):
+        return response
+    for method_name in ("to_dict_recursive", "to_dict"):
+        method = getattr(response, method_name, None)
+        if callable(method):
+            converted = method()
+            if isinstance(converted, Mapping):
+                return converted
+    return None
 
 
 def _validated_hosted_url(response: Any, *, expected_host: str) -> str:
@@ -181,6 +209,85 @@ class StripeGateway:
         if self.config.api_version:
             options["stripe_version"] = self.config.api_version
         return options or None
+
+    def verify_webhook_event(
+        self,
+        *,
+        payload: bytes,
+        signature: str,
+    ) -> Mapping[str, Any]:
+        """Verify the exact raw request body with Stripe's official SDK."""
+        if not self.config.webhook_secret:
+            raise BillingConfigurationError("Stripe webhook signing secret is missing")
+        if not payload or not str(signature or "").strip():
+            raise InvalidWebhookSignatureError("Stripe webhook signature is missing")
+        try:
+            import stripe
+        except ImportError as exc:
+            raise BillingConfigurationError(
+                "The Stripe SDK is required when BILLING_ENABLED=true."
+            ) from exc
+        try:
+            event = stripe.Webhook.construct_event(
+                payload,
+                signature,
+                self.config.webhook_secret,
+            )
+        except (ValueError, stripe.error.SignatureVerificationError) as exc:
+            raise InvalidWebhookSignatureError("Stripe webhook verification failed") from exc
+        except Exception as exc:
+            raise BillingConfigurationError("Stripe webhook verification is unavailable") from exc
+
+        event_mapping = _plain_mapping(event)
+        if event_mapping is None:
+            raise InvalidWebhookSignatureError("Stripe webhook payload is invalid")
+        return event_mapping
+
+    async def retrieve_subscription(self, subscription_id: str) -> Mapping[str, Any]:
+        normalized = str(subscription_id or "").strip()
+        if not _SUBSCRIPTION_ID_PATTERN.fullmatch(normalized):
+            raise BillingConfigurationError("Stripe Subscription ID is invalid")
+        try:
+            response = await self._stripe_client().v1.subscriptions.retrieve_async(
+                normalized,
+                options=self._options(),
+            )
+        except (BillingConfigurationError, BillingProviderError):
+            raise
+        except Exception as exc:
+            raise BillingProviderError("Stripe Subscription retrieval failed") from exc
+        response_mapping = _plain_mapping(response)
+        if response_mapping is None:
+            raise BillingProviderError("Stripe returned an invalid Subscription")
+        return response_mapping
+
+    async def list_customer_subscriptions(
+        self,
+        *,
+        customer_id: str,
+    ) -> tuple[Mapping[str, Any], ...]:
+        if not _CUSTOMER_ID_PATTERN.fullmatch(str(customer_id or "").strip()):
+            raise BillingConfigurationError("Persisted Stripe Customer ID is invalid")
+        try:
+            response = await self._stripe_client().v1.subscriptions.list_async(
+                {"customer": customer_id, "status": "all", "limit": 100},
+                options=self._options(),
+            )
+        except (BillingConfigurationError, BillingProviderError):
+            raise
+        except Exception as exc:
+            raise BillingProviderError("Stripe Subscription listing failed") from exc
+        response_mapping = _plain_mapping(response)
+        if response_mapping is None:
+            raise BillingProviderError("Stripe returned an invalid Subscription list")
+        if bool(_response_value(response_mapping, "has_more")):
+            raise BillingProviderError(
+                "Stripe returned too many Subscriptions for automatic reconciliation"
+            )
+        data = _response_value(response_mapping, "data")
+        if not isinstance(data, list) or not all(isinstance(item, Mapping) for item in data):
+            raise BillingProviderError("Stripe returned an invalid Subscription list")
+        return tuple(data)
 
     async def create_customer(
         self,

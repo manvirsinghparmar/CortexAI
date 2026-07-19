@@ -111,6 +111,7 @@ PROMPT_OPTIMIZER_TEMPERATURE=0.2    # low-drift optimizer generation setting
 BILLING_ENABLED=false               # false => Free for every account
 SUBSCRIPTION_PAYMENT_GRACE_DAYS=3   # fallback past_due grace window
 STRIPE_SECRET_KEY=                  # server-only; required when billing is enabled
+STRIPE_WEBHOOK_SECRET=              # server-only signing secret for the webhook endpoint
 STRIPE_PLUS_MONTHLY_PRICE_ID=       # server-owned Price mapping
 STRIPE_PRO_MONTHLY_PRICE_ID=        # server-owned Price mapping
 STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/settings/billing?checkout=success
@@ -189,14 +190,15 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 - Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
-- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. It also keeps Stripe lazy and makes Checkout/Portal return `503 billing_not_configured` without requiring Stripe credentials. WP7 adds the pinned Stripe SDK plus server-owned Checkout and Customer Portal creation, but it does not grant paid access: keep billing disabled in production until WP8 verified-webhook synchronization is deployed. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
-- When billing is enabled, startup validates the Stripe secret-key shape, every paid plan's configured Price ID, the three backend redirect URLs, and any explicit API version. The client can submit only `plan_code` and `billing_period`; extra Price, amount, currency, Customer, or redirect fields are rejected. Stripe webhooks remain the future authority for paid state.
+- `BILLING_ENABLED=false` is the safe default and resolves every account to Free. It keeps Stripe lazy and makes Checkout, Portal, and webhook routes return `503 billing_not_configured` without requiring Stripe credentials. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
+- When billing is enabled, startup validates the Stripe secret key, webhook signing secret, every paid plan's configured Price ID, all backend redirect URLs, and any explicit API version. The client can submit only `plan_code` and `billing_period`; extra Price, amount, currency, Customer, or redirect fields are rejected. `POST /v1/billing/webhook` verifies the exact raw body and `Stripe-Signature`, stores provider event IDs idempotently, synchronizes Checkout/subscription/invoice lifecycle events, rejects stale snapshots, applies payment grace and cancellation policy, and creates each paid usage period once. Verified webhook state is authoritative for paid access.
 - DB-mode Ask, Compare, Optimize, and upload/file-analysis paths now use the same short reserve/settle/release lifecycle. Ask/Compare reserve before provider work, settle only actual successful model classes and performed research, and settle one file-analysis turn only when an attachment-backed turn produces billable output. `/v1/optimize` reserves before the explicit UI optimizer and settles once whenever invocation starts, including timeout or valid fallback; submitting its returned prompt to Ask/Compare does not charge another optimization turn. Upload reserves the server-observed raw-body byte count before object storage, settles it only after a successful upload, and releases it on validation or storage failure. Usage-export enforcement remains later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
 python -m pytest tests/test_registry_pricing_alignment.py tests/test_subscription_plan_catalog.py -q
 python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_billing_repository.py -q
+python -m pytest tests/test_stripe_billing.py tests/test_stripe_webhooks.py -q
 ```
 
 ## Run
@@ -403,6 +405,7 @@ Response includes:
 - `GET /v1/entitlements`
 - `POST /v1/billing/checkout-session`
 - `POST /v1/billing/portal-session`
+- `POST /v1/billing/webhook`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
@@ -448,7 +451,9 @@ The backend resolves the paid plan through `config/subscription_plans.yaml`, rea
 
 `POST /v1/billing/portal-session` accepts an omitted or empty strict body and returns `portal_url` only for the persisted Stripe Customer. Its return URL is server configuration. An account without a Customer receives `409 stripe_customer_required`; Stripe failures become a provider-safe `502 billing_provider_unavailable`. Neither route stores hosted URLs.
 
-These routes create hosted sessions only. They do not write paid subscription state or grant entitlements; verified Stripe webhooks in WP8 must authoritatively update the local subscription snapshot. See `docs/runbooks/stripe-billing.md` for configuration and safe enablement.
+The hosted-session routes do not write paid state. `POST /v1/billing/webhook` is intentionally unauthenticated by user credentials and instead requires Stripe's signature over the exact raw body. It accepts the required Checkout, subscription, and invoice lifecycle events, records valid unknown events as ignored, returns `400 invalid_webhook_signature` before persistence for invalid payloads/signatures, and returns a non-2xx response when verified processing fails so Stripe can retry. Duplicate provider event IDs are harmless; failed rows can be retried; older subscription snapshots cannot overwrite newer ones. Subscription Price IDs are reverse-mapped through server configuration, never event metadata.
+
+Paid usage periods follow Stripe period boundaries. Repeated events and multiple lifecycle events for the same period reuse the existing period row and preserve settled counters; plan changes with the same period start update that row without resetting usage. `invoice.payment_failed` grants the configured grace only when a fresh authoritative Subscription remains `past_due`; cancellation resolution downgrades through the existing conservative lifecycle service without deleting account or conversation data. See `docs/runbooks/stripe-billing.md` and `docs/runbooks/subscription-incidents.md` for configuration, replay, and recovery guidance.
 
 ### Cognito (Gmail) sign-in
 
@@ -1305,6 +1310,7 @@ OpenAIProject/
 - Change persistence/audit behavior for FastAPI: `server/persistence.py` (shared write path for chat/compare/stream).
 - Change usage/savings/BYOK behavior: `server/usage_reporting.py`, `server/savings.py`, `server/byok_service.py`, and related routes under `server/routes/`.
 - Change Stripe hosted-session behavior: `server/billing/stripe_gateway.py`, `server/billing/session_service.py`, `server/routes/billing.py`, strict billing schemas, `.env.example`, `docs/runbooks/stripe-billing.md`, Postman, and `tests/test_stripe_billing.py`. Never move Price, amount, Customer, or redirect authority into the client.
+- Change Stripe webhook lifecycle behavior: `server/billing/webhook_service.py`, `server/billing/stripe_gateway.py`, `db/billing_repository.py`, `server/billing/subscription_service.py`, `server/routes/billing.py`, billing response schemas, runbooks, Postman, and `tests/test_stripe_webhooks.py`. Preserve raw-body verification, provider-event idempotency, stale-event protection, server-owned Price mapping, and conservative plan resolution.
 - Add/adjust guardrails: `server/rate_limit.py`, `server/circuit_breaker.py`, privacy policy in `server/privacy.py`.
 - Update CI/workflow behavior: `.github/workflows/ci.yml`, `.github/workflows/live-e2e.yml`, `.github/workflows/incident-regression-38.yml`.
 - Add tenant/dev tooling scripts: `scripts/` (runtime checks/reporting) and `tools/` (operator/dev helpers).

@@ -15,7 +15,7 @@ from db.billing_repository import (
     get_active_usage_period,
     get_latest_subscription_for_account,
     get_live_subscription_for_account,
-    get_or_create_usage_period,
+    synchronize_usage_period,
 )
 from server.billing.account_service import get_or_create_user_billing_account
 from server.billing.errors import BillingConfigurationError
@@ -69,7 +69,7 @@ def _utc_month_bounds(at_time: datetime) -> tuple[datetime, datetime]:
     return starts_at, ends_at
 
 
-def _grace_days() -> int:
+def subscription_payment_grace_days() -> int:
     raw = str(os.getenv("SUBSCRIPTION_PAYMENT_GRACE_DAYS", "3") or "3").strip()
     try:
         value = int(raw)
@@ -140,7 +140,7 @@ def _ensure_usage_period(
         close_usage_period(db, active["id"])
 
     try:
-        return get_or_create_usage_period(
+        return synchronize_usage_period(
             db,
             billing_account_id=billing_account_id,
             subscription_id=subscription_id,
@@ -335,7 +335,7 @@ def resolve_effective_subscription(
     if status_value == "past_due" and grace_until is None:
         failure_observed_at = _as_utc(snapshot.get("last_provider_event_at"))
         if failure_observed_at is not None:
-            grace_until = failure_observed_at + timedelta(days=_grace_days())
+            grace_until = failure_observed_at + timedelta(days=subscription_payment_grace_days())
 
     grants_paid_access = status_value in _PAID_STATUSES
     if status_value == "past_due":

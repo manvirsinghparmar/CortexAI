@@ -297,6 +297,37 @@ def test_subscription_upsert_is_idempotent_and_prevents_cross_account_reassignme
 
 
 @pytest.mark.unit
+def test_subscription_upsert_cannot_replace_newer_provider_event(billing_db):
+    db, _ = billing_db
+    account = repository.get_or_create_billing_account_for_user(db, uuid4())
+    newer_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    snapshot = repository.SubscriptionSnapshot(
+        billing_account_id=account["id"],
+        provider="stripe",
+        provider_subscription_id="sub_ordered",
+        provider_price_id="price_pro",
+        plan_code="pro",
+        status="active",
+        last_provider_event_at=newer_at,
+    )
+    repository.upsert_subscription_snapshot(db, snapshot)
+
+    persisted = repository.upsert_subscription_snapshot(
+        db,
+        replace(
+            snapshot,
+            provider_price_id="price_plus",
+            plan_code="plus",
+            status="past_due",
+            last_provider_event_at=newer_at - timedelta(minutes=5),
+        ),
+    )
+
+    assert persisted["plan_code"] == "pro"
+    assert persisted["status"] == "active"
+
+
+@pytest.mark.unit
 def test_only_one_live_subscription_is_allowed_per_account(billing_db):
     db, _ = billing_db
     account = repository.get_or_create_billing_account_for_user(db, uuid4())
@@ -399,6 +430,38 @@ def test_get_or_create_usage_period_is_idempotent(billing_db):
     )
     assert reactivated["id"] == first["id"]
     assert reactivated["status"] == "active"
+
+
+@pytest.mark.unit
+def test_synchronize_usage_period_preserves_row_and_counters(billing_db):
+    db, tables = billing_db
+    account = repository.get_or_create_billing_account_for_user(db, uuid4())
+    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
+    period = repository.create_usage_period(
+        db,
+        billing_account_id=account["id"],
+        plan_code="plus",
+        starts_at=starts_at,
+        ends_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    counter = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    db.execute(
+        update(tables["usage_counters"])
+        .where(tables["usage_counters"].c.id == counter["id"])
+        .values(used_quantity=9)
+    )
+
+    synchronized = repository.synchronize_usage_period(
+        db,
+        billing_account_id=account["id"],
+        plan_code="pro",
+        starts_at=starts_at,
+        ends_at=datetime(2026, 8, 2, tzinfo=UTC),
+    )
+
+    assert synchronized["id"] == period["id"]
+    assert synchronized["plan_code"] == "pro"
+    assert db.execute(select(tables["usage_counters"].c.used_quantity)).scalar_one() == 9
 
 
 @pytest.mark.unit
@@ -627,6 +690,36 @@ def test_webhook_event_status_updates(billing_db):
     assert processed is not None
     assert processed["processing_status"] == "processed"
     assert processed["error_message"] is None
+
+
+@pytest.mark.unit
+def test_webhook_event_lock_uses_for_update(billing_db, monkeypatch):
+    db, _ = billing_db
+    event, _ = repository.create_webhook_event_if_absent(
+        db,
+        provider="stripe",
+        provider_event_id="evt_lock",
+        event_type="invoice.paid",
+        payload_hash=hashlib.sha256(b"lock").hexdigest(),
+    )
+    captured = []
+    original_execute = db.execute
+
+    def recording_execute(statement, *args, **kwargs):
+        if getattr(statement, "_for_update_arg", None) is not None:
+            captured.append(statement)
+        return original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", recording_execute)
+    locked = repository.lock_webhook_event(
+        db,
+        provider="stripe",
+        provider_event_id="evt_lock",
+    )
+
+    assert locked is not None
+    assert locked["id"] == event["id"]
+    assert len(captured) == 1
 
 
 @pytest.mark.unit

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
 
 from server import persistence as persistence_service
 from server.billing.errors import (
@@ -13,6 +13,8 @@ from server.billing.errors import (
     BillingNotConfiguredError,
     BillingPlanSelectionError,
     BillingProviderError,
+    BillingWebhookProcessingError,
+    InvalidWebhookSignatureError,
     StripeCustomerRequiredError,
     billing_configuration_http_exception,
     billing_database_required_http_exception,
@@ -20,6 +22,8 @@ from server.billing.errors import (
     billing_not_configured_http_exception,
     billing_plan_selection_http_exception,
     billing_provider_http_exception,
+    billing_webhook_processing_http_exception,
+    invalid_webhook_signature_http_exception,
     stripe_customer_required_http_exception,
 )
 from server.billing.session_service import (
@@ -31,10 +35,15 @@ from server.billing.stripe_gateway import (
     StripeGateway,
     require_stripe_billing_config,
 )
+from server.billing.webhook_service import process_stripe_webhook
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import CheckoutSessionRequest, PortalSessionRequest
-from server.schemas.responses import CheckoutSessionResponseDTO, PortalSessionResponseDTO
+from server.schemas.responses import (
+    BillingWebhookResponseDTO,
+    CheckoutSessionResponseDTO,
+    PortalSessionResponseDTO,
+)
 from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1/billing", tags=["Billing"])
@@ -48,10 +57,28 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
     rejection_event="billing.auth.session_required",
     logger=logger,
 )
+_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024
 
 
 def _gateway_factory(config: StripeBillingConfig) -> StripeGateway:
     return StripeGateway(config)
+
+
+async def _read_webhook_body(request: Request) -> bytes:
+    chunks: list[bytes] = []
+    total_bytes = 0
+    async for chunk in request.stream():
+        total_bytes += len(chunk)
+        if total_bytes > _MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={
+                    "code": "billing_webhook_payload_too_large",
+                    "message": "The Stripe webhook payload is too large.",
+                },
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _raise_billing_http_error(error: Exception, *, request_id: str) -> None:
@@ -161,3 +188,51 @@ async def portal_session(
         raise AssertionError("unreachable") from exc
 
     return PortalSessionResponseDTO(portal_url=redirect.url)
+
+
+@router.post(
+    "/webhook",
+    response_model=BillingWebhookResponseDTO,
+)
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+):
+    """Synchronize verified Stripe lifecycle state without user authentication."""
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    raw_body = await _read_webhook_body(request)
+
+    try:
+        config = require_stripe_billing_config()
+        if not API_DB_ENABLED:
+            raise billing_database_required_http_exception()
+        await process_stripe_webhook(
+            uow_factory=_db_uow,
+            gateway=_gateway_factory(config),
+            config=config,
+            payload=raw_body,
+            signature=stripe_signature or "",
+        )
+    except InvalidWebhookSignatureError as exc:
+        logger.warning(
+            "Stripe webhook signature verification failed",
+            extra={
+                "extra_fields": {
+                    "event": "billing.webhook.signature_rejected",
+                    "request_id": request_id,
+                }
+            },
+        )
+        raise invalid_webhook_signature_http_exception() from exc
+    except BillingNotConfiguredError as exc:
+        raise billing_not_configured_http_exception() from exc
+    except BillingWebhookProcessingError as exc:
+        raise billing_webhook_processing_http_exception() from exc
+    except BillingConfigurationError as exc:
+        logger.exception(
+            "Stripe webhook configuration failed",
+            extra={"extra_fields": {"request_id": request_id}},
+        )
+        raise billing_configuration_http_exception() from exc
+
+    return BillingWebhookResponseDTO()

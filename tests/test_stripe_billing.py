@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import uuid4
@@ -30,6 +34,7 @@ from db import billing_repository as repository
 from server.billing.errors import (
     BillingConfigurationError,
     BillingProviderError,
+    InvalidWebhookSignatureError,
 )
 from server.billing.stripe_gateway import (
     StripeBillingConfig,
@@ -44,6 +49,7 @@ def _enabled_environment() -> dict[str, str]:
     return {
         "BILLING_ENABLED": "true",
         "STRIPE_SECRET_KEY": "sk_test_unit",
+        "STRIPE_WEBHOOK_SECRET": "whsec_unit",
         "STRIPE_PLUS_MONTHLY_PRICE_ID": "price_plus123",
         "STRIPE_PRO_MONTHLY_PRICE_ID": "price_pro123",
         "STRIPE_CHECKOUT_SUCCESS_URL": "https://app.example.com/billing/success",
@@ -67,6 +73,7 @@ def test_enabled_billing_config_resolves_all_prices_and_server_urls():
     config = load_stripe_billing_config(environment=_enabled_environment())
 
     assert config.enabled is True
+    assert config.webhook_secret == "whsec_unit"
     assert config.require_price_id("plus") == "price_plus123"
     assert config.require_price_id("pro") == "price_pro123"
     assert config.checkout_success_url == "https://app.example.com/billing/success"
@@ -79,6 +86,7 @@ def test_enabled_billing_config_resolves_all_prices_and_server_urls():
     ("field", "value"),
     [
         ("STRIPE_SECRET_KEY", "pk_test_public"),
+        ("STRIPE_WEBHOOK_SECRET", "not_a_webhook_secret"),
         ("STRIPE_PLUS_MONTHLY_PRICE_ID", "prod_not_a_price"),
         ("STRIPE_CHECKOUT_SUCCESS_URL", "https://user:pass@app.example.com/return"),
         ("STRIPE_PORTAL_RETURN_URL", "http://app.example.com/settings"),
@@ -99,6 +107,15 @@ def test_enabled_billing_config_rejects_duplicate_paid_plan_prices():
     environment["STRIPE_PRO_MONTHLY_PRICE_ID"] = environment["STRIPE_PLUS_MONTHLY_PRICE_ID"]
 
     with pytest.raises(BillingConfigurationError):
+        load_stripe_billing_config(environment=environment)
+
+
+@pytest.mark.unit
+def test_enabled_billing_config_requires_webhook_secret():
+    environment = _enabled_environment()
+    environment.pop("STRIPE_WEBHOOK_SECRET")
+
+    with pytest.raises(BillingConfigurationError, match="STRIPE_WEBHOOK_SECRET"):
         load_stripe_billing_config(environment=environment)
 
 
@@ -229,6 +246,38 @@ def test_gateway_normalizes_sdk_failures_without_exposing_provider_details():
         )
 
     assert "secret" not in str(exc_info.value).lower()
+
+
+@pytest.mark.unit
+def test_gateway_verifies_exact_raw_webhook_body_with_stripe_sdk():
+    secret = "whsec_signed_unit"
+    payload = json.dumps(
+        {
+            "id": "evt_signed123",
+            "object": "event",
+            "type": "customer.created",
+            "created": int(time.time()),
+            "data": {"object": {"id": "cus_signed123"}},
+        },
+        separators=(",", ":"),
+    ).encode()
+    timestamp = int(time.time())
+    signed_payload = f"{timestamp}.{payload.decode()}".encode()
+    signature = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
+    header = f"t={timestamp},v1={signature}"
+    config = StripeBillingConfig(
+        enabled=True,
+        secret_key="sk_test_unit",
+        webhook_secret=secret,
+        price_ids={"plus": "price_plus123"},
+    )
+    gateway = StripeGateway(config, client=SimpleNamespace())
+
+    event = gateway.verify_webhook_event(payload=payload, signature=header)
+
+    assert event["id"] == "evt_signed123"
+    with pytest.raises(InvalidWebhookSignatureError):
+        gateway.verify_webhook_event(payload=payload + b" ", signature=header)
 
 
 class _FakeBillingGateway:

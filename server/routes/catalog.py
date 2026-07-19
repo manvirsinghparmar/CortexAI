@@ -58,6 +58,7 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
         provider=candidate.provider,
         model=candidate.model_name,
         tier=candidate.tier.value,
+        billing_class=candidate.billing_class.value,
         input_cost_per_1m=float(candidate.input_cost_per_1m),
         output_cost_per_1m=float(candidate.output_cost_per_1m),
         context_limit=int(candidate.context_limit),

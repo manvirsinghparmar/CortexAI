@@ -7,6 +7,11 @@ from typing import Any
 import yaml
 
 from orchestrator.routing_types import ModelCandidate, RoutingConstraints, Tier
+from server.billing.models import ALLOWED_MODEL_BILLING_CLASSES, ModelBillingClass
+from utils.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -45,6 +50,29 @@ class ModelRegistry:
                 if any(key not in model for key in required):
                     raise ValueError(f"Missing required fields in model for provider {provider}")
                 tier = Tier(model["tier"])
+                raw_billing_class = model.get("billing_class")
+                if raw_billing_class in (None, ""):
+                    billing_class = ModelBillingClass.ADVANCED
+                    logger.warning(
+                        "Model billing class missing; using conservative advanced fallback",
+                        extra={
+                            "extra_fields": {
+                                "provider": provider,
+                                "model": model["name"],
+                                "billing_class": billing_class.value,
+                            }
+                        },
+                    )
+                else:
+                    normalized_billing_class = str(raw_billing_class).strip().lower()
+                    if normalized_billing_class not in ALLOWED_MODEL_BILLING_CLASSES:
+                        allowed_text = ", ".join(sorted(ALLOWED_MODEL_BILLING_CLASSES))
+                        raise ValueError(
+                            "Invalid billing_class "
+                            f"'{raw_billing_class}' for {provider}:{model['name']}; "
+                            f"expected one of: {allowed_text}"
+                        )
+                    billing_class = ModelBillingClass(normalized_billing_class)
                 supported_mime_types = model.get(
                     "supported_attachment_mime_types",
                     provider_defaults.get("supported_attachment_mime_types", []),
@@ -76,6 +104,7 @@ class ModelRegistry:
                         output_cost_per_1m=float(model["output_cost_per_1m"]),
                         context_limit=int(model["context_limit"]),
                         tags=list(model.get("tags", [])),
+                        billing_class=billing_class,
                         enabled=bool(model.get("enabled", True)),
                         supports_image_input=bool(
                             model.get(

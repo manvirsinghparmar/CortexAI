@@ -279,6 +279,7 @@
                   "  pm.expect(body.models).to.be.an('array');",
                   "  pm.expect(body.enabled_only).to.eql(true);",
                   "  if (body.models.length > 0) {",
+                  "    pm.expect(body.models[0].billing_class).to.be.oneOf(['standard', 'advanced', 'ultra']);",
                   "    pm.expect(body.models[0]).to.have.property('supports_image_input');",
                   "  }",
                   "});"

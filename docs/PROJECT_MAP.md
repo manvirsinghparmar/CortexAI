@@ -41,6 +41,8 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 - Provider catalog and defaults: `config/providers.yaml`
 - Smart-router model tiers and metadata: `config/model_registry.yaml`
+- Consumer subscription plans: `config/subscription_plans.yaml`
+- Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
 - Cost tables: `config/pricing.py`
 
 ## Persistence and Reporting
@@ -130,6 +132,11 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Update provider clients and/or `server/utils.py`
   2. Keep `config/pricing.py` and `config/model_registry.yaml` aligned
   3. Update contract docs and tests
+
+- Change subscription plan definitions or model billing classes:
+  1. Update `config/subscription_plans.yaml` and/or model `billing_class` values in `config/model_registry.yaml`
+  2. Keep billing classes separate from smart-routing `T0`-`T3` tiers
+  3. Validate with `tests/test_subscription_plan_catalog.py`, `tests/test_model_registry_capabilities.py`, and the `/v1/models` contract tests
 
 - Change DB schema:
   1. Add SQL migration under `db/migrations/`

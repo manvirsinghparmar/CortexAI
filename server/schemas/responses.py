@@ -121,6 +121,7 @@ class ModelCatalogItemDTO(BaseModel):
     provider: str
     model: str
     tier: str
+    billing_class: str
     input_cost_per_1m: float
     output_cost_per_1m: float
     context_limit: int

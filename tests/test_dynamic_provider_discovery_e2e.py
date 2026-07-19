@@ -124,6 +124,8 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     models_payload = models_resp.json()
     model_pairs = {(item["provider"], item["model"]) for item in models_payload["models"]}
     assert (provider_id, "zai-chat") in model_pairs
+    zai_model = next(item for item in models_payload["models"] if item["provider"] == provider_id)
+    assert zai_model["billing_class"] == "advanced"
 
     filtered_resp = client.get(
         f"/v1/models?provider={provider_id}",

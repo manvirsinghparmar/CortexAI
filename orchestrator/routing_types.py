@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+
+from server.billing.models import ModelBillingClass
 
 
 class Tier(str, Enum):
@@ -57,6 +58,7 @@ class ModelCandidate:
     output_cost_per_1m: float
     context_limit: int
     tags: list[str]
+    billing_class: ModelBillingClass = ModelBillingClass.ADVANCED
     enabled: bool = True
     supports_image_input: bool = False
     supported_attachment_mime_types: list[str] = field(default_factory=list)

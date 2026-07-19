@@ -56,6 +56,7 @@ function model(provider: string, name: string): ModelCatalogItem {
     provider,
     model: name,
     tier: "frontier",
+    billing_class: "advanced",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128000,

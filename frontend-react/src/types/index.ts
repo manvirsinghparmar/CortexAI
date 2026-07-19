@@ -113,10 +113,13 @@ export interface CompareResponse {
   timestamp: string;
 }
 
+export type ModelBillingClass = "standard" | "advanced" | "ultra";
+
 export interface ModelCatalogItem {
   provider: string;
   model: string;
   tier: string;
+  billing_class: ModelBillingClass;
   input_cost_per_1m: number;
   output_cost_per_1m: number;
   context_limit: number;

@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from server.frontend_runtime_config import render_frontend_runtime_config_js
+from server.billing.plan_catalog import get_plan_catalog
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
 from server.routes import admin, auth as auth_routes, byok, catalog, chat, client_diagnostics, compare, files, health, history, optimize, reporting, whoami
@@ -70,6 +71,17 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
     cleanup_task: asyncio.Task | None = None
     cleanup_stop_event: asyncio.Event | None = None
+
+    plan_catalog = get_plan_catalog()
+    logger.info(
+        "Subscription plan catalog validated",
+        extra={
+            "extra_fields": {
+                "catalog_version": plan_catalog.version,
+                "plan_codes": [plan.code for plan in plan_catalog.list_plans()],
+            }
+        },
+    )
 
     runtime_check = check_claude_runtime()
     logger.info(

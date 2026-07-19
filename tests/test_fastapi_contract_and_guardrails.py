@@ -612,6 +612,7 @@ def test_models_catalog_lists_enabled_models_by_default(client):
         "provider",
         "model",
         "tier",
+        "billing_class",
         "input_cost_per_1m",
         "output_cost_per_1m",
         "context_limit",
@@ -624,6 +625,7 @@ def test_models_catalog_lists_enabled_models_by_default(client):
     }
     for item in body["models"]:
         assert required_keys.issubset(item.keys())
+        assert item["billing_class"] in {"standard", "advanced", "ultra"}
 
     registry = ModelRegistry.from_yaml()
     expected_pairs = {

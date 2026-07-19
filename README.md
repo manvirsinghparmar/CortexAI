@@ -171,12 +171,15 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 
 - Runtime token-cost estimation uses `config/pricing.py`.
 - Smart-router model economics use `config/model_registry.yaml`.
+- Consumer plan definitions use `config/subscription_plans.yaml` and are validated at API startup by `server/billing/plan_catalog.py`.
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
+- Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
+- The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. It is configuration only in this work package: no paid access, Stripe call, usage metering, or entitlement enforcement is active yet.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
-python -m pytest tests/test_registry_pricing_alignment.py -q
+python -m pytest tests/test_registry_pricing_alignment.py tests/test_subscription_plan_catalog.py -q
 ```
 
 ## Run
@@ -405,7 +408,8 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_REDIRECT_URI` – (optional) Callback URL; React falls back to same-origin `/auth`
 3. **Frontend**: Load the app; signed-out Cognito users see a `Sign in to use CortexAI` gate in the workspace and the React top-right account icon remains a secondary account menu. Cognito guests can `Sign in`, the theme switch toggles the React `data-theme` between light and dark and persists the browser preference, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
 
-`/v1/models` now includes attachment capability metadata per model:
+`/v1/models` includes billing and attachment capability metadata per model:
+- `billing_class` (`standard`, `advanced`, or `ultra`; independent of routing `tier`)
 - `supports_image_input`
 - `supported_attachment_mime_types`
 - `max_attachment_bytes`

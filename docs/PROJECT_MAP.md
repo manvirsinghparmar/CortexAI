@@ -4,7 +4,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Runtime Entrypoints
 
-- Full local app runner: `run_app.py`
+- Full local app runner and guarded Free/Plus/Pro/unrestricted IntelliJ profiles: `run_app.py`; effective local profile construction: `server/billing/subscription_service.py`
 - API server: `run_server.py`
 - Main FastAPI app wiring: `server/app.py`
 - Frontend runtime config renderer: `server/frontend_runtime_config.py` (`GET /runtime-config.js`)
@@ -90,7 +90,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Ask/Compare result rendering: `frontend-react/src/components/results/`
   - Deterministic assistant-offered follow-up extraction and response-level chip row: `frontend-react/src/followups/suggestedFollowups.ts`, `frontend-react/src/components/results/SuggestedFollowUps.tsx`, `frontend-react/src/components/results/ResponseCard.tsx`
   - Composer, attachments, model selection, and routing toggles: `frontend-react/src/components/composer/`
-  - Local full-app dev: `run_app.py` starts FastAPI plus Vite and sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`.
+  - Local full-app dev: `run_app.py` starts FastAPI plus Vite, sets `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE`, and can select guarded loopback-only subscription profiles with `--subscription-plan`.
   - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
 - Frontend selection in FastAPI: `server/app.py`
   - `FRONTEND_DIR` explicitly selects the static directory to mount.

@@ -387,6 +387,49 @@ def test_development_override_is_local_only(billing_service_db, monkeypatch):
 
 
 @pytest.mark.unit
+def test_unrestricted_development_override_is_explicit_and_local_only(
+    billing_service_db,
+    monkeypatch,
+):
+    db, tables = billing_service_db
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("DEV_SUBSCRIPTION_PLAN", "unrestricted")
+
+    disabled_user = _create_user(db, tables)
+    disabled = resolve_effective_subscription(
+        db,
+        disabled_user,
+        now=datetime(2026, 7, 18, tzinfo=UTC),
+    )
+
+    monkeypatch.setenv("DEV_SUBSCRIPTION_BYPASS_ENABLED", "true")
+    enabled_user = _create_user(db, tables)
+    enabled = resolve_effective_subscription(
+        db,
+        enabled_user,
+        now=datetime(2026, 7, 18, tzinfo=UTC),
+    )
+
+    assert disabled.plan.code == "free"
+    assert enabled.plan.code == "pro"
+    assert enabled.plan.display_name == "Local Unrestricted"
+    assert enabled.source == "development_override"
+    assert enabled.provider is None
+    assert min(vars(enabled.plan.allowances).values()) >= 1_000_000_000
+    assert enabled.plan.limits.max_files_per_request == 5
+    assert enabled.plan.limits.max_file_bytes == 20_000_000
+
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    billing_enabled_user = _create_user(db, tables)
+    billing_enabled = resolve_effective_subscription(
+        db,
+        billing_enabled_user,
+        now=datetime(2026, 7, 18, tzinfo=UTC),
+    )
+    assert billing_enabled.plan.code == "free"
+
+
+@pytest.mark.unit
 def test_development_override_can_follow_existing_free_period(
     billing_service_db,
     monkeypatch,

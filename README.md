@@ -118,7 +118,7 @@ STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/account/billing?checkout=suc
 STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
 STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 # STRIPE_API_VERSION=               # optional; default is the SDK-pinned version
-# DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; ignored in production and when billing is enabled
+# DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; also supports guarded unrestricted mode
 
 # Tavily research retrieval
 TAVILY_API_KEY=                     # required when research_mode=true
@@ -222,6 +222,28 @@ python run_app.py --enable-dev-login
 
 `run_app.py` starts FastAPI with `SERVE_FRONTEND=false`, runs `npm run --prefix frontend-react dev`, and points both Vite's `/v1`, `/auth`, and `/runtime-config.js` proxy plus `FRONTEND_RUNTIME_API_BASE` at the selected API host/port.
 Before launching either process, the runner verifies that both requested ports are available and reports a clear error when another process owns one. On Windows, shutdown terminates the complete FastAPI/Vite process trees so failed startup or `Ctrl+C` does not leave an orphaned Vite listener.
+
+### IntelliJ/PyCharm local subscription profiles
+
+Create one Python run configuration, then duplicate it four times:
+
+- Script path: `$ProjectFileDir$/run_app.py`
+- Working directory: `$ProjectFileDir$`
+- Python interpreter: the repository virtual environment
+- Environment variables: none required for the plan selection
+
+Use one Program arguments value per configuration:
+
+```text
+--subscription-plan free
+--subscription-plan plus
+--subscription-plan pro
+--subscription-plan unrestricted
+```
+
+Name the configurations `CortexAI - Free`, `CortexAI - Plus`, `CortexAI - Pro`, and `CortexAI - Unrestricted`. The selected profile forces local runtime mode, disables Stripe billing, enables the local session bootstrap, and takes precedence over conflicting billing/plan values from `.env`. It is rejected when either server binds to a non-loopback host.
+
+`unrestricted` keeps the normal backend entitlement and metering path active but presents `Local Unrestricted` with Pro model/features and very high monthly allowances. Authentication, provider/model capabilities, the global five-attachment/20 MB safety ceiling, object-storage validation, and provider API keys still apply. Run without `--subscription-plan` to use the normal `.env`/Stripe configuration.
 
 Run the API server by itself:
 ```bash

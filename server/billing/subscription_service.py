@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 import os
 from typing import Any
@@ -28,6 +28,9 @@ logger = get_logger(__name__)
 _PAID_STATUSES = frozenset({"trialing", "active"})
 _FREE_STATUSES = frozenset({"unpaid", "incomplete", "incomplete_expired", "paused"})
 _DEVELOPMENT_ENVIRONMENTS = frozenset({"local", "dev", "development"})
+_UNRESTRICTED_PLAN_NAME = "unrestricted"
+_UNRESTRICTED_COUNT_ALLOWANCE = 1_000_000_000
+_UNRESTRICTED_UPLOAD_ALLOWANCE = 1_000_000_000_000_000
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,29 @@ def subscription_payment_grace_days() -> int:
     return value
 
 
+def _development_unrestricted_plan(catalog: PlanCatalog) -> SubscriptionPlan:
+    pro = catalog.require("pro")
+    return replace(
+        pro,
+        display_name="Local Unrestricted",
+        stripe_price_env=None,
+        allowances=replace(
+            pro.allowances,
+            model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
+            advanced_model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
+            ultra_model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
+            research_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
+            optimization_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
+            file_analysis_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
+            uploaded_bytes=_UNRESTRICTED_UPLOAD_ALLOWANCE,
+        ),
+        limits=replace(
+            pro.limits,
+            requests_per_minute=_UNRESTRICTED_COUNT_ALLOWANCE,
+        ),
+    )
+
+
 def _development_override(catalog: PlanCatalog) -> SubscriptionPlan | None:
     raw_plan = str(os.getenv("DEV_SUBSCRIPTION_PLAN", "") or "").strip().lower()
     if not raw_plan or _env_bool("BILLING_ENABLED", default=False):
@@ -99,14 +125,27 @@ def _development_override(catalog: PlanCatalog) -> SubscriptionPlan | None:
         logger.warning("Ignoring DEV_SUBSCRIPTION_PLAN outside a local development environment")
         return None
 
-    plan = catalog.get(raw_plan)
+    if raw_plan == _UNRESTRICTED_PLAN_NAME:
+        if not _env_bool("DEV_SUBSCRIPTION_BYPASS_ENABLED", default=False):
+            logger.warning(
+                "Ignoring unrestricted development plan without explicit local bypass enablement"
+            )
+            return None
+        plan = _development_unrestricted_plan(catalog)
+    else:
+        plan = catalog.get(raw_plan)
     if plan is None:
         logger.warning("Ignoring unknown DEV_SUBSCRIPTION_PLAN '%s'", raw_plan)
         return None
 
     logger.warning(
         "Using local development subscription override",
-        extra={"extra_fields": {"plan_code": plan.code}},
+        extra={
+            "extra_fields": {
+                "plan_code": plan.code,
+                "development_profile": raw_plan,
+            }
+        },
     )
     return plan
 

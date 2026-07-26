@@ -46,6 +46,8 @@ Listening only to required event types reduces load and avoids retaining unrelat
 
 ## Local test-mode validation
 
+For fast entitlement UX testing without Stripe, run `python run_app.py --subscription-plan free`, `plus`, `pro`, or `unrestricted`. These profiles are accepted only when both runner hosts are loopback addresses, force billing off and local dev-session login on, and override conflicting subscription values from `.env`. `unrestricted` uses the Pro feature set with very large subscription allowances while retaining authentication, provider requirements, upload/file safety ceilings, and production guards. Omit `--subscription-plan` when validating the real Stripe lifecycle below.
+
 1. Apply and verify `db/migrations/20260718_add_b2c_billing_foundation.sql`.
 2. Use Stripe test keys, test Prices, and a CLI forwarding secret only.
 3. Forward the six required events to the local API, for example with Stripe CLI event filtering and `--forward-to http://127.0.0.1:8000/v1/billing/webhook`.

@@ -65,6 +65,8 @@ python run_app.py
 
 This starts FastAPI on `http://127.0.0.1:8000` and the React/Vite frontend on `http://127.0.0.1:5173`. The runner starts the API with `SERVE_FRONTEND=false`, launches `npm run --prefix frontend-react dev`, and sets Vite's proxy target plus `FRONTEND_RUNTIME_API_BASE` from the selected API host/port.
 
+For IntelliJ/PyCharm local plan testing, use the project virtual environment, set the script to `$ProjectFileDir$/run_app.py`, the working directory to `$ProjectFileDir$`, and choose one Program arguments value: `--subscription-plan free`, `plus`, `pro`, or `unrestricted`. The option forces local mode, disables Stripe, enables dev-session bootstrap, and is rejected for non-loopback hosts. `unrestricted` uses the normal entitlement/metering path with Pro access and very high allowances; global attachment/provider safety constraints still apply. Omit the option to use normal `.env`/Stripe state.
+
 For local browser session bootstrap, keep `ENABLE_DEV_SESSION_LOGIN=true` in `.env` or run:
 ```bash
 python run_app.py --enable-dev-login
@@ -119,7 +121,7 @@ python run_server.py --reload
 - `server/billing/account_service.py` validates user ownership and lazily creates B2C accounts. `server/billing/subscription_service.py` applies the server-side lifecycle/grace policy and creates the effective usage period. `server/billing/entitlement_service.py` returns feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` owns atomic allowance mutation. It locks the billing owner for idempotency-key creation, locks required counters in deterministic order, rejects over-limit reservations before mutation, settles only successful quantities, releases unused quantities, and expires clearly stale reservations after a default 30-minute threshold. Every function uses the caller-owned transaction and never commits.
 - `server/billing/enforcement_service.py` composes effective-plan resolution, entitlement evaluation, atomic reservation, and output-aware settlement/release for DB-mode Ask, Compare, Optimize, upload, and attachment analysis. `server/persistence.py` owns the short committing units of work; no billing transaction remains open during a provider, optimizer, or object-storage call.
-- `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout, Portal, and webhook routes return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development.
+- `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout, Portal, and webhook routes return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. The `unrestricted` development value additionally requires `DEV_SUBSCRIPTION_BYPASS_ENABLED=true`; prefer the guarded `run_app.py --subscription-plan unrestricted` entrypoint.
 - With billing enabled, startup validates the secret key, webhook signing secret, paid-plan Price IDs, server redirect URLs, and optional API version. The API rejects client-supplied Price IDs, amounts, currencies, Customer IDs, and redirects. `server/billing/webhook_service.py` makes verified Stripe Checkout/subscription/invoice state authoritative, locks provider-event retries, rejects stale snapshots, preserves usage counters across same-period changes, and delegates paid/grace/cancellation access to `subscription_service.py`.
 - `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` reserve model, research, and attachment-analysis quantities before provider execution. They settle only successful model responses by actual billing class, settle one file-analysis turn when an attachment-backed request produces billable output, release failed targets, and settle research once only when it ran. Compare performs aggregate partial settlement. `/v1/optimize` meters one actual explicit optimizer invocation without recounting the later Ask/Compare submission. `/v1/files/upload` enforces file access/size and uploaded-byte allowances before storage and releases failed uploads. Usage-export enforcement remains later work.
 - Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_stripe_billing.py tests/test_stripe_webhooks.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
@@ -251,7 +253,7 @@ STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/account/billing?checkout=suc
 STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
 STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 # STRIPE_API_VERSION=  # optional
-# DEV_SUBSCRIPTION_PLAN=pro  # local/dev only; never production
+# DEV_SUBSCRIPTION_PLAN=pro  # local/dev only; guarded unrestricted is runner-managed
 ```
 
 See `docs/runbooks/stripe-billing.md` for the enablement checklist. Do not place Stripe secrets in frontend runtime configuration or commit them.

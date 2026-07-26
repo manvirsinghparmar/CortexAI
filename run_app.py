@@ -17,6 +17,8 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_REACT_DIR = ROOT / "frontend-react"
+LOCAL_SUBSCRIPTION_PLANS = ("free", "plus", "pro", "unrestricted")
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 @dataclass
@@ -52,6 +54,29 @@ def _check_frontend_ready() -> None:
             "React frontend dependencies are not installed. "
             "Run `npm ci --prefix frontend-react` first."
         )
+
+
+def _configure_local_subscription(
+    env: dict[str, str],
+    plan: str | None,
+    *,
+    api_host: str,
+    frontend_host: str,
+) -> None:
+    if plan is None:
+        return
+    if api_host not in LOOPBACK_HOSTS or frontend_host not in LOOPBACK_HOSTS:
+        raise RuntimeError(
+            "--subscription-plan is local-only and requires loopback API and frontend hosts"
+        )
+
+    env["APP_ENV"] = "local"
+    env["BILLING_ENABLED"] = "false"
+    env["ENABLE_DEV_SESSION_LOGIN"] = "true"
+    env["DEV_SUBSCRIPTION_PLAN"] = "" if plan == "free" else plan
+    env["DEV_SUBSCRIPTION_BYPASS_ENABLED"] = (
+        "true" if plan == "unrestricted" else "false"
+    )
 
 
 def _require_port_available(name: str, host: str, port: int) -> None:
@@ -137,7 +162,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--api-host", default="127.0.0.1", help="FastAPI host")
     parser.add_argument("--api-port", type=int, default=8000, help="FastAPI port")
     parser.add_argument("--frontend-host", default="127.0.0.1", help="Vite host")
-    parser.add_argument("--frontend-port", type=int, default=5172, help="Vite port")
+    parser.add_argument("--frontend-port", type=int, default=5173, help="Vite port")
     parser.add_argument(
         "--no-reload",
         action="store_true",
@@ -147,6 +172,15 @@ def _parse_args() -> argparse.Namespace:
         "--enable-dev-login",
         action="store_true",
         help="Enable local dev-session login for the API process",
+    )
+    parser.add_argument(
+        "--subscription-plan",
+        choices=LOCAL_SUBSCRIPTION_PLANS,
+        default=None,
+        help=(
+            "Local-only subscription profile. free/plus/pro exercise that plan; "
+            "unrestricted keeps subscription enforcement active with very high local allowances."
+        ),
     )
     parser.add_argument(
         "--serve-api-frontend",
@@ -168,8 +202,15 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    env = os.environ.copy()
 
     try:
+        _configure_local_subscription(
+            env,
+            args.subscription_plan,
+            api_host=args.api_host,
+            frontend_host=args.frontend_host,
+        )
         npm = _resolve_npm(args.npm)
         _check_frontend_ready()
         _require_port_available("API", args.api_host, args.api_port)
@@ -182,7 +223,6 @@ def main() -> int:
     api_base = f"http://{api_host_for_browser}:{args.api_port}"
     frontend_url = f"http://{_display_host(args.frontend_host)}:{args.frontend_port}/"
 
-    env = os.environ.copy()
     if not args.serve_api_frontend:
         env["SERVE_FRONTEND"] = "false"
     if args.enable_dev_login:
@@ -219,6 +259,8 @@ def main() -> int:
 
     print(f"[cortexai] API: {api_base}")
     print(f"[cortexai] React frontend: {frontend_url}")
+    if args.subscription_plan:
+        print(f"[cortexai] local subscription profile: {args.subscription_plan}")
     print("[cortexai] press Ctrl+C to stop both processes")
 
     processes: list[ManagedProcess] = []

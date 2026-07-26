@@ -64,6 +64,12 @@ describe("ResponseCard", () => {
     }
   });
 
+  it("renders an explicit placeholder for a completed empty response", () => {
+    render(<ResponseCard response={response(false, "")} />);
+
+    expect(screen.getByText("(empty response)")).toBeInTheDocument();
+  });
+
   it("renders suggested follow-ups before the action toolbar and marks a tapped chip as sent", () => {
     vi.useFakeTimers();
     const onSuggestedFollowUp = vi.fn();

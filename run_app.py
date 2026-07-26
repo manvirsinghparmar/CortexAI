@@ -149,11 +149,6 @@ def _parse_args() -> argparse.Namespace:
         help="Enable local dev-session login for the API process",
     )
     parser.add_argument(
-        "--serve-api-frontend",
-        action="store_true",
-        help="Keep FastAPI static frontend serving enabled instead of forcing SERVE_FRONTEND=false",
-    )
-    parser.add_argument(
         "--python",
         default=sys.executable,
         help="Python executable used to run run_server.py",
@@ -183,8 +178,7 @@ def main() -> int:
     frontend_url = f"http://{_display_host(args.frontend_host)}:{args.frontend_port}/"
 
     env = os.environ.copy()
-    if not args.serve_api_frontend:
-        env["SERVE_FRONTEND"] = "false"
+    env["SERVE_FRONTEND"] = "false"
     if args.enable_dev_login:
         env["ENABLE_DEV_SESSION_LOGIN"] = "true"
         env.setdefault("APP_ENV", "local")

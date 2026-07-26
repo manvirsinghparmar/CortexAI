@@ -27,8 +27,8 @@ flowchart TB
 
     %% L1
     subgraph L1["Layer 1 - Frontend Experience"]
-        FE1["frontend/index.html or frontend-react/dist/index.html"]
-        FE2["frontend/app.js or frontend-react/src\nUI state + mode selection + streaming parser"]
+        FE1["frontend-react/dist/index.html"]
+        FE2["frontend-react/src\nUI state + mode selection + streaming parser"]
         FE3["User actions\nsingle chat | compare | optimize | history | reports | byok"]
     end
 
@@ -253,12 +253,12 @@ flowchart LR
 
 ## Layer-to-Code Map
 
-- Layer 1 (Frontend): legacy `frontend/app.js` + `frontend/index.html`, or React `frontend-react/src/` + built `frontend-react/dist/index.html`
+- Layer 1 (Frontend): React `frontend-react/src/` + built `frontend-react/dist/index.html`
 - Layer 2 (Edge/Middleware/Auth): `server/app.py`, `server/middleware.py`, `server/dependencies.py`
 - Layer 3 (Routes): `server/routes/*.py`
 - Layer 4 (Orchestration): `orchestrator/core.py`, `orchestrator/smart_router.py`, `orchestrator/*`
 - Layer 5 (Adapters): `api/client_registry.py`, `api/provider_adapter.py`, `api/*_client.py`
 - Layer 6 (External APIs): OpenAI, Gemini, DeepSeek, Grok
 - Layer 7 (Persistence/Governance): `server/persistence.py`, `db/repository.py`, `server/rate_limit.py`, `server/privacy.py`, `server/savings.py`
-- Layer 8 (Response Contracts): `server/schemas/responses.py`, frontend stream/event rendering in legacy `frontend/app.js` or React `frontend-react/src/api/` + `frontend-react/src/hooks/`
+- Layer 8 (Response Contracts): `server/schemas/responses.py`, frontend stream/event rendering in `frontend-react/src/api/` + `frontend-react/src/hooks/`
 

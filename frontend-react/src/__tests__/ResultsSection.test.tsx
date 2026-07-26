@@ -74,6 +74,22 @@ describe("ResultsSection layout states", () => {
     expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
   });
 
+  it("assigns transcript-wide response indexes across Ask and Compare turns", () => {
+    setTurns([
+      askTurn("ask-indexed", "Ask first"),
+      compareTurn("compare-indexed", "Compare second"),
+      askTurn("ask-last", "Ask last"),
+    ]);
+
+    render(<ResultsSection />);
+
+    expect(document.querySelector("#response-text-0")).toBeInTheDocument();
+    expect(document.querySelector("#response-text-1")).toBeInTheDocument();
+    expect(document.querySelector("#response-text-2")).toBeInTheDocument();
+    expect(document.querySelector("#response-text-3")).toBeInTheDocument();
+    expect(document.querySelectorAll("[id^='response-text-']")).toHaveLength(4);
+  });
+
   it.each([
     ["Ask", askTurn("ask-optimizing", "Improve this Ask prompt"), 1],
     ["Compare", compareTurn("compare-optimizing", "Improve this Compare prompt"), 2],

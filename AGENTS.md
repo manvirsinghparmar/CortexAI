@@ -29,8 +29,8 @@ codex --cd C:\path\to\primary\repo `
 - Python `3.12` backend with FastAPI entrypoint in [run_server.py](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/run_server.py).
 - Multi-provider orchestration (`openai`, `gemini`, `deepseek`, `grok`, `claude`) under `api/` + `orchestrator/`.
 - PostgreSQL-backed runtime is the standard mode (`DATABASE_URL` required; postgres URL expected).
-- Legacy static frontend under `frontend/` and React/Vite frontend under `frontend-react/`.
-- FastAPI serves static frontend assets unless `SERVE_FRONTEND=false`; set `FRONTEND_DIR=frontend-react/dist` after `npm run --prefix frontend-react build` to serve React.
+- The only product UI is the React/Vite frontend under `frontend-react/`.
+- FastAPI serves `frontend-react/dist` unless `SERVE_FRONTEND=false`; `FRONTEND_DIR` overrides the compiled asset directory.
 - React dependencies stay in `frontend-react/package.json` / `frontend-react/package-lock.json`, not `requirements.txt`.
 - Browser E2E harness under `e2e/` (Playwright).
 

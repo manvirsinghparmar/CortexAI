@@ -43,11 +43,7 @@ def _resolve_frontend_dir() -> str:
     if configured:
         return configured
     root = os.path.dirname(os.path.dirname(__file__))
-    # When REACT_FRONTEND=true, serve the pre-built React/Vite dist instead of
-    # the legacy vanilla frontend.  Set FRONTEND_DIR to override either path.
-    if _env_bool("REACT_FRONTEND", default=False):
-        return os.path.join(root, "frontend-react", "dist")
-    return os.path.join(root, "frontend")
+    return os.path.join(root, "frontend-react", "dist")
 
 
 def _parse_positive_int_env(name: str, default: int) -> int:

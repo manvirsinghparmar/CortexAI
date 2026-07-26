@@ -70,7 +70,7 @@ test("ask mode with smart routing returns streamed response and persisted select
     expect(snapshot.routingDecisions.length).toBeGreaterThanOrEqual(1);
     expect(snapshot.routingAttempts.length).toBeGreaterThanOrEqual(1);
     expect(new Set(snapshot.requests.map(row => row.session_id)).size).toBe(1);
-    expectSummaryMatchesRequest(result.summaryText, request, runState);
+    expectSummaryMatchesRequest(result.summaryText, request);
 });
 
 test("web on then off in the same session changes source behavior", async ({ liveApp }) => {
@@ -82,15 +82,16 @@ test("web on then off in the same session changes source behavior", async ({ liv
     await setToggle(page, "#routeResearchBtn", true);
 
     const first = await submitAskPrompt(page, liveApp.withPromptMarker(promptLibrary.webResearch), config);
-    const firstCardText = await page.locator(`#chat-msg-${first.index}`).innerText();
+    const firstCardText = await page.locator(`#response-text-${first.index}`).innerText();
     const firstSnapshot = await waitForSnapshot(liveApp, { minRequests: 1 });
 
     expect(firstSnapshot.requests).toHaveLength(1);
     expect(firstSnapshot.routingDecisions).toHaveLength(1);
     expect(firstSnapshot.routingDecisions[0].research_mode).toBe("on");
 
-    const firstSourcesStrip = page.locator(`#response-sources-${first.index}`);
-    if (await firstSourcesStrip.isVisible()) {
+    const firstCard = page.locator(`#response-text-${first.index}`).locator("xpath=..");
+    const firstSources = firstCard.getByRole("button", { name: /^Sources:/ });
+    if (await firstSources.count()) {
         const sourceLinks = await expandSourcesForCard(page, first.index);
         expect(await sourceLinks.count()).toBeGreaterThan(0);
     } else {
@@ -101,7 +102,8 @@ test("web on then off in the same session changes source behavior", async ({ liv
 
     await setToggle(page, "#routeResearchBtn", false);
     const second = await submitAskPrompt(page, liveApp.withPromptMarker(promptLibrary.noWebFollowUp), config);
-    await expect(page.locator(`#response-sources-${second.index}`)).toBeHidden();
+    const secondCard = page.locator(`#response-text-${second.index}`).locator("xpath=..");
+    await expect(secondCard.getByRole("button", { name: /^Sources:/ })).toHaveCount(0);
 
     const snapshot = await waitForSnapshot(liveApp, { minRequests: 2 });
     expect(snapshot.requests).toHaveLength(2);
@@ -208,7 +210,7 @@ test("improve flow shows optimization status and sends optimized prompt", async 
     await page.locator("#promptInput").fill(rawPrompt);
     await page.locator("#submitBtn").click();
 
-    await expect(page.getByText("Refining your prompt for better results")).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("Improving your prompt");
     expect(optimizeRequestBody?.prompt).toBe(rawPrompt);
     expect(optimizeRequestBody?.context_hint).toBeUndefined();
     expect(chatRequestBody).toBeNull();
@@ -222,7 +224,11 @@ test("improve flow shows optimization status and sends optimized prompt", async 
     await expect(page.locator(".chat-message-user")).toHaveCount(1);
     await expect.poll(() => chatRequestBody?.prompt || "").toBe(optimizedPrompt);
     await expect(page.locator(`#response-text-${nextIndex}`)).toContainText("Optimized request received.");
-    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/, { timeout: 15_000 });
+    await expect(page.locator("#submitBtn")).toHaveAttribute(
+        "aria-label",
+        "Send message",
+        { timeout: 15_000 },
+    );
 });
 
 test("improve flow explains when original prompt is kept", async ({ liveApp }) => {
@@ -265,7 +271,7 @@ test("improve flow explains when original prompt is kept", async ({ liveApp }) =
     await page.locator("#submitBtn").click();
 
     await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
-    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
+    await expect(page.locator(".optimization-result-note")).toHaveText("Already clear — sent as-is");
     await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
 });
 
@@ -307,7 +313,7 @@ test("improve flow explains fallback when prompt refinement is unavailable", asy
     await page.locator("#submitBtn").click();
 
     await expect(page.locator(".optimization-user-text")).toHaveText(rawPrompt);
-    await expect(page.locator(".optimization-result-note")).toHaveText("Your prompt was already clear. CortexAI sent the original version.");
+    await expect(page.locator(".optimization-result-note")).toHaveText("Already clear — sent as-is");
     await expect.poll(() => chatRequestBody?.prompt || "").toBe(rawPrompt);
 });
 
@@ -398,7 +404,7 @@ test("routing policy boundary coverage uses allowed outcomes and varies across p
         outcomes.push(`${request.provider}:${request.model}`);
 
         expect(scenario.allowedProviders).toContain(request.provider);
-        expectSummaryMatchesRequest(result.summaryText, request, runState);
+        expectSummaryMatchesRequest(result.summaryText, request);
     }
 
     expect(new Set(outcomes).size).toBeGreaterThanOrEqual(2);

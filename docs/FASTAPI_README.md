@@ -32,8 +32,7 @@ Notes:
 4. Optional deployment boundary controls:
 ```ini
 SERVE_FRONTEND=false
-FRONTEND_DIR=frontend
-REACT_FRONTEND=false
+FRONTEND_DIR=frontend-react/dist
 # Optional frontend runtime-config override for clients that honor apiBase
 # FRONTEND_RUNTIME_API_BASE=https://kudlo.triobrain.com
 # Optional explicit browser flag override (otherwise inherits ENABLE_DEV_SESSION_LOGIN)
@@ -83,7 +82,7 @@ $env:FRONTEND_DIR=(Resolve-Path .\frontend-react\dist).Path
 python run_server.py --reload
 ```
 
-`FRONTEND_DIR` is explicit and takes precedence. If `FRONTEND_DIR` is unset, `REACT_FRONTEND=true` makes `server/app.py` serve `frontend-react/dist` instead of the legacy `frontend/` directory.
+If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set the variable explicitly when compiled assets live elsewhere.
 
 6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
@@ -220,6 +219,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
+- `frontend-react/runtime-config.example.js` is the static-hosting template for deployments where FastAPI or a reverse proxy does not provide `/runtime-config.js`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
 - The React router exposes `/usage` for Usage & insights and `/models` for the task-first model guide. Desktop reaches both from the sidebar; mobile reaches both from the account menu, and Models intentionally has no bottom-tab entry.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.

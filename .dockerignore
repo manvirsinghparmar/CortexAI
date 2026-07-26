@@ -20,7 +20,6 @@ build/
 logs/
 tests/
 docs/
-frontend/
 *.db
 *.sqlite
 .env

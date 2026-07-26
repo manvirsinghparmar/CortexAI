@@ -159,8 +159,7 @@ BASELINE_MODEL_ID=openai:gpt-4o-mini
 
 # Component boundary controls
 SERVE_FRONTEND=true      # false => API-only runtime (no static frontend mount)
-FRONTEND_DIR=frontend    # optional override when SERVE_FRONTEND=true; set to frontend-react/dist for React
-REACT_FRONTEND=false     # optional convenience switch; when true and FRONTEND_DIR is unset, serves frontend-react/dist
+FRONTEND_DIR=frontend-react/dist # optional override; this is also the default static build path
 # Frontend runtime config served by GET /runtime-config.js
 FRONTEND_RUNTIME_API_BASE=                           # optional; defaults to request origin
 FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false      # optional browser override
@@ -207,7 +206,7 @@ python run_server.py --reload
 Useful URLs:
 - Health: `http://127.0.0.1:8000/health`
 - Swagger: `http://127.0.0.1:8000/docs`
-- Legacy/static frontend when FastAPI serves one: `http://127.0.0.1:8000/`
+- React frontend when its build is mounted: `http://127.0.0.1:8000/`
 
 ### Run the React Frontend Through FastAPI
 
@@ -220,12 +219,7 @@ $env:FRONTEND_DIR=(Resolve-Path .\frontend-react\dist).Path
 python run_server.py --reload
 ```
 
-`FRONTEND_DIR` is the most explicit option and takes precedence over `REACT_FRONTEND`. For a shorter local setup, you can set `REACT_FRONTEND=true` instead, as long as `frontend-react/dist` already exists:
-
-```powershell
-$env:REACT_FRONTEND="true"
-python run_server.py --reload
-```
+When `FRONTEND_DIR` is unset, FastAPI uses `frontend-react/dist`. Set the variable explicitly in deployments that place the compiled assets elsewhere.
 
 Do not add React packages to `requirements.txt`; keep React dependencies in `frontend-react/package.json` and `frontend-react/package-lock.json`.
 
@@ -238,9 +232,10 @@ $env:SERVE_FRONTEND="false"
 python run_server.py --reload
 ```
 
-Frontend only (serve static UI separately):
+Frontend only (preview a production build):
 ```bash
-python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
+npm run --prefix frontend-react build
+npm run --prefix frontend-react preview
 ```
 
 React development server (hot reload, with `/v1`, `/auth`, and `/runtime-config.js` proxied to the API on port 8000):
@@ -265,7 +260,7 @@ Frontend runtime config (`/runtime-config.js`):
   - forced off in production-like runtimes (`APP_ENV/ENVIRONMENT/ENV = prod|production`)
 - The frontend completes Cognito/local dev-session bootstrap before fetching session-scoped startup data (`/v1/providers`, `/v1/models`, and `/v1/history`). If Cognito is enabled and no user session is present, React shows a sign-in gate instead of calling those session-scoped startup endpoints; local development history still appears on load after dev-session bootstrap.
 - Optional browser token for local bootstrap: `FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN`
-- For static-only hosting (`scripts/serve_frontend.py`, CDN, etc.): copy `frontend/runtime-config.example.js` to `frontend/runtime-config.js` and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
+- For static-only hosting (nginx, CDN, etc.): copy `frontend-react/runtime-config.example.js` to `runtime-config.js` at the deployed React origin and set `window.CORTEX_RUNTIME_CONFIG.apiBase`.
 - For standalone React production hosting, make `/runtime-config.js` available at the same origin as the React app and route `/v1/*` plus `/auth` to the API origin. The current React client uses same-origin relative API paths, so a CDN/load-balancer/nginx rule should proxy those paths to the FastAPI service.
 - Composer keyboard behavior: `Enter` sends the prompt, `Shift+Enter` inserts a new line.
 - React startup waits for Cognito/local dev-session bootstrap before fetching `/v1/models` and `/v1/history`; signed-out Cognito users see a sign-in gate instead of the Ask/Compare workspace, and background history failures do not surface as the primary chat error banner. It persists the active `session_id` in browser storage and restores that transcript after reloads, Chrome tab refreshes, mobile/desktop browser resume, and same-browser reauth.
@@ -280,7 +275,7 @@ Frontend runtime config (`/runtime-config.js`):
 - React Compare renders submitted prompts with the same right-aligned user bubble used by Ask mode. Aggregate result totals remain in a separate compact row, while model cards keep friendly names, exact API model IDs, and compact icon actions.
 - React Ask and Compare use one rounded composer shell with a borderless textarea that starts at one line and auto-grows to a bounded height. Attachments stay above the compact routing controls and fixed-size send action; mode changes remain in the app navigation rather than a redundant composer switch. Compare model selectors use a subtle opposing-arrows connector between active models: a bordered medallion on desktop and a compact borderless glyph on mobile. The selector row scrolls horizontally rather than compressing model names when a third model exceeds the mobile width. Its shared dropdown is rendered in a viewport-positioned body portal so mobile overflow containers cannot clip model options.
 - The React composer shell uses a transparent structural border and soft elevation instead of a visible rectangular outline. Textarea focus removes the browser outline and strengthens the shell shadow without changing layout on desktop or mobile.
-- React Smart, Web/With sources, and Improve chips expose the same concise guidance as the legacy UI through accessible tooltips. Enabled chips use a theme-aware high-contrast fill, label, and accent ring so their state remains clear in light and dark themes. Compare's With sources and Improve controls use the same background, border, label, and shadow treatment whenever they share the same toggle state. Tooltips open on pointer hover or keyboard focus and stay within narrow viewports. On touch screens, the same tap toggles the chip and shows its tooltip for two seconds.
+- React Smart, Web/With sources, and Improve chips expose concise guidance through accessible tooltips. Enabled chips use a theme-aware high-contrast fill, label, and accent ring so their state remains clear in light and dark themes. Compare's With sources and Improve controls use the same background, border, label, and shadow treatment whenever they share the same toggle state. Tooltips open on pointer hover or keyboard focus and stay within narrow viewports. On touch screens, the same tap toggles the chip and shows its tooltip for two seconds.
 - On mobile answer screens, the follow-up composer rests as a docked pill above the fixed Ask/Compare/History navigation. The pill shows the current routing context and opens the bottom sheet on tap; that same tap focuses the textarea and places the cursor at the end of any draft so typing can begin immediately. The expanded sheet keeps attachment chips, routing controls, and the fixed-size send action clear of the tab bar. Answer transcripts reserve enough bottom scroll clearance for response copy, regenerate, and feedback actions to remain reachable above the dock.
 - Mobile exposes one persistent square-pen action in the header for starting a new session from Ask, Compare, or History. It cancels active generation, clears the current thread, returns to chat, and preserves the selected mode; History does not duplicate this action.
 - React file upload uses the current raw-byte `POST /v1/files/upload` contract, polls `GET /v1/files/{file_id}` while uploads are processing, and sends attachment IDs on Ask/Compare requests.
@@ -770,20 +765,11 @@ class CortexClient:
 
 ## Build Artifacts
 
-Legacy static frontend artifact (static files + manifest + zip):
-```bash
-python scripts/build_frontend_artifact.py
-```
-
-React static frontend build:
+React static frontend build and optional zip/manifest:
 ```bash
 npm ci --prefix frontend-react
 npm run --prefix frontend-react build
-```
-
-Optional React artifact zip/manifest after building:
-```bash
-python scripts/build_frontend_artifact.py --source-dir frontend-react/dist --output-dir dist/frontend-react
+python scripts/build_frontend_artifact.py
 ```
 
 API runtime image:
@@ -846,6 +832,8 @@ Required secrets for `live-e2e` environment:
 - `GROK_API_KEY`
 - `DEEPSEEK_API_KEY`
 - optional web/search keys used by test prompts: `BRAVE_API_KEY`, `SERPAPI_API_KEY`
+
+The live harness enables the production-blocked dev-session endpoint only inside its local E2E server process so React and cleanup helpers can access session-scoped routes. `E2E_DEV_SESSION_LOGIN_TOKEN` can override the harness-local default when needed.
 
 ## Tenant Onboarding Script
 
@@ -1013,27 +1001,17 @@ OpenAIProject/
       0001-architecture-baseline-and-deploy-boundaries.md
       0002-provider-validation-and-safety-rails.md
       0003-component-deployment-readiness-boundaries.md
+      0004-react-only-frontend-boundary.md
     runbooks/
       db-migrations.md
     postman/
       CortexAI_B2B.postman_collection.json
 
-  frontend/
-    index.html
-    app.js
-    llm-response.css
-    llm-response.js
-    runtime-config.example.js
-    style.css
-    smart-routing-state.js
-    layout-smoke.test.mjs
-    provider-discovery.e2e.test.mjs
-    smart-routing-state.test.mjs
-
   frontend-react/
     index.html
     package.json
     package-lock.json
+    runtime-config.example.js
     vite.config.ts
     src/
       main.tsx
@@ -1070,7 +1048,6 @@ OpenAIProject/
     onboard_tenant.py
     release_gate.py
     run_playwright_mcp.py
-    serve_frontend.py
     test_report_runner.py
 
   server/

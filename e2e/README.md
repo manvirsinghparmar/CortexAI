@@ -33,7 +33,9 @@ Nothing in this folder is used by the API image or the frontend deployment artif
 1. Copy [e2e/.env.example](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/e2e/.env.example) to `e2e/.env` or export the same variables in your shell.
 2. Point `E2E_DATABASE_URL` at the PostgreSQL instance you want the suite to verify.
 3. Set a dedicated `E2E_API_KEY`.
-4. Keep provider secrets in the repo root `.env` or export them in your shell.
+4. Optionally override `E2E_DEV_SESSION_LOGIN_TOKEN`; the harness uses it only to mint a local session cookie for browser-scoped routes.
+5. Keep provider secrets in the repo root `.env` or export them in your shell.
+6. Install the React dependencies with `npm ci --prefix frontend-react`.
 
 ## Commands
 
@@ -43,7 +45,7 @@ npm run --prefix e2e install:browsers
 npm run --prefix e2e test
 ```
 
-The live `test` command requires the E2E database, API key, and provider configuration described above.
+The live `test` command requires the E2E database, API key, and provider configuration described above. Its global setup builds `frontend-react/dist`, starts FastAPI with that React build as the browser target, and enables the production-blocked dev-session endpoint only inside the E2E server process.
 
 Responsive UI suites do not require PostgreSQL, provider keys, or a running backend. They start Vite directly and mock the frontend API contracts:
 

@@ -2,10 +2,10 @@
 
 ## Project Snapshot
 
-- Product: CortexAI B2B LLM gateway (API + optional static frontend + CLI tooling).
+- Product: CortexAI B2B LLM gateway (API + React frontend + CLI tooling).
 - Backend stack: FastAPI + SQLAlchemy/repository pattern + PostgreSQL.
 - Orchestration: provider abstraction with smart routing/fallback across OpenAI, Gemini, DeepSeek, Grok, and Claude.
-- Frontend stack: legacy static HTML/CSS/JS app in `frontend/` plus React/Vite app in `frontend-react/`.
+- Frontend stack: React/Vite app in `frontend-react/`.
 - E2E stack: Playwright tests in `e2e/`.
 
 ## Runtime Commands
@@ -13,7 +13,6 @@
 ```bash
 python run_app.py
 python run_server.py --reload
-python scripts/serve_frontend.py --host 127.0.0.1 --port 8080 --dir frontend
 npm ci --prefix frontend-react
 npm run --prefix frontend-react build
 ```
@@ -30,11 +29,11 @@ npm run --prefix frontend-react build
 - Browser lifecycle diagnostics post non-sensitive metadata to unauthenticated `POST /v1/client-diagnostics`; backend logs them as `frontend.diagnostic` for reload/discard/bfcache/long-task/error triage.
 - `run_app.py` is the local full-app runner: it starts FastAPI with `SERVE_FRONTEND=false`, launches the React/Vite dev server, and passes `CORTEX_API_PROXY_TARGET` / `FRONTEND_RUNTIME_API_BASE` so Vite and runtime config point to the selected API host/port.
 - The full-app runner preflights both ports before starting children and must terminate full process trees on Windows so failed startup cannot orphan Vite.
-- `FRONTEND_DIR` explicitly selects the static frontend directory. Set it to `frontend-react/dist` after building React; `REACT_FRONTEND=true` is a convenience switch when `FRONTEND_DIR` is unset.
+- `FRONTEND_DIR` explicitly selects the compiled static frontend directory. When unset, FastAPI uses `frontend-react/dist`.
 - React dependencies belong in `frontend-react/package.json` and `frontend-react/package-lock.json`, never in Python `requirements.txt`.
 - Ask and Compare support shared session continuity via `session_id`.
 - History persistence remains row-oriented: React groups sidebar threads by `session_id` and reconstructs multi-model Compare turns by `request_group_id` when restoring a session. Thread labels use an explicit renamed `session_title` when available, but must ignore the system-generated `API Chat` / `API Compare` placeholders and fall back to the first persisted prompt.
-- React desktop and mobile history rows show each thread's latest activity timestamp using the legacy Today/Yesterday/calendar-date formatting contract.
+- React desktop and mobile history rows show each thread's latest activity timestamp using Today/Yesterday/calendar-date formatting.
 - Desktop history rows expose a hover/focus context menu containing only Rename and Delete; Rename persists `sessions.title` through `PATCH /v1/history/session/{session_id}`, while Delete uses the short in-row confirmation and removes each persisted request row in the selected thread. Mobile keeps its existing inline delete affordance. `DELETE /v1/history?session_id=<id>` clears only that session, while omitting `session_id` clears all history for the authenticated identity.
 - Expanded desktop sidebar history is the `Recent` list: Today/Yesterday/month-day groups with single-line 36px rows containing a compact 11.5px ellipsized title and narrowed `MODE · time` caption that swaps to the context-menu trigger on hover/focus. Do not add a leading mode glyph; preserve at least 140px for title text at the 280px expanded width. Keep model names, turn counts, and token counts hidden, preserve the full title in the row tooltip, and support arrow navigation plus Enter/R/D/Escape. Leave the collapsed 76px desktop rail and separate mobile History layout unchanged. Ask, Compare, Usage, and Models live in the desktop rail; the bottom-left session tile is status-only for active sessions and must not trigger logout; the mobile bottom navigation remains Ask/Compare/History only while Usage and Models are reached from the account menu.
 - Explicit browser fresh sign-in starts a new chat session instead of restoring the previously active thread; page refresh, Chrome tab resume/reload, same-browser reauth, and explicit History thread selection still preserve continuity for the selected session. React uses `cortex_active_session_id` for active-thread persistence and consumes `cortex_fresh_login_pending` plus `fresh_login=1` only for intentional fresh-login resets.
@@ -44,7 +43,6 @@ npm run --prefix frontend-react build
 - Frontend Compare selectors keep at least two active models, prefer `openai:gpt-5.1` and `claude:claude-sonnet-4-5`, prefer `deepseek:deepseek-chat` for Add Model, preserve valid manual selections, and fall back to distinct enabled catalog models when a preference is unavailable. With three active models, removing any slot compacts the remaining two instead of allowing the default resolver to refill the removed slot.
 - React manual Ask and Compare controls share `ModelPicker`, an accessible listbox with provider logo, readable family label, exact model ID, and selected-state styling. Compare supplies duplicate-option disabling and removal behavior. Keep the synchronized hidden native selects because the E2E harness uses `#singleModel` and `#compareModel1..3` for option enumeration, `inputValue`, and `selectOption`.
 - The styled model picker keeps the custom accessible listbox on desktop and mobile. Its fixed-position menu renders through a body portal so narrow Compare overflow containers cannot clip touch selection; synchronized hidden native selects remain available only for automation compatibility.
-- Legacy frontend assistant responses use `frontend/app.js` for Markdown parsing plus `frontend/llm-response.js` and `frontend/llm-response.css` for code-block enhancement, response-scoped citation targets, callout styling, and system-aware light/dark response styling.
 - React frontend assistant responses use `frontend-react/src/components/results/` with progressive Ask/Compare stream rendering, visible copy-success confirmation, inline publisher-name citation pills from `web_source_items`, code-block copy controls, GFM table rendering, sanitized provider errors, and no active auto-follow or floating down-arrow jump control during streaming. Response tables use contained horizontal scrolling on desktop and header-labelled stacked rows on mobile.
 - Chat and Compare streaming may emit `heartbeat` NDJSON events while provider work is pending. React ignores these visually; they exist to keep intermediaries from treating long provider calls as idle response bodies and are logged through stream lifecycle telemetry.
 - React response headers resolve labels and provider logos through `config/modelPresentation.ts` and the shared `components/shared/ProviderLogo` renderer used by `ModelPicker`; do not add response-only provider mappings.
@@ -61,7 +59,7 @@ npm run --prefix frontend-react build
 - React Ask and Compare share one rounded composer shell: model options sit above a borderless textarea that starts at one line and auto-grows to a bounded height, attachment chips grow upward inside the shell, and compact feature controls plus the fixed-size send action share the bottom row. Compare model chips are separated by decorative opposing-arrows connectors; desktop uses a subtle bordered medallion while mobile uses a narrow borderless glyph. Mode selection stays in the main navigation, while mobile compare chips scroll horizontally when needed and the answer-screen follow-up composer rests as a docked context pill above the fixed bottom navigation until tapped open. Mobile answer transcripts reserve bottom scroll clearance so response copy, regenerate, and feedback actions stay reachable above the dock. The shared model picker renders its fixed-position listbox through a body portal so horizontally scrollable mobile Compare rows cannot clip it.
 - Keep the React composer shell visually borderless: use a transparent structural border to avoid layout shift, soft idle/focus elevation, and no textarea browser outline on desktop or mobile.
 - Mobile starts new sessions through one persistent square-pen action in the header. It cancels active generation, clears the current thread, returns from History to chat, and preserves Ask/Compare mode; do not duplicate New chat inside mobile History.
-- Shared React feature chips keep the legacy Smart, Web/With sources, and Improve guidance in accessible `role="tooltip"` elements. Ask starts with Web enabled and Compare starts with With sources enabled for new page sessions, while preserving manual off choices. Reveal tooltips on hover and keyboard focus; on touch input, one tap toggles the chip and shows its tooltip for two seconds. Keep tooltip bounds inside narrow mobile viewports.
+- Shared React feature chips keep Smart, Web/With sources, and Improve guidance in accessible `role="tooltip"` elements. Ask starts with Web enabled and Compare starts with With sources enabled for new page sessions, while preserving manual off choices. Reveal tooltips on hover and keyboard focus; on touch input, one tap toggles the chip and shows its tooltip for two seconds. Keep tooltip bounds inside narrow mobile viewports.
 - React attachment upload uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` while files process, and sends attachment IDs on Ask/Compare requests.
 - Tavily research uses a deterministic local search-options resolver before provider calls. The resolver fixes retrieval params, may add topic/time/country/domain options when enabled, never rewrites the query, and can be reduced to fixed params with `TAVILY_ENHANCED_SEARCH_ENABLED=false`.
 - Frontend follows the Alabaster Minimal shell: a quiet 272px desktop navigation rail that can collapse to a narrow icon rail, subtle mode and current-session states, top Ask/Compare tabs, prompt starter landing, horizontal compare canvas, unified composer with active model chips, visually aligned mobile Ask/Compare/History navigation, and token-backed light/dark themes switched from the account menu.
@@ -90,7 +88,7 @@ npm run --prefix frontend-react build
 - Provider/catalog changes: `api/`, `api/client_registry.py`, `config/providers.yaml`, provider discovery tests.
 - Routing behavior changes: `orchestrator/prompt_analyzer.py`, `tier_decider.py`, `model_selector.py`, `smart_router.py`.
 - DB changes: add SQL migration under `db/migrations/`, then reflect in tables/repository usage.
-- Frontend behavior changes: `frontend/` for legacy UI or `frontend-react/` for React UI, plus contract checks (`frontend/*.test.mjs`, `npm run --prefix frontend-react build`, `e2e/` as needed).
+- Frontend behavior changes: `frontend-react/` plus React tests/build and `e2e/` contract checks as needed.
 
 ## Validation Matrix
 
@@ -104,8 +102,6 @@ npm run --prefix frontend-react build
   - Ruff/MyPy run on changed Python files; Black is advisory until a formatting baseline lands.
   - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
 - Frontend local checks (when UI touched):
-  - `node --test frontend/layout-smoke.test.mjs`
-  - `node --test frontend/provider-discovery.e2e.test.mjs`
   - `npm run --prefix frontend-react build` when React UI is touched
   - `npm run --prefix frontend-react test` when React component logic/tests are touched
 - Full browser E2E:

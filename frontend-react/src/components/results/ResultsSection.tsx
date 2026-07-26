@@ -97,6 +97,7 @@ export function ResultsSection() {
               key={turn.id}
               turn={turn}
               turnIndex={turnIndex}
+              responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
               onSuggestedFollowUp={submitFollowUp}
@@ -106,6 +107,7 @@ export function ResultsSection() {
               key={turn.id}
               turn={turn}
               turnIndex={turnIndex}
+              responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
               onSuggestedFollowUp={submitFollowUp}
@@ -121,6 +123,7 @@ export function ResultsSection() {
 interface TurnProps {
   turn: ChatTurn;
   turnIndex: number;
+  responseStartIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
   onSuggestedFollowUp: (suggestion: string) => Promise<void>;
@@ -132,6 +135,7 @@ interface TurnProps {
 const SingleTurn = memo(function SingleTurn({
   turn,
   turnIndex,
+  responseStartIndex,
   registerTurn,
   onRegenerate,
   onSuggestedFollowUp,
@@ -150,7 +154,7 @@ const SingleTurn = memo(function SingleTurn({
             key={response.request_id}
             response={response}
             isStreaming={isResponseLoading(turn, response)}
-            slotIndex={responseIndex}
+            slotIndex={responseStartIndex + responseIndex}
             loadingMode="ask"
             researchEnabled={turn.researchEnabled}
             optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
@@ -170,6 +174,7 @@ const SingleTurn = memo(function SingleTurn({
 const CompareTurn = memo(function CompareTurn({
   turn,
   turnIndex,
+  responseStartIndex,
   registerTurn,
   onRegenerate,
 }: TurnProps) {
@@ -346,7 +351,7 @@ const CompareTurn = memo(function CompareTurn({
                   <ResponseCard
                     response={response}
                     isStreaming={isResponseLoading(turn, response)}
-                    slotIndex={index}
+                    slotIndex={responseStartIndex + index}
                     compact
                     loadingMode="compare"
                     researchEnabled={turn.researchEnabled}
@@ -458,9 +463,15 @@ function TurnPrompt({ turn, turnIndex }: { turn: ChatTurn; turnIndex: number }) 
   return (
     <div className={styles.promptRow}>
       <div className={styles.promptGroup}>
-        <div id={`chat-msg-${turnIndex}`} className={styles.userBubble}>
+        <div id={`chat-msg-${turnIndex}`} className={`${styles.userBubble} chat-message-user`}>
           <span className={styles.userLabel}>You</span>
-          <p className={styles.userPromptText}>{promptText}</p>
+          <p
+            className={`${styles.userPromptText} chat-user-text ${
+              optimization ? "optimization-user-text" : ""
+            }`}
+          >
+            {promptText}
+          </p>
           <TurnAttachments turn={turn} />
         </div>
         {optimization && (
@@ -599,4 +610,10 @@ function TurnAttachments({ turn }: { turn: ChatTurn }) {
       ))}
     </ul>
   );
+}
+
+function responseStartIndexForTurn(turns: ChatTurn[], turnIndex: number): number {
+  return turns
+    .slice(0, turnIndex)
+    .reduce((total, turn) => total + turn.responses.length, 0);
 }

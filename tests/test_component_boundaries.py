@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
-from server.app import create_app
+from pathlib import Path
+
+from server.app import _resolve_frontend_dir, create_app
 
 
 def _set_min_api_env(monkeypatch):
@@ -36,6 +38,20 @@ def test_api_runs_when_frontend_directory_is_missing(monkeypatch):
 
     root = client.get("/")
     assert root.status_code == 404
+
+
+def test_default_frontend_directory_is_react_build(monkeypatch):
+    monkeypatch.delenv("FRONTEND_DIR", raising=False)
+
+    resolved = Path(_resolve_frontend_dir())
+
+    assert resolved.parts[-2:] == ("frontend-react", "dist")
+
+
+def test_frontend_directory_override_still_takes_precedence(monkeypatch):
+    monkeypatch.setenv("FRONTEND_DIR", "custom/react-build")
+
+    assert _resolve_frontend_dir() == "custom/react-build"
 
 
 def test_runtime_health_reports_interpreter_and_claude_readiness(monkeypatch):

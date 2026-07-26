@@ -15,6 +15,7 @@ Operational behavior and endpoint contracts can evolve; when details differ, tre
 - [0001 - Architecture Baseline and Deploy Boundaries](./0001-architecture-baseline-and-deploy-boundaries.md)
 - [0002 - Provider Validation and Safety Rails](./0002-provider-validation-and-safety-rails.md)
 - [0003 - Component Deployment Readiness Boundaries](./0003-component-deployment-readiness-boundaries.md)
+- [0004 - React-Only Frontend Boundary](./0004-react-only-frontend-boundary.md)
 
 ## ADR Format
 
@@ -28,4 +29,4 @@ Each ADR includes:
 
 ---
 
-Last reviewed: 2026-03-19
+Last reviewed: 2026-07-25

@@ -28,6 +28,7 @@ def _print_runtime_diagnostics() -> None:
 
 if __name__ == "__main__":
     import argparse
+    import os
 
     parser = argparse.ArgumentParser(description="CortexAI FastAPI Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
@@ -37,6 +38,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     _print_runtime_diagnostics()
 
+    # Enable uvicorn-level proxy header forwarding so that X-Forwarded-Proto
+    # and X-Forwarded-For from CloudFront/ALB are trusted.  The application-level
+    # ProxyHeadersMiddleware in server/app.py provides the same behaviour for
+    # deployments that bypass this entry point (e.g. gunicorn workers).
+    # Disable with ENABLE_PROXY_HEADERS=false when the server is directly
+    # internet-exposed without an upstream proxy.
+    _raw_proxy = str(os.getenv("ENABLE_PROXY_HEADERS", "true") or "true").strip().lower()
+    _proxy_headers_enabled = _raw_proxy not in {"0", "false", "no", "off"}
+
     uvicorn.run(
         "server.app:create_app",
         factory=True,
@@ -44,4 +54,6 @@ if __name__ == "__main__":
         port=args.port,
         reload=args.reload,
         log_level="info",
+        proxy_headers=_proxy_headers_enabled,
+        forwarded_allow_ips="*" if _proxy_headers_enabled else None,
     )

@@ -29,6 +29,11 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/v1/auth", tags=["Auth"])
 PRODUCTION_ENV_VALUES = {"prod", "production"}
 
+# Session cookie lifetime in seconds.  Defaults to 7 days so users are not
+# logged out when the browser session ends (e.g. mobile background, tab close).
+# Set SESSION_MAX_AGE_SECONDS=0 to fall back to a browser-session cookie.
+_DEFAULT_SESSION_MAX_AGE = 7 * 24 * 3600
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -43,6 +48,33 @@ def _runtime_environment() -> str:
         if value:
             return value
     return ""
+
+
+def _session_max_age() -> int | None:
+    raw = str(os.getenv("SESSION_MAX_AGE_SECONDS", "") or "").strip()
+    if not raw:
+        return _DEFAULT_SESSION_MAX_AGE
+    try:
+        val = int(raw)
+        return val if val > 0 else None
+    except ValueError:
+        return _DEFAULT_SESSION_MAX_AGE
+
+
+def _session_cookie_secure(request: Request) -> bool:
+    """Return True if the session cookie should have the Secure flag set.
+
+    In production HTTPS deployments (CloudFront/ALB), the ``Secure`` flag must
+    be set so the browser sends the cookie on HTTPS requests.  We detect HTTPS
+    from the actual request scheme (which is correct when ProxyHeadersMiddleware
+    is active) and fall back to an explicit SESSION_COOKIE_SECURE env override.
+    """
+    explicit = os.getenv("SESSION_COOKIE_SECURE")
+    if explicit is not None:
+        return str(explicit).strip().lower() in {"1", "true", "yes", "on"}
+    # With ProxyHeadersMiddleware in place request.url.scheme already reflects
+    # X-Forwarded-Proto, so this correctly returns True for HTTPS deployments.
+    return request.url.scheme == "https"
 
 
 def _dev_login_enabled() -> bool:
@@ -91,7 +123,19 @@ async def cognito_config():
 
 
 def _redirect_uri_from_request(request: Request) -> str:
-    """Build callback URL for Cognito (must match app client allowed callback). Uses request path so /auth and /v1/auth/callback both work."""
+    """Build callback URL for Cognito (must match app client allowed callback).
+
+    Explicit ``COGNITO_REDIRECT_URI`` env var always wins.  When not set, the
+    URI is derived from the current request.  With ``ProxyHeadersMiddleware``
+    active, ``request.base_url`` already reflects the correct scheme/host from
+    ``X-Forwarded-Proto`` / ``X-Forwarded-Host``, so the computed URI will be
+    ``https://`` even when FastAPI itself is running on HTTP behind an ALB.
+
+    Without ``ProxyHeadersMiddleware`` and without the explicit env var, the
+    computed URI may be ``http://`` in HTTPS deployments, causing a mismatch
+    with the ``https://`` callback URL registered in the Cognito app client and
+    a redirect-loop that looks like an automatic page refresh.
+    """
     configured = (os.getenv("COGNITO_REDIRECT_URI") or "").strip()
     if configured:
         return configured.rstrip("/")
@@ -152,13 +196,15 @@ async def handle_oauth_callback(
         "1",
     )
     redir = RedirectResponse(url=success_url, status_code=status.HTTP_302_FOUND)
+    max_age = _session_max_age()
     redir.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=cookie_val,
         httponly=True,
-        secure=False,
+        secure=_session_cookie_secure(request),
         samesite="lax",
         path="/",
+        max_age=max_age,
     )
     return redir
 
@@ -181,13 +227,15 @@ async def dev_login(request: Request, response: Response) -> dict:
         display_name = row[1] if row else "CLI User"
 
     cookie_val = sign_session(user_id)
+    max_age = _session_max_age()
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=cookie_val,
         httponly=True,
-        secure=False,
+        secure=_session_cookie_secure(request),
         samesite="lax",
         path="/",
+        max_age=max_age,
     )
     logger.info(
         "Dev session login completed",
@@ -222,7 +270,7 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginRequest, response: Response) -> dict:
+async def login(body: LoginRequest, request: Request, response: Response) -> dict:
     """
     Verify Cognito ID token, upsert user in DB, and set a signed session cookie.
     """
@@ -244,13 +292,15 @@ async def login(body: LoginRequest, response: Response) -> dict:
 
     # Set cookie
     cookie_val = sign_session(user_id)
+    max_age = _session_max_age()
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=cookie_val,
         httponly=True,
-        secure=False,  # set True behind HTTPS in production
+        secure=_session_cookie_secure(request),
         samesite="lax",
         path="/",
+        max_age=max_age,
     )
 
     logger.info("User logged in via Cognito", extra={"extra_fields": {"user_id": str(user_id)}})

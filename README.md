@@ -165,6 +165,13 @@ REACT_FRONTEND=false     # optional convenience switch; when true and FRONTEND_D
 FRONTEND_RUNTIME_API_BASE=                           # optional; defaults to request origin
 FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false      # optional browser override
 FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible local token
+
+# AWS / reverse-proxy settings (important for CloudFront/ALB deployments)
+ENABLE_PROXY_HEADERS=true          # trust X-Forwarded-Proto/Host from upstream proxy (default: true)
+TRUSTED_PROXY_IPS=*                # comma-separated trusted upstream IPs, or '*' for all (default: *)
+# SESSION_COOKIE_SECURE=           # optional explicit Secure flag; leave unset to auto-detect HTTPS
+SESSION_MAX_AGE_SECONDS=604800     # session cookie lifetime in seconds (default: 7 days; 0 = session cookie)
+COGNITO_SSL_VERIFY=true            # set false to skip TLS verification for Cognito endpoints (not recommended)
 ```
 
 ## Pricing Configuration
@@ -402,7 +409,7 @@ To enable "Sign in with Google" via Amazon Cognito:
    - `COGNITO_CLIENT_ID` – App client ID
    - `COGNITO_REGION` – AWS region
    - `COGNITO_DOMAIN` – Hosted UI base URL (e.g. `https://your-prefix.auth.us-east-1.amazoncognito.com`)
-   - `COGNITO_REDIRECT_URI` – (optional) Callback URL; React falls back to same-origin `/auth`
+   - `COGNITO_REDIRECT_URI` – **Required in production**. Must exactly match the callback URL registered in the Cognito App Client (e.g. `https://app.example.com/auth`). Without this, the backend computes the redirect URI from the incoming request; behind CloudFront or an ALB the scheme may be resolved as `http://` instead of `https://`, causing a token-exchange failure and an auth redirect loop that looks like an automatic page refresh.
 3. **Frontend**: Load the app; signed-out Cognito users see a `Sign in to use CortexAI` gate in the workspace and the React top-right account icon remains a secondary account menu. Cognito guests can `Sign in`, the theme switch toggles the React `data-theme` between light and dark and persists the browser preference, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
 
 `/v1/models` now includes attachment capability metadata per model:
@@ -800,6 +807,30 @@ Production deployment notes:
 - `Dockerfile.api` is API-only and does not copy `frontend-react/dist`; if the API image should serve React directly, include the built `frontend-react/dist` directory in that runtime image and set `FRONTEND_DIR` to its absolute path.
 - `Dockerfile.frontend` builds and serves React static assets with nginx. Put it behind a reverse proxy or update nginx/CDN routing so `/v1/*`, `/auth`, and `/runtime-config.js` reach the FastAPI service.
 - Keep `APP_ENV`, `ENVIRONMENT`, or `ENV` set to `prod`/`production` in production-like deployments so browser dev-session login is forced off.
+
+### AWS Production: preventing automatic page refreshes
+
+The UI page can appear to refresh automatically in production for these reasons:
+
+1. **Cognito auth redirect loop (most common)**  
+   Behind CloudFront or an ALB, HTTPS is terminated at the load balancer. FastAPI sees plain HTTP, so `request.base_url` returns `http://…` unless proxy header forwarding is enabled. The computed Cognito redirect URI (`http://…/auth`) then mismatches the registered `https://…/auth` callback, causing every token exchange to fail and redirecting the browser back to the Cognito login page repeatedly. Fix:  
+   - Set `COGNITO_REDIRECT_URI=https://app.example.com/auth` explicitly, **and**  
+   - Ensure `ENABLE_PROXY_HEADERS=true` (default) so `request.base_url` / `runtime-config.js` reflect HTTPS.
+
+2. **Session cookie not persisting across browser sessions**  
+   Without an explicit `max_age`, the `cortex_session` cookie is a session cookie that is deleted when the browser closes. On mobile, background/resume cycles and low-memory tab discards trigger this frequently. The default is now 7 days (`SESSION_MAX_AGE_SECONDS=604800`). Increase or decrease to match your security policy.
+
+3. **Session cookie `Secure` flag**  
+   In HTTPS deployments, the session cookie must carry the `Secure` attribute so browsers send it on encrypted requests. The flag is now auto-detected from `request.url.scheme` (which is `https` when `ENABLE_PROXY_HEADERS=true`). Override with `SESSION_COOKIE_SECURE=true` if needed.
+
+4. **ALB idle timeout vs SSE streaming**  
+   AWS ALB defaults to a 60-second idle timeout. The backend sends heartbeat events every `STREAM_HEARTBEAT_INTERVAL_SECONDS` (default 15 s) to keep streaming connections alive. If the ALB is configured with a shorter timeout, or WAF rules terminate long-lived connections, users will see streams fail. Increase the ALB idle timeout to at least 120 seconds for streaming routes.
+
+5. **Safari background-tab eviction (confirmed root cause in July 2026)**  
+   Any `beforeunload` event listener makes the page ineligible for the browser's back/forward cache (bfcache). Safari must then keep the full JS context in memory for backgrounded tabs. After ~8–10 minutes it evicts the tab and does a full reload when the user returns. The `beforeunload` listener has been removed from `bootDiagnostics.ts`; `pagehide` is used instead (covers the same events and is bfcache-compatible). After deploying this change, look for `frontend.diagnostic` events with `details.navigationType="pagehide"` and `details.persisted=true`, which confirms the page is now entering bfcache successfully.
+
+6. **`frontend.diagnostic` log events**  
+   The React client records every page boot, unload, and visibility change to `/v1/client-diagnostics`. Search for `frontend.diagnostic` events in CloudWatch / `app.log` around the reported timestamp and inspect `details.navigationType` and `details.wasDiscarded` to identify the exact refresh cause (user reload, Chrome tab discard, bfcache restore, or Cognito redirect). See `docs/runbooks/aws-ec2-logging.md` § "Browser Refresh / Blink Workflow".
 
 These artifacts are intentionally separate so frontend-only or API-only changes can be built independently.
 

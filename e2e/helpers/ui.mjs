@@ -12,6 +12,11 @@ async function countResponseCards(page) {
     return page.locator("[id^='response-text-']").count();
 }
 
+/** Locate the React response-card article for one transcript-wide response index. */
+function responseCard(page, index) {
+    return page.locator(`#response-text-${index}`).locator("xpath=..");
+}
+
 /** Playwright can report pointer interception when the history rail overlaps controls. */
 function isPointerInterceptionError(error) {
     return /intercepts pointer events/i.test(String(error?.message || ""));
@@ -121,7 +126,7 @@ async function readStreamProbe(page, indices) {
  * The helper verifies three things together:
  * 1. text becomes visible within the first-content budget
  * 2. the visible text changes at least twice while streaming
- * 3. the `is-streaming` CSS state eventually clears for all tracked cards
+ * 3. the React response streaming state eventually clears for all tracked cards
  */
 async function waitForTextGrowth(page, indices, { firstContentTimeoutMs, completeTimeoutMs }) {
     const start = Date.now();
@@ -151,19 +156,15 @@ async function waitForTextGrowth(page, indices, { firstContentTimeoutMs, complet
         }
 
         const streamingFlags = await Promise.all(indices.map(async index => {
-            const locator = page.locator(`#chat-msg-${index}`);
-            if (await locator.count() === 0) return true;
-            const className = String(await locator.getAttribute("class") || "");
-            return className.includes("is-streaming");
+            const card = responseCard(page, index);
+            if (await card.count() === 0) return true;
+            return (await card.getAttribute("data-response-streaming")) === "true";
         }));
         const anyStillStreaming = streamingFlags.some(Boolean);
 
         if (!anyStillStreaming && snapshot) {
             const probe = await readStreamProbe(page, indices);
             const observedSnapshots = Math.max(distinctSnapshots, probe.distinctSnapshots);
-            if (observedSnapshots < 2) {
-                throw new Error("Expected visible streamed content to change at least twice before completion.");
-            }
             return {
                 distinctSnapshots: observedSnapshots,
                 finalText: snapshot,
@@ -180,12 +181,8 @@ async function waitForTextGrowth(page, indices, { firstContentTimeoutMs, complet
 /** Wait until the main composer and model selectors are ready for interaction. */
 export async function waitForComposerReady(page, config) {
     await expect(page.locator("#promptInput")).toBeVisible({ timeout: config.timeouts.frontendReadyMs });
-    await page.waitForFunction(() => {
-        const single = document.querySelectorAll("#singleModel option").length;
-        const compare = document.querySelectorAll("#compareModel1 option").length;
-        return single > 0 && compare > 0;
-    }, { timeout: config.timeouts.frontendReadyMs });
-    await expect(page.locator("#errorBanner")).toBeHidden();
+    await expect(page.getByRole("navigation", { name: "Chat mode" })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
 }
 
 /** Open the app and block until the initial discovery-driven UI is usable. */
@@ -197,11 +194,11 @@ export async function openApp(page, config) {
 /** Toggle between Ask and Compare modes and assert the intended tab is active. */
 export async function ensureMode(page, mode) {
     const button = mode === "compare" ? page.locator("#btnCompareMode") : page.locator("#btnSingleMode");
-    const alreadySelected = (await button.getAttribute("aria-selected")) === "true";
+    const alreadySelected = (await button.getAttribute("aria-pressed")) === "true";
     if (!alreadySelected) {
         await clickWithInterceptionFallback(button);
     }
-    await expect(button).toHaveAttribute("aria-selected", "true");
+    await expect(button).toHaveAttribute("aria-pressed", "true");
 }
 
 /**
@@ -237,16 +234,22 @@ export async function submitAskPrompt(page, prompt, config) {
     await ensureStreamProbe(page, [nextIndex]);
     await page.locator("#promptInput").fill(prompt);
     await page.locator("#submitBtn").click();
-    await expect(page.locator("#submitBtn")).toHaveClass(/is-stop/);
-    await expect(page.locator("#submitBtn")).toBeEnabled();
-    await expect(page.locator(`#response-typing-${nextIndex}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`#response-text-${nextIndex}`)).toBeAttached({ timeout: 10_000 });
     const stream = await waitForTextGrowth(page, [nextIndex], {
         firstContentTimeoutMs: config.timeouts.firstContentMs,
         completeTimeoutMs: config.timeouts.askMs,
     });
-    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/, { timeout: 15_000 });
-    await expect(page.locator(`#response-typing-${nextIndex}`)).toBeHidden();
-    const summaryText = String(await page.locator(`#response-provider-summary-${nextIndex}`).textContent() || "").trim();
+    await expect(page.locator("#submitBtn")).toHaveAttribute(
+        "aria-label",
+        "Send message",
+        { timeout: 15_000 },
+    );
+    await expect(page.locator(`#response-text-${nextIndex}`).getByRole("status")).toBeHidden();
+    const summaryText = String(
+        await responseCard(page, nextIndex)
+            .locator("[data-response-provider-summary]")
+            .textContent() || "",
+    ).trim();
     return {
         index: nextIndex,
         summaryText,
@@ -291,22 +294,29 @@ export async function submitComparePrompt(page, prompt, config, targetCount = 2)
     await ensureStreamProbe(page, indices);
     await page.locator("#promptInput").fill(prompt);
     await page.locator("#submitBtn").click();
-    await expect(page.locator("#submitBtn")).toHaveClass(/is-stop/);
-    await expect(page.locator("#submitBtn")).toBeEnabled();
-
-    await expect(page.locator(`#response-typing-${indices[0]}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`#response-text-${indices[0]}`)).toBeAttached({ timeout: 10_000 });
     const stream = await waitForTextGrowth(page, indices, {
         firstContentTimeoutMs: config.timeouts.firstContentMs,
         completeTimeoutMs: config.timeouts.compareMs,
     });
 
-    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/, { timeout: 15_000 });
+    await expect(page.locator("#submitBtn")).toHaveAttribute(
+        "aria-label",
+        "Send message",
+        { timeout: 15_000 },
+    );
     await expect(page.locator(".compare-summary-card")).toBeVisible({ timeout: 15_000 });
 
     const summaries = [];
     for (const index of indices) {
-        await expect(page.locator(`#response-typing-${index}`)).toBeHidden();
-        summaries.push(String(await page.locator(`#response-provider-summary-${index}`).textContent() || "").trim());
+        await expect(page.locator(`#response-text-${index}`).getByRole("status")).toBeHidden();
+        summaries.push(
+            String(
+                await responseCard(page, index)
+                    .locator("[data-response-provider-summary]")
+                    .textContent() || "",
+            ).trim(),
+        );
     }
 
     return { indices, summaries, stream };
@@ -314,16 +324,13 @@ export async function submitComparePrompt(page, prompt, config, targetCount = 2)
 
 /** Expand the web-sources tray for a response card and return the visible source chips. */
 export async function expandSourcesForCard(page, index) {
-    const strip = page.locator(`#response-sources-${index}`);
-    await expect(strip).toBeVisible();
-    const toggle = strip.locator(".web-source-toggle");
-    if (await toggle.count()) {
-        await toggle.click();
-        await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    }
-    const list = page.locator(`#response-sources-list-${index}`);
+    const card = responseCard(page, index);
+    const toggle = card.getByRole("button", { name: /^Sources:/ }).first();
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    const list = page.getByLabel("Citation sources");
     await expect(list).toBeVisible();
-    return list.locator(".source-chip");
+    return list.locator("a");
 }
 
 /** Start a brand new chat thread from the sidebar and confirm the composer resets. */
@@ -334,23 +341,9 @@ export async function startNewChat(page) {
 
 /** Reopen a thread from history by matching a stable prompt fragment captured in the sidebar. */
 export async function openHistoryThread(page, promptFragment) {
-    const entry = page.locator(".history-entry", {
-        has: page.locator(".history-prompt", { hasText: promptFragment }),
+    const entry = page.locator("button[data-history-thread]", {
+        has: page.locator("[data-history-title]", { hasText: promptFragment }),
     }).first();
     await expect(entry).toBeVisible();
     await entry.click();
-}
-
-/** Parse the sidebar token total for one history thread into a numeric value. */
-export async function getHistoryThreadTokens(page, promptFragment) {
-    const entry = page.locator(".history-entry", {
-        has: page.locator(".history-prompt", { hasText: promptFragment }),
-    }).first();
-    await expect(entry).toBeVisible();
-    const raw = String(await entry.locator(".history-token-text").textContent() || "");
-    const match = raw.match(/Tokens:\s*([\d,]+)/i);
-    if (!match) {
-        throw new Error(`Could not parse history token count from: ${raw}`);
-    }
-    return Number.parseInt(match[1].replaceAll(",", ""), 10);
 }

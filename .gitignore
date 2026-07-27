@@ -2,7 +2,6 @@
 .env
 .env.local
 .env.*.local
-frontend/runtime-config.js
 
 # Python cache and bytecode
 __pycache__/

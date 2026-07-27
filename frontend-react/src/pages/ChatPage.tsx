@@ -41,7 +41,7 @@ export function ChatPage() {
   const workspaceReady = !authLoading && !signedOut;
   const { models } = useModels(workspaceReady);
   const { load: loadHistory, removeThread } = useHistory();
-  const { submit, cancel } = useChat();
+  const { submit, regenerate, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
   const [composerCollapsed, setComposerCollapsed] = useState(false);
@@ -56,6 +56,12 @@ export function ChatPage() {
   const setHistory = useChatStore((s) => s.setHistory);
   const setHistorySearch = useChatStore((s) => s.setHistorySearch);
   const hasTurns = useChatStore((s) => s.turns.length > 0);
+  const retryTurnId = useChatStore((s) => {
+    for (let index = s.turns.length - 1; index >= 0; index -= 1) {
+      if (s.turns[index]?.status === "error") return s.turns[index]!.id;
+    }
+    return null;
+  });
   const showComposerSheet = !composerCollapsed;
   const showComposerBackdrop = showComposerSheet && hasTurns;
 
@@ -185,6 +191,7 @@ export function ChatPage() {
               type="button"
               className={`${styles.tab} ${mode === "single" ? styles.activeTab : ""}`}
               onClick={() => setMode("single")}
+              aria-pressed={mode === "single"}
               disabled={signedOut}
             >
               Ask
@@ -194,6 +201,7 @@ export function ChatPage() {
               type="button"
               className={`${styles.tab} ${mode === "compare" ? styles.activeTab : ""}`}
               onClick={() => setMode("compare")}
+              aria-pressed={mode === "compare"}
               disabled={signedOut}
             >
               Compare
@@ -238,7 +246,11 @@ export function ChatPage() {
                   message={error}
                   onRetry={() => {
                     setError(null);
-                    void submit();
+                    if (retryTurnId) {
+                      void regenerate(retryTurnId);
+                    } else {
+                      void submit();
+                    }
                   }}
                   onDismiss={() => setError(null)}
                 />

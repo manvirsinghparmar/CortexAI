@@ -1,6 +1,8 @@
 /** Thin HTTP helpers for the live E2E suite. */
 import { setTimeout as delay } from "node:timers/promises";
 
+const sessionCookies = new Map();
+
 /** Wrap fetches in an AbortController so retries fail fast with clear timeout errors. */
 function withTimeout(signal, timeoutMs) {
     const controller = new AbortController();
@@ -57,17 +59,56 @@ export async function waitForJson(url, { headers = {}, timeoutMs = 30_000, inter
     throw lastError || new Error(`Timed out waiting for ${url}`);
 }
 
-/** Resolve the stable E2E owner identity created by the backend for the suite API key. */
+/** Mint and cache the local-only session cookie required by browser-scoped routes. */
+export async function getSessionCookie(config) {
+    const cacheKey = config.apiBaseUrl;
+    const cached = sessionCookies.get(cacheKey);
+    if (cached) return cached;
+
+    const timeout = withTimeout(null, config.timeouts.discoveryMs);
+    try {
+        const response = await fetch(`${config.apiBaseUrl}/v1/auth/dev-login`, {
+            method: "POST",
+            headers: {
+                "X-Dev-Login-Token": config.devSessionLoginToken,
+            },
+            signal: timeout.signal,
+        });
+        const body = await response.text();
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} for /v1/auth/dev-login: ${body}`);
+        }
+
+        const setCookie = response.headers.get("set-cookie") || "";
+        const match = setCookie.match(/cortex_session=([^;]+)/i);
+        if (!match) {
+            throw new Error("Dev login succeeded without returning a cortex_session cookie.");
+        }
+
+        const cookie = `cortex_session=${match[1]}`;
+        sessionCookies.set(cacheKey, cookie);
+        return cookie;
+    } finally {
+        timeout.dispose();
+    }
+}
+
+/** Return headers for routes that require identity-backed session auth. */
+export async function getSessionHeaders(config) {
+    return { Cookie: await getSessionCookie(config) };
+}
+
+/** Resolve the stable E2E owner identity created by the dev session. */
 export async function getWhoAmI(config) {
     return fetchJson(`${config.apiBaseUrl}/v1/whoami`, {
-        headers: { "X-API-Key": config.apiKey },
+        headers: await getSessionHeaders(config),
         timeoutMs: config.timeouts.discoveryMs,
     });
 }
 
 export async function getProviderCatalog(config) {
     return fetchJson(`${config.apiBaseUrl}/v1/providers`, {
-        headers: { "X-API-Key": config.apiKey },
+        headers: await getSessionHeaders(config),
         timeoutMs: config.timeouts.discoveryMs,
     });
 }
@@ -80,7 +121,7 @@ export async function listHistory(config, { limit = 500, sessionId = null } = {}
         params.set("session_id", String(sessionId));
     }
     return fetchJson(`${config.apiBaseUrl}/v1/history?${params.toString()}`, {
-        headers: { "X-API-Key": config.apiKey },
+        headers: await getSessionHeaders(config),
         timeoutMs: config.timeouts.discoveryMs,
     });
 }
@@ -89,7 +130,7 @@ export async function listHistory(config, { limit = 500, sessionId = null } = {}
 export async function deleteHistoryEntry(config, entryId) {
     const response = await fetch(`${config.apiBaseUrl}/v1/history/${entryId}`, {
         method: "DELETE",
-        headers: { "X-API-Key": config.apiKey },
+        headers: await getSessionHeaders(config),
     });
     if (!response.ok && response.status !== 404) {
         throw new Error(`Failed to delete history entry ${entryId}: HTTP ${response.status}`);

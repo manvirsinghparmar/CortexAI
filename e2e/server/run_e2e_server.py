@@ -52,7 +52,17 @@ def _prepare_runtime_env() -> tuple[str, int]:
     os.environ["DATABASE_URL"] = _require("E2E_DATABASE_URL")
     os.environ["API_KEYS"] = _require("E2E_API_KEY")
     os.environ["AUTO_REGISTER_UNMAPPED_API_KEYS"] = "true"
-    os.environ.setdefault("SERVE_FRONTEND", "true")
+    dev_session_login_token = (
+        str(os.getenv("E2E_DEV_SESSION_LOGIN_TOKEN", "") or "").strip()
+        or "cortex-e2e-dev-login"
+    )
+    os.environ["APP_ENV"] = "local"
+    os.environ["ENABLE_DEV_SESSION_LOGIN"] = "true"
+    os.environ["DEV_SESSION_LOGIN_TOKEN"] = dev_session_login_token
+    os.environ["FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN"] = "true"
+    os.environ["FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN"] = dev_session_login_token
+    os.environ["SERVE_FRONTEND"] = "true"
+    os.environ["FRONTEND_DIR"] = str(REPO_ROOT / "frontend-react" / "dist")
 
     db_schema = str(os.getenv("E2E_DB_SCHEMA", "") or "").strip()
     if db_schema:

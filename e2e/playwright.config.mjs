@@ -35,12 +35,8 @@ export default defineConfig({
     reporter: reporters,
     use: {
         baseURL: config.baseUrl,
-        viewport: null,
-        launchOptions: {
-            // Running headed with a maximized window makes local debugging match
-            // the real desktop layout more closely than a fixed viewport.
-            args: ["--start-maximized"],
-        },
+        // Keep the live suite on the desktop shell in both headed and headless runs.
+        viewport: { width: 1440, height: 1000 },
         screenshot: "only-on-failure",
         trace: "retain-on-failure",
         video: "retain-on-failure",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a frontend deployment artifact from static assets."""
+"""Build a deployment artifact from the compiled React frontend."""
 
 from __future__ import annotations
 
@@ -12,16 +12,16 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build frontend static artifact")
+    parser = argparse.ArgumentParser(description="Build React frontend static artifact")
     parser.add_argument(
         "--source-dir",
-        default="frontend",
-        help="Source frontend directory (default: frontend)",
+        default="frontend-react/dist",
+        help="Compiled React frontend directory (default: frontend-react/dist)",
     )
     parser.add_argument(
         "--output-dir",
-        default="dist/frontend",
-        help="Output directory for built artifact (default: dist/frontend)",
+        default="dist/frontend-react",
+        help="Output directory for built artifact (default: dist/frontend-react)",
     )
     return parser.parse_args()
 
@@ -72,7 +72,7 @@ def main() -> None:
     manifest_path = output_dir / "artifact-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    archive_base = output_dir.parent / "frontend-artifact"
+    archive_base = output_dir.parent / "react-frontend-artifact"
     archive_path = shutil.make_archive(str(archive_base), "zip", root_dir=output_dir)
 
     print(f"Frontend artifact directory: {output_dir}")

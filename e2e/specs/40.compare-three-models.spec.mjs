@@ -7,8 +7,8 @@ import { ensureMode, startNewChat, submitComparePrompt } from "../helpers/ui.mjs
 const PROMPT = "Explain Python virtual environments in 3 short bullet points.";
 
 async function addGrokAsThirdModel(page) {
-    await expect(page.locator("#compareModel1")).toBeVisible();
-    await expect(page.locator("#compareModel2")).toBeVisible();
+    await expect(page.locator("#compareModel1")).toHaveCount(1);
+    await expect(page.locator("#compareModel2")).toHaveCount(1);
 
     const selectedOne = await page.locator("#compareModel1").inputValue();
     const selectedTwo = await page.locator("#compareModel2").inputValue();
@@ -44,7 +44,7 @@ test("compare mode with three selected models renders exactly three non-empty ca
 
     await startNewChat(page);
     await ensureMode(page, "compare");
-    await expect(page.locator("#errorBanner")).toBeHidden();
+    await expect(page.getByRole("alert")).toHaveCount(0);
 
     await addGrokAsThirdModel(page);
 
@@ -56,14 +56,16 @@ test("compare mode with three selected models renders exactly three non-empty ca
     expect(cardsAfter - cardsBefore).toBe(3);
 
     for (const index of result.indices) {
-        await expect(page.locator(`#chat-msg-${index}`)).toBeVisible();
-
-        const summaryText = String(await page.locator(`#response-provider-summary-${index}`).textContent() || "").trim();
+        const card = page.locator(`#response-text-${index}`).locator("xpath=..");
+        await expect(card).toBeVisible();
+        const summaryText = String(
+            await card.locator("[data-response-provider-summary]").textContent() || "",
+        ).trim();
         expect(summaryText.length).toBeGreaterThan(0);
 
         const responseText = String(await page.locator(`#response-text-${index}`).textContent() || "").trim();
         expect(responseText.length).toBeGreaterThan(20);
     }
 
-    await expect(page.locator("#errorBanner")).toBeHidden();
+    await expect(page.getByRole("alert")).toHaveCount(0);
 });

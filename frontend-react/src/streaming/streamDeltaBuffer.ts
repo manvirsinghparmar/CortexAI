@@ -2,8 +2,7 @@ import { useChatStore } from "../store/chatStore";
 
 // Applying every SSE delta to the store re-renders the transcript and
 // re-parses markdown per token, which can saturate the main thread on long
-// responses. Batch deltas and flush at the same ~8/sec cadence the legacy
-// UI used (STREAM_MARKDOWN_RENDER_DEBOUNCE_MS in frontend/app.js).
+// responses. Batch deltas and flush at a stable ~8/sec cadence.
 const FLUSH_INTERVAL_MS = 120;
 
 export class StreamDeltaBuffer {

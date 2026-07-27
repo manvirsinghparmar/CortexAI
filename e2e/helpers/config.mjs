@@ -73,6 +73,9 @@ export function getE2EConfig() {
     const apiKey = requireEnv("E2E_API_KEY");
     const databaseUrl = requireEnv("E2E_DATABASE_URL");
     const dbSchema = String(process.env.E2E_DB_SCHEMA || "public").trim() || "public";
+    const devSessionLoginToken = String(
+        process.env.E2E_DEV_SESSION_LOGIN_TOKEN || "cortex-e2e-dev-login",
+    ).trim() || "cortex-e2e-dev-login";
 
     cachedConfig = {
         repoRoot,
@@ -85,6 +88,7 @@ export function getE2EConfig() {
         apiKey,
         databaseUrl,
         dbSchema,
+        devSessionLoginToken,
         loadRootDotenv: readBool("E2E_LOAD_ROOT_DOTENV", true),
         enableFaultInjection: readBool("E2E_ENABLE_FAULT_INJECTION", true),
         timeouts: {

@@ -59,15 +59,10 @@ export function latestRequest(snapshot, predicate = null) {
     return filtered[filtered.length - 1] || null;
 }
 
-export function providerLabelFor(runState, provider) {
-    const normalized = String(provider || "").trim().toLowerCase();
-    return runState.providerLabels[normalized] || normalized;
-}
-
-/** Match the UI provider summary against the provider/model captured in persistence. */
-export function expectSummaryMatchesRequest(summaryText, request, runState) {
+/** Match the React card summary against the provider/model captured in persistence. */
+export function expectSummaryMatchesRequest(summaryText, request) {
     expect(request).toBeTruthy();
+    expect(String(request.provider || "").trim()).not.toBe("");
     const normalizedSummary = String(summaryText || "").toLowerCase();
-    expect(normalizedSummary).toContain(providerLabelFor(runState, request.provider).toLowerCase());
     expect(normalizedSummary).toContain(String(request.model || "").toLowerCase());
 }

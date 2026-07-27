@@ -51,7 +51,7 @@ export function AttachmentStrip() {
   };
 
   return (
-    <div className={styles.strip}>
+    <div id="attachmentStrip" className={styles.strip}>
       {attachments.length > 0 && (
         <ul className={styles.list} aria-live="polite">
           {attachments.map((a) => (

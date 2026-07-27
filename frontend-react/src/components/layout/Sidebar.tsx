@@ -442,6 +442,7 @@ export function Sidebar({
                                   }}
                                   className={styles.historySelectButton}
                                   data-history-thread={thread.key}
+                                  data-session-id={thread.sessionId}
                                   aria-label={`${thread.title}. ${modeLabel}, ${
                                     dateTimeLabel || "Date unavailable"
                                   }`}

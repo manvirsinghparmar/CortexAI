@@ -99,7 +99,7 @@ npm run --prefix frontend-react build
 - Pricing/registry consistency:
   - `python -m pytest tests/test_registry_pricing_alignment.py -q`
 - CI changed-file quality gates:
-  - Ruff/MyPy run on changed Python files; Black is advisory until a formatting baseline lands.
+  - Ruff/MyPy run on added or modified Python files; deleted paths are excluded before tooling runs. Black is advisory until a formatting baseline lands.
   - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
 - Frontend local checks (when UI touched):
   - `npm run --prefix frontend-react build` when React UI is touched

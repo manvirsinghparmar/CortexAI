@@ -38,7 +38,7 @@ jobs:
               - 'e2e/package.json'
               - 'e2e/package-lock.json'
             python:
-              - '**/*.py'
+              - added|modified: '**/*.py'
             backend:
               - 'api/**'
               - 'config/**'

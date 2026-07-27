@@ -23,6 +23,10 @@ npm run --prefix frontend-react build
 - Most `/v1/*` endpoints accept API key, Cognito bearer, or session cookie auth.
 - Session-scoped routes (`/v1/chat*`, `/v1/compare*`, `/v1/files/*`, `/v1/providers`, `/v1/models`, `/v1/optimize`, `/v1/history*`) reject API-key-only auth.
 - Local dev can mint session cookies via `POST /v1/auth/dev-login` only when `ENABLE_DEV_SESSION_LOGIN=true` (blocked in production-like envs).
+- Reverse-proxy handling defaults to `ENABLE_PROXY_HEADERS=true` with `TRUSTED_PROXY_IPS=*`. Narrow the trusted proxy list when the API is directly reachable, or disable proxy-header handling when no trusted upstream proxy is present.
+- Production Cognito deployments should set `COGNITO_REDIRECT_URI` to the exact registered HTTPS callback. Automatic callback and frontend API-base derivation depend on the effective request scheme supplied through trusted proxy headers.
+- Session cookies default to a seven-day lifetime (`SESSION_MAX_AGE_SECONDS=604800`); `0` restores browser-session behavior. `SESSION_COOKIE_SECURE` is an explicit override, otherwise the `Secure` attribute follows the effective HTTPS request scheme.
+- Cognito JWKS and token requests verify TLS certificates by default (`COGNITO_SSL_VERIFY=true`). Disabling verification is limited to controlled local troubleshooting or trusted TLS-inspection environments.
 - Frontend startup waits for Cognito/local dev-session bootstrap before session-scoped startup fetches. Signed-out Cognito users see a `Sign in to use CortexAI` workspace gate and React does not call `/v1/providers`, `/v1/models`, or `/v1/history` until a session exists; authenticated and local dev-session users hydrate Ask/Compare model selectors and the history sidebar, then restore the browser-persisted active `session_id` transcript when the page reloads/remounts.
 - React account actions live in the top-right account icon menu as a secondary sign-in path. Keep the persisted light/dark theme switch available there, and keep `Log off` available as a session-clear fallback even when the icon is labelled `Guest account`; it clears the API session cookie, resets active React chat/history state, and redirects to the Cognito Hosted UI logout URL when `/v1/auth/cognito-config` provides one.
 - In monolith mode (`SERVE_FRONTEND=true`), `GET /runtime-config.js` is generated at runtime and sent with no-cache headers.
@@ -99,7 +103,7 @@ npm run --prefix frontend-react build
 - Pricing/registry consistency:
   - `python -m pytest tests/test_registry_pricing_alignment.py -q`
 - CI changed-file quality gates:
-  - Ruff/MyPy run on changed Python files; Black is advisory until a formatting baseline lands.
+  - Ruff/MyPy run on added or modified Python files; deleted paths are excluded before tooling runs. Black is advisory until a formatting baseline lands.
   - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
 - Frontend local checks (when UI touched):
   - `npm run --prefix frontend-react build` when React UI is touched

@@ -39,6 +39,14 @@ FRONTEND_DIR=frontend-react/dist
 # FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
 # Optional browser-visible dev-login token (local only)
 # FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=
+# Reverse-proxy handling (enabled by default for CloudFront/ALB deployments)
+# ENABLE_PROXY_HEADERS=true
+# TRUSTED_PROXY_IPS=*
+# Session cookie policy: leave the Secure override unset to auto-detect HTTPS; 0 max age uses a browser-session cookie
+# SESSION_COOKIE_SECURE=
+# SESSION_MAX_AGE_SECONDS=604800
+# Cognito JWKS/token endpoint certificate verification; keep true in production
+# COGNITO_SSL_VERIFY=true
 # Optional stream keep-alive interval; set 0 to disable heartbeat events
 # STREAM_HEARTBEAT_INTERVAL_SECONDS=15
 # Optional prompt optimization
@@ -204,6 +212,15 @@ Local-only session bootstrap helper:
 - disabled by default (`ENABLE_DEV_SESSION_LOGIN=false`)
 - blocked when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`
 - optional shared secret: `DEV_SESSION_LOGIN_TOKEN` via header `X-Dev-Login-Token`
+
+### Reverse proxy, session cookie, and Cognito TLS settings
+
+- `ENABLE_PROXY_HEADERS=true` is the default. It lets requests behind CloudFront or an ALB use forwarded connection metadata so HTTPS-dependent callback URLs, runtime config, and session cookies see the public request scheme. Set it to `false` when the service is directly internet-facing without a trusted upstream proxy.
+- `TRUSTED_PROXY_IPS=*` is the default trusted-host list for the application proxy-header middleware. Replace `*` with a comma-separated set of trusted proxy IPs or CIDRs when the API can also be reached directly.
+- Set `COGNITO_REDIRECT_URI` explicitly in production to the exact HTTPS callback registered in the Cognito app client. Automatic derivation uses the incoming request, so it depends on correct proxy-header forwarding.
+- `SESSION_COOKIE_SECURE` overrides the session cookie's `Secure` attribute when set. When it is unset, the API enables `Secure` when the effective request scheme is HTTPS; leave the example line commented to use auto-detection.
+- `SESSION_MAX_AGE_SECONDS=604800` keeps the signed session cookie for seven days by default. Set it to `0` to create a browser-session cookie instead.
+- `COGNITO_SSL_VERIFY=true` verifies certificates for Cognito JWKS and token requests. Setting it to `false` disables TLS verification and should be limited to controlled local troubleshooting or a trusted TLS-inspection environment.
 
 ## Frontend Runtime Config
 

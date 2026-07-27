@@ -54,6 +54,18 @@ def test_frontend_directory_override_still_takes_precedence(monkeypatch):
     assert _resolve_frontend_dir() == "custom/react-build"
 
 
+def test_ci_python_quality_filter_excludes_deleted_files():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    python_filter = workflow.split("            python:", maxsplit=1)[1].split(
+        "            backend:", maxsplit=1
+    )[0]
+
+    assert "added|modified: '**/*.py'" in python_filter
+    assert "\n              - '**/*.py'" not in python_filter
+
+
 def test_runtime_health_reports_interpreter_and_claude_readiness(monkeypatch):
     _set_min_api_env(monkeypatch)
     monkeypatch.setenv("SERVE_FRONTEND", "false")

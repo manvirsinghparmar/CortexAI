@@ -270,7 +270,7 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginRequest, response: Response) -> dict:
+async def login(body: LoginRequest, request: Request, response: Response) -> dict:
     """
     Verify Cognito ID token, upsert user in DB, and set a signed session cookie.
     """

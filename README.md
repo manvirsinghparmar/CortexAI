@@ -169,7 +169,7 @@ FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=            # optional browser-visible 
 # AWS / reverse-proxy settings (important for CloudFront/ALB deployments)
 ENABLE_PROXY_HEADERS=true          # trust X-Forwarded-Proto/Host from upstream proxy (default: true)
 TRUSTED_PROXY_IPS=*                # comma-separated trusted upstream IPs, or '*' for all (default: *)
-SESSION_COOKIE_SECURE=             # explicit Secure flag for session cookie; auto-detected from HTTPS when unset
+# SESSION_COOKIE_SECURE=           # optional explicit Secure flag; leave unset to auto-detect HTTPS
 SESSION_MAX_AGE_SECONDS=604800     # session cookie lifetime in seconds (default: 7 days; 0 = session cookie)
 COGNITO_SSL_VERIFY=true            # set false to skip TLS verification for Cognito endpoints (not recommended)
 ```

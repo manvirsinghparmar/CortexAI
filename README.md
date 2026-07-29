@@ -914,24 +914,31 @@ Production deployment notes:
 
 The UI page can appear to refresh automatically in production for these reasons:
 
-1. **Cognito auth redirect loop (most common)**  
-   Behind CloudFront or an ALB, HTTPS is terminated at the load balancer. FastAPI sees plain HTTP, so `request.base_url` returns `http://…` unless proxy header forwarding is enabled. The computed Cognito redirect URI (`http://…/auth`) then mismatches the registered `https://…/auth` callback, causing every token exchange to fail and redirecting the browser back to the Cognito login page repeatedly. Fix:  
-   - Set `COGNITO_REDIRECT_URI=https://app.example.com/auth` explicitly, **and**  
+1. **Cognito auth redirect loop (most common)**
+
+   Behind CloudFront or an ALB, HTTPS is terminated at the load balancer. FastAPI sees plain HTTP, so `request.base_url` returns `http://…` unless proxy header forwarding is enabled. The computed Cognito redirect URI (`http://…/auth`) then mismatches the registered `https://…/auth` callback, causing every token exchange to fail and redirecting the browser back to the Cognito login page repeatedly. Fix:
+
+   - Set `COGNITO_REDIRECT_URI=https://app.example.com/auth` explicitly, **and**
    - Ensure `ENABLE_PROXY_HEADERS=true` (default) so `request.base_url` / `runtime-config.js` reflect HTTPS.
 
-2. **Session cookie not persisting across browser sessions**  
+2. **Session cookie not persisting across browser sessions**
+
    Without an explicit `max_age`, the `cortex_session` cookie is a session cookie that is deleted when the browser closes. On mobile, background/resume cycles and low-memory tab discards trigger this frequently. The default is now 7 days (`SESSION_MAX_AGE_SECONDS=604800`). Increase or decrease to match your security policy.
 
-3. **Session cookie `Secure` flag**  
+3. **Session cookie `Secure` flag**
+
    In HTTPS deployments, the session cookie must carry the `Secure` attribute so browsers send it on encrypted requests. The flag is now auto-detected from `request.url.scheme` (which is `https` when `ENABLE_PROXY_HEADERS=true`). Override with `SESSION_COOKIE_SECURE=true` if needed.
 
-4. **ALB idle timeout vs SSE streaming**  
+4. **ALB idle timeout vs SSE streaming**
+
    AWS ALB defaults to a 60-second idle timeout. The backend sends heartbeat events every `STREAM_HEARTBEAT_INTERVAL_SECONDS` (default 15 s) to keep streaming connections alive. If the ALB is configured with a shorter timeout, or WAF rules terminate long-lived connections, users will see streams fail. Increase the ALB idle timeout to at least 120 seconds for streaming routes.
 
-5. **Safari background-tab eviction (confirmed root cause in July 2026)**  
+5. **Safari background-tab eviction (confirmed root cause in July 2026)**
+
    Any `beforeunload` event listener makes the page ineligible for the browser's back/forward cache (bfcache). Safari must then keep the full JS context in memory for backgrounded tabs. After ~8–10 minutes it evicts the tab and does a full reload when the user returns. The `beforeunload` listener has been removed from `bootDiagnostics.ts`; `pagehide` is used instead (covers the same events and is bfcache-compatible). After deploying this change, look for `frontend.diagnostic` events with `details.navigationType="pagehide"` and `details.persisted=true`, which confirms the page is now entering bfcache successfully.
 
-6. **`frontend.diagnostic` log events**  
+6. **`frontend.diagnostic` log events**
+
    The React client records every page boot, unload, and visibility change to `/v1/client-diagnostics`. Search for `frontend.diagnostic` events in CloudWatch / `app.log` around the reported timestamp and inspect `details.navigationType` and `details.wasDiscarded` to identify the exact refresh cause (user reload, Chrome tab discard, bfcache restore, or Cognito redirect). See `docs/runbooks/aws-ec2-logging.md` § "Browser Refresh / Blink Workflow".
 
 These artifacts are intentionally separate so frontend-only or API-only changes can be built independently.

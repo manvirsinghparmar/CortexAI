@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   loadHistory: vi.fn(),
   removeThread: vi.fn(),
   submit: vi.fn(),
+  regenerate: vi.fn(),
   cancel: vi.fn(),
   useModels: vi.fn(),
   subscriptionEntitlements: {
@@ -67,7 +68,7 @@ vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     submit: mocks.submit,
     cancel: mocks.cancel,
-    regenerate: vi.fn(),
+    regenerate: mocks.regenerate,
   }),
 }));
 
@@ -156,6 +157,31 @@ describe("ChatPage authentication gate", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Account" })[0]);
     expect(screen.getByRole("menuitem", { name: "Plus plan, Manage plan" })).toBeInTheDocument();
+  });
+
+  it("retries the latest failed turn through regeneration", async () => {
+    Object.assign(mocks.authState, {
+      whoAmI: whoAmI(),
+      cognitoConfig: { enabled: false },
+      loading: false,
+      loggedIn: true,
+    });
+    const turnId = useChatStore.getState().beginTurn({
+      mode: "single",
+      prompt: "Retry this prompt",
+      submittedPrompt: "Retry this prompt",
+      attachments: [],
+      responses: [],
+      status: "error",
+    });
+    useChatStore.getState().setError("Temporary upstream outage");
+    const user = userEvent.setup();
+
+    renderChatPage();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(mocks.regenerate).toHaveBeenCalledWith(turnId);
+    expect(mocks.submit).not.toHaveBeenCalled();
   });
 });
 

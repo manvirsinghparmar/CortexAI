@@ -50,14 +50,22 @@ export function logBootDiagnostics(): void {
       });
     });
 
+    // NOTE: We deliberately do NOT register a `beforeunload` listener here.
+    //
+    // Any `beforeunload` handler — even one that does nothing — marks the page
+    // as ineligible for the browser's back/forward cache (bfcache).  Without
+    // bfcache, Safari (and Chrome on Android) must fully reload the page every
+    // time the user returns to a backgrounded tab, which is the root cause of
+    // the "automatic page refresh" observed in production: Safari evicts tabs
+    // that cannot be cached after ~8–10 minutes of background inactivity and
+    // re-fetches them from the network when the user switches back.
+    //
+    // `pagehide` fires in every case where `beforeunload` fires AND it also
+    // fires when the page successfully enters bfcache (persisted: true), so
+    // diagnostic coverage is fully preserved.
     window.addEventListener("pagehide", (event) => {
       recordUnloadMarker("pagehide", { persisted: event.persisted });
       recordClientDiagnostic("pagehide", { persisted: event.persisted }, { flush: true });
-    });
-
-    window.addEventListener("beforeunload", () => {
-      recordUnloadMarker("beforeunload", {});
-      recordClientDiagnostic("beforeunload", {}, { flush: true });
     });
 
     window.addEventListener("error", (event) => {

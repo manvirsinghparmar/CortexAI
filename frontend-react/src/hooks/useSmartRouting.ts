@@ -1,7 +1,4 @@
-/**
- * Port of frontend/smart-routing-state.js into a typed React hook.
- * Keeps smart-routing derivation logic in one place.
- */
+/** Keeps smart-routing derivation logic in one typed React module. */
 
 export function parseModelKey(key: string): { provider: string; model: string } {
   const idx = key.indexOf(":");

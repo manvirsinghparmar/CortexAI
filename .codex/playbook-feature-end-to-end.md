@@ -30,7 +30,7 @@
    - add migration in `db/migrations/`
    - reflect schema in `db/tables.py` and `db/repository.py`
 5. Update UI/e2e surfaces (if user-visible):
-   - `frontend/` updates for legacy UI or `frontend-react/` updates for React UI
+   - `frontend-react/` updates for React UI
    - `e2e/` assertions for the new flow
 6. Update documentation and examples:
    - `README.md`

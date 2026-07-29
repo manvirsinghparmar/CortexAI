@@ -67,8 +67,10 @@ export function ResponseCard({
   const badge = getModelBadge(response.provider, response.model);
   const modelPresentation = getModelPresentation(response.provider, response.model);
   const accent = resolveProviderAccent(response.provider, slotIndex);
-  const responseText = hasError ? errorMessage(response) : response.text;
   const loadingStatus = resolveLoadingStatus(response, !!isStreaming, hasError);
+  const responseText = hasError
+    ? errorMessage(response)
+    : response.text || (loadingStatus ? "" : "(empty response)");
   const elapsedMs = useElapsedMs(response.started_at, !!loadingStatus);
   const totalTokens = validTokenCount(response.token_usage?.total_tokens);
   const durationMs = resolveDisplayDurationMs(response);
@@ -82,7 +84,8 @@ export function ResponseCard({
   const showRegenerate = !!onRegenerate && !loadingStatus;
   const showSuggestedFollowUps =
     suggestedFollowUps.length > 0 && !!onSuggestedFollowUp && !hasError && !showLoading;
-  const statsId = `response-stats-${response.request_id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const responseId = String(response.request_id || `response-${slotIndex}`);
+  const statsId = `response-stats-${responseId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
   useEffect(() => {
     return () => {
@@ -114,6 +117,9 @@ export function ResponseCard({
       } ${
         softError ? styles.softErrorCard : ""
       }`}
+      data-response-index={slotIndex}
+      data-response-error={hasError ? "true" : "false"}
+      data-response-streaming={isStreaming ? "true" : "false"}
     >
       <header className={styles.header}>
         <div className={styles.titleRow}>
@@ -127,7 +133,7 @@ export function ResponseCard({
                 className={styles.modelLogo}
               />
             </span>
-            <div className={styles.modelIdentity}>
+            <div className={styles.modelIdentity} data-response-provider-summary>
               <h2>{modelPresentation.label}</h2>
               <span>{response.model || response.provider}</span>
             </div>

@@ -53,7 +53,7 @@ test("mobile account menu exposes the Usage entry point", async ({ responsiveApp
     const { page } = responsiveApp;
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Guest account" }).click();
+    await page.getByRole("button", { name: /^(Account|Guest account)$/ }).click();
     await expect(page.getByRole("menuitem", { name: "Usage & insights" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Usage & insights" }).click();
 

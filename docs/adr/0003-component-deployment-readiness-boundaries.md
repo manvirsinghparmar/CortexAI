@@ -1,6 +1,6 @@
 # ADR 0003: Component Deployment Readiness Boundaries
 
-- Status: Accepted
+- Status: Superseded by ADR 0004
 - Date: 2026-03-01
 - Last reviewed: 2026-05-09 (decision extended for React/Vite frontend)
 
@@ -23,11 +23,10 @@ We define deployment-readiness boundaries as:
 1. API runtime must run without frontend mount.
    - `SERVE_FRONTEND=false` disables static mount in `server/app.py`.
    - `FRONTEND_DIR` can override static source path when mount is enabled.
-   - `REACT_FRONTEND=true` is a convenience switch that serves `frontend-react/dist` when `FRONTEND_DIR` is unset.
-   - `FRONTEND_DIR` remains the production-preferred selector because it pins the exact built asset directory.
+   - The current React-only default and selector behavior are defined by ADR 0004.
 
 2. Frontend must run as a standalone static component.
-   - `scripts/serve_frontend.py` provides independent local/static serving.
+   - Vite preview supports local static-build checks, while nginx/CDN hosting supports deployment.
    - Frontend runtime config can override API base and local dev bootstrap flags using `window.CORTEX_RUNTIME_CONFIG` or `localStorage`.
    - The React frontend is built with `npm ci --prefix frontend-react` and `npm run --prefix frontend-react build`.
    - React hot-reload development uses `npm run --prefix frontend-react dev`, with Vite proxying `/v1`, `/auth`, and `/runtime-config.js` to the local API.
@@ -39,7 +38,7 @@ We define deployment-readiness boundaries as:
    - `Dockerfile.api` does not include React assets by default; deployments that want API-served React must copy `frontend-react/dist` into the API runtime image and set `FRONTEND_DIR`.
 
 4. CI must detect changed paths and run component-specific checks/builds.
-   - Frontend checks/builds trigger only for frontend/shared changes.
+   - React checks/builds trigger only for React/shared changes.
    - Backend checks/builds trigger only for backend/db/shared changes.
    - Deploy jobs remain intentionally out of scope for now.
 

@@ -128,7 +128,7 @@ export const test = base.extend({
                 pool: dbPool,
                 ownerId: runState.ownerId,
                 caseId,
-                sessionId: liveApp.backendSessionId || seededSessionId,
+                sessionId: liveApp.backendSessionId || seededSessionId || null,
             });
         }
     },

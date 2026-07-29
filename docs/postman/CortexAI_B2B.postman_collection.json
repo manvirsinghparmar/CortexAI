@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -155,6 +155,7 @@
     },
     {
       "name": "Identity",
+      "description": "Session-cookie endpoints use SESSION_COOKIE_SECURE when explicitly configured, otherwise the effective HTTPS request scheme controls the Secure attribute. Cookies persist for SESSION_MAX_AGE_SECONDS (default 604800; 0 creates a browser-session cookie). Behind CloudFront or an ALB, keep ENABLE_PROXY_HEADERS=true, configure TRUSTED_PROXY_IPS for trusted upstreams, and use COGNITO_SSL_VERIFY=true outside controlled local troubleshooting.",
       "item": [
         {
           "name": "GET /v1/whoami",
@@ -241,7 +242,7 @@
               }
             ],
             "url": "{{base_url}}/v1/auth/dev-login",
-            "description": "Local-development helper. Enabled only when ENABLE_DEV_SESSION_LOGIN=true and blocked in production-like envs."
+            "description": "Local-development helper. Enabled only when ENABLE_DEV_SESSION_LOGIN=true and blocked in production-like envs. On success, the cortex_session cookie follows SESSION_COOKIE_SECURE and SESSION_MAX_AGE_SECONDS."
           },
           "event": [
             {

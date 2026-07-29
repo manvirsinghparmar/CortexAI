@@ -65,13 +65,10 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ## Frontend and Browser Tests
 
-- Static frontend shell and behavior: `frontend/index.html`, `frontend/app.js`, `frontend/style.css`
-- Response rendering enhancement assets: `frontend/llm-response.js`, `frontend/llm-response.css`
-- Static-only hosting config example: `frontend/runtime-config.example.js`
-- Legacy static frontend: `frontend/` (`runtime-config.example.js` for static-only hosting)
 - React/Vite frontend: `frontend-react/`
   - Runtime deps: `frontend-react/package.json` + `frontend-react/package-lock.json`
   - App entry: `frontend-react/src/main.tsx`, `frontend-react/src/App.tsx`
+  - Static-hosting runtime config template: `frontend-react/runtime-config.example.js`
   - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
@@ -94,7 +91,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Production build output: `frontend-react/dist` after `npm run --prefix frontend-react build`
 - Frontend selection in FastAPI: `server/app.py`
   - `FRONTEND_DIR` explicitly selects the static directory to mount.
-  - `REACT_FRONTEND=true` serves `frontend-react/dist` when `FRONTEND_DIR` is unset.
+  - `frontend-react/dist` is the default when `FRONTEND_DIR` is unset.
 - Frontend container boundary: `Dockerfile.frontend` + `nginx.conf`
 - Playwright E2E suite: `e2e/specs/`
   - Live full-stack browser scenarios: `e2e/specs/`
@@ -106,7 +103,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 ## CI and Workflows
 
 - Main CI: `.github/workflows/ci.yml`
-  - Detects frontend/backend/shared path changes.
+  - Detects React frontend/backend/shared path changes.
   - Runs blocking Ruff/MyPy checks against changed Python files with pinned dev tools.
   - Runs Black as an advisory changed-file format check until a repo-wide baseline is applied.
   - Runs Gitleaks as a pinned CLI directory scan of the checked-out tree.
@@ -216,4 +213,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-07-18
+Last updated: 2026-07-25

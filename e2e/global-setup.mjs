@@ -15,12 +15,42 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { chromium } from "@playwright/test";
 
-import { getWhoAmI, getProviderCatalog, waitForJson } from "./helpers/api.mjs";
+import { getWhoAmI, getSessionHeaders, waitForJson } from "./helpers/api.mjs";
 import { getE2EConfig } from "./helpers/config.mjs";
 import { createDbPool, verifyDbConnection } from "./helpers/db.mjs";
 import { createRunId } from "./helpers/ids.mjs";
 import { ensureRuntimeDir, writeCaseRegistry, writeRunState } from "./helpers/runtime-state.mjs";
 import { openApp } from "./helpers/ui.mjs";
+
+/** Build the React production bundle that FastAPI serves during live E2E. */
+async function buildReactFrontend(config) {
+    const npmCli = String(process.env.npm_execpath || "").trim();
+    const command = npmCli ? process.execPath : (os.platform() === "win32" ? "npm.cmd" : "npm");
+    const args = npmCli
+        ? [npmCli, "run", "--prefix", "frontend-react", "build"]
+        : ["run", "--prefix", "frontend-react", "build"];
+    await new Promise((resolve, reject) => {
+        const build = spawn(
+            command,
+            args,
+            {
+                cwd: config.repoRoot,
+                env: process.env,
+                stdio: "inherit",
+                shell: !npmCli && os.platform() === "win32",
+                windowsHide: true,
+            },
+        );
+        build.once("error", reject);
+        build.once("exit", code => {
+            if (code === 0) {
+                resolve();
+                return;
+            }
+            reject(new Error(`React frontend build failed with exit code ${code}.`));
+        });
+    });
+}
 
 /** Wait for the E2E server bootstrap to expose a healthy HTTP endpoint. */
 async function waitForHealth(config) {
@@ -87,15 +117,6 @@ async function spawnServer(config, runId) {
     );
 }
 
-/** Normalize provider labels once so specs can compare UI text to persisted provider ids. */
-function providerLabelMap(payload) {
-    const rows = Array.isArray(payload?.providers) ? payload.providers : [];
-    return Object.fromEntries(rows.map(row => [
-        String(row.provider || "").trim().toLowerCase(),
-        String(row?.ui?.display_name || row.label || row.provider || "").trim(),
-    ]));
-}
-
 export default async function globalSetup() {
     const config = getE2EConfig();
     const runId = createRunId();
@@ -110,34 +131,31 @@ export default async function globalSetup() {
         baseUrl: config.baseUrl,
         apiBaseUrl: config.apiBaseUrl,
         ownerId: null,
-        providerLabels: {},
         serverPid: null,
         startedAt: new Date().toISOString(),
     });
 
     try {
+        await buildReactFrontend(config);
         server = await spawnServer(config, runId);
         await writeRunState(config, {
             runId,
             baseUrl: config.baseUrl,
             apiBaseUrl: config.apiBaseUrl,
             ownerId: null,
-            providerLabels: {},
             serverPid: server.pid,
             startedAt: new Date().toISOString(),
         });
 
         await waitForHealth(config);
+        const sessionHeaders = await getSessionHeaders(config);
         await waitForJson(`${config.apiBaseUrl}/v1/providers`, {
-            headers: { "X-API-Key": config.apiKey },
+            headers: sessionHeaders,
             timeoutMs: config.timeouts.discoveryMs,
             intervalMs: 500,
         });
 
-        const [whoami, providers] = await Promise.all([
-            getWhoAmI(config),
-            getProviderCatalog(config),
-        ]);
+        const whoami = await getWhoAmI(config);
 
         if (!whoami?.user_id) {
             throw new Error("E2E bootstrap reached /v1/whoami, but user_id was null. DB mode is not active for the E2E server.");
@@ -169,7 +187,6 @@ export default async function globalSetup() {
             baseUrl: config.baseUrl,
             apiBaseUrl: config.apiBaseUrl,
             ownerId: whoami.user_id || null,
-            providerLabels: providerLabelMap(providers),
             serverPid: server.pid,
             startedAt: new Date().toISOString(),
         });

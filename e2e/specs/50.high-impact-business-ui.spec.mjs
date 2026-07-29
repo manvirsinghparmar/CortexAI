@@ -120,8 +120,8 @@ test("single chat renders explicit empty-response placeholder for empty successf
 
     const text = await waitForNonEmptyCardText(page, nextIndex);
     expect(text).toBe("(empty response)");
-    await expect(page.locator("#errorBanner")).toBeHidden();
-    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.locator("#submitBtn")).toHaveAttribute("aria-label", "Send message");
 });
 
 /**
@@ -150,7 +150,7 @@ test("single chat 429 failure shows error banner with retry action", async ({ li
     await expect(page.locator("#errorTitle")).not.toHaveText("");
     await expect(page.locator("#errorMsg")).not.toHaveText("");
     await expect(page.locator("#errorRetry")).toBeVisible();
-    await expect(page.locator("#submitBtn")).not.toHaveClass(/is-stop/);
+    await expect(page.locator("#submitBtn")).toHaveAttribute("aria-label", "Send message");
 });
 
 /**
@@ -175,7 +175,7 @@ test("single chat 503 failure maps to service-unavailable UI copy", async ({ liv
     await submitPromptDirect(page, liveApp.withPromptMarker("503 service copy probe."));
 
     await expect(page.locator("#errorBanner")).toBeVisible();
-    await expect(page.locator("#errorTitle")).toContainText("Service temporarily unavailable");
+    await expect(page.locator("#errorText")).toContainText(/service unavailable/i);
     await expect(page.locator("#errorRetry")).toBeVisible();
 });
 
@@ -201,7 +201,7 @@ test("single chat 504 failure maps to timeout UI copy", async ({ liveApp }) => {
     await submitPromptDirect(page, liveApp.withPromptMarker("504 timeout copy probe."));
 
     await expect(page.locator("#errorBanner")).toBeVisible();
-    await expect(page.locator("#errorTitle")).toContainText("The request took too long to respond");
+    await expect(page.locator("#errorText")).toContainText(/gateway timeout/i);
     await expect(page.locator("#errorRetry")).toBeVisible();
 });
 
@@ -320,6 +320,7 @@ test("compare stream with one failed model still renders mixed-result cards and 
                         total_tokens: 260,
                         total_cost: 0.0001,
                         success_count: 1,
+                        error_count: 1,
                     },
                 },
             ]),
@@ -328,10 +329,12 @@ test("compare stream with one failed model still renders mixed-result cards and 
 
     await submitPromptDirect(page, liveApp.withPromptMarker("Compare mixed failure/success resilience."));
 
-    await expect(page.locator(`#chat-msg-${firstIndex}`)).toHaveClass(/is-error/);
-    await expect(page.locator(`#response-text-${firstIndex}`)).toContainText("Error: temporary upstream failure");
+    const failedCard = page.locator(`#response-text-${firstIndex}`).locator("xpath=..");
+    await expect(failedCard).toHaveAttribute("data-response-error", "true");
+    await expect(page.locator(`#response-text-${firstIndex}`)).toContainText("temporary upstream failure");
     await expect(page.locator(`#response-text-${secondIndex}`)).toContainText("Recovery answer paragraph one.");
-    await expect(page.locator(".compare-summary-card")).toContainText("1/2 successful");
+    await expect(page.locator(".compare-summary-card")).toContainText("1 succeeded");
+    await expect(page.locator(".compare-summary-card")).toContainText("1 errors");
 });
 
 /**
@@ -424,9 +427,7 @@ test("single chat renders structured markdown (headings list table) for exec-sty
     const responseRoot = page.locator(`#response-text-${nextIndex}`);
     await expect(responseRoot.locator("h2")).toContainText("Executive Summary");
     await expect(responseRoot.locator("ol li")).toHaveCount(3);
-    await expect(responseRoot.locator("ol")).toHaveCount(3);
-    await expect(responseRoot.locator("ol").nth(1)).toHaveAttribute("start", "2");
-    await expect(responseRoot.locator("ol").nth(2)).toHaveAttribute("start", "3");
+    await expect(responseRoot.locator("ol")).toHaveCount(1);
     await expect(responseRoot.locator("table")).toBeVisible();
 });
 
@@ -472,9 +473,10 @@ test("error chat cards suppress web-source chips even when source metadata is pr
     const nextIndex = await page.locator("[id^='response-text-']").count();
     await submitPromptDirect(page, liveApp.withPromptMarker("Error card should hide sources."));
 
-    await expect(page.locator(`#chat-msg-${nextIndex}`)).toHaveClass(/is-error/);
-    await expect(page.locator(`#response-text-${nextIndex}`)).toContainText("Error: provider unavailable");
-    await expect(page.locator(`#response-sources-${nextIndex}`)).toBeHidden();
+    const errorCard = page.locator(`#response-text-${nextIndex}`).locator("xpath=..");
+    await expect(errorCard).toHaveAttribute("data-response-error", "true");
+    await expect(page.locator(`#response-text-${nextIndex}`)).toContainText("provider unavailable");
+    await expect(errorCard.getByRole("button", { name: /^Sources:/ })).toHaveCount(0);
 });
 
 /**
@@ -511,7 +513,9 @@ test("reopening a compare history thread keeps follow-up requests on the origina
     );
     expect(secondaryRequest).toBeTruthy();
 
-    const compareHistoryEntry = page.locator(`.history-entry[data-session-id="${compareSessionId}"]`).first();
+    const compareHistoryEntry = page.locator(
+        `button[data-history-thread][data-session-id="${compareSessionId}"]`,
+    ).first();
     await expect(compareHistoryEntry).toBeVisible({ timeout: config.timeouts.historyRestoreMs });
     await compareHistoryEntry.click();
 

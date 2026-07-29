@@ -8,15 +8,23 @@ interface ErrorBannerProps {
 
 export function ErrorBanner({ message, onRetry, onDismiss }: ErrorBannerProps) {
   return (
-    <div className={styles.banner} role="alert" aria-live="assertive" aria-atomic="true">
+    <div
+      id="errorBanner"
+      className={styles.banner}
+      role="alert"
+      aria-live="assertive"
+      aria-atomic="true"
+    >
       <span className={styles.iconWrap} aria-hidden="true">
         <span className={styles.icon}>!</span>
       </span>
       <div className={styles.content}>
-        <p className={styles.title}>Something went wrong</p>
-        <p className={styles.message}>{message}</p>
+        <p id="errorTitle" className={styles.title}>Something went wrong</p>
+        <p id="errorMsg" className={styles.message}>
+          <span id="errorText">{message}</span>
+        </p>
         {onRetry && (
-          <button className={styles.retryBtn} type="button" onClick={onRetry}>
+          <button id="errorRetry" className={styles.retryBtn} type="button" onClick={onRetry}>
             Retry
           </button>
         )}

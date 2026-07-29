@@ -35,6 +35,16 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _trusted_proxy_ips() -> str:
+    """Return comma-separated trusted proxy IP list from env, defaulting to '*' (all).
+
+    In production behind AWS CloudFront or ALB, set TRUSTED_PROXY_IPS to the
+    ALB/CloudFront CIDR ranges for tighter security. Accepts '*' to trust all
+    upstream IPs (safe when the service is not directly internet-exposed).
+    """
+    return str(os.getenv("TRUSTED_PROXY_IPS", "*") or "*").strip() or "*"
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -61,11 +71,7 @@ def _resolve_frontend_dir() -> str:
     if configured:
         return configured
     root = os.path.dirname(os.path.dirname(__file__))
-    # When REACT_FRONTEND=true, serve the pre-built React/Vite dist instead of
-    # the legacy vanilla frontend.  Set FRONTEND_DIR to override either path.
-    if _env_bool("REACT_FRONTEND", default=False):
-        return os.path.join(root, "frontend-react", "dist")
-    return os.path.join(root, "frontend")
+    return os.path.join(root, "frontend-react", "dist")
 
 
 def _parse_positive_int_env(name: str, default: int) -> int:
@@ -231,6 +237,30 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan
     )
+
+    # Proxy headers middleware must be outermost so that downstream middleware
+    # and route handlers see the correct scheme/host when behind AWS CloudFront
+    # or an ALB.  Without this, request.base_url resolves to http:// even on
+    # HTTPS deployments, which breaks Cognito redirect_uri construction and
+    # causes a login redirect loop that looks like an automatic page refresh.
+    #
+    # Control trusted upstream IPs via TRUSTED_PROXY_IPS env var (default "*").
+    # For direct-internet deployments (no proxy), set ENABLE_PROXY_HEADERS=false.
+    if _env_bool("ENABLE_PROXY_HEADERS", default=True):
+        try:
+            from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+            trusted = _trusted_proxy_ips()
+            app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
+            logger.info(
+                "ProxyHeadersMiddleware enabled",
+                extra={"extra_fields": {"trusted_proxy_ips": trusted}},
+            )
+        except ImportError:
+            logger.warning(
+                "uvicorn.middleware.proxy_headers not available; "
+                "X-Forwarded-Proto/Host headers will not be trusted. "
+                "Cognito redirect_uri may be wrong in HTTPS deployments."
+            )
 
     app.add_middleware(RequestIDMiddleware)
 

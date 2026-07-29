@@ -32,14 +32,21 @@ Notes:
 4. Optional deployment boundary controls:
 ```ini
 SERVE_FRONTEND=false
-FRONTEND_DIR=frontend
-REACT_FRONTEND=false
+FRONTEND_DIR=frontend-react/dist
 # Optional frontend runtime-config override for clients that honor apiBase
 # FRONTEND_RUNTIME_API_BASE=https://kudlo.triobrain.com
 # Optional explicit browser flag override (otherwise inherits ENABLE_DEV_SESSION_LOGIN)
 # FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN=false
 # Optional browser-visible dev-login token (local only)
 # FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN=
+# Reverse-proxy handling (enabled by default for CloudFront/ALB deployments)
+# ENABLE_PROXY_HEADERS=true
+# TRUSTED_PROXY_IPS=*
+# Session cookie policy: leave the Secure override unset to auto-detect HTTPS; 0 max age uses a browser-session cookie
+# SESSION_COOKIE_SECURE=
+# SESSION_MAX_AGE_SECONDS=604800
+# Cognito JWKS/token endpoint certificate verification; keep true in production
+# COGNITO_SSL_VERIFY=true
 # Optional stream keep-alive interval; set 0 to disable heartbeat events
 # STREAM_HEARTBEAT_INTERVAL_SECONDS=15
 # Optional prompt optimization
@@ -85,7 +92,7 @@ $env:FRONTEND_DIR=(Resolve-Path .\frontend-react\dist).Path
 python run_server.py --reload
 ```
 
-`FRONTEND_DIR` is explicit and takes precedence. If `FRONTEND_DIR` is unset, `REACT_FRONTEND=true` makes `server/app.py` serve `frontend-react/dist` instead of the legacy `frontend/` directory.
+If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set the variable explicitly when compiled assets live elsewhere.
 
 6. Open docs:
 - Swagger UI: `http://127.0.0.1:8000/docs`
@@ -282,6 +289,15 @@ Local-only session bootstrap helper:
 - blocked when `APP_ENV`, `ENVIRONMENT`, or `ENV` is `prod`/`production`
 - optional shared secret: `DEV_SESSION_LOGIN_TOKEN` via header `X-Dev-Login-Token`
 
+### Reverse proxy, session cookie, and Cognito TLS settings
+
+- `ENABLE_PROXY_HEADERS=true` is the default. It lets requests behind CloudFront or an ALB use forwarded connection metadata so HTTPS-dependent callback URLs, runtime config, and session cookies see the public request scheme. Set it to `false` when the service is directly internet-facing without a trusted upstream proxy.
+- `TRUSTED_PROXY_IPS=*` is the default trusted-host list for the application proxy-header middleware. Replace `*` with a comma-separated set of trusted proxy IPs or CIDRs when the API can also be reached directly.
+- Set `COGNITO_REDIRECT_URI` explicitly in production to the exact HTTPS callback registered in the Cognito app client. Automatic derivation uses the incoming request, so it depends on correct proxy-header forwarding.
+- `SESSION_COOKIE_SECURE` overrides the session cookie's `Secure` attribute when set. When it is unset, the API enables `Secure` when the effective request scheme is HTTPS; leave the example line commented to use auto-detection.
+- `SESSION_MAX_AGE_SECONDS=604800` keeps the signed session cookie for seven days by default. Set it to `0` to create a browser-session cookie instead.
+- `COGNITO_SSL_VERIFY=true` verifies certificates for Cognito JWKS and token requests. Setting it to `false` disables TLS verification and should be limited to controlled local troubleshooting or a trusted TLS-inspection environment.
+
 ## Frontend Runtime Config
 
 When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
@@ -296,6 +312,7 @@ When `SERVE_FRONTEND=true`, backend serves `GET /runtime-config.js` dynamically:
 
 React/Vite frontend notes:
 - Build output lives in `frontend-react/dist` after `npm run --prefix frontend-react build`.
+- `frontend-react/runtime-config.example.js` is the static-hosting template for deployments where FastAPI or a reverse proxy does not provide `/runtime-config.js`.
 - Local hot-reload development can use `python run_app.py` for the full app, or `npm run --prefix frontend-react dev` plus a separate API process. Vite proxies `/v1`, `/auth`, and `/runtime-config.js` to `http://localhost:8000` by default.
 - The React router exposes `/usage` for Usage & insights and `/models` for the task-first model guide. Desktop reaches both from the sidebar; mobile reaches both from the account menu, and Models intentionally has no bottom-tab entry.
 - `run_app.py` sets `CORTEX_API_PROXY_TARGET` for Vite and `FRONTEND_RUNTIME_API_BASE` for runtime config so custom API host/port flags stay aligned with the frontend proxy.

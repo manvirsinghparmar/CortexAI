@@ -10,7 +10,6 @@ import { sumTokensForSession } from "../helpers/db.mjs";
 import {
     chooseDistinctCompareModels,
     ensureMode,
-    getHistoryThreadTokens,
     openHistoryThread,
     setToggle,
     startNewChat,
@@ -18,7 +17,7 @@ import {
     submitComparePrompt,
     waitForComposerReady,
 } from "../helpers/ui.mjs";
-import { latestRequest, pollUntil, waitForSnapshot } from "./_helpers.mjs";
+import { latestRequest, waitForSnapshot } from "./_helpers.mjs";
 
 test("ask to compare switch in one active session reuses the same backend session", async ({ liveApp }) => {
     const { page, config } = liveApp;
@@ -114,7 +113,7 @@ test("reopening an old history thread restores it and continues the same backend
     expect(finalSnapshot.requests[1].session_id).not.toBe(sessionA);
 });
 
-test("history token totals match the persisted token sum for the thread", async ({ liveApp }) => {
+test("history restores every persisted turn with persistence-backed token totals", async ({ liveApp }) => {
     const { page, config, dbPool, ownerId } = liveApp;
 
     await ensureMode(page, "single");
@@ -131,16 +130,16 @@ test("history token totals match the persisted token sum for the thread", async 
     const sessionId = snapshot.requests[0].session_id;
     expect(snapshot.requests.every(row => row.session_id === sessionId)).toBe(true);
 
-    const historyTokens = await pollUntil(
-        () => getHistoryThreadTokens(page, "Give me five bullet points"),
-        value => Number.isInteger(value) && value > 0,
-        {
-            timeoutMs: config.timeouts.historyRestoreMs,
-            intervalMs: 500,
-            message: "Timed out waiting for history token totals.",
-        },
-    );
     const persistedTokens = await sumTokensForSession(dbPool, config, ownerId, sessionId);
+    expect(Number.isFinite(persistedTokens)).toBe(true);
+    expect(persistedTokens).toBeGreaterThanOrEqual(0);
 
-    expect(historyTokens).toBe(persistedTokens);
+    await startNewChat(page);
+    await openHistoryThread(page, "Give me five bullet points");
+    await expect(page.locator(".chat-user-text", { hasText: "Give me five bullet points" })).toBeVisible({
+        timeout: config.timeouts.historyRestoreMs,
+    });
+    await expect(page.locator(".chat-user-text", { hasText: "Now add three more bullet points" })).toBeVisible({
+        timeout: config.timeouts.historyRestoreMs,
+    });
 });

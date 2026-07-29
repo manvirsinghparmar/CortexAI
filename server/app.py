@@ -10,7 +10,22 @@ from fastapi.staticfiles import StaticFiles
 from server.frontend_runtime_config import render_frontend_runtime_config_js
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import admin, auth as auth_routes, byok, catalog, chat, client_diagnostics, compare, files, health, history, optimize, reporting, whoami
+from server.routes import (
+    admin,
+    auth as auth_routes,
+    byok,
+    catalog,
+    chat,
+    client_diagnostics,
+    compare,
+    cortex_analysis,
+    files,
+    health,
+    history,
+    optimize,
+    reporting,
+    whoami,
+)
 
 from utils.logger import get_logger
 
@@ -241,6 +256,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(client_diagnostics.router)
     app.include_router(compare.router)
+    app.include_router(cortex_analysis.router)
     app.include_router(optimize.router)
     app.include_router(history.router)
     app.include_router(admin.router)

@@ -59,6 +59,8 @@ FRONTEND_DIR=frontend-react/dist
 # PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES=2
 # PROMPT_OPTIMIZER_MAX_OUTPUT_TOKENS=450
 # PROMPT_OPTIMIZER_TEMPERATURE=0.2
+# On-demand Compare synthesis model (requires OPENAI_API_KEY)
+# CORTEX_ANALYSIS_MODEL=gpt-5.4-mini
 # Optional Tavily search-option resolver
 # TAVILY_ENHANCED_SEARCH_ENABLED=true
 # TAVILY_CHUNKS_PER_SOURCE=3
@@ -435,6 +437,7 @@ Persistence:
 - One `llm_requests` + `llm_responses` row per compare target response.
 - Shared `llm_requests.request_group_id` per compare run.
 - API response `request_group_id` is canonical and matches orchestrator/log/persistence group ID.
+- A regenerated Compare response appends a versioned `llm_requests` row tied to its original response root. History returns only the latest revision for that logical response while retaining every row for audit and Cortex staleness checks.
 
 ### Response shape
 
@@ -492,6 +495,30 @@ Notes:
   keep-alive semantics as chat streaming.
 - Server logs emit `compare.stream.*` lifecycle events from inside the response body generator, including per-target provider-call progress and terminal stream reason.
 
+### Cortex Analysis API
+
+`POST /v1/compare/{request_group_id}/analysis`:
+
+- Requires session-scoped auth, database mode, an owned Compare group, and two or three latest successful response revisions.
+- Calls `CORTEX_ANALYSIS_MODEL` (default `gpt-5.4-mini`) only after the user requests analysis.
+- Sends shuffled `Response A/B/C` content without provider/model metadata and
+  requests strict JSON-schema Structured Outputs. Before persistence, anonymous
+  response references in every user-visible field are restored to their real
+  provider display names.
+- Persists a run only after the provider result passes local schema validation.
+- Returns the saved run with `201`; provider/validation failures return `502` and do not add history.
+- Verifies the Cortex persistence schema before provider work. Missing or
+  incomplete migration state returns
+  `503 cortex_analysis_schema_unavailable` without calling the model.
+
+`GET /v1/compare/analysis-runs?session_id=<uuid>` or `?request_group_id=<uuid>`:
+
+- Requires one of the two filters and returns every owned run newest-first.
+- Each run includes `analysisId`, `requestGroupId`, `sessionId`, `model`, the structured result sections, `sourceResponses`, `createdAt`, and `isStale`.
+- `sourceResponses` records the exact `requestId` and `responseVersion` inputs. A later Compare response regeneration changes the current source fingerprint, so earlier runs remain available with `isStale=true`.
+
+The browser hydrates these runs with session history after reload or History reopening. It shows the newest analysis by default and exposes all prior runs through Analysis history. Cortex Analysis currently has no subscription, tier, credit, trial, or upgrade enforcement.
+
 ## Schema Migrations
 
 Apply these when enabling updated persistence flows:
@@ -499,9 +526,15 @@ Apply these when enabling updated persistence flows:
 ```bash
 psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
 psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
+psql "$DATABASE_URL" -f db/migrations/20260727_add_cortex_analysis_runs.sql
 ```
 
-No new DB migration is required for shared Ask/Compare session continuity; that behavior is currently implemented in persistence/session resolution logic.
+The Cortex Analysis migration adds Compare response revision metadata and the
+append-only `cortex_analysis_runs` table. Run it with a role that owns
+`llm_requests`; the normal application role may have read/write access without
+permission to alter that table. Restart the API after applying the migration so
+SQLAlchemy reflects the new columns. Shared Ask/Compare session continuity
+itself remains implemented in persistence/session resolution logic.
 
 ## OpenAI Compatibility Note
 

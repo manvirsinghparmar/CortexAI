@@ -4,6 +4,8 @@ import type {
   ChatResponse,
   ChatTurn,
   CompareResponse,
+  CortexAnalysisRun,
+  CortexAnalysisStatus,
   FileUploadResponse,
   HistoryEntry,
   HistoryThread,
@@ -85,7 +87,16 @@ interface ChatStoreState {
   ) => void;
   setTurnStatus: (turnId: string, status: TurnStatus) => void;
   setTurnCompareSummary: (turnId: string, summary: CompareResponse) => void;
-  hydrateFromHistoryThread: (thread: HistoryThread) => void;
+  setTurnAnalysisStatus: (
+    turnId: string,
+    status: CortexAnalysisStatus,
+    error?: string,
+  ) => void;
+  addTurnAnalysisRun: (turnId: string, run: CortexAnalysisRun) => void;
+  hydrateFromHistoryThread: (
+    thread: HistoryThread,
+    analysisRuns?: CortexAnalysisRun[],
+  ) => void;
   startNewChat: () => void;
 
   responses: ChatResponse[];
@@ -277,8 +288,50 @@ export const useChatStore = create<ChatStoreState>((set) => ({
         responses: state.activeTurnId === turnId ? activeResponses : state.responses,
       };
     }),
-  hydrateFromHistoryThread: (thread) => {
-    const turns = buildTurnsFromHistoryEntries(thread.entries);
+  setTurnAnalysisStatus: (turnId, status, error) =>
+    set((state) => ({
+      turns: state.turns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              analysisStatus: status,
+              analysisError: status === "failed" ? error : undefined,
+            }
+          : turn,
+      ),
+    })),
+  addTurnAnalysisRun: (turnId, run) =>
+    set((state) => ({
+      turns: state.turns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              analysisRuns: [
+                run,
+                ...(turn.analysisRuns ?? []).filter(
+                  (item) => item.analysisId !== run.analysisId,
+                ),
+              ],
+              analysisStatus: "idle",
+              analysisError: undefined,
+            }
+          : turn,
+      ),
+    })),
+  hydrateFromHistoryThread: (thread, analysisRuns = []) => {
+    const analysisByGroup = new Map<string, CortexAnalysisRun[]>();
+    for (const run of analysisRuns) {
+      const existing = analysisByGroup.get(run.requestGroupId) ?? [];
+      existing.push(run);
+      analysisByGroup.set(run.requestGroupId, existing);
+    }
+    const turns = buildTurnsFromHistoryEntries(thread.entries).map((turn) => ({
+      ...turn,
+      analysisRuns: turn.requestGroupId
+        ? analysisByGroup.get(turn.requestGroupId) ?? []
+        : [],
+      analysisStatus: "idle" as const,
+    }));
     const latestTurn = turns[turns.length - 1] ?? null;
     const sessionId = normalizeSessionId(thread.sessionId);
     persistActiveSessionId(sessionId);

@@ -20,6 +20,7 @@ class ErrorDTO(BaseModel):
 
 class ChatResponseDTO(BaseModel):
     request_id: str
+    response_version: int = 1
     session_id: Optional[str] = None
     text: str
     provider: str
@@ -34,7 +35,13 @@ class ChatResponseDTO(BaseModel):
     timestamp: str
 
     @classmethod
-    def from_unified_response(cls, ur, *, session_id: Optional[str] = None):
+    def from_unified_response(
+        cls,
+        ur,
+        *,
+        session_id: Optional[str] = None,
+        response_version: int = 1,
+    ):
         """Convert UnifiedResponse to DTO."""
         metadata = ur.metadata if isinstance(getattr(ur, "metadata", None), dict) else {}
         source_candidates = metadata.get("web_source_items")
@@ -61,6 +68,7 @@ class ChatResponseDTO(BaseModel):
 
         return cls(
             request_id=ur.request_id,
+            response_version=max(1, int(response_version)),
             session_id=session_id,
             text=ur.text,
             provider=ur.provider,

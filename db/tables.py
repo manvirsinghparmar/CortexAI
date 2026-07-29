@@ -48,6 +48,7 @@ TABLE_NAMES = [
     "uploaded_files",
     "request_attachments",
     "file_deletion_queue",
+    "cortex_analysis_runs",
 ]
 
 

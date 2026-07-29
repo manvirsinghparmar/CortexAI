@@ -34,6 +34,9 @@ export interface ChatRequest {
   context?: UserContextRequest;
   routing?: ChatRoutingRequest;
   attachments?: AttachmentRequestItem[];
+  regeneration?: {
+    source_request_id: string;
+  };
   temperature?: number;
   max_tokens?: number;
 }
@@ -84,6 +87,7 @@ export interface WebSourceItem {
 
 export interface ChatResponse {
   request_id: string;
+  response_version?: number;
   session_id?: string;
   text: string;
   provider: string;
@@ -157,6 +161,7 @@ export interface ProvidersCatalogResponse {
 
 export interface HistoryEntry {
   id: number;
+  request_id?: string;
   session_id?: string;
   session_title?: string;
   request_group_id?: string;
@@ -165,6 +170,7 @@ export interface HistoryEntry {
   prompt: string;
   provider: string;
   model: string;
+  response_version?: number;
   response: string;
   latency_ms?: number;
   tokens?: number;
@@ -311,6 +317,41 @@ export interface OptimizeResponse {
 
 export type ChatMode = "single" | "compare";
 export type TurnStatus = "idle" | "optimizing" | "streaming" | "complete" | "error" | "cancelled";
+export type CortexAnalysisStatus = "idle" | "processing" | "failed";
+
+export interface CortexAnalysisSource {
+  requestId: string;
+  responseVersion: number;
+  responseName: string;
+}
+
+export interface CortexAnalysisUniqueInsight {
+  responseName: string;
+  text: string;
+}
+
+export interface CortexAnalysisRun {
+  analysisId: string;
+  requestGroupId: string;
+  sessionId: string;
+  model: string;
+  recommendedAnswer: string;
+  agreements: string[];
+  disagreements: string[];
+  uniqueInsights: CortexAnalysisUniqueInsight[];
+  confidence: {
+    level: "limited" | "moderate" | "high";
+    reason: string;
+  };
+  verify: string[];
+  highStakesDomain: "financial" | "medical" | "legal" | "safety" | null;
+  sourceFingerprint: string;
+  sourceResponses: CortexAnalysisSource[];
+  combinedResponseCount: number;
+  failedResponseCount: number;
+  createdAt: string;
+  isStale: boolean;
+}
 
 export type PromptOptimizationUiStatus = "pending" | "optimized" | "kept_original" | "cancelled";
 
@@ -342,6 +383,9 @@ export interface ChatTurn {
   requestGroupId?: string;
   compareSummary?: CompareResponse;
   optimization?: PromptOptimizationState;
+  analysisRuns?: CortexAnalysisRun[];
+  analysisStatus?: CortexAnalysisStatus;
+  analysisError?: string;
 }
 
 export interface AppState {

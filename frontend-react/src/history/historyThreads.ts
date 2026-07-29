@@ -145,7 +145,8 @@ function buildCompareSummary(
 function toChatResponse(entry: HistoryEntry): ChatResponse {
   const isError = /^\[error\]/i.test(entry.response);
   return {
-    request_id: String(entry.id),
+    request_id: entry.request_id || String(entry.id),
+    response_version: entry.response_version ?? 1,
     session_id: entry.session_id,
     text: isError ? "" : entry.response,
     provider: entry.provider,

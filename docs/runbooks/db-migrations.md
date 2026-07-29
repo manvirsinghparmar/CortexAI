@@ -6,8 +6,10 @@ This runbook covers how to author, validate, apply, and rollback SQL migrations 
 
 ## Prerequisites
 
-- PostgreSQL `DATABASE_URL` for the target environment.
-- DB credentials with schema change permissions.
+- PostgreSQL owner/admin connection for the target environment. Do not assume
+  the normal application `DATABASE_URL` role can run DDL.
+- DB credentials that own existing altered tables and have `CREATE` permission
+  on the target schema.
 - Backup/restore access for production.
 
 ## Naming Convention
@@ -41,6 +43,16 @@ python -m pytest tests/test_component_boundaries.py tests/test_fastapi_contract_
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/<migration_file>.sql
 ```
+
+If the runtime role is intentionally restricted, use a separate owner/admin
+connection for the migration:
+
+```powershell
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/<migration_file>.sql
+```
+
+After a migration that changes reflected tables, restart the API process so its
+SQLAlchemy table cache sees the new columns.
 
 3. Run read/write smoke checks after apply:
 
@@ -87,6 +99,18 @@ Always prepare a compensating script before production apply when dropping/chang
 -- spot-check recent API writes
 SELECT id, created_at
 FROM llm_requests
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- Cortex Analysis schema added by 20260727_add_cortex_analysis_runs.sql
+SELECT response_revision_root_id, response_revision
+FROM llm_requests
+WHERE response_revision_root_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 20;
+
+SELECT id, request_group_id, source_fingerprint, created_at
+FROM cortex_analysis_runs
 ORDER BY created_at DESC
 LIMIT 20;
 ```

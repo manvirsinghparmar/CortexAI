@@ -12,10 +12,12 @@ import { getModelPresentation } from "../../config/modelPresentation";
 import { extractSuggestedFollowUps } from "../../followups/suggestedFollowups";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useChat } from "../../hooks/useChat";
+import { useCortexAnalysis } from "../../hooks/useCortexAnalysis";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
 import { ProviderLogo } from "../shared/ProviderLogo";
+import { CortexAnalysisZone } from "./CortexAnalysisZone";
 import { ResponseCard } from "./ResponseCard";
 import styles from "./ResultsSection.module.css";
 
@@ -23,6 +25,7 @@ export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
   const mode = useChatStore((s) => s.mode);
   const { regenerate, submitFollowUp } = useChat();
+  const { run: runCortexAnalysis } = useCortexAnalysis();
   const sectionRef = useRef<HTMLElement | null>(null);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
@@ -100,6 +103,7 @@ export function ResultsSection() {
               responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onAnalyze={runCortexAnalysis}
               onSuggestedFollowUp={submitFollowUp}
             />
           ) : (
@@ -127,6 +131,7 @@ interface TurnProps {
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
   onSuggestedFollowUp: (suggestion: string) => Promise<void>;
+  onAnalyze?: (turnId: string) => Promise<void>;
   showSuggestedFollowUps?: boolean;
 }
 
@@ -177,6 +182,7 @@ const CompareTurn = memo(function CompareTurn({
   responseStartIndex,
   registerTurn,
   onRegenerate,
+  onAnalyze,
 }: TurnProps) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
   const [responseTabsStuck, setResponseTabsStuck] = useState(false);
@@ -263,6 +269,12 @@ const CompareTurn = memo(function CompareTurn({
 
       {responsesVisible && turn.responses.length > 0 && (
         <>
+          <div className={styles.responseHeadingRow}>
+            <span>Model responses · {turn.responses.length} models</span>
+            {(turn.analysisRuns?.length ?? 0) > 0 && (
+              <small>Cortex analysis is below — originals stay in place</small>
+            )}
+          </div>
           {hasResponseTabs && (
             <>
               <div
@@ -301,6 +313,21 @@ const CompareTurn = memo(function CompareTurn({
                       className={selected ? styles.mobileResponseTabActive : undefined}
                       style={tabStyle}
                       onClick={() => setActiveResponseIndex(index)}
+                      onKeyDown={(event) => {
+                        const nextIndex = nextResponseTabIndex(
+                          event.key,
+                          index,
+                          turn.responses.length,
+                        );
+                        if (nextIndex === null) return;
+                        event.preventDefault();
+                        setActiveResponseIndex(nextIndex);
+                        window.requestAnimationFrame(() => {
+                          document
+                            .getElementById(`${turn.id}-response-tab-${nextIndex}`)
+                            ?.focus();
+                        });
+                      }}
                     >
                       <span className={styles.mobileResponseTabIcon}>
                         <ProviderLogo
@@ -363,11 +390,27 @@ const CompareTurn = memo(function CompareTurn({
               );
             })}
           </div>
+          {onAnalyze && (
+            <CortexAnalysisZone turn={turn} onAnalyze={onAnalyze} />
+          )}
         </>
       )}
     </article>
   );
 });
+
+function nextResponseTabIndex(
+  key: string,
+  currentIndex: number,
+  tabCount: number,
+): number | null {
+  if (tabCount < 1) return null;
+  if (key === "ArrowRight") return (currentIndex + 1) % tabCount;
+  if (key === "ArrowLeft") return (currentIndex - 1 + tabCount) % tabCount;
+  if (key === "Home") return 0;
+  if (key === "End") return tabCount - 1;
+  return null;
+}
 
 function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
   const durations = responses.map((response) =>

@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), append-only Cortex Analysis runs, BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -499,7 +499,8 @@
                   "  pm.expect(body.responses).to.be.an('array');",
                   "  pm.expect(body.responses.length).to.be.above(1);",
                   "});",
-                  "pm.collectionVariables.set('request_group_id', body.request_group_id);"
+                  "pm.collectionVariables.set('request_group_id', body.request_group_id);",
+                  "pm.collectionVariables.set('session_id', body.session_id);"
                 ]
               }
             }
@@ -542,6 +543,106 @@
                   "var text = pm.response.text();",
                   "pm.test('stream includes done marker', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/compare/{request_group_id}/analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/{{request_group_id}}/analysis"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201 or auth/provider precondition error', function () {",
+                  "  pm.expect([201, 401, 403, 404, 409, 502, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 201) { return; }",
+                  "var body = pm.response.json();",
+                  "pm.test('Cortex Analysis run is persisted and structured', function () {",
+                  "  pm.expect(body.analysisId).to.be.a('string');",
+                  "  pm.expect(body.requestGroupId).to.eql(pm.collectionVariables.get('request_group_id'));",
+                  "  pm.expect(body.model).to.be.a('string');",
+                  "  pm.expect(body.recommendedAnswer).to.be.a('string');",
+                  "  pm.expect(body.sourceResponses).to.be.an('array');",
+                  "  pm.expect(body.isStale).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/compare/analysis-runs by request group",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/analysis-runs?request_group_id={{request_group_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or auth error', function () {",
+                  "  pm.expect([200, 401, 403, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 200) { return; }",
+                  "var body = pm.response.json();",
+                  "pm.test('all saved runs are returned newest-first', function () {",
+                  "  pm.expect(body).to.be.an('array');",
+                  "  if (body.length > 1) {",
+                  "    pm.expect(Date.parse(body[0].createdAt)).to.be.at.least(Date.parse(body[1].createdAt));",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/compare/analysis-runs by session",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/analysis-runs?session_id={{session_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or auth error', function () {",
+                  "  pm.expect([200, 401, 403, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 200) { return; }",
+                  "pm.test('session Cortex Analysis history is an array', function () {",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
                   "});"
                 ]
               }

@@ -52,6 +52,10 @@ class AttachmentRequestItem(BaseModel):
     )
 
 
+class CompareResponseRegenerationRequest(BaseModel):
+    source_request_id: str = Field(..., min_length=1, max_length=160)
+
+
 class ChatRequest(BaseModel):
     prompt: str = Field("", min_length=0)
     provider: Optional[str] = None
@@ -59,6 +63,7 @@ class ChatRequest(BaseModel):
     context: Optional[UserContextRequest] = None
     routing: Optional[ChatRoutingRequest] = None
     attachments: Optional[List[AttachmentRequestItem]] = None
+    regeneration: Optional[CompareResponseRegenerationRequest] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
 

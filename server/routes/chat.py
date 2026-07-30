@@ -591,10 +591,38 @@ async def chat(
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
 
+    if request.regeneration is not None and not API_DB_ENABLED:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "code": "compare_regeneration_requires_db",
+                "message": "Compare response regeneration requires database persistence.",
+            },
+        )
+
     persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
+    regeneration_context: persistence_service.CompareRegenerationContext | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        if request.regeneration is not None:
+            regeneration_context = persistence_service.resolve_compare_regeneration_context(
+                user_id=persistence_resolution.user_id,
+                source_request_id=request.regeneration.source_request_id,
+            )
+            if (
+                request.provider != regeneration_context.provider
+                or request.model != regeneration_context.model
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "compare_regeneration_target_mismatch",
+                        "message": "Regenerated Compare responses must use their original model.",
+                    },
+                )
+            requested_session_id = str(regeneration_context.session_id)
+            force_new_session = False
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
@@ -745,11 +773,20 @@ async def chat(
                 research_mode=research_mode,
                 force_new_session=force_new_session,
                 attachments=persistence_attachments,
+                regeneration=regeneration_context,
             )
         except Exception:
             logger.exception("Chat persistence failed in DB mode")
 
-    dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
+    dto = ChatResponseDTO.from_unified_response(
+        response,
+        session_id=resolved_session_id,
+        response_version=(
+            regeneration_context.response_revision
+            if regeneration_context is not None
+            else 1
+        ),
+    )
     return dto
 
 
@@ -771,10 +808,38 @@ async def chat_stream(
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
 
+    if request.regeneration is not None and not API_DB_ENABLED:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "code": "compare_regeneration_requires_db",
+                "message": "Compare response regeneration requires database persistence.",
+            },
+        )
+
     persistence_resolution: persistence_service.ApiKeyPersistenceResolution | None = None
+    regeneration_context: persistence_service.CompareRegenerationContext | None = None
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        if request.regeneration is not None:
+            regeneration_context = persistence_service.resolve_compare_regeneration_context(
+                user_id=persistence_resolution.user_id,
+                source_request_id=request.regeneration.source_request_id,
+            )
+            if (
+                request.provider != regeneration_context.provider
+                or request.model != regeneration_context.model
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "compare_regeneration_target_mismatch",
+                        "message": "Regenerated Compare responses must use their original model.",
+                    },
+                )
+            requested_session_id = str(regeneration_context.session_id)
+            force_new_session = False
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
             providers=SUPPORTED_PROVIDERS,
@@ -1011,11 +1076,20 @@ async def chat_stream(
                         research_mode=research_mode,
                         force_new_session=force_new_session,
                         attachments=persistence_attachments,
+                        regeneration=regeneration_context,
                     )
                 except Exception:
                     logger.exception("Chat stream persistence failed in DB mode")
 
-            dto = ChatResponseDTO.from_unified_response(response, session_id=resolved_session_id)
+            dto = ChatResponseDTO.from_unified_response(
+                response,
+                session_id=resolved_session_id,
+                response_version=(
+                    regeneration_context.response_revision
+                    if regeneration_context is not None
+                    else 1
+                ),
+            )
             yield stream_log.record_event(
                 _to_ndjson(
                     {
@@ -1109,6 +1183,7 @@ async def chat_stream(
                         research_mode=research_mode,
                         force_new_session=force_new_session,
                         attachments=persistence_attachments,
+                        regeneration=regeneration_context,
                     )
                 except Exception:
                     logger.exception("Chat stream error persistence failed in DB mode")

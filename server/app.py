@@ -21,6 +21,7 @@ from server.routes import (
     chat,
     client_diagnostics,
     compare,
+    cortex_analysis,
     entitlements,
     files,
     health,
@@ -282,6 +283,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(client_diagnostics.router)
     app.include_router(compare.router)
+    app.include_router(cortex_analysis.router)
     app.include_router(optimize.router)
     app.include_router(history.router)
     app.include_router(admin.router)

@@ -219,6 +219,8 @@ export function useChat() {
         startedAt: requestStartedAt,
         targetOverride: target,
         researchEnabledOverride: !!sourceTurn.researchEnabled,
+        regenerationSourceRequestId:
+          sourceTurn.mode === "compare" ? sourceResponse.request_id : undefined,
       });
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
@@ -553,6 +555,7 @@ async function runRegenerateResponse({
   startedAt,
   targetOverride,
   researchEnabledOverride,
+  regenerationSourceRequestId,
 }: {
   turnId: string;
   responseIndex: number;
@@ -563,6 +566,7 @@ async function runRegenerateResponse({
   startedAt: string;
   targetOverride?: Partial<CompareTargetRequest>;
   researchEnabledOverride?: boolean;
+  regenerationSourceRequestId?: string;
 }) {
   const state = useChatStore.getState();
   const selected = parseModelKey(state.selectedModelKey);
@@ -577,6 +581,9 @@ async function runRegenerateResponse({
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
+    regeneration: regenerationSourceRequestId
+      ? { source_request_id: regenerationSourceRequestId }
+      : undefined,
   };
 
   const placeholder = makePlaceholderResponse(

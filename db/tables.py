@@ -54,6 +54,7 @@ TABLE_NAMES = [
     "usage_counters",
     "usage_reservations",
     "billing_webhook_events",
+    "cortex_analysis_runs",
 ]
 
 

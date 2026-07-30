@@ -35,10 +35,12 @@ from sqlalchemy.orm import sessionmaker
 import db.repository as repo
 from models.unified_response import MultiUnifiedResponse, TokenUsage, UnifiedResponse
 from server import dependencies as deps
+from server import cortex_analysis as cortex_analysis_service
 from server import persistence as persistence_service
 from server.app import create_app
 from server.routes import chat as chat_route
 from server.routes import compare as compare_route
+from server.routes import cortex_analysis as cortex_analysis_route
 from server.routes import history as history_route
 from server.utils import redact_sensitive_headers
 
@@ -175,6 +177,7 @@ def fastapi_client(monkeypatch):
     app = create_app()
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
+    cortex_analysis_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
     subscription_reservation = SimpleNamespace(
         allowed_billing_classes=frozenset({"standard", "advanced"}),
@@ -364,6 +367,8 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         Column("input_tokens_est", Integer),
         Column("api_key_id", Uuid),
         Column("request_group_id", Uuid),
+        Column("response_revision_root_id", Uuid),
+        Column("response_revision", Integer, nullable=False, default=1),
         Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     )
 
@@ -399,6 +404,33 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         Column("total_tokens", Integer, nullable=False, default=0),
         Column("total_cost", Float, nullable=False, default=0.0),
         PrimaryKeyConstraint("user_id", "usage_date"),
+    )
+
+    Table(
+        "cortex_analysis_runs",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("user_id", Uuid, nullable=False),
+        Column("session_id", Uuid, nullable=False),
+        Column("request_group_id", Uuid, nullable=False),
+        Column("model", String, nullable=False),
+        Column("source_fingerprint", String, nullable=False),
+        Column("source_snapshot", JSON, nullable=False, default=list),
+        Column("recommended_answer", String, nullable=False),
+        Column("agreements", JSON, nullable=False, default=list),
+        Column("disagreements", JSON, nullable=False, default=list),
+        Column("unique_insights", JSON, nullable=False, default=list),
+        Column("confidence_level", String, nullable=False),
+        Column("confidence_reason", String, nullable=False),
+        Column("verify_items", JSON, nullable=False, default=list),
+        Column("high_stakes_domain", String),
+        Column("combined_response_count", Integer, nullable=False),
+        Column("failed_response_count", Integer, nullable=False, default=0),
+        Column("prompt_tokens", Integer, nullable=False, default=0),
+        Column("completion_tokens", Integer, nullable=False, default=0),
+        Column("total_tokens", Integer, nullable=False, default=0),
+        Column("estimated_cost", Float, nullable=False, default=0.0),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     )
 
     Table(
@@ -717,12 +749,14 @@ def db_mode_fastapi_client(monkeypatch):
     old_persistence_db = persistence_service.API_DB_ENABLED
     old_chat_db = chat_route.API_DB_ENABLED
     old_compare_db = compare_route.API_DB_ENABLED
+    old_cortex_analysis_db = cortex_analysis_route.API_DB_ENABLED
     old_history_db = history_route.API_DB_ENABLED
     old_admin_db = admin_route.API_DB_ENABLED
 
     persistence_service.API_DB_ENABLED = True
     chat_route.API_DB_ENABLED = True
     compare_route.API_DB_ENABLED = True
+    cortex_analysis_route.API_DB_ENABLED = True
     history_route.API_DB_ENABLED = True
     admin_route.API_DB_ENABLED = True
 
@@ -748,11 +782,105 @@ def db_mode_fastapi_client(monkeypatch):
         persistence_service.API_DB_ENABLED = old_persistence_db
         chat_route.API_DB_ENABLED = old_chat_db
         compare_route.API_DB_ENABLED = old_compare_db
+        cortex_analysis_route.API_DB_ENABLED = old_cortex_analysis_db
         history_route.API_DB_ENABLED = old_history_db
         admin_route.API_DB_ENABLED = old_admin_db
         _reset_db_runtime_state(schema_name="public")
         with suppress(FileNotFoundError):
             db_file.unlink()
+
+
+@pytest.mark.unit
+def test_cortex_analysis_runs_persist_and_regeneration_marks_them_stale(
+    db_mode_fastapi_client,
+    monkeypatch,
+):
+    client, _ = db_mode_fastapi_client
+    generated = cortex_analysis_service.AnalysisResult(
+        recommended_answer="Use a staged rollout.",
+        agreements=["Both responses favor a staged rollout."],
+        disagreements=[],
+        unique_insights=[],
+        confidence_level="moderate",
+        confidence_reason="The responses align on the main tradeoff.",
+        verify_items=["Confirm the rollout constraint."],
+        high_stakes_domain=None,
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        estimated_cost=0.001,
+    )
+    monkeypatch.setattr(
+        cortex_analysis_service,
+        "analyze_responses",
+        lambda **kwargs: generated,
+    )
+
+    compare = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "Compare rollout approaches",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+            "routing": {"smart_mode": False, "research_mode": False},
+        },
+    )
+    assert compare.status_code == 200
+    compare_payload = compare.json()
+    group_id = compare_payload["request_group_id"]
+    session_id = compare_payload["session_id"]
+
+    first = client.post(f"/v1/compare/{group_id}/analysis", json={})
+    second = client.post(f"/v1/compare/{group_id}/analysis", json={})
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["analysisId"] != second.json()["analysisId"]
+
+    saved = client.get(
+        "/v1/compare/analysis-runs",
+        params={"session_id": session_id},
+    )
+    assert saved.status_code == 200
+    assert len(saved.json()) == 2
+    assert saved.json()[0]["isStale"] is False
+
+    source = compare_payload["responses"][0]
+    regenerated = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "Compare rollout approaches",
+            "provider": source["provider"],
+            "model": source["model"],
+            "routing": {"smart_mode": False, "research_mode": False},
+            "context": {"session_id": session_id, "new_session": False},
+            "regeneration": {"source_request_id": source["request_id"]},
+        },
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["response_version"] == 2
+
+    history = client.get(
+        "/v1/history",
+        params={"session_id": session_id, "limit": 20},
+    )
+    assert history.status_code == 200
+    compare_rows = [
+        item
+        for item in history.json()
+        if item["request_group_id"] == group_id
+    ]
+    assert len(compare_rows) == 2
+    assert any(item["response_version"] == 2 for item in compare_rows)
+
+    stale_runs = client.get(
+        "/v1/compare/analysis-runs",
+        params={"request_group_id": group_id},
+    )
+    assert stale_runs.status_code == 200
+    assert len(stale_runs.json()) == 2
+    assert all(item["isStale"] is True for item in stale_runs.json())
 
 
 @pytest.mark.unit

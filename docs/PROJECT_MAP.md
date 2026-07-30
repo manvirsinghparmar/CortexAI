@@ -59,6 +59,8 @@ This map is the quick "where do I change X?" reference for the current API-first
 - B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
 - Billing constraint/lifecycle/entitlement/metering/Stripe-session/webhook/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_stripe_webhooks.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
+- Cortex Analysis source normalization, anonymized GPT-5.4-mini call, structured validation, and source fingerprinting: `server/cortex_analysis.py`
+- Cortex Analysis persistence/revision migration: `db/migrations/20260727_add_cortex_analysis_runs.sql`
 - Usage reporting: `server/usage_reporting.py`
 - Savings reporting: `server/savings.py`
 - DB migrations: `db/migrations/`
@@ -78,6 +80,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
   - History thread grouping, persisted session rename, per-thread delete, and Compare-turn reconstruction: `server/routes/history.py`, `db/repository.py`, `frontend-react/src/api/history.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
+  - Cortex Analysis API/run hydration, append-only run state, stale-source detection, history selector, and result presentation: `server/routes/cortex_analysis.py`, `server/schemas/cortex_analysis.py`, `frontend-react/src/api/cortexAnalysis.ts`, `frontend-react/src/hooks/useCortexAnalysis.ts`, `frontend-react/src/store/chatStore.ts`, `frontend-react/src/components/results/CortexAnalysisZone.tsx`
   - Usage & insights route, states, KPI row, mobile compact dashboard, model leaderboard/provider-logo tiles, session modes panel, activity chart, period selector/export, and data layer: `frontend-react/src/pages/UsageInsightsPage.tsx`, `frontend-react/src/pages/UsageInsightsPage.module.css`, `frontend-react/src/api/usage.ts`, `frontend-react/src/hooks/useUsageSummary.ts`
   - Active thread browser persistence and fresh-login reset markers: `frontend-react/src/session/activeSession.ts`
   - Transcript/session state: `frontend-react/src/store/chatStore.ts`
@@ -124,6 +127,13 @@ This map is the quick "where do I change X?" reference for the current API-first
   4. Update hydration in `frontend-react/src/store/chatStore.ts` and presentation in the desktop/mobile history surfaces.
   5. Cover Ask session grouping and Compare `request_group_id` grouping in React and API tests.
   6. Update `README.md` and related docs
+
+- Change Cortex Analysis behavior:
+  1. Keep model prompting/anonymization and structured validation in `server/cortex_analysis.py`.
+  2. Keep session ownership and HTTP contracts in `server/routes/cortex_analysis.py` plus `server/schemas/cortex_analysis.py`.
+  3. Keep append-only run and Compare response-revision persistence in `db/repository.py`; add a forward migration for schema changes.
+  4. Update `frontend-react/src/api/cortexAnalysis.ts`, `useCortexAnalysis.ts`, `chatStore.ts`, and `CortexAnalysisZone.tsx` together.
+  5. Validate reload/history hydration and staleness after response regeneration in backend and React tests.
 
 - Change routing behavior:
   1. Update files in `orchestrator/`
@@ -213,4 +223,4 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 ---
 
-Last updated: 2026-07-25
+Last updated: 2026-07-29

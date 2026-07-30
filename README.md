@@ -9,7 +9,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 
 ## Launch-Ready Capabilities
 
-- API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`, `/v1/providers`, `/v1/models`
+- API endpoints: `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, `/v1/compare/stream`, `/v1/compare/{request_group_id}/analysis`, `/v1/compare/analysis-runs`, `/v1/providers`, `/v1/models`
 - Integration diagnostics endpoints: `/v1/whoami`, `/v1/entitlements`, `/v1/client-diagnostics`
 - Request attribution: `users`, `api_keys`, `sessions`, `messages`, `llm_requests`, `llm_responses`
 - Routing telemetry: `routing_decisions`, `routing_attempts`
@@ -119,6 +119,9 @@ STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/pricing?checkout=cancelled
 STRIPE_PORTAL_RETURN_URL=https://app.example.com/account/billing
 # STRIPE_API_VERSION=               # optional; default is the SDK-pinned version
 # DEV_SUBSCRIPTION_PLAN=pro         # local/dev only; also supports guarded unrestricted mode
+
+# On-demand Compare synthesis (requires OPENAI_API_KEY)
+CORTEX_ANALYSIS_MODEL=gpt-5.4-mini
 
 # Tavily research retrieval
 TAVILY_API_KEY=                     # required when research_mode=true
@@ -363,6 +366,8 @@ Session-scoped routes require signed-in identity auth (not API key):
 - `/v1/chat/stream`
 - `/v1/compare`
 - `/v1/compare/stream`
+- `/v1/compare/{request_group_id}/analysis`
+- `/v1/compare/analysis-runs`
 - `/v1/files/*`
 - `/v1/providers`
 - `/v1/models`
@@ -422,6 +427,9 @@ Response includes:
 - `POST /v1/chat/stream`
 - `POST /v1/compare`
 - `POST /v1/compare/stream`
+- `POST /v1/compare/{request_group_id}/analysis`
+- `GET /v1/compare/analysis-runs?session_id=<id>`
+- `GET /v1/compare/analysis-runs?request_group_id=<id>`
 - `POST /v1/optimize`
 - `GET /v1/history`
 - `PATCH /v1/history/session/{session_id}`
@@ -658,6 +666,7 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Switching between Ask and Compare does not require creating a separate thread.
 - Compare turns still persist their per-target rows under a shared `request_group_id`, but the user-visible chat session can remain the same across both modes.
 - `GET /v1/history` intentionally returns persisted request rows rather than pre-grouped UI threads. Each row includes optional `session_id`, `session_title`, and `request_group_id`; clients group sidebar threads by `session_id` and Compare responses by `request_group_id`. A user-authored `session_title` overrides the first prompt as the sidebar label, while the legacy system placeholders (`API Chat` and `API Compare`) are ignored.
+- Compare history exposes each response's immutable `request_id` and current `response_version`. Regenerating a Compare response appends a new revision to the same logical response slot; restored history displays the latest revision without deleting the prior audit row.
 - `PATCH /v1/history/session/{session_id}` with `{"title":"..."}` renames one authenticated user's persisted session. Titles are trimmed, limited to 120 characters, and do not change the thread's latest-activity ordering.
 - `DELETE /v1/history?session_id=<id>` clears only that user-visible conversation thread. Omitting `session_id` clears all history for the authenticated identity. React per-thread delete calls `DELETE /v1/history/{entry_id}` for every persisted row in the selected thread.
 - The browser UI persists the active thread id as `cortex_active_session_id` and restores that transcript after reload/resume. It does not auto-continue the last active thread after an explicit fresh login: that path marks `cortex_fresh_login_pending`, consumes the `fresh_login=1` callback marker, clears the active thread id, and sends `new_session=true` for the first turn. Users can still reopen older threads from History.
@@ -674,6 +683,32 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - Each target persists its own request/response pair.
 - All target rows share the same `request_group_id`.
 - Use this ID to debug failed attempts via admin route.
+
+## Cortex Analysis
+
+Cortex Analysis is an on-demand synthesis layer below completed browser Compare responses. It is functional independently of subscription, tier, credit, trial, or upgrade rules.
+
+- `POST /v1/compare/{request_group_id}/analysis` analyzes the latest successful revisions from two or three responses with `CORTEX_ANALYSIS_MODEL` (default `gpt-5.4-mini`) and returns `201`.
+- Provider/model identities are removed before the analysis model receives
+  shuffled `Response A/B/C` content. After generation, the server replaces
+  those anonymous labels with the real provider display names in every
+  user-visible result section before saving the run.
+- The model uses strict Structured Outputs, and the API validates the result before persistence. Provider failure or invalid output returns `502`; a failed generation does not create a run.
+- Successful runs are append-only in `cortex_analysis_runs`. Re-running never overwrites an earlier result.
+- While a re-run is processing, the result area temporarily replaces the
+  previous combined answer with the analysis progress state. If the re-run
+  fails, the saved answer returns below the retry message.
+- `GET /v1/compare/analysis-runs` requires either `session_id` or `request_group_id` and returns every owned run newest-first.
+- Each run snapshots exact source `requestId` and `responseVersion` values. If a source response is regenerated later, earlier analyses remain readable and return `isStale: true`; the browser offers an explicit update action.
+- Reloading or reopening a history thread hydrates its Compare transcript and all saved Cortex Analysis runs. The result area defaults to the newest run and exposes older runs through Analysis history.
+- Analysis starts only after a user action and only when at least two Compare responses succeeded. There is no automatic synthesis, subscription gate, credit counter, or Cortex-only mobile tab.
+
+Apply `db/migrations/20260727_add_cortex_analysis_runs.sql` with a database role
+that owns `llm_requests` before deploying this behavior, then restart the API so
+reflected table metadata includes the new columns. Until that schema is ready,
+both Cortex Analysis endpoints return
+`503 cortex_analysis_schema_unavailable`; the create endpoint performs this
+check before calling the analysis model.
 
 ## Streaming NDJSON Contract
 
@@ -953,6 +988,13 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billin
 ```
 
 - The migration creates only `billing_accounts`, `subscriptions`, `usage_periods`, `usage_counters`, `usage_reservations`, and `billing_webhook_events`, plus their constraints and indexes. It does not alter `users`, chat history, or existing LLM request/response tables.
+- Apply the Cortex Analysis migration with an owner/admin connection before deploying analysis routes, then restart the API so reflected metadata includes the new columns and table:
+
+```bash
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
+```
+
+- This migration adds append-only Compare response revision columns to `llm_requests` and creates `cortex_analysis_runs`. The normal application role may not own `llm_requests`, so use a migration role with table ownership and schema `CREATE` permission.
 
 ## Release Gate
 
@@ -1373,4 +1415,4 @@ OpenAIProject/
 - Add tests: put new tests in `tests/` (mirror by feature area) and run `python -m pytest -q` + `python scripts/release_gate.py`.
 - Update API docs and examples after behavior changes: `README.md` and `docs/postman/CortexAI_B2B.postman_collection.json`.
 
-Last updated: 2026-07-19
+Last updated: 2026-07-29

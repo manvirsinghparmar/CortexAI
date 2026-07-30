@@ -41,6 +41,7 @@ from db.billing_repository import (
     upsert_subscription_snapshot,
 )
 from db.repository import (
+    CortexAnalysisSchemaUnavailable,
     create_request_attachment,
     create_uploaded_file,
     clear_llm_history,
@@ -54,6 +55,7 @@ from db.repository import (
     # Utility
     compute_prompt_sha256,
     create_context_snapshot,
+    create_cortex_analysis_run,
     # LLM Audit
     create_llm_request,
     create_llm_response,
@@ -69,12 +71,16 @@ from db.repository import (
     get_latest_context_snapshot,
     get_llm_history_entries,
     rename_history_session,
+    require_cortex_analysis_schema,
     # User & Auth
     get_or_create_cli_user,
     get_or_create_service_user,
     get_or_create_user_by_cognito,
     get_byok_provider_key,
     get_failed_routing_attempts_by_request_group,
+    get_compare_analysis_sources,
+    get_compare_response_regeneration_source,
+    list_cortex_analysis_runs,
     get_savings_aggregates,
     get_session_by_id,
     get_session_messages,
@@ -114,6 +120,7 @@ from db.tables import (
 __all__ = [
     "ALLOWED_USAGE_METERS",
     "LIVE_SUBSCRIPTION_STATUSES",
+    "CortexAnalysisSchemaUnavailable",
     "SessionLocal",
     "SubscriptionSnapshot",
     "check_usage_limit",
@@ -124,6 +131,7 @@ __all__ = [
     "compute_prompt_sha256",
     "create_api_key",
     "create_context_snapshot",
+    "create_cortex_analysis_run",
     "create_llm_request",
     "create_llm_response",
     "create_request_attachment",
@@ -147,6 +155,8 @@ __all__ = [
     "get_billing_account_by_stripe_customer_id",
     "get_billing_account_for_user",
     "get_byok_provider_key",
+    "get_compare_analysis_sources",
+    "get_compare_response_regeneration_source",
     "get_db",
     "get_engine",
     "get_failed_routing_attempts_by_request_group",
@@ -174,6 +184,7 @@ __all__ = [
     "get_user_by_api_key",
     "get_user_preferences",
     "list_byok_provider_keys",
+    "list_cortex_analysis_runs",
     "list_due_file_deletion_jobs",
     "list_expired_uploaded_files",
     "list_request_attachments_for_request",
@@ -187,6 +198,7 @@ __all__ = [
     "release_usage_quantities",
     "release_usage_reservation",
     "rename_history_session",
+    "require_cortex_analysis_schema",
     "reserve_usage_quantities",
     "save_compare_summary",
     "save_message",

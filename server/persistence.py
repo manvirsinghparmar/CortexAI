@@ -26,6 +26,7 @@ from db import (
     create_session,
     get_active_session,
     get_api_key_settings,
+    get_compare_response_regeneration_source,
     get_failed_routing_attempts_by_request_group,
     get_session_by_id,
     get_or_create_service_user,
@@ -73,6 +74,16 @@ class RequestAttachmentPersistenceItem:
     transform_mode: str = "auto"
     order_index: int = 0
     resolved_artifact_meta: dict | None = None
+
+
+@dataclass(frozen=True)
+class CompareRegenerationContext:
+    response_revision_root_id: UUID
+    response_revision: int
+    session_id: UUID
+    request_group_id: UUID
+    provider: str
+    model: str
 
 
 @contextmanager
@@ -290,6 +301,51 @@ def resolve_identity(
     )
 
 
+def resolve_compare_regeneration_context(
+    *,
+    user_id: UUID,
+    source_request_id: str,
+) -> CompareRegenerationContext:
+    """Validate and resolve an owned Compare response before provider work starts."""
+    with db_uow(commit_on_success=False) as db_session:
+        source = get_compare_response_regeneration_source(
+            db_session,
+            user_id,
+            source_request_id,
+        )
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "compare_response_not_found",
+                "message": "The Compare response to regenerate was not found.",
+            },
+        )
+
+    session_id = coerce_uuid(str(source.get("session_id") or ""))
+    request_group_id = coerce_uuid(str(source.get("request_group_id") or ""))
+    revision_root_id = coerce_uuid(
+        str(source.get("response_revision_root_id") or "")
+    )
+    if session_id is None or request_group_id is None or revision_root_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "compare_response_revision_unavailable",
+                "message": "This Compare response cannot be regenerated in place.",
+            },
+        )
+
+    return CompareRegenerationContext(
+        response_revision_root_id=revision_root_id,
+        response_revision=max(2, int(source.get("response_revision") or 2)),
+        session_id=session_id,
+        request_group_id=request_group_id,
+        provider=str(source.get("provider") or ""),
+        model=str(source.get("model") or ""),
+    )
+
+
 def _extract_cap_value(raw: str | None, *, kind: str) -> int | float | None:
     if not raw:
         return None
@@ -405,8 +461,10 @@ def _enforce_usage_caps_in_session(
     if not token_cap_raw and not cost_cap_raw:
         return
 
-    token_cap = _extract_cap_value(token_cap_raw, kind="token")
-    cost_cap = _extract_cap_value(cost_cap_raw, kind="cost")
+    token_cap_value = _extract_cap_value(token_cap_raw, kind="token")
+    cost_cap_value = _extract_cap_value(cost_cap_raw, kind="cost")
+    token_cap = int(token_cap_value) if token_cap_value is not None else None
+    cost_cap = float(cost_cap_value) if cost_cap_value is not None else None
 
     # Default to api_key scope when available; fallback to user scope.
     scope = os.getenv("DAILY_CAP_SCOPE", "api_key").strip().lower()
@@ -616,8 +674,6 @@ def resolve_and_enforce_usage_caps(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
         ) from exc
-
-
 def reserve_subscription_usage(
     *,
     user_id: UUID,
@@ -948,7 +1004,7 @@ def _persist_request_attachments(
         return
 
     for idx, item in enumerate(attachments):
-        file_id: object
+        file_id: object | None
         if isinstance(item, RequestAttachmentPersistenceItem):
             file_id = item.file_id
             usage_role = item.usage_role
@@ -965,7 +1021,9 @@ def _persist_request_attachments(
             transform_mode = str(item.get("transform_mode") or "auto")
             order_index = int(item.get("order_index", idx))
             meta_raw = item.get("resolved_artifact_meta")
-            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
+            resolved_artifact_meta = (
+                dict(meta_raw) if isinstance(meta_raw, dict) else {}
+            )
         else:
             file_id = getattr(item, "file_id", None)
             usage_role = str(getattr(item, "usage_role", "primary") or "primary")
@@ -1000,33 +1058,58 @@ def persist_chat_interaction(
     research_mode: bool,
     force_new_session: bool = False,
     attachments: Sequence[object] | None = None,
+    regeneration: CompareRegenerationContext | None = None,
 ) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
-        session_id = get_or_create_api_session(
-            db_session,
-            resolution.user_id,
-            requested_session_id,
-            mode="ask",
-            title="API Chat",
-            force_new_session=force_new_session,
-        )
+        if regeneration is not None:
+            session_id = regeneration.session_id
+            if not verify_session_belongs_to_user(
+                db_session,
+                session_id,
+                resolution.user_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Compare session not found",
+                )
+        else:
+            session_id = get_or_create_api_session(
+                db_session,
+                resolution.user_id,
+                requested_session_id,
+                mode="ask",
+                title="API Chat",
+                force_new_session=force_new_session,
+            )
 
         stored_user_message = privacy_service.sanitize_user_message_for_storage(prompt)
-        save_message(db_session, session_id, "user", stored_user_message)
+        if regeneration is None:
+            save_message(db_session, session_id, "user", stored_user_message)
 
         llm_request_id = create_llm_request(
             db_session,
             user_id=resolution.user_id,
             request_id=response.request_id,
-            route_mode="ask",
+            route_mode="compare" if regeneration is not None else "ask",
             provider=response.provider,
             model=response.model,
             prompt=prompt,
             session_id=session_id,
+            request_group_id=(
+                regeneration.request_group_id if regeneration is not None else None
+            ),
             api_key_id=resolution.api_key_id,
             store_prompt=True,
             prompt_text_override=stored_user_message,
+            response_revision_root_id=(
+                regeneration.response_revision_root_id
+                if regeneration is not None
+                else None
+            ),
+            response_revision=(
+                regeneration.response_revision if regeneration is not None else 1
+            ),
         )
         _persist_request_attachments(
             db_session,
@@ -1043,7 +1126,7 @@ def persist_chat_interaction(
             research_mode="on" if research_mode else "off",
         )
 
-        if not response.is_error and response.text:
+        if regeneration is None and not response.is_error and response.text:
             assistant_text = privacy_service.sanitize_assistant_message_for_storage(response.text)
             save_message(db_session, session_id, "assistant", assistant_text)
 

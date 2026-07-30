@@ -42,6 +42,7 @@ def _require_db_mode() -> None:
 
 class HistoryEntry(BaseModel):
     id: int
+    request_id: str
     session_id: Optional[str] = None
     session_title: Optional[str] = None
     request_group_id: Optional[str] = None
@@ -50,6 +51,7 @@ class HistoryEntry(BaseModel):
     prompt: str
     provider: str
     model: str
+    response_version: int = 1
     response: str
     latency_ms: Optional[int] = None
     tokens: Optional[int] = None

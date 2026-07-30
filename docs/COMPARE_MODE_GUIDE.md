@@ -13,6 +13,25 @@ This guide covers both:
 - API compare mode (`POST /v1/compare`, `POST /v1/compare/stream`)
 - CLI compare mode (`COMPARE_MODE=true`)
 - Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
+- Browser Cortex Analysis, an on-demand synthesis of two or three completed Compare responses.
+
+## Cortex Analysis Prototype (2026-07-27)
+
+- After at least two Compare responses complete successfully, the browser offers `Analyze responses with Cortex` below the model answers.
+- The analysis runs only when requested. `gpt-5.4-mini` is the default analysis model and can be changed with `CORTEX_ANALYSIS_MODEL`.
+- The analysis model sees shuffled `Response A/B/C` content without provider or
+  model identities. After generation, the server translates those internal
+  labels back to provider display names throughout the recommended answer,
+  agreements, differences, unique insights, confidence explanation, and
+  verification items.
+- Results separate the recommended answer, agreements, differences, unique insights, confidence, and items to verify. High-stakes financial, medical, legal, or safety results keep verification guidance expanded.
+- Every successful analysis is retained. Reloading or reopening a History thread restores all prior runs and selects the newest by default.
+- Regenerating one source response appends a new response revision. Earlier analyses remain readable but are marked stale until the user explicitly runs an updated analysis.
+- Re-running Cortex Analysis temporarily hides the previous combined result and
+  shows only the processing state. A failed re-run restores the saved result
+  alongside the retry state.
+- The prototype deliberately has no subscription, tier, credit, trial, upgrade, or automatic-analysis behavior.
+- Required migration: `db/migrations/20260727_add_cortex_analysis_runs.sql`.
 
 The API accepts two or three explicit targets. Subscription enforcement may reduce the effective maximum: Free and Plus allow two targets, while Pro allows three. The four-provider examples below describe the legacy CLI `COMPARE_MODE=true` flow, not the FastAPI request limit.
 
@@ -264,8 +283,9 @@ COMPARE_TARGETS = [
 - **Mobile Model Picker**: Compare model dropdowns render through a fixed-position body portal, keeping every option visible and selectable above the horizontally scrollable mobile model row.
 - **Purposeful Empty State**: Before the first turn, Compare mode explains the ask-once, multi-model workflow and the value of comparing accuracy, depth, speed, tone, and usefulness. Three practical examples fill the prompt without submitting or changing the selected models.
 - **Controlled Response Rhythm**: Compare card titles, metadata, paragraphs, Markdown headings, and lists use a restrained type scale and tighter spacing so long model outputs remain readable without excessive vertical gaps.
+- **Append-only Cortex Analysis**: Successful synthesis runs live below Compare responses, survive reload/history reopening, retain every prior run, and use exact response revisions to disclose stale analyses without overwriting them.
 
 ---
 
-**Last Updated:** 2026-06-11
+**Last Updated:** 2026-07-27
 **Applies To:** OpenAI Project v2.0+

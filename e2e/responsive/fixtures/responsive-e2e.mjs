@@ -28,6 +28,7 @@ export const test = base.extend({
     responsiveApp: async ({ page }, use) => {
         const state = {
             history: responsiveHistoryEntries(),
+            analysisRuns: responsiveAnalysisRuns(),
             uploadedFiles: new Map(),
         };
         const pageErrors = [];
@@ -132,7 +133,38 @@ async function installResponsiveRoutes(page, state) {
         }
         if (url.pathname === "/v1/history" && method === "DELETE") {
             state.history = [];
+            state.analysisRuns = [];
             return route.fulfill({ status: 204, body: "" });
+        }
+        if (url.pathname === "/v1/compare/analysis-runs" && method === "GET") {
+            const sessionId = url.searchParams.get("session_id");
+            const requestGroupId = url.searchParams.get("request_group_id");
+            return json(
+                route,
+                state.analysisRuns.filter(run =>
+                    (!sessionId || run.sessionId === sessionId) &&
+                    (!requestGroupId || run.requestGroupId === requestGroupId),
+                ),
+            );
+        }
+        const analysisMatch = url.pathname.match(/^\/v1\/compare\/([^/]+)\/analysis$/);
+        if (analysisMatch && method === "POST") {
+            const requestGroupId = decodeURIComponent(analysisMatch[1]);
+            const sourceRows = state.history.filter(
+                entry => entry.request_group_id === requestGroupId && !entry.error_message,
+            );
+            if (sourceRows.length < 2) {
+                return json(route, { detail: "Not enough successful responses" }, 409);
+            }
+            const run = makeResponsiveAnalysisRun({
+                analysisId: `analysis-${state.analysisRuns.length + 1}`,
+                requestGroupId,
+                sessionId: sourceRows[0].session_id,
+                createdAt: new Date().toISOString(),
+                sourceRows,
+            });
+            state.analysisRuns = [run, ...state.analysisRuns];
+            return json(route, run, 201);
         }
         if (url.pathname === "/v1/files/upload" && method === "POST") {
             const fileName = request.headers()["x-file-name"] || "attachment.txt";
@@ -194,6 +226,67 @@ function responsiveHistoryEntries() {
         ...compareTableHistoryEntries(),
         ...threeModelCompareHistoryEntries(),
     ];
+}
+
+function responsiveAnalysisRuns() {
+    const history = responsiveHistoryEntries();
+    const sourceRows = history.filter(
+        entry => entry.request_group_id === "compare-group-1",
+    );
+    return [
+        makeResponsiveAnalysisRun({
+            analysisId: "analysis-saved-1",
+            requestGroupId: "compare-group-1",
+            sessionId: "compare-session",
+            createdAt: "2026-06-12T10:02:00Z",
+            sourceRows,
+        }),
+    ];
+}
+
+function makeResponsiveAnalysisRun({
+    analysisId,
+    requestGroupId,
+    sessionId,
+    createdAt,
+    sourceRows,
+}) {
+    return {
+        analysisId,
+        requestGroupId,
+        sessionId,
+        model: "gpt-5.4-mini",
+        recommendedAnswer:
+            "Use a phased gateway rollout with explicit provider fallbacks and observable recovery checks.",
+        agreements: [
+            "Both responses favor incremental rollout over a one-time cutover.",
+        ],
+        disagreements: [
+            "The responses assign different priorities to cost and operational control.",
+        ],
+        uniqueInsights: [
+            {
+                responseName: "ChatGPT",
+                text: "One response highlights request correlation as a rollout prerequisite.",
+            },
+        ],
+        confidence: {
+            level: "moderate",
+            reason: "The responses align on the main rollout shape but differ on priorities.",
+        },
+        verify: ["Confirm the recovery objectives for each rollout phase."],
+        highStakesDomain: null,
+        sourceFingerprint: `responsive-${analysisId}`,
+        sourceResponses: sourceRows.map(entry => ({
+            requestId: entry.request_id,
+            responseVersion: entry.response_version,
+            responseName: entry.provider === "openai" ? "ChatGPT" : "Claude",
+        })),
+        combinedResponseCount: sourceRows.length,
+        failedResponseCount: 0,
+        createdAt,
+        isStale: false,
+    };
 }
 
 function compareHistoryEntries() {
@@ -292,6 +385,8 @@ function historyEntry({
 }) {
     return {
         id,
+        request_id: String(id),
+        response_version: 1,
         session_id: sessionId,
         request_group_id: requestGroupId,
         timestamp,

@@ -118,12 +118,16 @@ CREATE TABLE public.llm_requests (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	api_key_id UUID, 
 	request_group_id UUID, 
+	response_revision_root_id UUID,
+	response_revision INTEGER DEFAULT 1 NOT NULL,
 	CONSTRAINT llm_requests_pkey PRIMARY KEY (id), 
 	CONSTRAINT llm_requests_api_key_id_fkey FOREIGN KEY(api_key_id) REFERENCES public.api_keys (id) ON DELETE SET NULL, 
+	CONSTRAINT llm_requests_response_revision_root_id_fkey FOREIGN KEY(response_revision_root_id) REFERENCES public.llm_requests (id) ON DELETE CASCADE,
 	CONSTRAINT llm_requests_session_id_fkey FOREIGN KEY(session_id) REFERENCES public.sessions (id) ON DELETE SET NULL, 
 	CONSTRAINT llm_requests_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE, 
 	CONSTRAINT llm_requests_request_id_key UNIQUE NULLS DISTINCT (request_id), 
-	CONSTRAINT llm_requests_route_mode_check CHECK (route_mode = ANY (ARRAY['ask'::text, 'compare'::text, 'eval'::text, 'research'::text]))
+	CONSTRAINT llm_requests_route_mode_check CHECK (route_mode = ANY (ARRAY['ask'::text, 'compare'::text, 'eval'::text, 'research'::text])),
+	CONSTRAINT llm_requests_response_revision_check CHECK (response_revision >= 1)
 );
 
 
@@ -191,6 +195,39 @@ CREATE TABLE public.llm_responses (
 );
 
 
+CREATE TABLE public.cortex_analysis_runs (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	session_id UUID NOT NULL,
+	request_group_id UUID NOT NULL,
+	model TEXT NOT NULL,
+	source_fingerprint TEXT NOT NULL,
+	source_snapshot JSONB DEFAULT '[]'::jsonb NOT NULL,
+	recommended_answer TEXT NOT NULL,
+	agreements JSONB DEFAULT '[]'::jsonb NOT NULL,
+	disagreements JSONB DEFAULT '[]'::jsonb NOT NULL,
+	unique_insights JSONB DEFAULT '[]'::jsonb NOT NULL,
+	confidence_level TEXT NOT NULL,
+	confidence_reason TEXT NOT NULL,
+	verify_items JSONB DEFAULT '[]'::jsonb NOT NULL,
+	high_stakes_domain TEXT,
+	combined_response_count INTEGER NOT NULL,
+	failed_response_count INTEGER DEFAULT 0 NOT NULL,
+	prompt_tokens INTEGER DEFAULT 0 NOT NULL,
+	completion_tokens INTEGER DEFAULT 0 NOT NULL,
+	total_tokens INTEGER DEFAULT 0 NOT NULL,
+	estimated_cost NUMERIC(12, 6) DEFAULT 0 NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	CONSTRAINT cortex_analysis_runs_pkey PRIMARY KEY (id),
+	CONSTRAINT cortex_analysis_runs_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT cortex_analysis_runs_session_id_fkey FOREIGN KEY(session_id) REFERENCES public.sessions (id) ON DELETE CASCADE,
+	CONSTRAINT cortex_analysis_runs_confidence_level_check CHECK (confidence_level = ANY (ARRAY['limited'::text, 'moderate'::text, 'high'::text])),
+	CONSTRAINT cortex_analysis_runs_high_stakes_domain_check CHECK (high_stakes_domain IS NULL OR high_stakes_domain = ANY (ARRAY['financial'::text, 'medical'::text, 'legal'::text, 'safety'::text])),
+	CONSTRAINT cortex_analysis_runs_combined_response_count_check CHECK (combined_response_count BETWEEN 2 AND 3),
+	CONSTRAINT cortex_analysis_runs_failed_response_count_check CHECK (failed_response_count >= 0)
+);
+
+
 CREATE TABLE public.routing_decisions (
 	id UUID DEFAULT gen_random_uuid() NOT NULL, 
 	llm_request_id UUID NOT NULL, 
@@ -242,10 +279,14 @@ CREATE INDEX idx_ledger_wallet_time ON public.ledger_entries USING btree (wallet
 CREATE INDEX idx_llm_requests_api_key_time ON public.llm_requests USING btree (api_key_id, created_at DESC);
 CREATE INDEX idx_llm_requests_provider_model_time ON public.llm_requests USING btree (provider, model, created_at DESC);
 CREATE INDEX idx_llm_requests_request_group_id ON public.llm_requests USING btree (request_group_id) WHERE (request_group_id IS NOT NULL);
+CREATE INDEX idx_llm_requests_response_revision_root ON public.llm_requests USING btree (response_revision_root_id, response_revision DESC) WHERE (response_revision_root_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_llm_requests_logical_response_revision ON public.llm_requests USING btree (COALESCE(response_revision_root_id, id), response_revision);
 CREATE INDEX idx_llm_requests_session_time ON public.llm_requests USING btree (session_id, created_at DESC);
 CREATE INDEX idx_llm_requests_user_request_group_id ON public.llm_requests USING btree (user_id, request_group_id) WHERE (request_group_id IS NOT NULL);
 CREATE INDEX idx_llm_requests_user_time ON public.llm_requests USING btree (user_id, created_at DESC);
 CREATE INDEX idx_llm_responses_request_id ON public.llm_responses USING btree (llm_request_id);
+CREATE INDEX idx_cortex_analysis_runs_user_group_time ON public.cortex_analysis_runs USING btree (user_id, request_group_id, created_at DESC);
+CREATE INDEX idx_cortex_analysis_runs_user_session_time ON public.cortex_analysis_runs USING btree (user_id, session_id, created_at DESC);
 CREATE INDEX idx_messages_session_id ON public.messages USING btree (session_id);
 CREATE INDEX idx_messages_session_time ON public.messages USING btree (session_id, created_at);
 CREATE INDEX idx_routing_attempts_decision_id ON public.routing_attempts USING btree (routing_decision_id);

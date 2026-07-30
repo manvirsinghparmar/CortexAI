@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { fetchCortexAnalysisRuns } from "../api/cortexAnalysis";
 import { fetchHistory } from "../api/history";
 import { exportUsageCsv, type UsageSummaryParams } from "../api/usage";
 import { AccountMenu } from "../components/layout/AccountMenu";
@@ -83,11 +84,14 @@ export function UsageInsightsPage() {
 
   const handleSelectHistoryThread = async (thread: HistoryThread) => {
     try {
-      const entries = thread.sessionId
-        ? await fetchHistory(500, thread.sessionId)
-        : thread.entries;
+      const [entries, analysisRuns] = thread.sessionId
+        ? await Promise.all([
+            fetchHistory(500, thread.sessionId),
+            fetchCortexAnalysisRuns({ sessionId: thread.sessionId }),
+          ])
+        : [thread.entries, []];
       const completeThread = buildHistoryThreads(entries)[0] ?? thread;
-      hydrateFromHistoryThread(completeThread);
+      hydrateFromHistoryThread(completeThread, analysisRuns);
       navigate("/");
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");

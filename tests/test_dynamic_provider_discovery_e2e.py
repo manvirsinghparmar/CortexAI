@@ -54,6 +54,12 @@ def _write_catalog_with_new_provider(tmp_path: Path) -> tuple[Path, Path, str]:
                 "context_limit": 128000,
                 "tags": ["balanced", "general"],
                 "enabled": True,
+                "billing_class": "advanced",
+                "access_category": "advanced",
+                "input_credit_multiplier": 2.0,
+                "output_credit_multiplier": 8.0,
+                "credit_usage_label": "High",
+                "credit_pricing_version": "2026-07-29",
             }
         ]
     }

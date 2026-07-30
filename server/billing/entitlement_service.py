@@ -16,7 +16,6 @@ from server.billing.models import ALLOWED_MODEL_BILLING_CLASSES, SubscriptionPla
 from server.billing.plan_catalog import PlanCatalog, get_plan_catalog
 from server.billing.subscription_service import EffectiveSubscription
 
-_MODEL_RESPONSE_OPERATIONS = frozenset({"ask", "compare", "regenerate", "follow_up"})
 _ALLOWED_OPERATIONS = frozenset(
     {
         "ask",
@@ -26,6 +25,7 @@ _ALLOWED_OPERATIONS = frozenset(
         "optimize",
         "file_upload",
         "usage_export",
+        "cortex_analysis",
     }
 )
 
@@ -46,6 +46,7 @@ class SubscriptionRequestIntent:
     attachment_count: int = 0
     total_attachment_bytes: int = 0
     attachment_sizes: tuple[int, ...] = ()
+    estimated_credits: int = 0
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class EntitlementDenial:
     recommended_plan: str | None = None
     used: int | None = None
     limit: int | None = None
+    required: int | None = None
     remaining: int | None = None
     reset_at: datetime | None = None
 
@@ -130,35 +132,10 @@ def load_allowance_usage(
 
 
 def required_quantities(intent: SubscriptionRequestIntent) -> dict[str, int]:
-    """Translate a request into subscription allowance units."""
-    quantities: dict[str, int] = {}
-
-    if intent.operation_type in _MODEL_RESPONSE_OPERATIONS and intent.model_targets:
-        quantities["model_responses"] = len(intent.model_targets)
-
-    advanced = sum(
-        1
-        for target in intent.model_targets
-        if _billing_class_value(target.billing_class) == "advanced"
-    )
-    ultra = sum(
-        1
-        for target in intent.model_targets
-        if _billing_class_value(target.billing_class) == "ultra"
-    )
-    if advanced:
-        quantities["advanced_model_responses"] = advanced
-    if ultra:
-        quantities["ultra_model_responses"] = ultra
-    if intent.research_enabled:
-        quantities["research_turns"] = 1
-    if intent.optimization_enabled or intent.operation_type == "optimize":
-        quantities["optimization_turns"] = 1
-    if intent.attachment_count > 0 and intent.operation_type != "file_upload":
-        quantities["file_analysis_turns"] = 1
-    if intent.operation_type == "file_upload" and intent.total_attachment_bytes > 0:
-        quantities["uploaded_bytes"] = intent.total_attachment_bytes
-    return quantities
+    """Translate a request into the single public AI-credit meter."""
+    if isinstance(intent.estimated_credits, bool) or intent.estimated_credits < 0:
+        raise ValueError("estimated_credits must be a nonnegative integer")
+    return {"ai_credits": intent.estimated_credits} if intent.estimated_credits else {}
 
 
 def _recommended_upgrade(
@@ -233,6 +210,8 @@ def evaluate_entitlement(
         return _configuration_denial(effective, "Attachment quantities cannot be negative.")
     if any(size < 0 for size in intent.attachment_sizes):
         return _configuration_denial(effective, "Attachment sizes cannot be negative.")
+    if isinstance(intent.estimated_credits, bool) or intent.estimated_credits < 0:
+        return _configuration_denial(effective, "Estimated credits cannot be negative.")
 
     entitlements = plan.entitlements
     if operation == "compare" and not entitlements.compare_enabled:
@@ -369,16 +348,17 @@ def evaluate_entitlement(
                 plan_code=plan.code,
                 required_quantities=quantities,
                 denial=EntitlementDenial(
-                    code="monthly_allowance_exhausted",
+                    code="insufficient_credits",
                     message=(
-                        f"The {plan.display_name} plan's monthly {meter} allowance "
-                        "has been exhausted."
+                        f"This request is estimated to require {quantity:,} credits. "
+                        f"You have {current.remaining:,} remaining."
                     ),
                     meter=meter,
                     current_plan=plan.code,
                     recommended_plan=recommended,
                     used=current.used,
                     limit=current.limit,
+                    required=quantity,
                     remaining=current.remaining,
                     reset_at=effective.current_period_end,
                 ),

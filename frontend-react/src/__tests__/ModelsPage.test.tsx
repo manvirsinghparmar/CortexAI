@@ -215,12 +215,7 @@ function entitlementFixture(): EntitlementsResponse {
 
 function plansFixture(): BillingPlansResponse {
   const baseAllowances = {
-    model_responses: 30,
-    advanced_model_responses: 5,
-    ultra_model_responses: 0,
-    research_turns: 5,
-    optimization_turns: 10,
-    file_analysis_turns: 3,
+    ai_credits: 100_000,
   };
   return {
     currency: "USD",
@@ -237,7 +232,7 @@ function plansFixture(): BillingPlansResponse {
           research_enabled: true,
           prompt_improvement_enabled: true,
           file_analysis_enabled: true,
-          allowed_billing_classes: ["standard", "advanced"],
+          allowed_billing_classes: ["economical", "standard"],
         },
         allowances: baseAllowances,
       },
@@ -251,9 +246,9 @@ function plansFixture(): BillingPlansResponse {
           research_enabled: true,
           prompt_improvement_enabled: true,
           file_analysis_enabled: true,
-          allowed_billing_classes: ["standard", "advanced", "ultra"],
+          allowed_billing_classes: ["economical", "standard", "advanced", "premium"],
         },
-        allowances: { ...baseAllowances, ultra_model_responses: 40 },
+        allowances: { ai_credits: 3_000_000 },
       },
     ],
   };
@@ -264,7 +259,7 @@ function liveUltraModel(): ModelCatalogItem {
     provider: "openai",
     model: "gpt-5.4",
     tier: "frontier",
-    billing_class: "ultra",
+    billing_class: "premium",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128_000,

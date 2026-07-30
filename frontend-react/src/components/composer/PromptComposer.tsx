@@ -64,14 +64,14 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
   );
   const researchFeatureError = featureAccessError("research", entitlements, plans);
   const researchAllowanceError = allowanceAccessError(
-    "research_turns",
+    "ai_credits",
     1,
     entitlements,
     plans,
   );
   const improveFeatureError = featureAccessError("prompt_improvement", entitlements, plans);
   const improveAllowanceError = allowanceAccessError(
-    "optimization_turns",
+    "ai_credits",
     1,
     entitlements,
     plans,
@@ -143,6 +143,15 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
 
   const showModelDropdown = isModelDropdownVisible(mode, smartMode);
   const showModelRow = mode === "compare" || showModelDropdown;
+  const creditWarning = expensiveCreditWarning({
+    mode,
+    smartMode,
+    selectedModelKey,
+    compareModelKeys,
+    models: availableModels,
+    researchEnabled: mode === "compare" ? compareResearchMode : researchMode,
+    attachmentSizes: attachments.map((attachment) => attachment.size_bytes),
+  });
   const featureChipProps = {
     compareMode: mode === "compare",
     smartMode: mode === "single" ? smartMode : false,
@@ -153,8 +162,8 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
     onOptimizeToggle: setOptimizeMode,
     researchBlocked: Boolean(researchFeatureError || researchAllowanceError),
     optimizeBlocked: Boolean(improveFeatureError || improveAllowanceError),
-    researchAllowanceLabel: allowanceLabel(entitlements, "research_turns"),
-    optimizeAllowanceLabel: allowanceLabel(entitlements, "optimization_turns"),
+    researchAllowanceLabel: allowanceLabel(entitlements),
+    optimizeAllowanceLabel: allowanceLabel(entitlements),
     onResearchBlocked: () =>
       setSubscriptionError(researchFeatureError ?? researchAllowanceError),
     onOptimizeBlocked: () =>
@@ -225,6 +234,16 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
 
         <AttachmentStrip entitlements={entitlements} plans={plans} />
 
+        {creditWarning ? (
+          <div
+            className={styles.creditWarning}
+            aria-label="Estimated credit usage warning"
+          >
+            <CortexIcon name="cost" size={14} />
+            <span>{creditWarning}</span>
+          </div>
+        ) : null}
+
         <div className={styles.featureControls}>
           <FeatureChips
             {...featureChipProps}
@@ -251,10 +270,52 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
 
 function allowanceLabel(
   entitlements: UseSubscriptionResult["entitlements"],
-  meter: "research_turns" | "optimization_turns",
 ): string | undefined {
-  const allowance = entitlements?.allowances[meter];
-  return allowance ? `${allowance.remaining} left this period` : undefined;
+  const allowance = entitlements?.allowances.ai_credits;
+  return allowance
+    ? `${new Intl.NumberFormat().format(allowance.remaining)} credits left`
+    : undefined;
+}
+
+function expensiveCreditWarning(options: {
+  mode: "single" | "compare";
+  smartMode: boolean;
+  selectedModelKey: string;
+  compareModelKeys: string[];
+  models: ModelCatalogItem[];
+  researchEnabled: boolean;
+  attachmentSizes: number[];
+}): string | null {
+  const selectedKeys =
+    options.mode === "compare"
+      ? options.compareModelKeys.filter(Boolean)
+      : options.smartMode
+        ? []
+        : [options.selectedModelKey];
+  const selectedModels = selectedKeys
+    .map((key) =>
+      options.models.find((model) => `${model.provider}:${model.model}` === key),
+    )
+    .filter((model): model is ModelCatalogItem => Boolean(model));
+  const reasons: string[] = [];
+
+  if (selectedModels.some((model) => model.billing_class === "premium")) {
+    reasons.push("premium model");
+  }
+  if (options.mode === "compare" && selectedKeys.length >= 3) {
+    reasons.push("three-model Compare");
+  }
+  if (options.mode === "compare" && options.researchEnabled) {
+    reasons.push("web-enabled Compare");
+  }
+  if (options.attachmentSizes.some((size) => size >= 5_000_000)) {
+    reasons.push("large attachment");
+  }
+  if (reasons.length === 0) return null;
+
+  return `Higher credit use expected for ${reasons.join(
+    ", ",
+  )}. This is an estimate; final credits depend on processed context and output length.`;
 }
 
 function capitalize(value: string): string {

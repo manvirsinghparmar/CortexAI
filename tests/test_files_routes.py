@@ -111,25 +111,11 @@ def test_files_upload_uses_service_result(client, monkeypatch, session_cookie):
     assert captured["auth"].api_key is None
 
 
-def test_files_upload_reserves_and_settles_actual_bytes(client, monkeypatch, session_cookie):
+def test_files_upload_is_free_and_does_not_meter_bytes(client, monkeypatch, session_cookie):
     from server import files_service
     from server.routes import files as files_route
 
-    reservation = object()
-    reserved: list[dict[str, object]] = []
-    settled: list[dict[str, object]] = []
-
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
-    monkeypatch.setattr(
-        files_route,
-        "_reserve_subscription_usage",
-        lambda **kwargs: reserved.append(kwargs) or reservation,
-    )
-    monkeypatch.setattr(
-        files_route,
-        "_finalize_subscription_usage",
-        lambda **kwargs: settled.append(kwargs),
-    )
     monkeypatch.setattr(
         files_service,
         "upload_user_file",
@@ -161,51 +147,26 @@ def test_files_upload_reserves_and_settles_actual_bytes(client, monkeypatch, ses
     )
 
     assert response.status_code == 200
-    assert reserved[0]["operation_type"] == "file_upload"
-    assert reserved[0]["attachment_count"] == 1
-    assert reserved[0]["total_attachment_bytes"] == 5
-    assert reserved[0]["attachment_sizes"] == (5,)
-    assert settled == [
-        {
-            "reservation": reservation,
-            "successful_targets": (),
-            "research_performed": False,
-            "uploaded_bytes": 5,
-        }
-    ]
+    assert not hasattr(files_route, "_reserve_subscription_usage")
+    assert not hasattr(files_route, "_finalize_subscription_usage")
 
 
-def test_files_upload_plan_denial_is_structured_and_prevents_storage(
+def test_files_upload_relies_on_file_service_for_validation(
     client,
     monkeypatch,
     session_cookie,
 ):
     from server import files_service
-    from server.billing.entitlement_service import EntitlementDenial
-    from server.billing.errors import EntitlementDeniedError
     from server.routes import files as files_route
 
-    storage_called = False
-
-    def deny_upload(**_kwargs):
-        raise EntitlementDeniedError(
-            EntitlementDenial(
-                code="feature_not_in_plan",
-                message="A selected file exceeds the Free plan's per-file limit.",
-                feature="attachment_size",
-                current_plan="free",
-                recommended_plan="plus",
-            )
+    def reject_upload(**_kwargs):
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "file_too_large", "message": "The file is too large."},
         )
 
-    def fake_upload(**_kwargs):
-        nonlocal storage_called
-        storage_called = True
-        raise AssertionError("storage must not run after subscription denial")
-
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
-    monkeypatch.setattr(files_route, "_reserve_subscription_usage", deny_upload)
-    monkeypatch.setattr(files_service, "upload_user_file", fake_upload)
+    monkeypatch.setattr(files_service, "upload_user_file", reject_upload)
 
     response = client.post(
         "/v1/files/upload",
@@ -218,29 +179,15 @@ def test_files_upload_plan_denial_is_structured_and_prevents_storage(
         cookies=session_cookie,
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["feature"] == "attachment_size"
-    assert storage_called is False
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "file_too_large"
 
 
-def test_files_upload_failure_releases_reserved_bytes(client, monkeypatch, session_cookie):
+def test_files_upload_failure_does_not_attempt_credit_release(client, monkeypatch, session_cookie):
     from server import files_service
     from server.routes import files as files_route
 
-    reservation = object()
-    released: list[dict[str, object]] = []
-
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
-    monkeypatch.setattr(
-        files_route,
-        "_reserve_subscription_usage",
-        lambda **_kwargs: reservation,
-    )
-    monkeypatch.setattr(
-        files_route,
-        "_release_subscription_usage",
-        lambda **kwargs: released.append(kwargs),
-    )
 
     def fail_upload(**_kwargs):
         raise HTTPException(
@@ -262,12 +209,7 @@ def test_files_upload_failure_releases_reserved_bytes(client, monkeypatch, sessi
     )
 
     assert response.status_code == 502
-    assert released == [
-        {
-            "reservation": reservation,
-            "reason": "upload_validation_or_storage_failed",
-        }
-    ]
+    assert not hasattr(files_route, "_release_subscription_usage")
 
 
 def test_files_upload_propagates_http_errors(client, monkeypatch, session_cookie):

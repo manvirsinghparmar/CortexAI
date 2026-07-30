@@ -20,7 +20,11 @@ from config.provider_catalog import (
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import attachments as attachments_service
-from server.billing.enforcement_service import ReservedRequestUsage, resolve_model_target
+from server.billing.enforcement_service import (
+    BillableModelUsage,
+    ReservedRequestUsage,
+    resolve_model_target,
+)
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
@@ -494,6 +498,37 @@ def _successful_billing_targets(
     )
 
 
+def _billing_input_text(request: ChatRequest) -> str:
+    parts = [str(request.prompt or "")]
+    if request.context and request.context.conversation_history:
+        parts.extend(str(item.content or "") for item in request.context.conversation_history)
+    return "\n".join(part for part in parts if part)
+
+
+def _billing_operation_type(request: ChatRequest) -> str:
+    if request.regeneration is not None:
+        return "regenerate"
+    if request.context and request.context.conversation_history:
+        return "follow_up"
+    return "ask"
+
+
+def _billable_model_usages(response: object) -> tuple[BillableModelUsage, ...]:
+    if bool(getattr(response, "is_error", False)):
+        return ()
+    usage = getattr(response, "token_usage", None)
+    return (
+        BillableModelUsage(
+            provider=str(getattr(response, "provider", "") or ""),
+            model=str(getattr(response, "model", "") or ""),
+            input_tokens=max(0, int(getattr(usage, "prompt_tokens", 0) or 0)),
+            output_tokens=max(0, int(getattr(usage, "completion_tokens", 0) or 0)),
+            output_text=str(getattr(response, "text", "") or ""),
+            provider_cost_usd=max(0.0, float(getattr(response, "estimated_cost", 0.0) or 0.0)),
+        ),
+    )
+
+
 def _reserve_chat_usage(
     *,
     resolution: persistence_service.ApiKeyPersistenceResolution,
@@ -502,6 +537,9 @@ def _reserve_chat_usage(
     research_enabled: bool,
     orchestrator: CortexOrchestrator,
     resolved_attachments: list[attachments_service.ResolvedAttachment],
+    input_text: str,
+    max_output_tokens: int | None,
+    operation_type: str,
 ) -> ReservedRequestUsage:
     try:
         target = resolve_model_target(
@@ -512,13 +550,15 @@ def _reserve_chat_usage(
         return _reserve_subscription_usage(
             user_id=resolution.user_id,
             request_id=request_id,
-            operation_type="ask",
+            operation_type=operation_type,
             model_targets=(target,),
             research_enabled=research_enabled,
             smart_routing=execution_plan.strategy == "smart_orchestrator",
             attachment_count=len(resolved_attachments),
             total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
             attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
+            input_text=input_text,
+            max_output_tokens=max_output_tokens,
         )
     except HTTPException:
         raise
@@ -552,6 +592,11 @@ def _finalize_chat_usage(
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=successful_targets,
+            model_usages=(
+                _billable_model_usages(response)
+                if settle_model_response
+                else ()
+            ),
             research_performed=_research_was_performed(response),
             file_analysis_performed=attachments_present and bool(successful_targets),
         )
@@ -590,6 +635,12 @@ async def chat(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
+    if (
+        research_mode
+        and request.regeneration is not None
+        and not request.regeneration.refresh_research
+    ):
+        orchestrator_research_mode = "auto"
 
     if request.regeneration is not None and not API_DB_ENABLED:
         raise HTTPException(
@@ -677,7 +728,8 @@ async def chat(
             mode="chat",
         )
         inference_attachments = attachments_service.materialize_inference_attachments(
-            resolved_attachments
+            resolved_attachments,
+            query_text=request.prompt,
         )
         persistence_attachments = attachments_service.build_request_attachment_persistence_items(
             resolved_attachments=resolved_attachments,
@@ -704,6 +756,9 @@ async def chat(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            input_text=_billing_input_text(request),
+            max_output_tokens=request.max_tokens,
+            operation_type=_billing_operation_type(request),
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:
@@ -807,6 +862,12 @@ async def chat_stream(
     routing = request.routing
     research_mode = bool(routing and routing.research_mode)
     orchestrator_research_mode = "on" if research_mode else "off"
+    if (
+        research_mode
+        and request.regeneration is not None
+        and not request.regeneration.refresh_research
+    ):
+        orchestrator_research_mode = "auto"
 
     if request.regeneration is not None and not API_DB_ENABLED:
         raise HTTPException(
@@ -894,7 +955,8 @@ async def chat_stream(
             mode="chat",
         )
         inference_attachments = attachments_service.materialize_inference_attachments(
-            resolved_attachments
+            resolved_attachments,
+            query_text=request.prompt,
         )
         persistence_attachments = attachments_service.build_request_attachment_persistence_items(
             resolved_attachments=resolved_attachments,
@@ -923,6 +985,9 @@ async def chat_stream(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            input_text=_billing_input_text(request),
+            max_output_tokens=request.max_tokens,
+            operation_type=_billing_operation_type(request),
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:

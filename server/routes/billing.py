@@ -152,14 +152,7 @@ async def billing_plans():
                     ),
                 ),
                 allowances=PublicBillingPlanAllowancesDTO(
-                    model_responses=plan.allowances.model_responses,
-                    advanced_model_responses=(
-                        plan.allowances.advanced_model_responses
-                    ),
-                    ultra_model_responses=plan.allowances.ultra_model_responses,
-                    research_turns=plan.allowances.research_turns,
-                    optimization_turns=plan.allowances.optimization_turns,
-                    file_analysis_turns=plan.allowances.file_analysis_turns,
+                    ai_credits=plan.allowances.ai_credits,
                 ),
             )
             for plan in catalog.list_plans()

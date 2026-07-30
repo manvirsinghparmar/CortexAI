@@ -44,20 +44,21 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Consumer subscription plans: `config/subscription_plans.yaml`
 - Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
 - Effective account/subscription lifecycle and entitlement decisions: `server/billing/account_service.py`, `server/billing/subscription_service.py`, `server/billing/entitlement_service.py`, `server/billing/errors.py`
-- Ask/Compare/Optimize/upload authorization, conservative Smart premium-envelope reservation, and actual-success finalization: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`, `server/routes/optimize.py`, `server/routes/files.py`
+- Credit arithmetic and conservative token estimates: `server/billing/credit_calculator.py`, `server/billing/credit_estimator.py`; Ask/Compare/Optimize/Cortex Analysis authorization, conservative credit reservation, and actual-success reconciliation: `server/billing/enforcement_service.py`; committing route adapters: `server/persistence.py`; request integration: `server/routes/chat.py`, `server/routes/compare.py`, `server/routes/optimize.py`, `server/routes/cortex_analysis.py`
 - Atomic allowance reservation lifecycle: `server/billing/metering_service.py`; transaction-neutral locks and counter mutations: `db/billing_repository.py`
-- Public effective-plan snapshot: `server/routes/entitlements.py` (`GET /v1/entitlements`); compatibility fields: `server/routes/whoami.py`
+- Public effective-plan snapshot and authenticated itemized credit history: `server/routes/entitlements.py` (`GET /v1/entitlements`, `GET /v1/credits/transactions`); compatibility fields: `server/routes/whoami.py`
 - Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; public plans, effective subscription, hosted-session, and webhook endpoints: `server/routes/billing.py`
 - React subscription transport, access presentation, and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`, `frontend-react/src/subscription/subscriptionAccess.ts`; contract/denial tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`, `subscriptionDenialDraft.test.tsx`
 - React consumer plan management: route wiring in `frontend-react/src/App.tsx`; public catalogue in `frontend-react/src/pages/PricingPage.tsx`; authenticated lifecycle/allowance view in `frontend-react/src/pages/BillingPage.tsx`; shared responsive account shell in `frontend-react/src/components/subscription/SubscriptionPageShell.tsx`; backend-plan-to-menu mapping in `frontend-react/src/subscription/accountMenuPresentation.ts`; summary navigation in `frontend-react/src/components/layout/AccountMenu.tsx` across Chat, Models, Usage, Pricing, and Billing; state/route tests in `frontend-react/src/__tests__/subscriptionPages.test.tsx`, `accountMenuPresentation.test.ts`, and `subscriptionRoutes.test.tsx`
-- React entitlement UX: reusable dialog/badge/allowance/banner components in `frontend-react/src/components/subscription/`; model/Compare/Web/Improve/file controls in `frontend-react/src/components/composer/`; draft-safe backend denial handling in `frontend-react/src/hooks/useChat.ts` and `store/chatStore.ts`; static-to-live model-class join in `frontend-react/src/pages/ModelsPage.tsx`; Usage allowance panel in `frontend-react/src/pages/UsageInsightsPage.tsx`; behavior/accessibility/mobile coverage in `frontend-react/src/__tests__/subscriptionGating.test.tsx`
+- React entitlement UX: reusable dialog/badge/allowance/banner components in `frontend-react/src/components/subscription/`; model/Compare/Web/Improve/file controls in `frontend-react/src/components/composer/`; draft-safe backend denial handling in `frontend-react/src/hooks/useChat.ts` and `store/chatStore.ts`; static-to-live model-category/credit metadata join in `frontend-react/src/pages/ModelsPage.tsx`; AI-credit balance and reconciliation activity in `frontend-react/src/pages/UsageInsightsPage.tsx`; behavior/accessibility/mobile coverage in `frontend-react/src/__tests__/subscriptionGating.test.tsx`
 - Cost tables: `config/pricing.py`
+- Attachment ownership/capability preflight, cached parsing, query-relevant chunk selection, and provider-neutral materialization: `server/attachments.py`; upload/ingestion lifecycle and private parsed-text caching: `server/files_service.py`
 
 ## Persistence and Reporting
 
 - SQLAlchemy table reflection and repository access: `db/`
-- B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/billing_repository.py`, `db/tables.py`
-- Billing constraint/lifecycle/entitlement/metering/Stripe-session/webhook/route coverage and opt-in PostgreSQL concurrency coverage: `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_stripe_webhooks.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
+- B2C billing persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/migrations/20260729_add_unified_ai_credits.sql`, `db/billing_repository.py`, `db/tables.py`
+- Credit arithmetic, constraints, lifecycle, entitlement, metering, Stripe, route, and opt-in PostgreSQL concurrency coverage: `tests/test_credit_calculator.py`, `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_stripe_webhooks.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Cortex Analysis source normalization, anonymized GPT-5.4-mini call, structured validation, and source fingerprinting: `server/cortex_analysis.py`
 - Cortex Analysis persistence/revision migration: `db/migrations/20260727_add_cortex_analysis_runs.sql`
@@ -150,10 +151,10 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Keep `config/pricing.py` and `config/model_registry.yaml` aligned
   3. Update contract docs and tests
 
-- Change subscription plan definitions or model billing classes:
-  1. Update `config/subscription_plans.yaml` and/or model `billing_class` values in `config/model_registry.yaml`
-  2. Keep billing classes separate from smart-routing `T0`-`T3` tiers
-  3. Validate with `tests/test_subscription_plan_catalog.py`, `tests/test_model_registry_capabilities.py`, and the `/v1/models` contract tests
+- Change subscription plan definitions or model credit economics:
+  1. Update `config/subscription_plans.yaml` and/or each model's access category, input/output multipliers, usage label, and pricing version in `config/model_registry.yaml`
+  2. Keep model access categories separate from smart-routing `T0`-`T3` tiers; never add a fallback multiplier
+  3. Validate with `tests/test_credit_calculator.py`, `tests/test_subscription_plan_catalog.py`, `tests/test_model_registry_capabilities.py`, and the `/v1/models` contract tests
 
 - Change DB schema:
   1. Add SQL migration under `db/migrations/`
@@ -161,7 +162,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Follow `docs/runbooks/db-migrations.md`
 
 - Change B2C billing persistence:
-  1. Keep schema constraints/indexes in `db/migrations/20260718_add_b2c_billing_foundation.sql` aligned with `db/billing_repository.py`
+  1. Keep schema constraints/indexes in `db/migrations/20260718_add_b2c_billing_foundation.sql` and `db/migrations/20260729_add_unified_ai_credits.sql` aligned with `db/billing_repository.py`
   2. Register new tables for lazy reflection in `db/tables.py` and export public repository functions through `db/__init__.py`
   3. Keep repository functions transaction-neutral; callers own commit/rollback boundaries
   4. Validate portable repository behavior in `tests/test_billing_repository.py` and PostgreSQL row locking with `BILLING_TEST_DATABASE_URL`
@@ -172,7 +173,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   2. Keep lifecycle state, Free fallback, development override guards, and period selection in `server/billing/subscription_service.py`
   3. Keep feature/model/file checks and required allowance quantities in `server/billing/entitlement_service.py`; atomic reserve/settle/release/expiry mutations belong in `server/billing/metering_service.py`
   4. Update `server/schemas/responses.py`, `/v1/entitlements`, `/v1/whoami`, Postman, and `tests/test_billing_entitlements.py` together
-  5. Preserve the separation between smart-routing tiers and subscription billing classes, and fail unknown plan/class/status data conservatively
+  5. Preserve the separation between smart-routing tiers and model access categories, and fail unknown plan/category/economics/status data conservatively
 
 - Change Stripe Checkout or Customer Portal behavior:
   1. Keep credentials, paid-plan Price mapping, and all redirect URLs in `server/billing/stripe_gateway.py`; never accept those values from request bodies
@@ -206,8 +207,8 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Keep transaction orchestration and transition rules in `server/billing/metering_service.py`; keep SQL row locks and counter mutations in `db/billing_repository.py`
   2. Preserve caller-owned commit/rollback boundaries, deterministic counter lock ordering, account-scoped request idempotency, nonnegative counters, and conservative configuration failures
   3. Validate portable transitions in `tests/test_billing_metering.py` and real concurrent overuse prevention with `BILLING_TEST_DATABASE_URL` in `tests/test_billing_postgres_integration.py`
-  4. Ask/Compare/Optimize/upload routes integrate through `server/billing/enforcement_service.py`; preserve pre-execution reservation, output-aware settlement, and failure release without folding provider, optimizer, or object-storage execution into billing transactions
-  5. Attachment analysis is one turn per Ask/Compare action, not per file or Compare target; upload consumes only the server-observed `uploaded_bytes`
+  4. Ask/Compare/Optimize/Cortex Analysis routes integrate through `server/billing/enforcement_service.py`; preserve pre-execution credit reservation, actual-usage settlement, fixed research charging, and failure release without folding provider execution into billing transactions
+  5. Keep uploads free, account attachment context through the consuming model call, and write one immutable `credit_transactions` row per reconciled item
 
 - Investigate production logging incidents on AWS EC2:
   1. Follow `docs/runbooks/aws-ec2-logging.md`

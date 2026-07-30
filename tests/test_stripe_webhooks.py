@@ -436,7 +436,7 @@ def test_subscription_update_changes_plan_without_resetting_period_counters(webh
     )
     assert _post(client, created).status_code == 200
     period = db.execute(select(tables["usage_periods"])).mappings().one()
-    counter = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    counter = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
     db.execute(
         update(tables["usage_counters"])
         .where(tables["usage_counters"].c.id == counter["id"])
@@ -532,7 +532,7 @@ def test_invoice_paid_resets_period_once_and_duplicate_preserves_usage(webhook_h
     )
     assert _post(client, payload).status_code == 200
     period = db.execute(select(tables["usage_periods"])).mappings().one()
-    counter = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    counter = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
     db.execute(
         update(tables["usage_counters"])
         .where(tables["usage_counters"].c.id == counter["id"])

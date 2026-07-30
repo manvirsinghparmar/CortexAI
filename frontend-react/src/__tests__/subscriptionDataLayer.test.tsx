@@ -6,7 +6,7 @@ import {
   fetchPlans,
   fetchSubscription,
 } from "../api/billing";
-import { fetchEntitlements } from "../api/entitlements";
+import { fetchCreditTransactions, fetchEntitlements } from "../api/entitlements";
 import { checkoutReturnFromLocation, useSubscription } from "../hooks/useSubscription";
 import { toSubscriptionError } from "../subscription/subscriptionErrors";
 import type {
@@ -34,6 +34,33 @@ describe("subscription data layer", () => {
       if (path === "/v1/billing/plans") return jsonResponse(plansResponse());
       if (path === "/v1/billing/subscription") return jsonResponse(subscriptionResponse());
       if (path === "/v1/entitlements") return jsonResponse(entitlementsResponse());
+      if (path === "/v1/credits/transactions?limit=20&offset=0") {
+        return jsonResponse({
+          items: [
+            {
+              id: "credit-1",
+              request_id: "request-1",
+              operation_type: "ask",
+              item_type: "model",
+              provider: "openai",
+              model: "gpt-4.1-mini",
+              input_tokens: 100,
+              output_tokens: 50,
+              input_credits: 100,
+              output_credits: 200,
+              fixed_credits: 0,
+              total_credits: 300,
+              provider_cost_usd: 0.001,
+              usage_estimated: false,
+              pricing_version: "2026-07-29",
+              metadata: {},
+              created_at: "2026-07-29T12:00:00Z",
+            },
+          ],
+          limit: 20,
+          offset: 0,
+        });
+      }
       if (path === "/v1/billing/checkout-session") {
         expect(JSON.parse(String(init?.body))).toEqual({
           plan_code: "plus",
@@ -55,6 +82,9 @@ describe("subscription data layer", () => {
     await expect(fetchPlans()).resolves.toEqual(plansResponse());
     await expect(fetchSubscription()).resolves.toEqual(subscriptionResponse());
     await expect(fetchEntitlements()).resolves.toEqual(entitlementsResponse());
+    await expect(fetchCreditTransactions()).resolves.toMatchObject({
+      items: [{ total_credits: 300 }],
+    });
     await expect(createCheckoutSession("plus")).resolves.toMatchObject({
       destination: "checkout",
     });
@@ -62,7 +92,7 @@ describe("subscription data layer", () => {
       portal_url: "https://billing.stripe.com/p/session/unit",
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     for (const [, init] of fetchMock.mock.calls) {
       expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
     }
@@ -72,10 +102,12 @@ describe("subscription data layer", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        errorResponse(429, {
-          code: "monthly_allowance_exhausted",
-          message: "The monthly research allowance is exhausted.",
-          meter: "research_turns",
+        errorResponse(402, {
+          code: "insufficient_credits",
+          message: "This request needs 15,000 AI credits, but only 2,000 remain.",
+          meter: "ai_credits",
+          required: 15_000,
+          remaining: 2_000,
           current_plan: "free",
           recommended_plan: "plus",
         }),
@@ -86,12 +118,14 @@ describe("subscription data layer", () => {
     const error = toSubscriptionError(rawError);
 
     expect(error.name).toBe("SubscriptionError");
-    expect(error.code).toBe("monthly_allowance_exhausted");
+    expect(error.code).toBe("insufficient_credits");
     expect(error.kind).toBe("allowance");
-    expect(error.status).toBe(429);
-    expect(error.retryable).toBe(true);
+    expect(error.status).toBe(402);
+    expect(error.retryable).toBe(false);
     expect(error.details).toMatchObject({
-      meter: "research_turns",
+      meter: "ai_credits",
+      required: 15_000,
+      remaining: 2_000,
       current_plan: "free",
       recommended_plan: "plus",
     });
@@ -147,7 +181,7 @@ describe("subscription data layer", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.entitlements?.plan.code).toBe("free");
-    expect(result.current.canUseModel("ultra")).toBe(false);
+    expect(result.current.canUseModel("premium")).toBe(false);
     expect(result.current.canCompareTargets(3)).toBe(false);
     expect(result.current.canUseResearch).toBe(true);
   });
@@ -323,9 +357,9 @@ function plansResponse(): BillingPlansResponse {
     billing_enabled: true,
     plans: (
       [
-        ["free", "Free", 0, false, ["standard", "advanced"]],
-        ["plus", "Plus", 6.99, true, ["standard", "advanced"]],
-        ["pro", "Pro", 12.99, false, ["standard", "advanced", "ultra"]],
+        ["free", "Free", 0, false, ["economical", "standard"]],
+        ["plus", "Plus", 6.99, true, ["economical", "standard", "advanced"]],
+        ["pro", "Pro", 12.99, false, ["economical", "standard", "advanced", "premium"]],
       ] as const
     ).map(([code, displayName, monthlyPrice, recommended, billingClasses]) => ({
       code,
@@ -340,12 +374,7 @@ function plansResponse(): BillingPlansResponse {
         allowed_billing_classes: [...billingClasses],
       },
       allowances: {
-        model_responses: code === "free" ? 30 : 400,
-        advanced_model_responses: code === "free" ? 5 : 75,
-        ultra_model_responses: code === "pro" ? 100 : 0,
-        research_turns: code === "free" ? 5 : 100,
-        optimization_turns: code === "free" ? 10 : 100,
-        file_analysis_turns: code === "free" ? 3 : 50,
+        ai_credits: code === "free" ? 100_000 : code === "plus" ? 1_000_000 : 3_000_000,
       },
     })),
   };
@@ -389,14 +418,23 @@ function entitlementsResponse(planCode: SubscriptionPlanCode = "free"): Entitlem
     },
     model_access: {
       allowed_billing_classes:
-        planCode === "pro" ? ["standard", "advanced", "ultra"] : ["standard", "advanced"],
+        planCode === "pro"
+          ? ["economical", "standard", "advanced", "premium"]
+          : planCode === "plus"
+            ? ["economical", "standard", "advanced"]
+            : ["economical", "standard"],
     },
     limits: {
       max_files_per_request: paid ? 10 : 1,
       max_file_bytes: paid ? 25_000_000 : 10_000_000,
     },
     allowances: {
-      model_responses: { used: 1, reserved: 0, limit: paid ? 400 : 30, remaining: 29 },
+      ai_credits: {
+        used: 1,
+        reserved: 0,
+        limit: paid ? 1_000_000 : 100_000,
+        remaining: paid ? 999_999 : 99_999,
+      },
     },
     period: {
       starts_at: "2026-07-01T00:00:00Z",

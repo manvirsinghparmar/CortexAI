@@ -52,18 +52,18 @@ describe("subscription denial draft preservation", () => {
     expect(state.responses).toEqual([]);
     expect(state.streaming).toBe(false);
     expect(state.error).toBeNull();
-    expect(state.subscriptionError?.code).toBe("monthly_allowance_exhausted");
-    expect(state.subscriptionError?.details.meter).toBe("model_responses");
+    expect(state.subscriptionError?.code).toBe("insufficient_credits");
+    expect(state.subscriptionError?.details.meter).toBe("ai_credits");
   });
 });
 
 async function* deniedStream() {
   yield* [];
-  throw new ApiClientError(429, "The monthly model response allowance has been exhausted.", {
+  throw new ApiClientError(402, "This request needs 4,096 AI credits, but only 0 remain.", {
     detail: {
-      code: "monthly_allowance_exhausted",
-      message: "The monthly model response allowance has been exhausted.",
-      meter: "model_responses",
+      code: "insufficient_credits",
+      message: "This request needs 4,096 AI credits, but only 0 remain.",
+      meter: "ai_credits",
       current_plan: "free",
       recommended_plan: "plus",
       remaining: 0,

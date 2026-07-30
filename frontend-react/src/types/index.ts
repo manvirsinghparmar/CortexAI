@@ -36,6 +36,7 @@ export interface ChatRequest {
   attachments?: AttachmentRequestItem[];
   regeneration?: {
     source_request_id: string;
+    refresh_research?: boolean;
   };
   temperature?: number;
   max_tokens?: number;
@@ -96,6 +97,8 @@ export interface ChatResponse {
   token_usage: TokenUsage | null;
   estimated_cost: number;
   cost_currency: string;
+  ai_credits?: number;
+  credit_usage_estimated?: boolean;
   finish_reason?: string;
   error?: ApiError;
   web_source_items: WebSourceItem[];
@@ -114,10 +117,11 @@ export interface CompareResponse {
   error_count: number;
   total_tokens: number;
   total_cost: number;
+  total_ai_credits?: number;
   timestamp: string;
 }
 
-export type ModelBillingClass = "standard" | "advanced" | "ultra";
+export type ModelBillingClass = "economical" | "standard" | "advanced" | "premium";
 
 export type SubscriptionPlanCode = "free" | "plus" | "pro";
 
@@ -133,14 +137,7 @@ export type SubscriptionStatus =
   | "paused"
   | "configuration_error";
 
-export type SubscriptionMeterKey =
-  | "model_responses"
-  | "advanced_model_responses"
-  | "ultra_model_responses"
-  | "research_turns"
-  | "optimization_turns"
-  | "file_analysis_turns"
-  | "uploaded_bytes";
+export type SubscriptionMeterKey = "ai_credits";
 
 export interface AllowanceCounter {
   used: number;
@@ -158,12 +155,7 @@ export interface PublicBillingPlanFeatures {
 }
 
 export interface PublicBillingPlanAllowances {
-  model_responses: number;
-  advanced_model_responses: number;
-  ultra_model_responses: number;
-  research_turns: number;
-  optimization_turns: number;
-  file_analysis_turns: number;
+  ai_credits: number;
 }
 
 export interface PublicBillingPlan {
@@ -226,6 +218,32 @@ export interface EntitlementsResponse {
   };
 }
 
+export interface CreditTransaction {
+  id: string;
+  request_id: string;
+  operation_type: string;
+  item_type: "model" | "research" | "adjustment";
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  input_credits: number;
+  output_credits: number;
+  fixed_credits: number;
+  total_credits: number;
+  provider_cost_usd: number;
+  usage_estimated: boolean;
+  pricing_version: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreditTransactionsResponse {
+  items: CreditTransaction[];
+  limit: number;
+  offset: number;
+}
+
 export interface CheckoutSessionResponse {
   checkout_url: string;
   destination: "checkout" | "portal";
@@ -240,6 +258,11 @@ export interface ModelCatalogItem {
   model: string;
   tier: string;
   billing_class: ModelBillingClass;
+  access_category?: ModelBillingClass;
+  input_credit_multiplier?: number;
+  output_credit_multiplier?: number;
+  credit_usage_label?: string;
+  credit_pricing_version?: string;
   input_cost_per_1m: number;
   output_cost_per_1m: number;
   context_limit: number;

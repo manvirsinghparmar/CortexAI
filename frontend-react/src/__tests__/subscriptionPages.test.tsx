@@ -141,10 +141,10 @@ describe("BillingPageContent", () => {
     expect(screen.getByText("PLUS PLAN")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Renews August 18, 2026")).toBeInTheDocument();
-    expect(screen.getByText("124 / 400")).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Model responses" })).toHaveAttribute(
+    expect(screen.getByText("124,000 / 1,000,000")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "AI credits" })).toHaveAttribute(
       "aria-valuenow",
-      "124",
+      "124000",
     );
 
     await user.click(screen.getByRole("button", { name: "Manage plan" }));
@@ -267,9 +267,9 @@ function plansResponse(billingEnabled = true): BillingPlansResponse {
     billing_enabled: billingEnabled,
     plans: (
       [
-        ["free", "Free", 0, false, 30, 5, 0, 2, 5, 10, 3],
-        ["plus", "Plus", 6.99, true, 400, 75, 0, 2, 50, 200, 30],
-        ["pro", "Pro", 12.99, false, 1200, 300, 40, 3, 200, 500, 100],
+        ["free", "Free", 0, false, 100_000, 2],
+        ["plus", "Plus", 6.99, true, 1_000_000, 2],
+        ["pro", "Pro", 12.99, false, 3_000_000, 3],
       ] as const
     ).map(
       ([
@@ -277,13 +277,8 @@ function plansResponse(billingEnabled = true): BillingPlansResponse {
         displayName,
         price,
         recommended,
-        responses,
-        advanced,
-        ultra,
+        credits,
         compare,
-        research,
-        optimize,
-        files,
       ]) => ({
         code,
         display_name: displayName,
@@ -295,15 +290,14 @@ function plansResponse(billingEnabled = true): BillingPlansResponse {
           prompt_improvement_enabled: true,
           file_analysis_enabled: true,
           allowed_billing_classes:
-            ultra > 0 ? ["standard", "advanced", "ultra"] : ["standard", "advanced"],
+            code === "pro"
+              ? ["economical", "standard", "advanced", "premium"]
+              : code === "plus"
+                ? ["economical", "standard", "advanced"]
+                : ["economical", "standard"],
         },
         allowances: {
-          model_responses: responses,
-          advanced_model_responses: advanced,
-          ultra_model_responses: ultra,
-          research_turns: research,
-          optimization_turns: optimize,
-          file_analysis_turns: files,
+          ai_credits: credits,
         },
       }),
     ),
@@ -330,12 +324,8 @@ function entitlementsResponse(
   status: SubscriptionStatus = planCode === "free" ? "free" : "active",
   cancelAtPeriodEnd = false,
 ): EntitlementsResponse {
-  const limits =
-    planCode === "free"
-      ? [30, 5, 0, 5, 10, 3]
-      : planCode === "plus"
-        ? [400, 75, 0, 50, 200, 30]
-        : [1200, 300, 40, 200, 500, 100];
+  const creditLimit =
+    planCode === "free" ? 100_000 : planCode === "plus" ? 1_000_000 : 3_000_000;
   const counters = (used: number, limit: number) => ({
     used,
     reserved: 0,
@@ -358,26 +348,24 @@ function entitlementsResponse(
       research_enabled: true,
       prompt_improvement_enabled: true,
       file_analysis_enabled: true,
-      usage_export_enabled: true,
+      usage_export_enabled: planCode !== "free",
       saved_history_enabled: true,
       models_catalog_enabled: true,
     },
     model_access: {
       allowed_billing_classes:
-        planCode === "pro" ? ["standard", "advanced", "ultra"] : ["standard", "advanced"],
+        planCode === "pro"
+          ? ["economical", "standard", "advanced", "premium"]
+          : planCode === "plus"
+            ? ["economical", "standard", "advanced"]
+            : ["economical", "standard"],
     },
     limits: {
       max_files_per_request: planCode === "free" ? 1 : 10,
       max_file_bytes: planCode === "free" ? 10_000_000 : 25_000_000,
     },
     allowances: {
-      model_responses: counters(planCode === "plus" ? 124 : 4, limits[0]),
-      advanced_model_responses: counters(planCode === "plus" ? 17 : 1, limits[1]),
-      ultra_model_responses: counters(0, limits[2]),
-      research_turns: counters(planCode === "plus" ? 8 : 1, limits[3]),
-      optimization_turns: counters(2, limits[4]),
-      file_analysis_turns: counters(planCode === "plus" ? 4 : 0, limits[5]),
-      uploaded_bytes: counters(0, 20_000_000),
+      ai_credits: counters(planCode === "plus" ? 124_000 : 4_000, creditLimit),
     },
     period: {
       starts_at: "2026-07-18T00:00:00Z",

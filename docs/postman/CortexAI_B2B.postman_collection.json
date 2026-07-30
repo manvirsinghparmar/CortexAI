@@ -203,7 +203,7 @@
               }
             ],
             "url": "{{base_url}}/v1/entitlements",
-            "description": "Returns the server-resolved plan, lifecycle state, features, model billing classes, server-owned file limits, current period, and all seven allowance counters. BILLING_ENABLED=false resolves Free without Stripe."
+            "description": "Returns the server-resolved plan, lifecycle state, features, model access categories, server-owned file limits, current period, and unified AI-credit allowance. BILLING_ENABLED=false resolves Free without Stripe."
           },
           "event": [
             {
@@ -222,8 +222,45 @@
                   "  pm.expect(body.limits.max_file_bytes).to.be.above(0);",
                   "  pm.expect(body).to.have.property('allowances');",
                   "  pm.expect(body).to.have.property('period');",
-                  "  pm.expect(Object.keys(body.allowances)).to.have.lengthOf(7);",
+                  "  pm.expect(Object.keys(body.allowances)).to.eql(['ai_credits']);",
+                  "  pm.expect(body.allowances.ai_credits.limit).to.be.above(0);",
                   "  Object.keys(body.allowances).forEach(function (meter) { pm.expect(body.allowances[meter].remaining).to.be.at.least(0); });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/credits/transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/credits/transactions?limit=20&offset=0",
+            "description": "Returns newest immutable, itemized AI-credit reconciliation rows for the authenticated billing account."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('credit transactions response shape', function () {",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "  pm.expect(body.limit).to.eql(20);",
+                  "  pm.expect(body.offset).to.eql(0);",
+                  "  if (body.items.length > 0) {",
+                  "    pm.expect(body.items[0].total_credits).to.be.at.least(0);",
+                  "    pm.expect(body.items[0]).to.have.property('pricing_version');",
+                  "    pm.expect(body.items[0]).to.have.property('usage_estimated');",
+                  "  }",
                   "});"
                 ]
               }
@@ -497,7 +534,12 @@
                   "  pm.expect(body.models).to.be.an('array');",
                   "  pm.expect(body.enabled_only).to.eql(true);",
                   "  if (body.models.length > 0) {",
-                  "    pm.expect(body.models[0].billing_class).to.be.oneOf(['standard', 'advanced', 'ultra']);",
+                  "    pm.expect(body.models[0].billing_class).to.be.oneOf(['economical', 'standard', 'advanced', 'premium']);",
+                  "    pm.expect(body.models[0].access_category).to.eql(body.models[0].billing_class);",
+                  "    pm.expect(body.models[0].input_credit_multiplier).to.be.above(0);",
+                  "    pm.expect(body.models[0].output_credit_multiplier).to.be.above(0);",
+                  "    pm.expect(body.models[0]).to.have.property('credit_usage_label');",
+                  "    pm.expect(body.models[0]).to.have.property('credit_pricing_version');",
                   "    pm.expect(body.models[0]).to.have.property('supports_image_input');",
                   "  }",
                   "});"

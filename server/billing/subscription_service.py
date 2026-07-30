@@ -25,12 +25,11 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_PAID_STATUSES = frozenset({"trialing", "active"})
+_PAID_STATUSES = frozenset({"active"})
 _FREE_STATUSES = frozenset({"unpaid", "incomplete", "incomplete_expired", "paused"})
 _DEVELOPMENT_ENVIRONMENTS = frozenset({"local", "dev", "development"})
 _UNRESTRICTED_PLAN_NAME = "unrestricted"
 _UNRESTRICTED_COUNT_ALLOWANCE = 1_000_000_000
-_UNRESTRICTED_UPLOAD_ALLOWANCE = 1_000_000_000_000_000
 
 
 @dataclass(frozen=True)
@@ -93,13 +92,7 @@ def _development_unrestricted_plan(catalog: PlanCatalog) -> SubscriptionPlan:
         stripe_price_env=None,
         allowances=replace(
             pro.allowances,
-            model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
-            advanced_model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
-            ultra_model_responses=_UNRESTRICTED_COUNT_ALLOWANCE,
-            research_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
-            optimization_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
-            file_analysis_turns=_UNRESTRICTED_COUNT_ALLOWANCE,
-            uploaded_bytes=_UNRESTRICTED_UPLOAD_ALLOWANCE,
+            ai_credits=_UNRESTRICTED_COUNT_ALLOWANCE,
         ),
         limits=replace(
             pro.limits,

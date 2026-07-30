@@ -151,7 +151,7 @@ describe("UsageInsightsPage states", () => {
 
     expect(screen.getByRole("heading", { name: "Plan allowances" })).toBeInTheDocument();
     expect(
-      screen.getByRole("progressbar", { name: "Model responses: 20 left of 30" }),
+      screen.getByRole("progressbar", { name: "AI credits: 90,000 left of 100,000" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Models that replied" })).toBeInTheDocument();
   });
@@ -293,6 +293,7 @@ describe("UsageInsightsPage states", () => {
       error: null,
       reload: vi.fn(),
     };
+    hookMocks.subscriptionState.current = { entitlements: entitlementFixture("plus") };
 
     try {
       renderPage();
@@ -486,7 +487,8 @@ function expectedTrailingPeriod(days: number) {
   };
 }
 
-function entitlementFixture(): EntitlementsResponse {
+function entitlementFixture(planCode: "free" | "plus" = "free"): EntitlementsResponse {
+  const isPaid = planCode === "plus";
   const counter = (used: number, limit: number) => ({
     used,
     reserved: 0,
@@ -495,10 +497,10 @@ function entitlementFixture(): EntitlementsResponse {
   });
   return {
     plan: {
-      code: "free",
-      display_name: "Free",
-      status: "free",
-      source: "default",
+      code: planCode,
+      display_name: isPaid ? "Plus" : "Free",
+      status: isPaid ? "active" : "free",
+      source: isPaid ? "stripe" : "default",
       renews_at: "2026-08-19T00:00:00Z",
       cancel_at_period_end: false,
       grace_until: null,
@@ -509,20 +511,21 @@ function entitlementFixture(): EntitlementsResponse {
       research_enabled: true,
       prompt_improvement_enabled: true,
       file_analysis_enabled: true,
-      usage_export_enabled: true,
+      usage_export_enabled: isPaid,
       saved_history_enabled: true,
       models_catalog_enabled: true,
     },
-    model_access: { allowed_billing_classes: ["standard", "advanced"] },
-    limits: { max_files_per_request: 1, max_file_bytes: 10_000_000 },
+    model_access: {
+      allowed_billing_classes: isPaid
+        ? ["economical", "standard", "advanced"]
+        : ["economical", "standard"],
+    },
+    limits: {
+      max_files_per_request: isPaid ? 3 : 1,
+      max_file_bytes: isPaid ? 20_000_000 : 10_000_000,
+    },
     allowances: {
-      model_responses: counter(10, 30),
-      advanced_model_responses: counter(1, 5),
-      ultra_model_responses: counter(0, 0),
-      research_turns: counter(1, 5),
-      optimization_turns: counter(2, 10),
-      file_analysis_turns: counter(1, 3),
-      uploaded_bytes: counter(1_000_000, 30_000_000),
+      ai_credits: counter(isPaid ? 124_000 : 10_000, isPaid ? 1_000_000 : 100_000),
     },
     period: { starts_at: "2026-07-19T00:00:00Z", ends_at: "2026-08-19T00:00:00Z" },
   };

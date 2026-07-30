@@ -65,6 +65,10 @@ def test_resolve_attachments_returns_ready_owned_rows(monkeypatch):
             "status": "ready",
             "storage_bucket": "bucket",
             "storage_key": "attachments/key.pdf",
+            "ingestion_meta": {
+                "ingestion_state": "ready",
+                "cached_extracted_text": "Cached document text",
+            },
         },
     )
 
@@ -77,6 +81,7 @@ def test_resolve_attachments_returns_ready_owned_rows(monkeypatch):
     assert resolved[0].mime_type == "application/pdf"
     assert resolved[0].usage_role == "reference"
     assert resolved[0].storage_key == "attachments/key.pdf"
+    assert resolved[0].ingestion_meta["cached_extracted_text"] == "Cached document text"
 
 
 def test_model_compatibility_rejects_deepseek_for_pdf():
@@ -177,6 +182,72 @@ def test_materialize_inference_attachments_extracts_json_text(monkeypatch):
     assert "extracted_text" in items[0]
     assert '"ok": true' in items[0]["extracted_text"]
     assert "data_base64" not in items[0]
+
+
+def test_materialize_reuses_cached_parse_without_reading_storage(monkeypatch):
+    attachment = attachments_service.ResolvedAttachment(
+        file_id=uuid4(),
+        usage_role="reference",
+        transform_mode="auto",
+        order_index=0,
+        original_filename="brief.docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes=2048,
+        status="ready",
+        storage_bucket="bucket",
+        storage_key="attachments/brief.docx",
+        ingestion_meta={
+            "ingestion_state": "ready",
+            "cached_extracted_text": "Parsed once and reused for future questions.",
+        },
+    )
+
+    monkeypatch.setattr(
+        attachments_service,
+        "get_object_storage",
+        lambda: pytest.fail("cached text should not read object storage"),
+    )
+
+    items = attachments_service.materialize_inference_attachments([attachment])
+
+    assert items[0]["extracted_text"].endswith(
+        "Parsed once and reused for future questions."
+    )
+    assert items[0]["artifact_meta"]["parse_cache_reused"] is True
+    assert "data_base64" not in items[0]
+
+
+def test_materialize_selects_query_relevant_cached_section(monkeypatch):
+    monkeypatch.setenv("ATTACHMENTS_TEXT_CHUNK_CHARS", "200")
+    monkeypatch.setenv("ATTACHMENTS_REFERENCE_TEXT_MAX_CHUNKS", "1")
+    attachment = attachments_service.ResolvedAttachment(
+        file_id=uuid4(),
+        usage_role="reference",
+        transform_mode="auto",
+        order_index=0,
+        original_filename="brief.docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes=2048,
+        status="ready",
+        storage_bucket="bucket",
+        storage_key="attachments/brief.docx",
+        ingestion_meta={
+            "ingestion_state": "ready",
+            "cached_extracted_text": (
+                ("General introduction. " * 20)
+                + "\n"
+                + ("Zebra migration schedule and ownership. " * 10)
+            ),
+        },
+    )
+
+    items = attachments_service.materialize_inference_attachments(
+        [attachment],
+        query_text="What is the zebra migration schedule?",
+    )
+
+    assert "Zebra migration schedule" in items[0]["extracted_text"]
+    assert items[0]["artifact_meta"]["selection_strategy"] == "query_relevance"
 
 
 def test_compatible_providers_include_deepseek_for_text_materialized_attachment():

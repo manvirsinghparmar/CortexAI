@@ -21,17 +21,7 @@ from sqlalchemy.orm import Session
 
 BillingRecord: TypeAlias = dict[str, Any]
 
-ALLOWED_USAGE_METERS = frozenset(
-    {
-        "model_responses",
-        "advanced_model_responses",
-        "ultra_model_responses",
-        "research_turns",
-        "optimization_turns",
-        "file_analysis_turns",
-        "uploaded_bytes",
-    }
-)
+ALLOWED_USAGE_METERS = frozenset({"ai_credits"})
 
 LIVE_SUBSCRIPTION_STATUSES = frozenset(
     {"trialing", "active", "past_due", "unpaid", "paused", "incomplete"}
@@ -999,6 +989,131 @@ def expire_usage_reservation(
     if persisted is None:
         raise RuntimeError("Usage reservation state changed during expiry")
     return persisted
+
+
+def create_credit_transaction(
+    db: Session,
+    *,
+    billing_account_id: UUID,
+    usage_period_id: UUID,
+    reservation_id: UUID,
+    request_id: str,
+    operation_type: str,
+    item_index: int,
+    item_type: str,
+    total_credits: int,
+    pricing_version: str,
+    provider: str | None = None,
+    model: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    input_credits: int = 0,
+    output_credits: int = 0,
+    fixed_credits: int = 0,
+    provider_cost_usd: float = 0.0,
+    usage_estimated: bool = False,
+    metadata: Mapping[str, Any] | None = None,
+) -> BillingRecord:
+    """Persist one immutable line item for a settled credit reservation."""
+    if item_type not in {"model", "research", "adjustment"}:
+        raise ValueError("Unsupported credit transaction item_type")
+    numeric_values = {
+        "item_index": item_index,
+        "total_credits": total_credits,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "input_credits": input_credits,
+        "output_credits": output_credits,
+        "fixed_credits": fixed_credits,
+    }
+    for label, value in numeric_values.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{label} must be a nonnegative integer")
+    if provider_cost_usd < 0:
+        raise ValueError("provider_cost_usd must be nonnegative")
+
+    transactions = _table("credit_transactions")
+    values = {
+        "id": _new_id_for(transactions),
+        "billing_account_id": billing_account_id,
+        "usage_period_id": usage_period_id,
+        "reservation_id": reservation_id,
+        "request_id": _required_text(request_id, "request_id"),
+        "operation_type": _required_text(operation_type, "operation_type").lower(),
+        "item_index": item_index,
+        "item_type": item_type,
+        "provider": str(provider).strip().lower() if provider else None,
+        "model": str(model).strip() if model else None,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "input_credits": input_credits,
+        "output_credits": output_credits,
+        "fixed_credits": fixed_credits,
+        "total_credits": total_credits,
+        "provider_cost_usd": provider_cost_usd,
+        "usage_estimated": bool(usage_estimated),
+        "pricing_version": _required_text(pricing_version, "pricing_version"),
+        "metadata": dict(metadata or {}),
+    }
+    stmt = (
+        _dialect_insert(db, transactions)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["reservation_id", "item_index"])
+        .returning(*transactions.c)
+    )
+    created = _first_record(db.execute(stmt))
+    if created is not None:
+        return created
+    existing = _first_record(
+        db.execute(
+            select(transactions).where(
+                and_(
+                    transactions.c.reservation_id == reservation_id,
+                    transactions.c.item_index == item_index,
+                )
+            )
+        )
+    )
+    if existing is None:
+        raise RuntimeError("Credit transaction conflict could not be resolved")
+    comparable = (
+        "request_id",
+        "operation_type",
+        "item_type",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "input_credits",
+        "output_credits",
+        "fixed_credits",
+        "total_credits",
+        "usage_estimated",
+        "pricing_version",
+    )
+    if any(existing.get(key) != values[key] for key in comparable):
+        raise ValueError("Credit transaction item was already recorded differently")
+    return existing
+
+
+def list_credit_transactions(
+    db: Session,
+    *,
+    billing_account_id: UUID,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[BillingRecord]:
+    if limit < 1 or limit > 1000 or offset < 0:
+        raise ValueError("Invalid credit transaction pagination")
+    transactions = _table("credit_transactions")
+    stmt = (
+        select(transactions)
+        .where(transactions.c.billing_account_id == billing_account_id)
+        .order_by(transactions.c.created_at.desc(), transactions.c.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return [dict(row) for row in db.execute(stmt).mappings().all()]
 
 
 def _validate_payload_hash(payload_hash: str) -> str:

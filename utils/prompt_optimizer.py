@@ -145,9 +145,15 @@ class PromptOptimizer:
         api_key: str | None = None,
         client: Any | None = None,
     ):
-        self.provider = (provider or os.getenv("PROMPT_OPTIMIZER_PROVIDER", "gemini")).lower()
-        self.model = model or os.getenv("PROMPT_OPTIMIZER_MODEL") or self._default_model_for_provider(
-            self.provider
+        self.provider = (provider or os.getenv("PROMPT_OPTIMIZER_PROVIDER", "openai")).lower()
+        self.model = (
+            model
+            or os.getenv("PROMPT_OPTIMIZER_MODEL")
+            or (
+                "gpt-4.1-mini"
+                if self.provider == "openai"
+                else self._default_model_for_provider(self.provider)
+            )
         )
         self.max_retries = max_retries or int(os.getenv("PROMPT_OPTIMIZER_MAX_RETRIES", "3"))
         self.max_output_tokens = _env_int(
@@ -585,6 +591,7 @@ class PromptOptimizer:
         attempt_count = 0
         retry_reasons: list[str] = []
         unchanged_retry_used = False
+        billable_usages: list[dict[str, Any]] = []
         next_retry_reason: str | None = None
         completion_kwargs: dict[str, Any] = {
             "model": self.model,
@@ -625,6 +632,16 @@ class PromptOptimizer:
                 last_error_code = "optimization_failed"
                 retry_reasons.append("provider_error")
                 continue
+            billable_usages.append(
+                {
+                    "provider": response.provider,
+                    "model": response.model,
+                    "input_tokens": max(0, int(response.token_usage.prompt_tokens)),
+                    "output_tokens": max(0, int(response.token_usage.completion_tokens)),
+                    "output_text": response.text,
+                    "provider_cost_usd": max(0.0, float(response.estimated_cost)),
+                }
+            )
 
             try:
                 result = self._parse_ai_response(response.text, original_prompt)
@@ -659,13 +676,15 @@ class PromptOptimizer:
             if unchanged and prompt_quality == "weak" and (unchanged_retry_used or attempt_count > 1):
                 result["fallback_reason"] = "unchanged_after_retry"
 
-            return self._attach_metadata(
+            completed = self._attach_metadata(
                 result,
                 prompt_quality=prompt_quality,
                 attempt_count=attempt_count,
                 retry_reasons=retry_reasons,
                 unchanged_retry_used=unchanged_retry_used,
             )
+            completed["_billable_usages"] = billable_usages
+            return completed
 
         return {
             "optimized_prompt": original_prompt,
@@ -676,6 +695,7 @@ class PromptOptimizer:
             "attempt_count": attempt_count,
             "retry_reasons": retry_reasons,
             "unchanged_retry_used": unchanged_retry_used,
+            "_billable_usages": billable_usages,
             "error": {
                 "code": last_error_code,
                 "message": last_error or "Prompt optimization failed",

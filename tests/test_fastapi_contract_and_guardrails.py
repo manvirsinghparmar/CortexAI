@@ -78,6 +78,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import Boolean, Column, MetaData, String, Table, Uuid, text
 
@@ -638,6 +639,11 @@ def test_models_catalog_lists_enabled_models_by_default(client):
         "model",
         "tier",
         "billing_class",
+        "access_category",
+        "input_credit_multiplier",
+        "output_credit_multiplier",
+        "credit_usage_label",
+        "credit_pricing_version",
         "input_cost_per_1m",
         "output_cost_per_1m",
         "context_limit",
@@ -650,7 +656,12 @@ def test_models_catalog_lists_enabled_models_by_default(client):
     }
     for item in body["models"]:
         assert required_keys.issubset(item.keys())
-        assert item["billing_class"] in {"standard", "advanced", "ultra"}
+        assert item["billing_class"] in {
+            "economical",
+            "standard",
+            "advanced",
+            "premium",
+        }
 
     registry = ModelRegistry.from_yaml()
     expected_pairs = {
@@ -743,6 +754,43 @@ def test_optimize_accepts_session_cookie_auth(client, monkeypatch):
     assert body["original_prompt"] == "make this prompt better"
     assert body["optimization_status"] == "disabled"
     assert body["fallback_reason"] == "optimization_disabled"
+
+
+def test_optimize_is_subject_to_plan_request_rate_limit(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    optimizer_called = False
+
+    class FakeOptimizer:
+        def optimize_prompt(self, _payload):
+            nonlocal optimizer_called
+            optimizer_called = True
+            return {"optimized_prompt": "should not run"}
+
+    def rate_limited(**_kwargs):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "rate_limited",
+                "message": "Rate limit exceeded (5 requests/minute)",
+                "retry_after_seconds": 30,
+            },
+        )
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_resolve_and_enforce_caps", rate_limited)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FakeOptimizer())
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "rate_limited"
+    assert optimizer_called is False
 
 
 def test_optimize_uses_schema_optimizer_when_enabled(client, monkeypatch):
@@ -929,9 +977,13 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     from server.routes import optimize as optimize_route
 
     reservation = object()
-    settled: list[dict[str, Any]] = []
+    released: list[dict[str, Any]] = []
 
     class SlowOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
         def optimize_prompt(self, payload):
             time.sleep(0.05)
             return {"optimized_prompt": "This should arrive too late."}
@@ -947,8 +999,8 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     )
     monkeypatch.setattr(
         optimize_route,
-        "_finalize_subscription_usage",
-        lambda **kwargs: settled.append(kwargs),
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
     )
 
     r = client.post(
@@ -964,11 +1016,15 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     assert body["server_optimization_enabled"] is True
     assert body["optimization_status"] == "timeout"
     assert body["fallback_reason"] == "timeout"
-    assert settled[0]["reservation"] is reservation
-    assert settled[0]["optimization_performed"] is True
+    assert released == [
+        {
+            "reservation": reservation,
+            "reason": "optimizer_no_billable_output",
+        }
+    ]
 
 
-def test_optimize_setup_failure_releases_before_invocation(client, monkeypatch):
+def test_optimize_setup_failure_does_not_leave_a_reservation(client, monkeypatch):
     from server.routes import optimize as optimize_route
 
     reservation = object()
@@ -999,12 +1055,7 @@ def test_optimize_setup_failure_releases_before_invocation(client, monkeypatch):
             cookies={"cortex_session": "test-session-cookie"},
         )
 
-    assert released == [
-        {
-            "reservation": reservation,
-            "reason": "optimizer_setup_failed_before_invocation",
-        }
-    ]
+    assert released == []
 
 
 def test_optimize_entitlement_denial_prevents_optimizer_invocation(client, monkeypatch):
@@ -1013,6 +1064,10 @@ def test_optimize_entitlement_denial_prevents_optimizer_invocation(client, monke
     optimizer_called = False
 
     class FakeOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
         def optimize_prompt(self, payload):
             del payload
             nonlocal optimizer_called
@@ -1022,13 +1077,11 @@ def test_optimize_entitlement_denial_prevents_optimizer_invocation(client, monke
     def deny_usage(**_kwargs):
         raise EntitlementDeniedError(
             EntitlementDenial(
-                code="monthly_allowance_exhausted",
-                message="The monthly optimization allowance has been exhausted.",
-                meter="optimization_turns",
+                code="insufficient_credits",
+                message="This request needs 4,096 AI credits, but only 0 remain.",
+                meter="ai_credits",
                 current_plan="free",
                 recommended_plan="plus",
-                used=10,
-                limit=10,
                 remaining=0,
             )
         )
@@ -1044,8 +1097,8 @@ def test_optimize_entitlement_denial_prevents_optimizer_invocation(client, monke
         cookies={"cortex_session": "test-session-cookie"},
     )
 
-    assert response.status_code == 429
-    assert response.json()["detail"]["meter"] == "optimization_turns"
+    assert response.status_code == 402
+    assert response.json()["detail"]["meter"] == "ai_credits"
     assert optimizer_called is False
 
 
@@ -1060,7 +1113,7 @@ def test_explicit_improve_settles_fallback_once_and_chat_does_not_recount(
         reservation_id=uuid4(),
         request_id="test-optimize",
         operation_type="optimize",
-        requested_quantities={"optimization_turns": 1},
+        requested_quantities={"ai_credits": 4096},
         allowed_billing_classes=frozenset({"standard", "advanced"}),
         current_plan="free",
         reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
@@ -1070,10 +1123,24 @@ def test_explicit_improve_settles_fallback_once_and_chat_does_not_recount(
     chat_reserves: list[dict[str, Any]] = []
 
     class FallbackOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
         def optimize_prompt(self, payload):
             return {
                 "optimized_prompt": payload["prompt"],
                 "fallback_reason": "already_clear",
+                "_billable_usages": [
+                    {
+                        "provider": self.provider,
+                        "model": self.model,
+                        "input_tokens": 12,
+                        "output_tokens": 4,
+                        "output_text": payload["prompt"],
+                        "provider_cost_usd": 0.0001,
+                    }
+                ],
             }
 
     def reserve_optimize(**kwargs):
@@ -2246,12 +2313,16 @@ def _enable_subscription_route_test_mode(monkeypatch):
     return chat_route, compare_route
 
 
-def _test_reservation(operation_type: str, *, allowed=frozenset({"standard", "advanced"})):
+def _test_reservation(
+    operation_type: str,
+    *,
+    allowed=frozenset({"economical", "standard", "advanced"}),
+):
     return ReservedRequestUsage(
         reservation_id=uuid4(),
         request_id=f"test-{operation_type}",
         operation_type=operation_type,
-        requested_quantities={"model_responses": 1 if operation_type == "ask" else 2},
+        requested_quantities={"ai_credits": 4096 if operation_type == "ask" else 8192},
         allowed_billing_classes=allowed,
         current_plan="free",
         reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
@@ -2304,7 +2375,7 @@ def test_chat_with_attachment_reserves_file_facts_and_settles_one_analysis_turn(
     monkeypatch.setattr(
         attachments_service,
         "materialize_inference_attachments",
-        lambda _attachments: [{"mime_type": "text/plain", "text": "hello"}],
+        lambda _attachments, **_kwargs: [{"mime_type": "text/plain", "text": "hello"}],
     )
     monkeypatch.setattr(
         attachments_service,
@@ -2408,13 +2479,11 @@ def test_chat_entitlement_denial_prevents_provider_execution(client, app, monkey
     def deny_usage(**_kwargs):
         raise EntitlementDeniedError(
             EntitlementDenial(
-                code="monthly_allowance_exhausted",
-                message="The monthly model response allowance has been exhausted.",
-                meter="model_responses",
+                code="insufficient_credits",
+                message="This request needs 4,096 AI credits, but only 0 remain.",
+                meter="ai_credits",
                 current_plan="free",
                 recommended_plan="plus",
-                used=30,
-                limit=30,
                 remaining=0,
             )
         )
@@ -2430,8 +2499,8 @@ def test_chat_entitlement_denial_prevents_provider_execution(client, app, monkey
         cookies={"cortex_session": "test-session-cookie"},
     )
 
-    assert response.status_code == 429
-    assert response.json()["detail"]["code"] == "monthly_allowance_exhausted"
+    assert response.status_code == 402
+    assert response.json()["detail"]["code"] == "insufficient_credits"
     assert app.state.fake_orchestrator.last_ask_prompt is None
 
 
@@ -2717,11 +2786,14 @@ def test_smart_chat_passes_plan_billing_classes_as_routing_constraint(
         "_finalize_subscription_usage",
         lambda **_kwargs: None,
     )
-    app.state.fake_orchestrator.model_billing_class = lambda _provider, _model: "standard"
+    monkeypatch.setattr(chat_route, "_finalize_chat_usage", lambda **_kwargs: None)
+    app.state.fake_orchestrator.model_billing_class = (
+        lambda _provider, model: "standard" if model == "gpt-4.1-mini" else "economical"
+    )
 
     def preview_smart_target(**kwargs):
         observed_constraints.append(kwargs.get("routing_constraints"))
-        return "openai", "gpt-4o-mini"
+        return "openai", "gpt-4.1-mini"
 
     app.state.fake_orchestrator.preview_smart_target = preview_smart_target
     response = client.post(

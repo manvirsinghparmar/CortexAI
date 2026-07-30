@@ -10,7 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from server import persistence as persistence_service
-from server.billing.enforcement_service import ReservedRequestUsage
+from server.billing.enforcement_service import (
+    BillableModelUsage,
+    ReservedRequestUsage,
+    resolve_model_target,
+)
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
@@ -27,6 +31,7 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
 )
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _resolve_identity = persistence_service.resolve_identity
+_resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _reserve_subscription_usage = persistence_service.reserve_subscription_usage
 _finalize_subscription_usage = persistence_service.finalize_subscription_usage
 _release_subscription_usage = persistence_service.release_subscription_usage
@@ -113,6 +118,8 @@ def _reserve_optimization_usage(
     *,
     auth: AuthResult,
     request_id: str,
+    optimizer: PromptOptimizer,
+    request: "OptimizeRequest",
 ) -> ReservedRequestUsage:
     try:
         resolution = _resolve_identity(auth=auth, request_id=request_id)
@@ -120,9 +127,16 @@ def _reserve_optimization_usage(
             user_id=resolution.user_id,
             request_id=request_id,
             operation_type="optimize",
-            model_targets=(),
+            model_targets=(
+                resolve_model_target(
+                    provider=optimizer.provider,
+                    model=optimizer.model,
+                ),
+            ),
             research_enabled=False,
             optimization_enabled=True,
+            input_text=_optimization_input_text(request),
+            max_output_tokens=optimizer.max_output_tokens,
         )
     except HTTPException:
         raise
@@ -141,11 +155,40 @@ def _reserve_optimization_usage(
         raise http_error from exc
 
 
-def _finalize_optimization_usage(reservation: ReservedRequestUsage) -> None:
+def _optimization_input_text(request: "OptimizeRequest") -> str:
+    parts = [request.prompt, request.context_hint or ""]
+    if request.context and request.context.conversation_history:
+        parts.extend(item.content for item in request.context.conversation_history)
+    return "\n".join(part for part in parts if part)
+
+
+def _result_model_usages(result: dict | None) -> tuple[BillableModelUsage, ...]:
+    raw_items = result.get("_billable_usages") if isinstance(result, dict) else None
+    if not isinstance(raw_items, list):
+        return ()
+    return tuple(
+        BillableModelUsage(
+            provider=str(item.get("provider") or ""),
+            model=str(item.get("model") or ""),
+            input_tokens=max(0, int(item.get("input_tokens") or 0)),
+            output_tokens=max(0, int(item.get("output_tokens") or 0)),
+            output_text=str(item.get("output_text") or ""),
+            provider_cost_usd=max(0.0, float(item.get("provider_cost_usd") or 0.0)),
+        )
+        for item in raw_items
+        if isinstance(item, dict)
+    )
+
+
+def _finalize_optimization_usage(
+    reservation: ReservedRequestUsage,
+    result: dict | None,
+) -> None:
     try:
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=(),
+            model_usages=_result_model_usages(result),
             research_performed=False,
             optimization_performed=True,
         )
@@ -209,6 +252,8 @@ async def optimize_prompt(
     req_id = str(getattr(http_request.state, "request_id", "") or uuid4())
     started_at = time.monotonic()
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
+    if API_DB_ENABLED:
+        _resolve_and_enforce_caps(auth=auth, request_id=req_id)
     server_enabled = os.getenv("ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true"
 
     if not server_enabled:
@@ -234,15 +279,18 @@ async def optimize_prompt(
         )
 
     billing_reservation: ReservedRequestUsage | None = None
+    optimizer = _get_optimizer()
     if API_DB_ENABLED:
         billing_reservation = _reserve_optimization_usage(
             auth=auth,
             request_id=req_id,
+            optimizer=optimizer,
+            request=request,
         )
 
     optimizer_invoked = False
+    result: dict | None = None
     try:
-        optimizer = _get_optimizer()
         timeout_seconds = _optimizer_timeout_seconds()
         max_retries = _optimizer_route_max_retries()
         payload = {
@@ -335,10 +383,14 @@ async def optimize_prompt(
         )
     finally:
         if billing_reservation is not None:
-            if optimizer_invoked:
-                _finalize_optimization_usage(billing_reservation)
+            if optimizer_invoked and _result_model_usages(result):
+                _finalize_optimization_usage(billing_reservation, result)
             else:
                 _release_optimization_usage_safely(
                     billing_reservation,
-                    reason="optimizer_setup_failed_before_invocation",
+                    reason=(
+                        "optimizer_no_billable_output"
+                        if optimizer_invoked
+                        else "optimizer_setup_failed_before_invocation"
+                    ),
                 )

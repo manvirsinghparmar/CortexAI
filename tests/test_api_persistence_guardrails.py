@@ -37,6 +37,7 @@ from models.unified_response import MultiUnifiedResponse, TokenUsage, UnifiedRes
 from server import dependencies as deps
 from server import cortex_analysis as cortex_analysis_service
 from server import persistence as persistence_service
+from server import rate_limit as rate_limit_service
 from server.app import create_app
 from server.routes import chat as chat_route
 from server.routes import compare as compare_route
@@ -173,6 +174,7 @@ def fastapi_client(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
+    rate_limit_service.reset_rate_limit_state()
 
     app = create_app()
     chat_route.API_DB_ENABLED = False
@@ -578,6 +580,38 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
     )
 
     Table(
+        "credit_transactions",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("reservation_id", Uuid),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("item_index", Integer, nullable=False, default=0),
+        Column("item_type", String(32), nullable=False),
+        Column("provider", String(64)),
+        Column("model", String(255)),
+        Column("input_tokens", BigInteger, nullable=False, default=0),
+        Column("output_tokens", BigInteger, nullable=False, default=0),
+        Column("input_credits", BigInteger, nullable=False, default=0),
+        Column("output_credits", BigInteger, nullable=False, default=0),
+        Column("fixed_credits", BigInteger, nullable=False, default=0),
+        Column("total_credits", BigInteger, nullable=False),
+        Column("provider_cost_usd", Float, nullable=False, default=0.0),
+        Column("usage_estimated", Boolean, nullable=False, default=False),
+        Column("pricing_version", String(64), nullable=False),
+        Column("metadata", JSON, nullable=False, default=dict),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_credit_transactions_reservation_item",
+            "reservation_id",
+            "item_index",
+            unique=True,
+        ),
+    )
+
+    Table(
         "billing_webhook_events",
         metadata,
         Column("id", Uuid, primary_key=True),
@@ -744,6 +778,7 @@ def db_mode_fastapi_client(monkeypatch):
     monkeypatch.delenv("DAILY_CAP_SCOPE", raising=False)
 
     _reset_db_runtime_state(schema_name="main")
+    rate_limit_service.reset_rate_limit_state()
     _bootstrap_api_db_schema(db_url)
 
     old_persistence_db = persistence_service.API_DB_ENABLED
@@ -785,6 +820,7 @@ def db_mode_fastapi_client(monkeypatch):
         cortex_analysis_route.API_DB_ENABLED = old_cortex_analysis_db
         history_route.API_DB_ENABLED = old_history_db
         admin_route.API_DB_ENABLED = old_admin_db
+        rate_limit_service.reset_rate_limit_state()
         _reset_db_runtime_state(schema_name="public")
         with suppress(FileNotFoundError):
             db_file.unlink()

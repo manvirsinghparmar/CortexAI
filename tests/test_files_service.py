@@ -332,6 +332,8 @@ def test_upload_docx_runs_sync_ingestion_when_small(monkeypatch):
     assert result["ingestion_meta"]["ingestion_state"] == "ready"
     assert result["ingestion_meta"]["ingestion_required"] is True
     assert result["ingestion_meta"]["artifact_meta"]["materialization"] == "text"
+    assert row_state["ingestion_meta"]["cached_extracted_text"] == "Document text."
+    assert "cached_extracted_text" not in result["ingestion_meta"]
 
 
 def test_upload_docx_large_defers_processing(monkeypatch):

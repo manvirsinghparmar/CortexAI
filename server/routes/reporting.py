@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 
 from server import persistence as persistence_service
 from server.dependencies import get_auth
+from server.billing.subscription_service import resolve_effective_subscription
 from server.schemas.responses import SavingsReportDTO, UsageReportDTO, UsageSummaryDTO
 from server.usage_reporting import (
     SAVINGS_CSV_COLUMNS,
@@ -33,6 +34,22 @@ def _require_db_mode() -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="Usage/savings reporting requires DATABASE_URL (DB mode).",
+    )
+
+
+def _require_usage_export(db_session, *, user_id) -> None:
+    effective = resolve_effective_subscription(db_session, user_id)
+    if effective.plan.entitlements.usage_export_enabled:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "feature_not_in_plan",
+            "feature": "usage_export",
+            "current_plan": effective.plan.code,
+            "recommended_plan": "plus",
+            "message": "CSV usage export is available on Plus and Pro.",
+        },
     )
 
 
@@ -155,6 +172,7 @@ async def usage_export(
             request_id=req_id,
             db_session=db_session,
         )
+        _require_usage_export(db_session, user_id=resolution.user_id)
         report = build_usage_report(
             db_session,
             user_id=resolution.user_id,
@@ -198,6 +216,7 @@ async def savings_export(
             request_id=req_id,
             db_session=db_session,
         )
+        _require_usage_export(db_session, user_id=resolution.user_id)
         report = build_savings_report(
             db_session,
             user_id=resolution.user_id,

@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 plans:
   free:
@@ -13,22 +13,16 @@ plans:
       research_enabled: true
       prompt_improvement_enabled: true
       file_analysis_enabled: true
-      usage_export_enabled: true
+      usage_export_enabled: false
       saved_history_enabled: true
       models_catalog_enabled: true
       allowed_billing_classes:
+        - economical
         - standard
-        - advanced
     allowances:
-      model_responses: 30
-      advanced_model_responses: 5
-      ultra_model_responses: 0
-      research_turns: 5
-      optimization_turns: 10
-      file_analysis_turns: 3
-      uploaded_bytes: 30000000
+      ai_credits: 100000
     limits:
-      requests_per_minute: 10
+      requests_per_minute: 5
       max_files_per_request: 1
       max_file_bytes: 10000000
 
@@ -48,18 +42,13 @@ plans:
       saved_history_enabled: true
       models_catalog_enabled: true
       allowed_billing_classes:
+        - economical
         - standard
         - advanced
     allowances:
-      model_responses: 400
-      advanced_model_responses: 75
-      ultra_model_responses: 0
-      research_turns: 50
-      optimization_turns: 200
-      file_analysis_turns: 30
-      uploaded_bytes: 1000000000
+      ai_credits: 1000000
     limits:
-      requests_per_minute: 30
+      requests_per_minute: 15
       max_files_per_request: 3
       max_file_bytes: 20000000
 
@@ -79,18 +68,13 @@ plans:
       saved_history_enabled: true
       models_catalog_enabled: true
       allowed_billing_classes:
+        - economical
         - standard
         - advanced
-        - ultra
+        - premium
     allowances:
-      model_responses: 1200
-      advanced_model_responses: 300
-      ultra_model_responses: 40
-      research_turns: 200
-      optimization_turns: 500
-      file_analysis_turns: 100
-      uploaded_bytes: 5000000000
+      ai_credits: 3000000
     limits:
-      requests_per_minute: 60
+      requests_per_minute: 30
       max_files_per_request: 5
       max_file_bytes: 20000000

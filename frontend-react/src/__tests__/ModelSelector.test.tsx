@@ -33,7 +33,7 @@ describe("ModelSelector", () => {
     const listbox = screen.getByRole("listbox", { name: "Using options" });
 
     expect(within(listbox).getByText("Claude Sonnet")).toBeInTheDocument();
-    expect(within(listbox).getByText("claude-sonnet-4-5")).toBeInTheDocument();
+    expect(within(listbox).getByText(/claude-sonnet-4-5 · High credit use/)).toBeInTheDocument();
     const deepSeekLogo = listbox.querySelector<HTMLImageElement>(
       'img[src*="domain_url=deepseek.com"]',
     );
@@ -57,6 +57,11 @@ function model(provider: string, name: string): ModelCatalogItem {
     model: name,
     tier: "frontier",
     billing_class: "advanced",
+    access_category: "advanced",
+    input_credit_multiplier: 3,
+    output_credit_multiplier: 12,
+    credit_usage_label: "High",
+    credit_pricing_version: "2026-07-29",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128000,

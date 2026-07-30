@@ -444,7 +444,7 @@ def test_synchronize_usage_period_preserves_row_and_counters(billing_db):
         starts_at=starts_at,
         ends_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
-    counter = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    counter = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
     db.execute(
         update(tables["usage_counters"])
         .where(tables["usage_counters"].c.id == counter["id"])
@@ -469,8 +469,8 @@ def test_usage_counter_is_idempotent_and_nonnegative(billing_db):
     db, tables = billing_db
     _, period = _account_and_period(db)
 
-    first = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
-    second = repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    first = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
+    second = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
 
     assert first["id"] == second["id"]
     with pytest.raises(ValueError, match="Unknown usage meter"):
@@ -484,11 +484,10 @@ def test_usage_counter_is_idempotent_and_nonnegative(billing_db):
 
 
 @pytest.mark.unit
-def test_counter_lock_is_for_update_and_uses_deterministic_order(billing_db, monkeypatch):
+def test_counter_lock_is_for_update_for_unified_credit_meter(billing_db, monkeypatch):
     db, _ = billing_db
     _, period = _account_and_period(db)
-    repository.get_or_create_usage_counter(db, period["id"], "research_turns")
-    repository.get_or_create_usage_counter(db, period["id"], "model_responses")
+    repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
 
     captured = []
     original_execute = db.execute
@@ -502,10 +501,10 @@ def test_counter_lock_is_for_update_and_uses_deterministic_order(billing_db, mon
     rows = repository.lock_usage_counters(
         db,
         period["id"],
-        ["research_turns", "model_responses"],
+        ["ai_credits"],
     )
 
-    assert [row["meter_key"] for row in rows] == ["model_responses", "research_turns"]
+    assert [row["meter_key"] for row in rows] == ["ai_credits"]
     assert len(captured) == 1
     assert captured[0]._for_update_arg is not None
 
@@ -520,7 +519,7 @@ def test_reservation_duplicate_and_quantity_validation(billing_db):
         usage_period_id=period["id"],
         request_id="req-1",
         operation_type="ask",
-        requested_quantities={"model_responses": 1},
+        requested_quantities={"ai_credits": 1},
     )
 
     with pytest.raises(IntegrityError):
@@ -530,7 +529,7 @@ def test_reservation_duplicate_and_quantity_validation(billing_db):
             usage_period_id=period["id"],
             request_id="req-1",
             operation_type="ask",
-            requested_quantities={"model_responses": 1},
+            requested_quantities={"ai_credits": 1},
         )
 
 
@@ -544,20 +543,20 @@ def test_reservation_settlement_and_release_are_idempotent(billing_db):
         usage_period_id=period["id"],
         request_id="req-settle",
         operation_type="compare",
-        requested_quantities={"model_responses": 2, "advanced_model_responses": 2},
+        requested_quantities={"ai_credits": 2_000},
     )
 
     settled = repository.settle_usage_reservation(
         db,
         billing_account_id=account["id"],
         request_id="req-settle",
-        settled_quantities={"model_responses": 1, "advanced_model_responses": 1},
+        settled_quantities={"ai_credits": 1_000},
     )
     settled_again = repository.settle_usage_reservation(
         db,
         billing_account_id=account["id"],
         request_id="req-settle",
-        settled_quantities={"model_responses": 1, "advanced_model_responses": 1},
+        settled_quantities={"ai_credits": 1_000},
     )
     assert settled["state"] == "settled"
     assert settled_again["id"] == settled["id"]
@@ -576,7 +575,7 @@ def test_reservation_settlement_and_release_are_idempotent(billing_db):
         usage_period_id=period["id"],
         request_id="req-release",
         operation_type="ask",
-        requested_quantities={"model_responses": 1},
+        requested_quantities={"ai_credits": 1},
     )
     released = repository.release_usage_reservation(
         db,
@@ -604,7 +603,7 @@ def test_settlement_cannot_exceed_reserved_quantities(billing_db):
         usage_period_id=period["id"],
         request_id="req-over",
         operation_type="ask",
-        requested_quantities={"model_responses": 1},
+        requested_quantities={"ai_credits": 1},
     )
 
     with pytest.raises(ValueError, match="cannot exceed"):
@@ -612,7 +611,7 @@ def test_settlement_cannot_exceed_reserved_quantities(billing_db):
             db,
             billing_account_id=account["id"],
             request_id="req-over",
-            settled_quantities={"model_responses": 2},
+            settled_quantities={"ai_credits": 2},
         )
 
 
@@ -751,3 +750,14 @@ def test_billing_migration_contains_required_constraints_and_is_additive():
     assert "llm_requests" not in migration
     assert migration.startswith("begin;")
     assert migration.rstrip().endswith("commit;")
+
+    credit_migration = (
+        Path("db/migrations/20260729_add_unified_ai_credits.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    assert "create table if not exists public.credit_transactions" in credit_migration
+    assert "uq_credit_transactions_reservation_item" in credit_migration
+    assert "usage_counters.meter_key = 'ai_credits'" in credit_migration
+    assert credit_migration.startswith("begin;")
+    assert credit_migration.rstrip().endswith("commit;")

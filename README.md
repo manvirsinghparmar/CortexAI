@@ -196,12 +196,12 @@ COGNITO_SSL_VERIFY=true            # set false to skip TLS verification for Cogn
 - Consumer plan definitions use `config/subscription_plans.yaml` and are validated at API startup by `server/billing/plan_catalog.py`.
 - Provider metadata/defaults/allowlists use `config/providers.yaml` via `config/provider_catalog.py`.
 - Keep both files in sync when provider pricing changes.
-- Smart-routing tiers (`T0`-`T3`) and consumer model billing classes (`standard`, `advanced`, `ultra`) are separate controls. Every configured model has an explicit `billing_class`; a legacy entry that omits it is exposed as `advanced` with a warning, while an unknown value fails registry loading.
+- Smart-routing tiers (`T0`-`T3`) and consumer model access categories (`economical`, `standard`, `advanced`, `premium`) are separate controls. Every configured model must declare an access category, input/output credit multipliers, a customer-facing credit-usage label, and a pricing version; missing or unknown values fail registry loading.
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
 - `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
 - `BILLING_ENABLED=false` is the safe default and resolves every account to Free. It keeps Stripe lazy and makes Checkout, Portal, and webhook routes return `503 billing_not_configured` without requiring Stripe credentials. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
 - When billing is enabled, startup validates the Stripe secret key, webhook signing secret, every paid plan's configured Price ID, all backend redirect URLs, and any explicit API version. The client can submit only `plan_code` and `billing_period`; extra Price, amount, currency, Customer, or redirect fields are rejected. `POST /v1/billing/webhook` verifies the exact raw body and `Stripe-Signature`, stores provider event IDs idempotently, synchronizes Checkout/subscription/invoice lifecycle events, rejects stale snapshots, applies payment grace and cancellation policy, and creates each paid usage period once. Verified webhook state is authoritative for paid access.
-- DB-mode Ask, Compare, Optimize, and upload/file-analysis paths now use the same short reserve/settle/release lifecycle. Ask/Compare reserve before provider work, settle only actual successful model classes and performed research, and settle one file-analysis turn only when an attachment-backed turn produces billable output. `/v1/optimize` reserves before the explicit UI optimizer and settles once whenever invocation starts, including timeout or valid fallback; submitting its returned prompt to Ask/Compare does not charge another optimization turn. Upload reserves the server-observed raw-body byte count before object storage, settles it only after a successful upload, and releases it on validation or storage failure. Usage-export enforcement remains later work. Smart-routing tiers (`T0`-`T3`) remain independent from subscription billing classes.
+- DB-mode Ask, Compare, Optimize, Cortex Analysis, and attachment-backed generation use one short reserve/settle/release lifecycle. A preflight estimate reserves AI credits before provider work; settlement charges each successful model by actual input/output tokens and configured multipliers, then releases the unused estimate. Missing provider usage is conservatively estimated and marked in the reconciliation ledger. Advanced Web Search adds a fixed 15,000 credits once per performed retrieval; Compare shares research and charges only successful targets; file upload itself is free. `/v1/optimize` and Cortex Analysis are separate model calls and are charged once per successful provider attempt. Smart-routing tiers (`T0`-`T3`) remain independent from model access categories.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
@@ -437,6 +437,7 @@ Response includes:
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
 - `GET /v1/entitlements`
+- `GET /v1/credits/transactions`
 - `POST /v1/billing/checkout-session`
 - `POST /v1/billing/portal-session`
 - `POST /v1/billing/webhook`
@@ -455,24 +456,28 @@ Response includes:
 
 ### Subscription entitlement snapshot
 
-`GET /v1/entitlements` accepts the same API-key, Cognito bearer, or signed-session authentication as `/v1/whoami`. On first access it lazily creates the authenticated user's billing account, resolves the effective plan, creates the current usage period, and ensures all seven allowance counters exist. Free periods use UTC calendar-month boundaries; paid periods use the stored provider period.
+`GET /v1/entitlements` accepts the same API-key, Cognito bearer, or signed-session authentication as `/v1/whoami`. On first access it lazily creates the authenticated user's billing account, resolves the effective plan, creates the current usage period, and ensures the unified `ai_credits` counter exists. Free periods use UTC calendar-month boundaries; paid periods use the stored provider period.
 
 The response contains:
 
 - `plan`: effective code/display name, lifecycle status/source, renewal/reset time, cancellation-at-period-end state, and optional grace deadline
 - `features`: Compare, research, prompt improvement, file analysis, usage export, saved history, and model-catalog access
-- `model_access.allowed_billing_classes`: `standard`, `advanced`, and/or `ultra`
+- `model_access.allowed_billing_classes`: `economical`, `standard`, `advanced`, and/or `premium`
 - `limits`: server-owned `max_files_per_request` and `max_file_bytes` values for the effective plan
-- `allowances`: `used`, `reserved`, `limit`, and nonnegative `remaining` for model responses, advanced/ultra responses, research, optimization, file analysis, and uploaded bytes
+- `allowances.ai_credits`: `used`, `reserved`, `limit`, and nonnegative `remaining`
 - `period.starts_at` / `period.ends_at`
 
 Lifecycle resolution is conservative: `trialing`/`active` grant paid access for a valid stored period; `past_due` grants it only through `grace_until`; cancel-at-period-end access lasts only until the stored period end; `unpaid`, `incomplete`, `incomplete_expired`, `paused`, expired cancellations, unknown plans, and unknown statuses fall back to Free. No Stripe IDs or provider secrets are exposed by this endpoint.
 
+The monthly plan budgets are Free 100,000, Plus 1,000,000, and Pro 3,000,000 AI credits. Their request-rate limits are respectively 5, 15, and 30 requests per minute. File limits are 1 × 10 MB, 3 × 20 MB, and 5 × 20 MB per request. Plus costs USD 6.99/month and Pro costs USD 12.99/month.
+
+`GET /v1/credits/transactions?limit=100&offset=0` returns the authenticated account's immutable, itemized reconciliation history. Each row identifies the operation and model/research item, input/output tokens and credits, fixed credits, total credits, provider cost, pricing version, whether usage was estimated, metadata such as file context or prompt improvement, and its timestamp.
+
 `plan_tier` remains on `/v1/whoami` for backward compatibility and is now populated from the effective plan display name in database mode. New consumers should use `/v1/entitlements` and `billing.plan_code` instead.
 
-Ask and Compare enforcement is backend-authoritative in database mode. Entitlement/model denials happen before provider execution and return structured `403`, exhausted monthly meters return `429`, and unsafe billing configuration returns a provider-safe `500`. Compare accepts two or three targets at the platform boundary; Free and Plus allow two, while Pro allows three. Streaming reservations are finalized inside the response generator: model units settle after meaningful output is emitted, disconnects before output release them, performed research still settles once, and Compare disconnects aggregate only targets whose output started.
+Ask and Compare enforcement is backend-authoritative in database mode. Feature/model denials happen before provider execution and return structured `403`; insufficient credits return `402 insufficient_credits` with required and remaining credit values; request-rate exhaustion returns `429`; unsafe billing configuration returns a provider-safe `500`. Compare accepts two or three targets at the platform boundary; Free and Plus allow two, while Pro allows three. Streaming reservations are finalized inside the response generator: successful output settles actual credits, disconnects before output release them, performed research still settles once, and Compare partially settles only successful targets.
 
-Smart Ask receives `allowed_billing_classes` as a routing constraint. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's billing classes are removed. The initial conservative policy reserves one response plus the premium-meter envelope through the highest billing class Smart may select, then settles only the class of the actual successful model and releases unused premium reservations. The envelope is required because the existing atomic reservation schema cannot transfer a reservation between meter keys when Smart falls back from Ultra to Advanced.
+Smart Ask receives `allowed_billing_classes` as a routing constraint. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's access categories are removed. Preflight reserves the worst-case credit estimate among allowed Smart candidates and settlement charges only the model actually used.
 
 ### Stripe Checkout and Customer Portal
 
@@ -502,9 +507,9 @@ The React client owns subscription transport in `frontend-react/src/api/billing.
 
 The React consumer plan surfaces are `/pricing` and `/account/billing`. Pricing renders the server catalogue, current-plan state, monthly allowances, billing-disabled state, and auth/lifecycle-aware Checkout or Portal actions. Billing renders effective plan status, renewal or cancellation dates, payment-grace warnings, and allowance progress. Signed-out users can read public pricing but must authenticate for account billing. The shared account menu shows only the plan label, past-due state, and Upgrade/Manage action; it intentionally omits detailed counters. Paid access is displayed only from the webhook-synchronized subscription and entitlement responses, including after `?checkout=success`.
 
-Composer and catalogue gating is explanatory UX over the same backend authority. Manual model pickers and the static Models catalogue join model IDs to live `/v1/models.billing_class` values; disallowed models remain visible with the server-derived required plan, while missing live billing metadata is shown conservatively as unavailable. Free/Plus users see a Pro action instead of silently adding a third Compare target. Web, Improve, file count/size, uploaded bytes, and response allowances use the current `/v1/entitlements` snapshot for preflight messaging, but every request is still enforced and reserved by the backend.
+Composer and catalogue gating is explanatory UX over the same backend authority. Manual model pickers and the static Models catalogue join model IDs to live `/v1/models.billing_class` and credit-usage metadata; disallowed models remain visible with the server-derived required plan, while missing live billing metadata is shown conservatively as unavailable. Free/Plus users see a Pro action instead of silently adding a third Compare target. Web, Improve, file count/size, AI-credit balance, and CSV export use the current `/v1/entitlements` snapshot for preflight messaging, but every request is still enforced and reserved by the backend.
 
-Structured subscription denials open an accessible contextual dialog and keep the current prompt and attachments intact. The composer clears only after the stream is accepted; an HTTP `model_not_in_plan`, `feature_not_in_plan`, `monthly_allowance_exhausted`, or `subscription_payment_required` response removes the optimistic placeholder and restores no client-side authority. Existing premium history is never filtered or deleted after downgrade. Usage & insights renders the current plan's seven allowance counters and reset date above the existing provider-usage analytics, with responsive two-column/one-column layouts on narrow screens.
+Structured subscription denials open an accessible contextual dialog and keep the current prompt and attachments intact. The composer clears only after the stream is accepted; an HTTP `model_not_in_plan`, `feature_not_in_plan`, `insufficient_credits`, or `subscription_payment_required` response removes the optimistic placeholder and restores no client-side authority. Existing premium history is never filtered or deleted after downgrade. Usage & insights renders the unified AI-credit balance/reset date and recent itemized credit activity above the existing provider-usage analytics, with responsive layouts on narrow screens. Response cards display actual AI credits, and Compare also displays the aggregate total.
 
 ### Cognito (Gmail) sign-in
 
@@ -520,7 +525,8 @@ To enable "Sign in with Google" via Amazon Cognito:
 3. **Frontend**: Load the app; signed-out Cognito users see a `Sign in to use CortexAI` gate in the workspace and the React top-right account icon remains a secondary account menu. Cognito guests can `Sign in`, the theme switch toggles the React `data-theme` between light and dark and persists the browser preference, and `Log off` remains available as a session-clear fallback even when the icon is labelled `Guest account`. Log off posts to `/v1/auth/logout`, clears the active React session/history state, then redirects to the Cognito `logoutUrl` when the backend provides one. After sign-in, sessions/history are tied to the authenticated user identity.
 
 `/v1/models` includes billing and attachment capability metadata per model:
-- `billing_class` (`standard`, `advanced`, or `ultra`; independent of routing `tier`)
+- `billing_class` / `access_category` (`economical`, `standard`, `advanced`, or `premium`; independent of routing `tier`)
+- `input_credit_multiplier`, `output_credit_multiplier`, `credit_usage_label`, and `credit_pricing_version`
 - `supports_image_input`
 - `supported_attachment_mime_types`
 - `max_attachment_bytes`
@@ -530,7 +536,7 @@ To enable "Sign in with Google" via Amazon Cognito:
 
 `POST /v1/files/upload` accepts raw bytes in the request body.
 
-In DB mode, upload access, the plan per-file limit, and the monthly `uploaded_bytes` allowance are enforced from the authenticated user's server-resolved plan. The raw-body contract means the authoritative byte count is known after the request body is read but before object storage or metadata persistence. A successful accepted upload settles that observed byte count; validation/storage failures release the reservation. Upload does not consume `file_analysis_turns`.
+In DB mode, upload access and the plan per-file limit are enforced from the authenticated user's server-resolved plan. Upload and storage are free; credits are charged only when a model processes file context as part of a billable generation.
 
 Authentication (session-scoped routes):
 - `cortex_session` cookie, or
@@ -563,6 +569,7 @@ Upload status semantics:
 
 MVP ingestion policy:
 - Small files are handled inline.
+- Text-extractable Office documents persist a private parsed-text cache at ingestion. Follow-up and Compare requests reuse that cache, apply deterministic prompt-term relevance selection when a document exceeds the chunk budget, and send only the selected chunks to each model. The cached text is never returned by file-status APIs.
 - Office docs (`.docx`, `.pptx`, `.xlsx`) may return `processing` when above `ATTACHMENTS_SYNC_INGEST_MAX_BYTES`.
 - Poll `GET /v1/files/{file_id}` until `ready` before sending chat/compare with that `file_id`.
 - Frontend polling budget is 60 seconds; if exceeded, attachment is marked failed in UI and user can remove/retry upload.
@@ -586,7 +593,7 @@ Use attachments in chat/compare payloads by passing file references:
 Current guardrail behavior:
 - attachments require `DATABASE_URL` (DB mode)
 - all attachment `file_id` values must belong to the same API key owner
-- the plan's `max_files_per_request` and `max_file_bytes` are enforced for Ask/Compare attachments, and exhausted `file_analysis_turns` returns a structured subscription denial before provider execution
+- the plan's `max_files_per_request` and `max_file_bytes` are enforced for Ask/Compare attachments, and the model call that processes file context is covered by the request's AI-credit reservation
 - model compatibility is validated before orchestration starts
 - same-user deduplication is hash+size based (no cross-user dedup)
 - provider adapter support in this release:
@@ -614,8 +621,9 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 Prompt optimization (`/v1/optimize`):
 - disabled by default unless `ENABLE_PROMPT_OPTIMIZATION=true`
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
-- in DB mode, the explicit endpoint checks `prompt_improvement_enabled` and reserves one `optimization_turns` unit before optimizer setup; it releases setup failures before invocation and settles once after invocation begins, including timeout, rejection, or kept-original fallback
-- a later Ask/Compare submission of the returned prompt does not reserve `optimization_turns` again
+- in DB mode, the explicit endpoint checks `prompt_improvement_enabled`, reserves a conservative GPT-4.1 mini credit estimate before optimizer setup, and settles each provider attempt that actually returns billable usage
+- Improve Prompt counts as one submitted user action against the effective plan's requests-per-minute limit
+- a later Ask/Compare submission of the returned prompt is a separate model call and uses the normal Ask/Compare credit calculation; it does not duplicate the optimizer charge
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
 - uses `PROMPT_OPTIMIZER_PROVIDER` + optional `PROMPT_OPTIMIZER_MODEL`
 - `/v1/optimize` has an optimize-specific hard deadline from `PROMPT_OPTIMIZER_TIMEOUT_MS` (default `5000`) and explicit-route retry count from `PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES` (default `2`)

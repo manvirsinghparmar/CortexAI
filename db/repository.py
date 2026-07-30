@@ -1216,7 +1216,12 @@ def create_llm_request(
     }
     column_names = {col.name for col in llm_requests.columns}
     if "request_group_id" in column_names:
-        values["request_group_id"] = request_group_id
+        group_column = llm_requests.c.request_group_id
+        values["request_group_id"] = (
+            request_group_id.hex
+            if isinstance(request_group_id, UUID) and isinstance(group_column.type, String)
+            else request_group_id
+        )
     if "response_revision_root_id" in column_names:
         values["response_revision_root_id"] = response_revision_root_id
     if "response_revision" in column_names:

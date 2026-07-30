@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
+
+from db.billing_repository import list_credit_transactions
 
 from server import persistence as persistence_service
 from server.billing.entitlement_service import load_allowance_usage
@@ -26,6 +28,8 @@ from server.schemas.responses import (
     EntitlementPeriodDTO,
     EntitlementPlanDTO,
     EntitlementsResponseDTO,
+    CreditTransactionDTO,
+    CreditTransactionsResponseDTO,
 )
 from utils.logger import get_logger
 
@@ -125,4 +129,62 @@ async def entitlements(
             starts_at=_required_iso(effective.current_period_start),
             ends_at=_required_iso(effective.current_period_end),
         ),
+    )
+
+
+@router.get("/credits/transactions", response_model=CreditTransactionsResponseDTO)
+async def credit_transactions(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthResult = Depends(get_auth),
+):
+    """Return itemized AI-credit usage for the authenticated billing account."""
+    if not API_DB_ENABLED:
+        raise billing_database_required_http_exception()
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    try:
+        with _db_uow() as db_session:
+            identity = _resolve_identity(
+                auth=auth,
+                request_id=request_id,
+                db_session=db_session,
+            )
+            effective = resolve_effective_subscription(db_session, identity.user_id)
+            rows = list_credit_transactions(
+                db_session,
+                billing_account_id=effective.billing_account_id,
+                limit=limit,
+                offset=offset,
+            )
+    except BillingIdentityError as exc:
+        raise billing_identity_http_exception() from exc
+    except BillingConfigurationError as exc:
+        raise billing_configuration_http_exception() from exc
+
+    return CreditTransactionsResponseDTO(
+        items=[
+            CreditTransactionDTO(
+                id=str(row["id"]),
+                request_id=str(row["request_id"]),
+                operation_type=str(row["operation_type"]),
+                item_type=str(row["item_type"]),
+                provider=str(row["provider"]) if row.get("provider") else None,
+                model=str(row["model"]) if row.get("model") else None,
+                input_tokens=int(row.get("input_tokens") or 0),
+                output_tokens=int(row.get("output_tokens") or 0),
+                input_credits=int(row.get("input_credits") or 0),
+                output_credits=int(row.get("output_credits") or 0),
+                fixed_credits=int(row.get("fixed_credits") or 0),
+                total_credits=int(row.get("total_credits") or 0),
+                provider_cost_usd=float(row.get("provider_cost_usd") or 0),
+                usage_estimated=bool(row.get("usage_estimated")),
+                pricing_version=str(row["pricing_version"]),
+                metadata=dict(row.get("metadata") or {}),
+                created_at=_required_iso(row["created_at"]),
+            )
+            for row in rows
+        ],
+        limit=limit,
+        offset=offset,
     )

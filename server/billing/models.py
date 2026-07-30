@@ -8,9 +8,11 @@ from enum import Enum
 class ModelBillingClass(str, Enum):
     """Consumer billing classification, independent of smart-routing tiers."""
 
+    ECONOMICAL = "economical"
     STANDARD = "standard"
     ADVANCED = "advanced"
-    ULTRA = "ultra"
+    PREMIUM = "premium"
+    ULTRA = "premium"
 
 
 ALLOWED_MODEL_BILLING_CLASSES = frozenset(item.value for item in ModelBillingClass)
@@ -18,13 +20,7 @@ ALLOWED_MODEL_BILLING_CLASSES = frozenset(item.value for item in ModelBillingCla
 
 @dataclass(frozen=True)
 class PlanAllowances:
-    model_responses: int
-    advanced_model_responses: int
-    ultra_model_responses: int
-    research_turns: int
-    optimization_turns: int
-    file_analysis_turns: int
-    uploaded_bytes: int
+    ai_credits: int
 
 
 @dataclass(frozen=True)

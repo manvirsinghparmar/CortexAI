@@ -93,16 +93,29 @@ export function isSubscriptionDenial(error: unknown): error is SubscriptionError
 }
 
 export function localSubscriptionDenial(options: {
-  code: "feature_not_in_plan" | "model_not_in_plan" | "monthly_allowance_exhausted";
+  code:
+    | "feature_not_in_plan"
+    | "model_not_in_plan"
+    | "monthly_allowance_exhausted"
+    | "insufficient_credits";
   message: string;
   details?: Record<string, unknown>;
 }): SubscriptionError {
-  const status = options.code === "monthly_allowance_exhausted" ? 429 : 403;
+  const status =
+    options.code === "monthly_allowance_exhausted"
+      ? 429
+      : options.code === "insufficient_credits"
+        ? 402
+        : 403;
   return new SubscriptionError({
     code: options.code,
     message: options.message,
     status,
-    kind: options.code === "monthly_allowance_exhausted" ? "allowance" : "access",
+    kind:
+      options.code === "monthly_allowance_exhausted" ||
+      options.code === "insufficient_credits"
+        ? "allowance"
+        : "access",
     retryable: false,
     details: options.details,
   });
@@ -152,7 +165,9 @@ function errorKind(code: string, status: number): SubscriptionErrorKind {
   ) {
     return "authentication";
   }
-  if (code === "monthly_allowance_exhausted") return "allowance";
+  if (code === "monthly_allowance_exhausted" || code === "insufficient_credits") {
+    return "allowance";
+  }
   if (code === "subscription_payment_required") return "payment";
   if (code === "feature_not_in_plan" || code === "model_not_in_plan" || status === 403) {
     return "access";

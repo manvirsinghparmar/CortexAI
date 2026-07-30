@@ -114,7 +114,7 @@ def test_lock_usage_counters_serializes_concurrent_reservation_paths(postgres_ru
     repository.get_or_create_usage_counter(
         setup_session,
         period["id"],
-        "model_responses",
+        "ai_credits",
     )
     setup_session.commit()
     setup_session.close()
@@ -130,7 +130,7 @@ def test_lock_usage_counters_serializes_concurrent_reservation_paths(postgres_ru
             repository.lock_usage_counters(
                 session,
                 period["id"],
-                ["model_responses"],
+                ["ai_credits"],
             )
             first_has_lock.set()
             if not release_first.wait(timeout=5):
@@ -150,7 +150,7 @@ def test_lock_usage_counters_serializes_concurrent_reservation_paths(postgres_ru
             repository.lock_usage_counters(
                 session,
                 period["id"],
-                ["model_responses"],
+                ["ai_credits"],
             )
             second_has_lock.set()
             session.commit()
@@ -197,7 +197,7 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
     counter = repository.get_or_create_usage_counter(
         setup_session,
         period["id"],
-        "model_responses",
+        "ai_credits",
     )
     usage_counters = get_table("usage_counters")
     setup_session.execute(
@@ -231,7 +231,7 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
                 effective_subscription=effective,
                 request_id=request_id,
                 operation_type="ask",
-                requested_quantities={"model_responses": 1},
+                requested_quantities={"ai_credits": 1},
             )
             session.commit()
             outcomes.put(("reserved", reservation.id))
@@ -264,7 +264,7 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
             before_settlement = repository.get_or_create_usage_counter(
                 verification,
                 period["id"],
-                "model_responses",
+                "ai_credits",
             )
             assert before_settlement["used_quantity"] == 29
             assert before_settlement["reserved_quantity"] == 1
@@ -272,13 +272,13 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
             settle_usage(
                 verification,
                 reservation_id=reservation_id,
-                successful_quantities={"model_responses": 1},
+                successful_quantities={"ai_credits": 1},
             )
             verification.commit()
             after_settlement = repository.get_or_create_usage_counter(
                 verification,
                 period["id"],
-                "model_responses",
+                "ai_credits",
             )
             assert after_settlement["used_quantity"] == 30
             assert after_settlement["reserved_quantity"] == 0

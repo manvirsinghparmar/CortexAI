@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import csv
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import base64
 import io
 import json
+import re
 import zipfile
 from xml.etree import ElementTree
 from typing import Any, Iterable
@@ -329,15 +330,41 @@ def _format_text_chunks_for_model(
     text: str,
     *,
     usage_role: str,
+    query_text: str = "",
 ) -> tuple[str, dict[str, Any]]:
     raw = str(text or "").strip()
     chunk_chars = _text_chunk_chars()
     max_chunks = _text_chunk_budget_for_usage_role(usage_role)
-    chunks, truncated_to_chunks = _split_text_into_chunks(
+    all_chunks, _ = _split_text_into_chunks(
         raw,
         chunk_chars=chunk_chars,
-        max_chunks=max_chunks,
+        max_chunks=max(1, (len(raw) // max(1, chunk_chars)) + 2),
     )
+    query_terms = {
+        term
+        for term in re.findall(r"[a-z0-9]{3,}", str(query_text or "").lower())
+        if term not in {"about", "from", "have", "please", "that", "this", "what", "with"}
+    }
+    selected_indexes = list(range(min(len(all_chunks), max_chunks)))
+    selection_strategy = "leading_chunks"
+    if query_terms and len(all_chunks) > max_chunks:
+        scored = [
+            (
+                sum(chunk.lower().count(term) for term in query_terms),
+                index,
+            )
+            for index, chunk in enumerate(all_chunks)
+        ]
+        relevant = [
+            index
+            for score, index in sorted(scored, key=lambda item: (-item[0], item[1]))
+            if score > 0
+        ][:max_chunks]
+        if relevant:
+            selected_indexes = sorted(relevant)
+            selection_strategy = "query_relevance"
+    chunks = [all_chunks[index] for index in selected_indexes]
+    truncated_to_chunks = len(chunks) < len(all_chunks)
 
     if not chunks:
         return "", {
@@ -349,6 +376,8 @@ def _format_text_chunks_for_model(
             "source_char_count": len(raw),
             "model_text_char_count": 0,
             "usage_role": str(usage_role or "primary"),
+            "selection_strategy": selection_strategy,
+            "selected_chunk_indexes": [],
         }
 
     if len(chunks) == 1:
@@ -373,6 +402,8 @@ def _format_text_chunks_for_model(
         "source_char_count": len(raw),
         "model_text_char_count": len(model_text),
         "usage_role": str(usage_role or "primary"),
+        "selection_strategy": selection_strategy,
+        "selected_chunk_indexes": selected_indexes,
     }
 
 
@@ -383,6 +414,7 @@ def extract_text_attachment_artifact(
     filename: str,
     transform_mode: str,
     usage_role: str = "primary",
+    query_text: str = "",
 ) -> dict[str, Any]:
     """
     Build text materialization output for one attachment.
@@ -411,6 +443,7 @@ def extract_text_attachment_artifact(
     extracted_text, artifact_meta = _format_text_chunks_for_model(
         extracted_raw,
         usage_role=usage_role,
+        query_text=query_text,
     )
     artifact_meta = dict(artifact_meta)
     artifact_meta["effective_transform_mode"] = effective_mode
@@ -420,6 +453,7 @@ def extract_text_attachment_artifact(
     return {
         "effective_transform_mode": effective_mode,
         "extracted_text": extracted_text,
+        "extracted_source_text": extracted_raw,
         "artifact_meta": artifact_meta,
     }
 
@@ -448,6 +482,7 @@ class ResolvedAttachment:
     status: str
     storage_bucket: str
     storage_key: str
+    ingestion_meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -584,6 +619,11 @@ def resolve_request_attachments(
                     status=file_status,
                     storage_bucket=str(row.get("storage_bucket") or "").strip(),
                     storage_key=str(row.get("storage_key") or "").strip(),
+                    ingestion_meta=(
+                        dict(row.get("ingestion_meta"))
+                        if isinstance(row.get("ingestion_meta"), dict)
+                        else {}
+                    ),
                 )
             )
 
@@ -592,25 +632,57 @@ def resolve_request_attachments(
 
 def materialize_inference_attachments(
     attachments: list[ResolvedAttachment],
+    *,
+    query_text: str = "",
 ) -> list[dict[str, Any]]:
     """Load attachment bytes from object storage and convert to provider-neutral payloads."""
     if not attachments:
         return []
 
-    try:
-        storage = get_object_storage()
-    except ObjectStorageConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "storage_not_configured", "message": str(exc)},
-        ) from exc
-
+    storage = None
     items: list[dict[str, Any]] = []
     for attachment in attachments:
         effective_mode = _effective_transform_mode(
             mime_type=attachment.mime_type,
             requested_mode=attachment.transform_mode,
         )
+        cached_text = str(
+            attachment.ingestion_meta.get("cached_extracted_text") or ""
+        ).strip()
+        if (
+            cached_text
+            and attachment.ingestion_meta.get("ingestion_state") == "ready"
+            and _materializes_as_text(
+                mime_type=attachment.mime_type,
+                requested_mode=attachment.transform_mode,
+            )
+        ):
+            extracted_text, artifact_meta = _format_text_chunks_for_model(
+                cached_text,
+                usage_role=attachment.usage_role,
+                query_text=query_text,
+            )
+            items.append(
+                {
+                    "file_id": str(attachment.file_id),
+                    "usage_role": attachment.usage_role,
+                    "transform_mode": effective_mode,
+                    "order_index": attachment.order_index,
+                    "filename": attachment.original_filename or "file",
+                    "mime_type": attachment.mime_type,
+                    "size_bytes": attachment.size_bytes,
+                    "extracted_text": extracted_text,
+                    "artifact_meta": {
+                        **artifact_meta,
+                        "effective_transform_mode": effective_mode,
+                        "mime_type": attachment.mime_type,
+                        "filename": attachment.original_filename or "file",
+                        "parse_cache_reused": True,
+                    },
+                }
+            )
+            continue
+
         if not attachment.storage_key:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -620,7 +692,14 @@ def materialize_inference_attachments(
                 },
             )
         try:
+            if storage is None:
+                storage = get_object_storage()
             payload = storage.get_bytes(key=attachment.storage_key)
+        except ObjectStorageConfigurationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "storage_not_configured", "message": str(exc)},
+            ) from exc
         except ObjectStorageOperationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -652,6 +731,7 @@ def materialize_inference_attachments(
                     filename=attachment.original_filename or "file",
                     transform_mode=attachment.transform_mode,
                     usage_role=attachment.usage_role,
+                    query_text=query_text,
                 )
             except Exception as exc:
                 raise HTTPException(

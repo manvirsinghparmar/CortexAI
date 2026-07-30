@@ -57,7 +57,7 @@ For fast entitlement UX testing without Stripe, run `python run_app.py --subscri
 7. Resend the same event. Confirm the event count and usage-period count do not change and existing counters retain their values.
 8. Use a failing test payment to confirm `past_due`, `grace_until`, and the eventual Free fallback. Cancel through Portal and confirm history remains readable after access downgrades.
 9. Set `BILLING_ENABLED=false` and confirm `/pricing` labels plan actions Unavailable while `/account/billing` keeps Free allowances visible and does not offer Checkout or Portal.
-10. Validate subscription UX at desktop and phone widths: locked models remain visible, the third Compare target offers Pro, Web/Improve/file limits explain denials without clearing the draft, Usage & insights shows all seven counters, payment/cancellation banners render, and restored premium history remains readable after downgrade. Repeat the submission against the API to confirm backend enforcement is still authoritative.
+10. Validate subscription UX at desktop and phone widths: locked models remain visible, the third Compare target offers Pro, Web/Improve/file limits explain denials without clearing the draft, Usage & insights shows the unified AI-credit balance plus itemized recent activity, payment/cancellation banners render, and restored premium history remains readable after downgrade. Repeat the submission against the API to confirm backend enforcement is still authoritative.
 
 Do not complete a live-money Checkout during automated or staging validation.
 

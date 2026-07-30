@@ -28,12 +28,17 @@ def _write_catalog(tmp_path: Path, data: dict) -> Path:
 def test_default_plan_catalog_loads_as_immutable_decimal_backed_types():
     catalog = PlanCatalog.from_yaml()
 
-    assert catalog.version == 1
+    assert catalog.version == 2
     assert [plan.code for plan in catalog.list_plans()] == ["free", "plus", "pro"]
     assert catalog.require("plus").monthly_price_usd == Decimal("6.99")
     assert catalog.require("pro").entitlements.allowed_billing_classes == frozenset(
-        {"standard", "advanced", "ultra"}
+        {"economical", "standard", "advanced", "premium"}
     )
+    assert catalog.require("free").allowances.ai_credits == 100_000
+    assert catalog.require("plus").allowances.ai_credits == 1_000_000
+    assert catalog.require("pro").allowances.ai_credits == 3_000_000
+    assert [plan.limits.requests_per_minute for plan in catalog.list_plans()] == [5, 15, 30]
+    assert catalog.require("free").entitlements.usage_export_enabled is False
     with pytest.raises(FrozenInstanceError):
         catalog.require("free").rank = 99  # type: ignore[misc]
 
@@ -59,7 +64,7 @@ def test_default_plan_catalog_is_process_cached():
         ),
         (
             lambda data: data["plans"]["free"]["allowances"].update(
-                {"model_responses": -1}
+                {"ai_credits": -1}
             ),
             "cannot be negative",
         ),

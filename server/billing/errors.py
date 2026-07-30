@@ -111,6 +111,7 @@ _ENTITLEMENT_STATUS_CODES = {
     "feature_not_in_plan": status.HTTP_403_FORBIDDEN,
     "model_not_in_plan": status.HTTP_403_FORBIDDEN,
     "monthly_allowance_exhausted": status.HTTP_429_TOO_MANY_REQUESTS,
+    "insufficient_credits": status.HTTP_402_PAYMENT_REQUIRED,
     "subscription_payment_required": status.HTTP_402_PAYMENT_REQUIRED,
     "subscription_configuration_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -119,6 +120,7 @@ _ENTITLEMENT_STATUS_CODES = {
 def entitlement_http_exception(denial: Any) -> HTTPException:
     """Convert a domain denial to a provider-safe FastAPI error."""
     code = str(getattr(denial, "code", "subscription_configuration_error"))
+    reset_at = getattr(denial, "reset_at", None)
     detail = {
         "code": code,
         "message": str(
@@ -136,8 +138,9 @@ def entitlement_http_exception(denial: Any) -> HTTPException:
         "recommended_plan": getattr(denial, "recommended_plan", None),
         "used": getattr(denial, "used", None),
         "limit": getattr(denial, "limit", None),
+        "required": getattr(denial, "required", None),
         "remaining": getattr(denial, "remaining", None),
-        "reset_at": getattr(denial, "reset_at", None),
+        "reset_at": reset_at.isoformat() if isinstance(reset_at, datetime) else reset_at,
     }
     return HTTPException(
         status_code=_ENTITLEMENT_STATUS_CODES.get(

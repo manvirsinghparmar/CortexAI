@@ -113,8 +113,8 @@ export function PricingPageContent({
         <span className={styles.eyebrow}>MONTHLY PLANS</span>
         <h1 id="pricing-title">More choice, with clear monthly limits.</h1>
         <p>
-          Start free, then move up when you need more responses, premium models, research, prompt
-          improvement, or file analysis.
+          Start free, then move up when you need more AI credits, broader model access, or
+          three-model comparisons.
         </p>
       </section>
 
@@ -333,22 +333,22 @@ function planFeatures(plan: PublicBillingPlan): string[] {
   const allowances = plan.allowances;
   const classes = plan.features.allowed_billing_classes;
   return [
-    `${formatCount(allowances.model_responses)} model responses`,
-    `${formatCount(allowances.advanced_model_responses)} Advanced-model responses`,
-    allowances.ultra_model_responses > 0
-      ? `${formatCount(allowances.ultra_model_responses)} Ultra-model responses`
-      : "Ultra models not included",
+    `${formatCount(allowances.ai_credits)} AI credits per month`,
     `Compare up to ${plan.features.max_compare_models} models`,
-    `${formatCount(allowances.research_turns)} Web-research turns`,
-    `${formatCount(allowances.optimization_turns)} Improve runs`,
-    `${formatCount(allowances.file_analysis_turns)} file-analysis turns`,
-    classes.includes("advanced") ? "Advanced model access" : "Standard model access",
+    "Advanced Web Search draws from AI credits",
+    "Improve Prompt draws from AI credits",
+    "File upload is free; model processing uses AI credits",
+    classes.includes("premium")
+      ? "Premium model access"
+      : classes.includes("advanced")
+        ? "Advanced model access"
+        : "Economical and selected standard models",
   ];
 }
 
 function planSummary(code: SubscriptionPlanCode): string {
   if (code === "plus") return "For regular research and creation";
-  if (code === "pro") return "For high-volume and Ultra-model work";
+  if (code === "pro") return "For high-volume and premium-model work";
   return "For trying CortexAI and occasional work";
 }
 

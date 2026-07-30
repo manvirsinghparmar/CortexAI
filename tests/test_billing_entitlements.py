@@ -14,8 +14,11 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
+    Integer,
+    JSON,
     MetaData,
     String,
     Table,
@@ -139,9 +142,41 @@ def billing_service_db(monkeypatch):
             unique=True,
         ),
     )
+    credit_transactions = Table(
+        "credit_transactions",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("reservation_id", Uuid),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("item_index", Integer, nullable=False, default=0),
+        Column("item_type", String(32), nullable=False),
+        Column("provider", String(64)),
+        Column("model", String(255)),
+        Column("input_tokens", BigInteger, nullable=False, default=0),
+        Column("output_tokens", BigInteger, nullable=False, default=0),
+        Column("input_credits", BigInteger, nullable=False, default=0),
+        Column("output_credits", BigInteger, nullable=False, default=0),
+        Column("fixed_credits", BigInteger, nullable=False, default=0),
+        Column("total_credits", BigInteger, nullable=False),
+        Column("provider_cost_usd", Float, nullable=False, default=0),
+        Column("usage_estimated", Boolean, nullable=False, default=False),
+        Column("pricing_version", String(64), nullable=False),
+        Column("metadata", JSON, nullable=False, default=dict),
+        Column("created_at", DateTime(timezone=True), nullable=False, default=datetime.now),
+    )
     tables = {
         table.name: table
-        for table in (users, billing_accounts, subscriptions, usage_periods, usage_counters)
+        for table in (
+            users,
+            billing_accounts,
+            subscriptions,
+            usage_periods,
+            usage_counters,
+            credit_transactions,
+        )
     }
     metadata.create_all(engine)
 
@@ -252,9 +287,9 @@ def test_existing_user_resolves_to_free_calendar_period_by_default(billing_servi
 
 @pytest.mark.parametrize(
     ("status", "plan_code"),
-    [("active", "plus"), ("active", "pro"), ("trialing", "plus")],
+    [("active", "plus"), ("active", "pro")],
 )
-def test_active_and_trialing_snapshots_grant_paid_plan(
+def test_active_snapshots_grant_paid_plan(
     billing_service_db,
     monkeypatch,
     status,
@@ -277,6 +312,26 @@ def test_active_and_trialing_snapshots_grant_paid_plan(
     period = repository.get_active_usage_period(db, account.id, datetime(2026, 7, 18))
     assert period["subscription_id"] == snapshot["id"]
     assert period["plan_code"] == plan_code
+
+
+def test_trialing_snapshot_does_not_grant_paid_access(
+    billing_service_db,
+    monkeypatch,
+):
+    db, tables = billing_service_db
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    user_id = _create_user(db, tables)
+    account = get_or_create_user_billing_account(db, user_id)
+    _snapshot(db, account_id=account.id, status="trialing", plan_code="plus")
+
+    effective = resolve_effective_subscription(
+        db,
+        user_id,
+        now=datetime(2026, 7, 18, tzinfo=UTC),
+    )
+
+    assert effective.plan.code == "free"
+    assert effective.status == "trialing"
 
 
 @pytest.mark.parametrize(
@@ -455,11 +510,11 @@ def test_development_override_can_follow_existing_free_period(
 
 
 @pytest.mark.parametrize("plan_code", ["free", "plus"])
-def test_ultra_model_is_denied_until_pro(plan_code):
+def test_premium_model_is_denied_until_pro(plan_code):
     effective = _effective(plan_code)
     intent = SubscriptionRequestIntent(
         operation_type="ask",
-        model_targets=(ModelTargetIntent("openai", "ultra-model", "ultra"),),
+        model_targets=(ModelTargetIntent("openai", "premium-model", "premium"),),
     )
 
     decision = evaluate_entitlement(effective, intent, _allowances(plan_code))
@@ -470,9 +525,9 @@ def test_ultra_model_is_denied_until_pro(plan_code):
 
 
 @pytest.mark.unit
-def test_standard_and_limited_advanced_models_are_allowed_on_free():
+def test_economical_and_standard_models_are_allowed_on_free():
     effective = _effective("free")
-    for billing_class in ("standard", "advanced"):
+    for billing_class in ("economical", "standard"):
         decision = evaluate_entitlement(
             effective,
             SubscriptionRequestIntent(
@@ -485,27 +540,23 @@ def test_standard_and_limited_advanced_models_are_allowed_on_free():
 
 
 @pytest.mark.unit
-def test_pro_allows_ultra_and_three_model_compare():
+def test_pro_allows_premium_and_three_model_compare():
     effective = _effective("pro")
     intent = SubscriptionRequestIntent(
         operation_type="compare",
         model_targets=(
             ModelTargetIntent("openai", "standard", "standard"),
             ModelTargetIntent("gemini", "advanced", "advanced"),
-            ModelTargetIntent("xai", "ultra", "ultra"),
+            ModelTargetIntent("xai", "premium", "premium"),
         ),
         research_enabled=True,
+        estimated_credits=42_000,
     )
 
     decision = evaluate_entitlement(effective, intent, _allowances("pro"))
 
     assert decision.allowed is True
-    assert decision.required_quantities == {
-        "model_responses": 3,
-        "advanced_model_responses": 1,
-        "ultra_model_responses": 1,
-        "research_turns": 1,
-    }
+    assert decision.required_quantities == {"ai_credits": 42_000}
 
 
 @pytest.mark.parametrize("plan_code", ["free", "plus"])
@@ -523,24 +574,26 @@ def test_three_model_compare_recommends_pro(plan_code):
 
 
 @pytest.mark.unit
-def test_research_and_optimization_allowances_fail_with_actionable_denial():
+def test_unified_credit_allowance_fails_with_actionable_denial():
     effective = _effective("free")
-    for meter, intent in (
-        (
-            "research_turns",
-            SubscriptionRequestIntent(operation_type="ask", research_enabled=True),
+    for intent in (
+        SubscriptionRequestIntent(
+            operation_type="ask",
+            research_enabled=True,
+            estimated_credits=15_001,
         ),
-        ("optimization_turns", SubscriptionRequestIntent(operation_type="optimize")),
+        SubscriptionRequestIntent(operation_type="optimize", estimated_credits=15_001),
     ):
         allowances = _allowances("free")
-        limit = allowances[meter].limit
-        allowances[meter] = AllowanceUsage(limit, 0, limit, 0)
+        limit = allowances["ai_credits"].limit
+        allowances["ai_credits"] = AllowanceUsage(limit, 0, limit, 0)
 
         decision = evaluate_entitlement(effective, intent, allowances)
 
         assert decision.allowed is False
-        assert decision.denial.code == "monthly_allowance_exhausted"
-        assert decision.denial.meter == meter
+        assert decision.denial.code == "insufficient_credits"
+        assert decision.denial.meter == "ai_credits"
+        assert decision.denial.required == 15_001
         assert decision.denial.remaining == 0
         assert decision.denial.reset_at == effective.current_period_end
 
@@ -567,12 +620,9 @@ def test_disabled_research_feature_is_denied_before_allowance_evaluation():
 
 
 @pytest.mark.unit
-def test_uploaded_byte_allowance_is_checked_for_file_uploads():
+def test_upload_has_no_credit_quantity():
     effective = _effective("free")
     allowances = _allowances("free")
-    limit = allowances["uploaded_bytes"].limit
-    allowances["uploaded_bytes"] = AllowanceUsage(limit, 0, limit, 0)
-
     decision = evaluate_entitlement(
         effective,
         SubscriptionRequestIntent(
@@ -584,8 +634,8 @@ def test_uploaded_byte_allowance_is_checked_for_file_uploads():
         allowances,
     )
 
-    assert decision.denial.code == "monthly_allowance_exhausted"
-    assert decision.denial.meter == "uploaded_bytes"
+    assert decision.allowed is True
+    assert decision.required_quantities == {}
 
 
 @pytest.mark.unit
@@ -625,13 +675,10 @@ def test_compare_with_files_computes_once_per_turn_quantities():
         ),
         attachment_count=1,
         total_attachment_bytes=100,
+        estimated_credits=25_000,
     )
 
-    assert required_quantities(intent) == {
-        "model_responses": 2,
-        "advanced_model_responses": 2,
-        "file_analysis_turns": 1,
-    }
+    assert required_quantities(intent) == {"ai_credits": 25_000}
 
 
 @pytest.mark.unit
@@ -647,7 +694,11 @@ def test_missing_billing_class_and_counter_fail_conservatively():
     )
     missing_counter = evaluate_entitlement(
         effective,
-        SubscriptionRequestIntent(operation_type="ask", research_enabled=True),
+        SubscriptionRequestIntent(
+            operation_type="ask",
+            research_enabled=True,
+            estimated_credits=15_000,
+        ),
         {},
     )
 
@@ -668,6 +719,7 @@ def test_missing_billing_class_and_counter_fail_conservatively():
         ("feature_not_in_plan", 403),
         ("model_not_in_plan", 403),
         ("monthly_allowance_exhausted", 429),
+        ("insufficient_credits", 402),
         ("subscription_payment_required", 402),
         ("subscription_configuration_error", 500),
     ],
@@ -679,6 +731,22 @@ def test_entitlement_denial_codes_map_to_safe_http_statuses(code, expected_statu
 
     assert error.status_code == expected_status
     assert error.detail["message"] == "Safe subscription error."
+
+
+def test_entitlement_reset_timestamp_is_json_safe():
+    denial = EntitlementDenial(
+        code="insufficient_credits",
+        message="Not enough credits.",
+        required=15_000,
+        remaining=2_000,
+        reset_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+
+    error = entitlement_http_exception(denial)
+
+    assert error.detail["reset_at"] == "2026-08-01T00:00:00+00:00"
+    assert error.detail["required"] == 15_000
+    assert error.detail["remaining"] == 2_000
 
 
 @pytest.mark.integration
@@ -723,7 +791,85 @@ def test_entitlements_endpoint_lazy_creates_free_snapshot_with_all_counters(
     }
     assert payload["period"]["starts_at"].endswith("Z")
     assert payload["period"]["ends_at"].endswith("Z")
-    assert len(db.execute(select(tables["usage_counters"])).all()) == 7
+    assert len(db.execute(select(tables["usage_counters"])).all()) == 1
+
+
+@pytest.mark.integration
+def test_credit_transactions_endpoint_returns_itemized_reconciliation(
+    billing_service_db,
+    monkeypatch,
+):
+    db, tables = billing_service_db
+    user_id = _create_user(db, tables)
+    effective = resolve_effective_subscription(
+        db,
+        user_id,
+        now=datetime(2026, 7, 29, tzinfo=UTC),
+    )
+    db.execute(
+        insert(tables["credit_transactions"]).values(
+            id=uuid4(),
+            billing_account_id=effective.billing_account_id,
+            usage_period_id=effective.usage_period_id,
+            reservation_id=uuid4(),
+            request_id="credit-route-request",
+            operation_type="ask",
+            item_index=0,
+            item_type="model",
+            provider="openai",
+            model="gpt-4.1-mini",
+            input_tokens=100,
+            output_tokens=50,
+            input_credits=100,
+            output_credits=200,
+            fixed_credits=0,
+            total_credits=300,
+            provider_cost_usd=0.001,
+            usage_estimated=False,
+            pricing_version="2026-07-29",
+            metadata={"file_context": True},
+            created_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
+        )
+    )
+    db.commit()
+
+    @contextmanager
+    def test_uow():
+        yield db
+
+    monkeypatch.setattr(entitlements_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(entitlements_route, "_db_uow", test_uow)
+    app = FastAPI()
+    app.include_router(entitlements_route.router)
+    app.dependency_overrides[get_auth] = lambda: AuthResult(
+        api_key=None,
+        cognito_claims=None,
+        user_id=user_id,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/credits/transactions?limit=20&offset=0")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0] == {
+        "id": response.json()["items"][0]["id"],
+        "request_id": "credit-route-request",
+        "operation_type": "ask",
+        "item_type": "model",
+        "provider": "openai",
+        "model": "gpt-4.1-mini",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "input_credits": 100,
+        "output_credits": 200,
+        "fixed_credits": 0,
+        "total_credits": 300,
+        "provider_cost_usd": 0.001,
+        "usage_estimated": False,
+        "pricing_version": "2026-07-29",
+        "metadata": {"file_context": True},
+        "created_at": "2026-07-29T12:00:00Z",
+    }
 
 
 @pytest.mark.integration

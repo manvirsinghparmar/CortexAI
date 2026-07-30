@@ -2,6 +2,43 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Literal
+from functools import lru_cache
+
+from orchestrator.model_registry import ModelRegistry
+from server.billing.credit_calculator import (
+    ADVANCED_WEB_SEARCH_CREDITS,
+    calculate_credit_charge,
+)
+from server.billing.credit_estimator import fallback_actual_tokens
+
+
+@lru_cache(maxsize=1)
+def _credit_registry() -> ModelRegistry:
+    return ModelRegistry.from_yaml()
+
+
+def _response_credit_usage(response) -> tuple[int, bool]:
+    if getattr(response, "is_error", False):
+        return 0, False
+    candidate = _credit_registry().find_model(response.provider, response.model)
+    if candidate is None:
+        return 0, True
+    input_tokens = max(0, int(response.token_usage.prompt_tokens or 0))
+    output_tokens = max(0, int(response.token_usage.completion_tokens or 0))
+    estimated = input_tokens == 0 and output_tokens == 0
+    if estimated:
+        input_tokens, output_tokens = fallback_actual_tokens(
+            input_text="",
+            output_text=response.text,
+        )
+    charge = calculate_credit_charge(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        input_multiplier=candidate.input_credit_multiplier,
+        output_multiplier=candidate.output_credit_multiplier,
+        estimated=estimated,
+    )
+    return charge.total_credits, charge.estimated
 
 
 class TokenUsageDTO(BaseModel):
@@ -29,6 +66,8 @@ class ChatResponseDTO(BaseModel):
     token_usage: TokenUsageDTO
     estimated_cost: float
     cost_currency: str = "USD"
+    ai_credits: int = 0
+    credit_usage_estimated: bool = False
     finish_reason: Optional[str] = None
     error: Optional[ErrorDTO] = None
     web_source_items: List[Dict[str, str]] = Field(default_factory=list)
@@ -41,6 +80,7 @@ class ChatResponseDTO(BaseModel):
         *,
         session_id: Optional[str] = None,
         response_version: int = 1,
+        include_research_charge: bool = True,
     ):
         """Convert UnifiedResponse to DTO."""
         metadata = ur.metadata if isinstance(getattr(ur, "metadata", None), dict) else {}
@@ -66,6 +106,13 @@ class ChatResponseDTO(BaseModel):
                 if len(normalized_sources) >= 8:
                     break
 
+        ai_credits, credit_usage_estimated = _response_credit_usage(ur)
+        if (
+            include_research_charge
+            and metadata.get("research_used")
+            and not metadata.get("research_reused")
+        ):
+            ai_credits += ADVANCED_WEB_SEARCH_CREDITS
         return cls(
             request_id=ur.request_id,
             response_version=max(1, int(response_version)),
@@ -81,6 +128,8 @@ class ChatResponseDTO(BaseModel):
             ),
             estimated_cost=ur.estimated_cost,
             cost_currency=ur.cost_currency,
+            ai_credits=ai_credits,
+            credit_usage_estimated=credit_usage_estimated,
             finish_reason=ur.finish_reason,
             error=ErrorDTO(
                 code=ur.error.code,
@@ -102,19 +151,38 @@ class CompareResponseDTO(BaseModel):
     error_count: int
     total_tokens: int
     total_cost: float
+    total_ai_credits: int = 0
     timestamp: str
 
     @classmethod
     def from_multi_unified_response(cls, mur, *, session_id: Optional[str] = None):
         """Convert MultiUnifiedResponse to DTO."""
+        response_dtos = [
+            ChatResponseDTO.from_unified_response(
+                r,
+                session_id=session_id,
+                include_research_charge=False,
+            )
+            for r in mur.responses
+        ]
+        research_charged = any(
+            isinstance(getattr(r, "metadata", None), dict)
+            and r.metadata.get("research_used")
+            and not r.metadata.get("research_reused")
+            for r in mur.responses
+        )
         return cls(
             request_group_id=mur.request_group_id,
             session_id=session_id,
-            responses=[ChatResponseDTO.from_unified_response(r, session_id=session_id) for r in mur.responses],
+            responses=response_dtos,
             success_count=mur.success_count,
             error_count=mur.error_count,
             total_tokens=mur.total_tokens,
             total_cost=mur.total_cost,
+            total_ai_credits=(
+                sum(item.ai_credits for item in response_dtos)
+                + (ADVANCED_WEB_SEARCH_CREDITS if research_charged else 0)
+            ),
             timestamp=mur.timestamp
         )
 
@@ -130,6 +198,11 @@ class ModelCatalogItemDTO(BaseModel):
     model: str
     tier: str
     billing_class: str
+    access_category: str
+    input_credit_multiplier: float
+    output_credit_multiplier: float
+    credit_usage_label: str
+    credit_pricing_version: str
     input_cost_per_1m: float
     output_cost_per_1m: float
     context_limit: int
@@ -398,6 +471,32 @@ class EntitlementsResponseDTO(BaseModel):
     period: EntitlementPeriodDTO
 
 
+class CreditTransactionDTO(BaseModel):
+    id: str
+    request_id: str
+    operation_type: str
+    item_type: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: int
+    output_tokens: int
+    input_credits: int
+    output_credits: int
+    fixed_credits: int
+    total_credits: int
+    provider_cost_usd: float
+    usage_estimated: bool
+    pricing_version: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class CreditTransactionsResponseDTO(BaseModel):
+    items: List[CreditTransactionDTO] = Field(default_factory=list)
+    limit: int
+    offset: int
+
+
 class PublicBillingPlanFeaturesDTO(BaseModel):
     max_compare_models: int
     research_enabled: bool
@@ -407,12 +506,7 @@ class PublicBillingPlanFeaturesDTO(BaseModel):
 
 
 class PublicBillingPlanAllowancesDTO(BaseModel):
-    model_responses: int
-    advanced_model_responses: int
-    ultra_model_responses: int
-    research_turns: int
-    optimization_turns: int
-    file_analysis_turns: int
+    ai_credits: int
 
 
 class PublicBillingPlanDTO(BaseModel):

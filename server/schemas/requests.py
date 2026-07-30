@@ -52,6 +52,7 @@ class AttachmentRequestItem(BaseModel):
 
 class CompareResponseRegenerationRequest(BaseModel):
     source_request_id: str = Field(..., min_length=1, max_length=160)
+    refresh_research: bool = False
 
 
 class ChatRequest(BaseModel):

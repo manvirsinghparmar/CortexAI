@@ -60,6 +60,10 @@ class ModelCandidate:
     context_limit: int
     tags: list[str]
     billing_class: ModelBillingClass = ModelBillingClass.ADVANCED
+    input_credit_multiplier: float = 0.0
+    output_credit_multiplier: float = 0.0
+    credit_usage_label: str = ""
+    credit_pricing_version: str = ""
     enabled: bool = True
     supports_image_input: bool = False
     supported_attachment_mime_types: list[str] = field(default_factory=list)

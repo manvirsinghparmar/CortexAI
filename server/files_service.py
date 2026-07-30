@@ -245,6 +245,7 @@ def _sanitize_ingestion_meta_for_client(ingestion_meta: Any) -> dict[str, Any]:
         "request_id",
         "traceback",
         "stack",
+        "cached_extracted_text",
     }
     for key, value in ingestion_meta.items():
         key_text = str(key or "").strip().lower()
@@ -349,6 +350,11 @@ def _run_sync_ingestion(
                     artifact.get("effective_transform_mode") or "text_only"
                 ),
                 "artifact_meta": dict(artifact_meta) if isinstance(artifact_meta, dict) else {},
+                "cached_extracted_text": str(
+                    artifact.get("extracted_source_text")
+                    or artifact.get("extracted_text")
+                    or ""
+                ),
             },
         )
         logger.info(

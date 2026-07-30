@@ -36,12 +36,7 @@ interface BillingPageContentProps {
 }
 
 const USAGE_ROWS: Array<{ key: SubscriptionMeterKey; label: string }> = [
-  { key: "model_responses", label: "Model responses" },
-  { key: "advanced_model_responses", label: "Advanced responses" },
-  { key: "ultra_model_responses", label: "Ultra responses" },
-  { key: "research_turns", label: "Web research" },
-  { key: "optimization_turns", label: "Improve runs" },
-  { key: "file_analysis_turns", label: "File analysis" },
+  { key: "ai_credits", label: "AI credits" },
 ];
 
 export function BillingPage() {

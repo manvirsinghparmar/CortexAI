@@ -69,9 +69,8 @@ describe("subscription feature gating", () => {
     );
     expect(screen.getByRole("heading", { name: "Plan allowances" })).toBeInTheDocument();
     expect(
-      screen.getByRole("progressbar", { name: "Model responses: 20 left of 30" }),
-    ).toHaveAttribute("aria-valuenow", "10");
-    expect(screen.getByText("29 MB left of 30 MB")).toBeInTheDocument();
+      screen.getByRole("progressbar", { name: "AI credits: 90,000 left of 100,000" }),
+    ).toHaveAttribute("aria-valuenow", "10000");
 
     await user.click(screen.getByRole("button", { name: "Manage billing" }));
     expect(manage).toHaveBeenCalledTimes(1);
@@ -116,15 +115,15 @@ describe("subscription feature gating", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const onLocked = vi.fn();
-    const models = [model("standard-model", "standard"), model("ultra-model", "ultra")];
+    const models = [model("standard-model", "standard"), model("premium-model", "premium")];
 
     render(
       <ModelSelector
         models={models}
         value="openai:standard-model"
         onChange={onChange}
-        lockedKeys={["openai:ultra-model"]}
-        lockedLabels={{ "openai:ultra-model": "Pro" }}
+        lockedKeys={["openai:premium-model"]}
+        lockedLabels={{ "openai:premium-model": "Pro" }}
         onLockedSelect={onLocked}
       />,
     );
@@ -133,18 +132,18 @@ describe("subscription feature gating", () => {
       screen.getByRole("button", { name: /Model: ChatGPT \(standard-model\)/ }),
     );
     const locked = within(screen.getByRole("listbox")).getByRole("option", {
-      name: /ChatGPT.*ultra-model.*Pro/,
+      name: /ChatGPT.*premium-model.*Pro/,
     });
     expect(locked).toHaveAttribute("aria-disabled", "true");
     expect(locked).not.toBeDisabled();
     expect(
       document.querySelector<HTMLOptionElement>(
-        '#modelSelector option[value="openai:ultra-model"]',
+        '#modelSelector option[value="openai:premium-model"]',
       ),
     ).toBeDisabled();
     await user.click(locked);
 
-    expect(onLocked).toHaveBeenCalledWith("openai:ultra-model");
+    expect(onLocked).toHaveBeenCalledWith("openai:premium-model");
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -175,10 +174,10 @@ describe("subscription feature gating", () => {
   it("explains exhausted Web access without changing or clearing the draft", async () => {
     const user = userEvent.setup();
     const entitlements = entitlementFixture();
-    entitlements.allowances.research_turns = {
-      used: 5,
+    entitlements.allowances.ai_credits = {
+      used: 100_000,
       reserved: 0,
-      limit: 5,
+      limit: 100_000,
       remaining: 0,
     };
     useChatStore.setState({ prompt: "Keep this draft" });
@@ -192,14 +191,56 @@ describe("subscription feature gating", () => {
 
     const research = screen.getByRole("switch", { name: "Research mode" });
     expect(research).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("tooltip", { name: /0 left this period/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tooltip", {
+        name: /Uses latest information from the web.*0 credits left/,
+      }),
+    ).toBeInTheDocument();
     await user.click(research);
 
     expect(useChatStore.getState().subscriptionError?.code).toBe(
-      "monthly_allowance_exhausted",
+      "insufficient_credits",
     );
     expect(useChatStore.getState().prompt).toBe("Keep this draft");
     expect(research).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("warns before unusually expensive premium, three-model, web-enabled requests", () => {
+    const premium = model("premium-model", "premium");
+    const models = [...DEFAULT_MODELS, premium];
+    const entitlements = entitlementFixture({ code: "pro", display_name: "Pro" });
+    entitlements.features.max_compare_models = 3;
+    entitlements.model_access.allowed_billing_classes = [
+      "economical",
+      "standard",
+      "advanced",
+      "premium",
+    ];
+    useChatStore.setState({
+      mode: "compare",
+      compareResearchMode: true,
+      compareModelKeys: [
+        "openai:gpt-5.1",
+        "claude:claude-sonnet-4-5",
+        "openai:premium-model",
+      ],
+    });
+
+    render(
+      <PromptComposer
+        models={models}
+        subscription={{ plans: plansFixture(), entitlements }}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText("Estimated credit usage warning"),
+    ).toHaveTextContent(
+      "Higher credit use expected for premium model, three-model Compare, web-enabled Compare",
+    );
+    expect(screen.getByLabelText("Estimated credit usage warning")).toHaveTextContent(
+      "final credits depend on processed context and output length",
+    );
   });
 
   it("blocks over-limit files before upload and keeps existing attachments", async () => {
@@ -250,7 +291,7 @@ describe("subscription feature gating", () => {
         </>,
       );
 
-      expect(screen.getAllByRole("progressbar")).toHaveLength(7);
+      expect(screen.getAllByRole("progressbar")).toHaveLength(1);
       expect(screen.getByRole("dialog", { name: "Three-model Compare requires Pro" }))
         .toBeVisible();
       expect(screen.getByRole("button", { name: "View Pro" })).toBeVisible();
@@ -289,20 +330,14 @@ function entitlementFixture(
       research_enabled: true,
       prompt_improvement_enabled: true,
       file_analysis_enabled: true,
-      usage_export_enabled: true,
+      usage_export_enabled: false,
       saved_history_enabled: true,
       models_catalog_enabled: true,
     },
-    model_access: { allowed_billing_classes: ["standard", "advanced"] },
+    model_access: { allowed_billing_classes: ["economical", "standard"] },
     limits: { max_files_per_request: 1, max_file_bytes: 10_000_000 },
     allowances: {
-      model_responses: counter(10, 30),
-      advanced_model_responses: counter(1, 5),
-      ultra_model_responses: counter(0, 0),
-      research_turns: counter(1, 5),
-      optimization_turns: counter(2, 10),
-      file_analysis_turns: counter(1, 3),
-      uploaded_bytes: counter(1_000_000, 30_000_000),
+      ai_credits: counter(10_000, 100_000),
     },
     period: {
       starts_at: "2026-07-19T00:00:00Z",
@@ -329,12 +364,7 @@ function plansFixture(): BillingPlansResponse {
       allowed_billing_classes: classes,
     },
     allowances: {
-      model_responses: code === "free" ? 30 : code === "plus" ? 400 : 1200,
-      advanced_model_responses: code === "free" ? 5 : code === "plus" ? 75 : 300,
-      ultra_model_responses: code === "pro" ? 40 : 0,
-      research_turns: code === "free" ? 5 : code === "plus" ? 50 : 200,
-      optimization_turns: code === "free" ? 10 : code === "plus" ? 200 : 500,
-      file_analysis_turns: code === "free" ? 3 : code === "plus" ? 30 : 100,
+      ai_credits: code === "free" ? 100_000 : code === "plus" ? 1_000_000 : 3_000_000,
     },
   });
   return {
@@ -342,9 +372,9 @@ function plansFixture(): BillingPlansResponse {
     billing_period: "monthly",
     billing_enabled: true,
     plans: [
-      plan("free", ["standard", "advanced"], 2),
-      plan("plus", ["standard", "advanced"], 2),
-      plan("pro", ["standard", "advanced", "ultra"], 3),
+      plan("free", ["economical", "standard"], 2),
+      plan("plus", ["economical", "standard", "advanced"], 2),
+      plan("pro", ["economical", "standard", "advanced", "premium"], 3),
     ],
   };
 }
@@ -355,6 +385,11 @@ function model(name: string, billingClass: ModelBillingClass): ModelCatalogItem 
     model: name,
     tier: "frontier",
     billing_class: billingClass,
+    access_category: billingClass,
+    input_credit_multiplier: billingClass === "premium" ? 6 : 2,
+    output_credit_multiplier: billingClass === "premium" ? 30 : 8,
+    credit_usage_label: billingClass === "premium" ? "Premium" : "Standard",
+    credit_pricing_version: "2026-07-29",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128_000,

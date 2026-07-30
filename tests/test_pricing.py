@@ -12,7 +12,7 @@ from utils.cost_calculator import CostCalculator
         ("gemini", "gemini-2.5-flash-lite", 0.10, 0.40),
         ("gemini", "gemini-2.5-pro", 1.25, 10.00),
         ("deepseek", "deepseek-chat", 0.28, 0.42),
-        ("grok", "grok-4-1-fast-non-reasoning", 0.20, 0.50),
+        ("grok", "grok-4-1-fast-non-reasoning", 2.00, 5.00),
         ("claude", "claude-sonnet-4-5", 3.00, 15.00),
         ("claude", "claude-opus-4-5", 5.00, 25.00),
     ],

@@ -45,6 +45,11 @@ class ModelRegistry:
                 required = [
                     "name",
                     "tier",
+                    "billing_class",
+                    "input_credit_multiplier",
+                    "output_credit_multiplier",
+                    "credit_usage_label",
+                    "credit_pricing_version",
                     "input_cost_per_1m",
                     "output_cost_per_1m",
                     "context_limit",
@@ -55,16 +60,9 @@ class ModelRegistry:
                 tier = Tier(model["tier"])
                 raw_billing_class = model.get("billing_class")
                 if raw_billing_class in (None, ""):
-                    billing_class = ModelBillingClass.ADVANCED
-                    logger.warning(
-                        "Model billing class missing; using conservative advanced fallback",
-                        extra={
-                            "extra_fields": {
-                                "provider": provider,
-                                "model": model["name"],
-                                "billing_class": billing_class.value,
-                            }
-                        },
+                    raise ValueError(
+                        f"Missing billing_class for {provider}:{model['name']}; "
+                        "unclassified models are unavailable"
                     )
                 else:
                     normalized_billing_class = str(raw_billing_class).strip().lower()
@@ -108,6 +106,22 @@ class ModelRegistry:
                         context_limit=int(model["context_limit"]),
                         tags=list(model.get("tags", [])),
                         billing_class=billing_class,
+                        input_credit_multiplier=_positive_float(
+                            model["input_credit_multiplier"],
+                            f"{provider}:{model['name']}.input_credit_multiplier",
+                        ),
+                        output_credit_multiplier=_positive_float(
+                            model["output_credit_multiplier"],
+                            f"{provider}:{model['name']}.output_credit_multiplier",
+                        ),
+                        credit_usage_label=_required_text(
+                            model["credit_usage_label"],
+                            f"{provider}:{model['name']}.credit_usage_label",
+                        ),
+                        credit_pricing_version=_required_text(
+                            model["credit_pricing_version"],
+                            f"{provider}:{model['name']}.credit_pricing_version",
+                        ),
                         enabled=bool(model.get("enabled", True)),
                         supports_image_input=bool(
                             model.get(
@@ -223,3 +237,22 @@ class ModelRegistry:
         if include_disabled:
             return candidates
         return [candidate for candidate in candidates if candidate.enabled]
+
+
+def _positive_float(value: object, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid {label}: expected a positive number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid {label}: expected a positive number") from exc
+    if parsed <= 0:
+        raise ValueError(f"Invalid {label}: expected a positive number")
+    return parsed
+
+
+def _required_text(value: object, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"Invalid {label}: value is required")
+    return normalized

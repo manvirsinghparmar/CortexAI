@@ -11,13 +11,7 @@ const METER_PRESENTATION: Array<{
   label: string;
   shortLabel: string;
 }> = [
-  { key: "model_responses", label: "Model responses", shortLabel: "Responses" },
-  { key: "advanced_model_responses", label: "Advanced models", shortLabel: "Advanced" },
-  { key: "ultra_model_responses", label: "Ultra models", shortLabel: "Ultra" },
-  { key: "research_turns", label: "Web research", shortLabel: "Web" },
-  { key: "optimization_turns", label: "Prompt improvement", shortLabel: "Improve" },
-  { key: "file_analysis_turns", label: "File analysis", shortLabel: "Files" },
-  { key: "uploaded_bytes", label: "Uploaded data", shortLabel: "Uploads" },
+  { key: "ai_credits", label: "AI credits", shortLabel: "Credits" },
 ];
 
 export function UsageAllowance({
@@ -99,11 +93,8 @@ function AllowanceItem({
 }
 
 function formatQuantity(value: number, meter: SubscriptionMeterKey): string {
-  if (meter !== "uploaded_bytes") return new Intl.NumberFormat().format(value);
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)} MB`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} KB`;
-  return `${value} B`;
+  void meter;
+  return new Intl.NumberFormat().format(value);
 }
 
 function formatDate(value: string): string {

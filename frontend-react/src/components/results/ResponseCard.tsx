@@ -77,8 +77,11 @@ export function ResponseCard({
   const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
   const isFailed = hasError || response.ui_status === "failed";
   const hasCost = !loadingStatus && !isFailed && response.estimated_cost > 0;
+  const aiCredits = response.ai_credits ?? 0;
+  const hasCredits = !loadingStatus && !isFailed && aiCredits > 0;
   const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
-  const hasMetaContent = !!loadingStatus || isFailed || hasCompletedMetrics || hasCost;
+  const hasMetaContent =
+    !!loadingStatus || isFailed || hasCompletedMetrics || hasCost || hasCredits;
   const metaPinned = !!loadingStatus || isFailed;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
@@ -184,6 +187,13 @@ export function ResponseCard({
                     {formatTokens(totalTokens)} tok
                   </span>
                 )}
+                {hasCredits && (
+                  <span className={`${styles.metricPill} ${styles.metricText}`}>
+                    <CortexIcon name="cost" />
+                    {aiCredits.toLocaleString()} credits
+                    {response.credit_usage_estimated ? " estimated" : ""}
+                  </span>
+                )}
                 {hasCost && (
                   <span
                     className={`${styles.metricPill} ${
@@ -258,7 +268,8 @@ export function ResponseCard({
               type="button"
               className={styles.actionButton}
               aria-label="Regenerate response"
-              title="Regenerate response"
+              aria-description="This creates a new model call and uses AI credits."
+              title="Regenerate response · New model credits will be used"
               onClick={onRegenerate}
             >
               <CortexIcon name="regenerate" />

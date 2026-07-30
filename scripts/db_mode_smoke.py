@@ -6,7 +6,9 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -178,12 +180,31 @@ def main() -> int:
     os.environ["AUTO_REGISTER_UNMAPPED_API_KEYS"] = "true"
 
     _bootstrap_sqlite_schema(os.environ["DATABASE_URL"])
+    smoke_user_id = uuid4()
+    smoke_engine = create_engine(os.environ["DATABASE_URL"])
+    with smoke_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users "
+                "(id, email, display_name, is_active, auth_provider, auth_subject) "
+                "VALUES (:id, :email, :display_name, 1, :auth_provider, :auth_subject)"
+            ),
+            {
+                "id": smoke_user_id.hex,
+                "email": "release-gate@example.test",
+                "display_name": "Release Gate",
+                "auth_provider": "release_gate",
+                "auth_subject": str(smoke_user_id),
+            },
+        )
 
     from fastapi.testclient import TestClient
 
     from models.unified_response import TokenUsage, UnifiedResponse
     from server import dependencies as deps
     from server.app import create_app
+    from server.billing.enforcement_service import ReservedRequestUsage
+    from server.routes import chat as chat_route
 
     class _FakeOrchestrator:
         def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
@@ -202,11 +223,34 @@ def main() -> int:
 
     app = create_app()
     app.dependency_overrides[deps.get_orchestrator] = lambda: _FakeOrchestrator()
+    app.dependency_overrides[deps.get_auth] = lambda: deps.AuthResult(
+        api_key=None,
+        cognito_claims=None,
+        # SQLite reflection exposes UUID columns as strings in this deliberately
+        # minimal smoke schema.
+        user_id=smoke_user_id.hex,  # type: ignore[arg-type]
+    )
+    # This smoke covers core request/response persistence using a deliberately
+    # minimal SQLite schema. Subscription persistence has its own complete
+    # schema, repository, metering, and route suites.
+    smoke_reservation = ReservedRequestUsage(
+        reservation_id=uuid4(),
+        request_id="release-gate-smoke-1",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 100_000},
+        allowed_billing_classes=frozenset(
+            {"economical", "standard", "advanced", "premium"}
+        ),
+        current_plan="pro",
+        reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    chat_route._reserve_subscription_usage = lambda **_kwargs: smoke_reservation
+    chat_route._finalize_subscription_usage = lambda **_kwargs: None
+    chat_route._release_subscription_usage = lambda **_kwargs: None
     client = TestClient(app)
 
     response = client.post(
         "/v1/chat",
-        headers={"X-API-Key": os.environ["API_KEYS"].split(",")[0]},
         json={"prompt": "db mode smoke", "provider": "openai", "model": "gpt-4o-mini"},
     )
     if response.status_code != 200:

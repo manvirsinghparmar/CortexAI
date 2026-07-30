@@ -17,6 +17,12 @@ from db import (
 )
 from server import cortex_analysis as analysis_service
 from server import persistence as persistence_service
+from server.billing.enforcement_service import (
+    BillableModelUsage,
+    ReservedRequestUsage,
+    resolve_model_target,
+)
+from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.cortex_analysis import (
@@ -201,6 +207,30 @@ async def create_analysis_run(
             },
         )
 
+    billing_reservation: ReservedRequestUsage | None = None
+    try:
+        billing_reservation = persistence_service.reserve_subscription_usage(
+            user_id=resolution.user_id,
+            request_id=f"{req_id}:cortex-analysis:{uuid4()}",
+            operation_type="cortex_analysis",
+            model_targets=(
+                resolve_model_target(
+                    provider="openai",
+                    model=analysis_service.configured_analysis_model(),
+                ),
+            ),
+            research_enabled=False,
+            input_text="\n".join(
+                [
+                    str(source_payload.get("question") or ""),
+                    *(source.content for source in sources),
+                ]
+            ),
+            max_output_tokens=1800,
+        )
+    except Exception as exc:
+        raise enforcement_http_exception(exc) from exc
+
     try:
         generated = await asyncio.to_thread(
             analysis_service.analyze_responses,
@@ -208,6 +238,14 @@ async def create_analysis_run(
             sources=sources,
         )
     except analysis_service.CortexAnalysisGenerationError as exc:
+        if billing_reservation is not None:
+            try:
+                persistence_service.release_subscription_usage(
+                    reservation=billing_reservation,
+                    reason="cortex_analysis_provider_failed",
+                )
+            except Exception:
+                logger.exception("Cortex Analysis credit reservation release failed")
         logger.warning(
             "Cortex Analysis generation failed",
             extra={
@@ -225,6 +263,26 @@ async def create_analysis_run(
                 "message": "Cortex couldn't combine these answers. Try again.",
             },
         ) from exc
+
+    if billing_reservation is not None:
+        try:
+            persistence_service.finalize_subscription_usage(
+                reservation=billing_reservation,
+                successful_targets=(),
+                model_usages=(
+                    BillableModelUsage(
+                        provider="openai",
+                        model=analysis_service.configured_analysis_model(),
+                        input_tokens=generated.prompt_tokens,
+                        output_tokens=generated.completion_tokens,
+                        output_text=generated.recommended_answer,
+                        provider_cost_usd=generated.estimated_cost,
+                    ),
+                ),
+                research_performed=False,
+            )
+        except Exception as exc:
+            raise enforcement_http_exception(exc) from exc
 
     session_id = persistence_service.coerce_uuid(str(source_payload.get("session_id") or ""))
     if session_id is None:

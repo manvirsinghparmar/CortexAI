@@ -189,6 +189,42 @@ python -m pytest tests/test_billing_repository.py tests/test_billing_metering.py
 BILLING_TEST_DATABASE_URL="postgresql+psycopg://..." python -m pytest tests/test_billing_postgres_integration.py -q
 ```
 
+### Unified AI credits and reconciliation ledger
+
+Migration:
+
+`db/migrations/20260729_add_unified_ai_credits.sql`
+
+Apply it after the B2C billing foundation and before deploying the unified-credit API:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
+```
+
+The migration adds the immutable `credit_transactions` reconciliation table. Existing legacy counter rows remain available for audit, but the new runtime creates and mutates only `usage_counters.meter_key = 'ai_credits'`. The table rejects negative token, credit, and provider-cost values and prevents duplicate item settlement for the same reservation.
+
+Verify the schema and newest reconciliation records:
+
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name = 'credit_transactions';
+
+SELECT request_id, operation_type, item_type, total_credits,
+       usage_estimated, pricing_version, created_at
+FROM public.credit_transactions
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+Run the credit and billing suites after apply:
+
+```bash
+python -m pytest tests/test_credit_calculator.py tests/test_billing_repository.py tests/test_billing_metering.py tests/test_billing_entitlements.py -q
+BILLING_TEST_DATABASE_URL="postgresql+psycopg://..." python -m pytest tests/test_billing_postgres_integration.py -q
+```
+
 ### Atomic metering operations
 
 Work Package 4 uses the existing `usage_counters` and `usage_reservations` tables; it does not require another migration. `server/billing/metering_service.py` reserves, settles, releases, and expires usage inside the caller-owned transaction. Keep these transactions short and commit the reservation before starting a provider call.
@@ -221,11 +257,12 @@ If the tables must be removed before any production billing data exists:
 
 1. Stop billing writers and deploy the previous API version.
 2. Take and verify a database snapshot.
-3. Confirm all six billing tables contain zero rows.
+3. Confirm all seven billing tables contain zero rows.
 4. Drop only the billing tables in dependency order inside one transaction:
 
 ```sql
 BEGIN;
+DROP TABLE IF EXISTS public.credit_transactions;
 DROP TABLE IF EXISTS public.billing_webhook_events;
 DROP TABLE IF EXISTS public.usage_reservations;
 DROP TABLE IF EXISTS public.usage_counters;

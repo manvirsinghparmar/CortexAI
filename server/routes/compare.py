@@ -22,7 +22,11 @@ from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
 from server import attachments as attachments_service
 from server import persistence as persistence_service
-from server.billing.enforcement_service import ReservedRequestUsage, resolve_model_target
+from server.billing.enforcement_service import (
+    BillableModelUsage,
+    ReservedRequestUsage,
+    resolve_model_target,
+)
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
@@ -172,6 +176,30 @@ def _successful_billing_targets(
     )
 
 
+def _billing_input_text(request: CompareRequest) -> str:
+    parts = [str(request.prompt or "")]
+    if request.context and request.context.conversation_history:
+        parts.extend(str(item.content or "") for item in request.context.conversation_history)
+    return "\n".join(part for part in parts if part)
+
+
+def _billable_model_usages(
+    responses: list[UnifiedResponse],
+) -> tuple[BillableModelUsage, ...]:
+    return tuple(
+        BillableModelUsage(
+            provider=response.provider,
+            model=response.model,
+            input_tokens=max(0, int(response.token_usage.prompt_tokens or 0)),
+            output_tokens=max(0, int(response.token_usage.completion_tokens or 0)),
+            output_text=response.text,
+            provider_cost_usd=max(0.0, float(response.estimated_cost or 0.0)),
+        )
+        for response in responses
+        if not response.is_error
+    )
+
+
 def _reserve_compare_usage(
     *,
     resolution: persistence_service.ApiKeyPersistenceResolution,
@@ -200,6 +228,8 @@ def _reserve_compare_usage(
             attachment_count=len(resolved_attachments),
             total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
             attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
+            input_text=_billing_input_text(request),
+            max_output_tokens=request.max_tokens,
         )
     except HTTPException:
         raise
@@ -229,6 +259,7 @@ def _finalize_compare_usage(
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=successful_targets,
+            model_usages=_billable_model_usages(responses),
             research_performed=(
                 _research_was_performed(responses)
                 if research_performed is None
@@ -415,7 +446,8 @@ async def compare(
                 mode="compare",
             )
         inference_attachments = attachments_service.materialize_inference_attachments(
-            resolved_attachments
+            resolved_attachments,
+            query_text=request.prompt,
         )
         persistence_attachments = attachments_service.build_request_attachment_persistence_items(
             resolved_attachments=resolved_attachments,
@@ -582,7 +614,8 @@ async def compare_stream(
                 mode="compare",
             )
         inference_attachments = attachments_service.materialize_inference_attachments(
-            resolved_attachments
+            resolved_attachments,
+            query_text=request.prompt,
         )
         persistence_attachments = attachments_service.build_request_attachment_persistence_items(
             resolved_attachments=resolved_attachments,
@@ -682,7 +715,9 @@ async def compare_stream(
                     )
                     ordered_responses[i] = bad
                     bad_dto = ChatResponseDTO.from_unified_response(
-                        bad, session_id=requested_session_id
+                        bad,
+                        session_id=requested_session_id,
+                        include_research_charge=False,
                     )
 
                     yield stream_log.record_event(
@@ -773,7 +808,9 @@ async def compare_stream(
                         response_is_error=bool(getattr(response, "is_error", False)),
                     )
                     dto = ChatResponseDTO.from_unified_response(
-                        response, session_id=requested_session_id
+                        response,
+                        session_id=requested_session_id,
+                        include_research_charge=False,
                     )
 
                     yield stream_log.record_event(
@@ -843,7 +880,11 @@ async def compare_stream(
                     logger.exception("Compare stream persistence failed in DB mode")
 
             dtos = [
-                ChatResponseDTO.from_unified_response(r, session_id=resolved_session_id)
+                ChatResponseDTO.from_unified_response(
+                    r,
+                    session_id=resolved_session_id,
+                    include_research_charge=False,
+                )
                 for r in raw_responses
             ]
             compare_payload = {
@@ -854,6 +895,15 @@ async def compare_stream(
                 "error_count": sum(1 for r in dtos if r.error is not None),
                 "total_tokens": sum(r.token_usage.total_tokens for r in dtos),
                 "total_cost": sum(r.estimated_cost for r in dtos),
+                "total_ai_credits": (
+                    sum(r.ai_credits for r in dtos)
+                    + (
+                        15_000
+                        if _prepared_research_was_performed(prepared_turn)
+                        or _research_was_performed(raw_responses)
+                        else 0
+                    )
+                ),
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
 

@@ -264,6 +264,11 @@ const CompareTurn = memo(function CompareTurn({
           <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
             ${turn.compareSummary.total_cost.toFixed(5)}
           </span>
+          {(turn.compareSummary.total_ai_credits ?? 0) > 0 && (
+            <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
+              {(turn.compareSummary.total_ai_credits ?? 0).toLocaleString()} credits
+            </span>
+          )}
         </div>
       )}
 

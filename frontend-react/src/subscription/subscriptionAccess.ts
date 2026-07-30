@@ -21,13 +21,7 @@ type FeatureKey =
   | "attachment_size";
 
 const METER_LABELS: Record<SubscriptionMeterKey, string> = {
-  model_responses: "model response",
-  advanced_model_responses: "advanced-model response",
-  ultra_model_responses: "ultra-model response",
-  research_turns: "Web research turn",
-  optimization_turns: "Improve run",
-  file_analysis_turns: "file-analysis turn",
-  uploaded_bytes: "upload storage",
+  ai_credits: "AI credit",
 };
 
 export function modelAccessError(
@@ -127,8 +121,8 @@ export function allowanceAccessError(
     return limit !== null && limit > allowance.limit;
   });
   return localSubscriptionDenial({
-    code: "monthly_allowance_exhausted",
-    message: `The ${entitlements.plan.display_name} plan's monthly ${METER_LABELS[meter]} allowance has been used.`,
+    code: "insufficient_credits",
+    message: `The ${entitlements.plan.display_name} plan has no ${METER_LABELS[meter]}s remaining.`,
     details: {
       meter,
       current_plan: entitlements.plan.code,
@@ -171,15 +165,7 @@ export function fileSelectionAccessError(
     );
   }
 
-  return (
-    allowanceAccessError("file_analysis_turns", 1, entitlements, plans) ??
-    allowanceAccessError(
-      "uploaded_bytes",
-      files.reduce((total, file) => total + file.size, 0),
-      entitlements,
-      plans,
-    )
-  );
+  return null;
 }
 
 export function submitAccessError(options: {
@@ -216,31 +202,19 @@ export function submitAccessError(options: {
     if (denied) return denied;
   }
 
-  const responseCount = options.mode === "compare" ? activeKeys.length : 1;
-  const advancedCount = targets.filter((model) => model?.billing_class === "advanced").length;
-  const ultraCount = targets.filter((model) => model?.billing_class === "ultra").length;
-  const allowanceDenied =
-    allowanceAccessError("model_responses", responseCount, entitlements, plans) ??
-    allowanceAccessError("advanced_model_responses", advancedCount, entitlements, plans) ??
-    allowanceAccessError("ultra_model_responses", ultraCount, entitlements, plans);
+  const allowanceDenied = allowanceAccessError("ai_credits", 1, entitlements, plans);
   if (allowanceDenied) return allowanceDenied;
 
   if (options.researchEnabled) {
-    const denied =
-      featureAccessError("research", entitlements, plans) ??
-      allowanceAccessError("research_turns", 1, entitlements, plans);
+    const denied = featureAccessError("research", entitlements, plans);
     if (denied) return denied;
   }
   if (options.optimizeEnabled) {
-    const denied =
-      featureAccessError("prompt_improvement", entitlements, plans) ??
-      allowanceAccessError("optimization_turns", 1, entitlements, plans);
+    const denied = featureAccessError("prompt_improvement", entitlements, plans);
     if (denied) return denied;
   }
   if (options.attachmentCount > 0) {
-    const denied =
-      featureAccessError("file_analysis", entitlements, plans) ??
-      allowanceAccessError("file_analysis_turns", 1, entitlements, plans);
+    const denied = featureAccessError("file_analysis", entitlements, plans);
     if (denied) return denied;
     if (options.attachmentCount > entitlements.limits.max_files_per_request) {
       return featureError(
@@ -309,7 +283,6 @@ function publicAllowanceLimit(
   allowances: BillingPlansResponse["plans"][number]["allowances"],
   meter: SubscriptionMeterKey,
 ): number | null {
-  if (meter === "uploaded_bytes") return null;
   return allowances[meter];
 }
 
@@ -318,7 +291,12 @@ function modelKey(model: ModelCatalogItem): string {
 }
 
 function isBillingClass(value: unknown): value is ModelBillingClass {
-  return value === "standard" || value === "advanced" || value === "ultra";
+  return (
+    value === "economical" ||
+    value === "standard" ||
+    value === "advanced" ||
+    value === "premium"
+  );
 }
 
 function formatBytes(value: number): string {

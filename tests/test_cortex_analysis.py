@@ -381,6 +381,17 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
         "analyze_responses",
         lambda **kwargs: generated,
     )
+    billing_reservation = SimpleNamespace()
+    monkeypatch.setattr(
+        analysis_route.persistence_service,
+        "reserve_subscription_usage",
+        lambda **kwargs: billing_reservation,
+    )
+    monkeypatch.setattr(
+        analysis_route.persistence_service,
+        "finalize_subscription_usage",
+        lambda **kwargs: None,
+    )
 
     def fake_create(*args, **kwargs):
         created.update(kwargs)

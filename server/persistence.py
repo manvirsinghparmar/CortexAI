@@ -47,12 +47,14 @@ from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
 from server.billing.enforcement_service import (
+    BillableModelUsage,
     ReservedRequestUsage,
     authorize_and_reserve_usage,
     finalize_reserved_usage,
     release_reserved_usage,
 )
 from server.billing.entitlement_service import ModelTargetIntent
+from server.billing.subscription_service import resolve_effective_subscription
 from utils.logger import get_logger
 
 API_DB_ENABLED = bool(os.getenv("DATABASE_URL"))
@@ -544,9 +546,16 @@ def _enforce_usage_caps_in_session(
 def _resolve_requests_per_minute(
     db_session: Session,
     *,
+    user_id: UUID,
     api_key_id: UUID | None,
 ) -> int:
-    rpm = rate_limit_service.default_requests_per_minute()
+    try:
+        rpm = resolve_effective_subscription(
+            db_session,
+            user_id,
+        ).plan.limits.requests_per_minute
+    except Exception:
+        rpm = rate_limit_service.default_requests_per_minute()
     if api_key_id is None:
         return rpm
 
@@ -573,7 +582,11 @@ def _enforce_rate_limit_in_session(
     user_id: UUID,
     api_key_id: UUID | None,
 ) -> None:
-    rpm = _resolve_requests_per_minute(db_session, api_key_id=api_key_id)
+    rpm = _resolve_requests_per_minute(
+        db_session,
+        user_id=user_id,
+        api_key_id=api_key_id,
+    )
     subject = str(api_key_id or user_id)
     rate_limit_service.enforce_rate_limit(
         subject_key=subject,
@@ -686,6 +699,8 @@ def reserve_subscription_usage(
     attachment_count: int = 0,
     total_attachment_bytes: int = 0,
     attachment_sizes: Iterable[int] = (),
+    input_text: str = "",
+    max_output_tokens: int | None = None,
 ) -> ReservedRequestUsage:
     """Authorize and atomically reserve subscription usage before provider work."""
     with db_uow() as db_session:
@@ -701,6 +716,8 @@ def reserve_subscription_usage(
             attachment_count=attachment_count,
             total_attachment_bytes=total_attachment_bytes,
             attachment_sizes=tuple(attachment_sizes),
+            input_text=input_text,
+            max_output_tokens=max_output_tokens,
         )
 
 
@@ -708,6 +725,7 @@ def finalize_subscription_usage(
     *,
     reservation: ReservedRequestUsage,
     successful_targets: Iterable[ModelTargetIntent],
+    model_usages: Iterable[BillableModelUsage] = (),
     research_performed: bool,
     optimization_performed: bool = False,
     file_analysis_performed: bool = False,
@@ -720,6 +738,7 @@ def finalize_subscription_usage(
             db_session,
             reservation=reservation,
             successful_targets=tuple(successful_targets),
+            model_usages=tuple(model_usages),
             research_performed=research_performed,
             optimization_performed=optimization_performed,
             file_analysis_performed=file_analysis_performed,

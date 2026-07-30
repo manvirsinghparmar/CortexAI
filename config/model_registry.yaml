@@ -15,7 +15,11 @@ providers:
     models:
       - name: "gpt-4.1-nano"
         tier: "T0"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.25
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.100
         output_cost_per_1m: 0.400
         context_limit: 128000
@@ -23,7 +27,11 @@ providers:
         enabled: true
       - name: "gpt-5.4-nano"
         tier: "T0"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.200
         output_cost_per_1m: 1.250
         context_limit: 1000000
@@ -31,7 +39,11 @@ providers:
         enabled: true
       - name: "gpt-4o-mini"
         tier: "T1"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.150
         output_cost_per_1m: 0.600
         context_limit: 128000
@@ -40,6 +52,10 @@ providers:
       - name: "gpt-4.1-mini"
         tier: "T1"
         billing_class: "standard"
+        input_credit_multiplier: 1.0
+        output_credit_multiplier: 4.0
+        credit_usage_label: "Low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.400
         output_cost_per_1m: 1.600
         context_limit: 128000
@@ -48,6 +64,10 @@ providers:
       - name: "gpt-5.4-mini"
         tier: "T2"
         billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.750
         output_cost_per_1m: 4.500
         context_limit: 1000000
@@ -56,6 +76,10 @@ providers:
       - name: "gpt-5.1"
         tier: "T2"
         billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 12.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 1.250
         output_cost_per_1m: 10.000
         context_limit: 128000
@@ -64,6 +88,10 @@ providers:
       - name: "gpt-5.4"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 2.500
         output_cost_per_1m: 15.000
         context_limit: 1000000
@@ -72,6 +100,10 @@ providers:
       - name: "gpt-5.2-codex"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 1.750
         output_cost_per_1m: 14.000
         context_limit: 128000
@@ -80,6 +112,10 @@ providers:
       - name: "gpt-4o"
         tier: "T2"
         billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 14.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 2.500
         output_cost_per_1m: 10.000
         context_limit: 128000
@@ -101,7 +137,11 @@ providers:
     models:
       - name: "gemini-2.5-flash-lite"
         tier: "T0"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.25
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.100
         output_cost_per_1m: 0.400
         context_limit: 1000000
@@ -110,6 +150,10 @@ providers:
       - name: "gemini-2.5-flash"
         tier: "T1"
         billing_class: "standard"
+        input_credit_multiplier: 1.0
+        output_credit_multiplier: 6.0
+        credit_usage_label: "Low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.300
         output_cost_per_1m: 2.500
         context_limit: 1000000
@@ -118,6 +162,10 @@ providers:
       - name: "gemini-2.5-pro"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 12.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 1.250
         output_cost_per_1m: 10.000
         context_limit: 1000000
@@ -132,7 +180,11 @@ providers:
     models:
       - name: "deepseek-chat"
         tier: "T1"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.280
         output_cost_per_1m: 0.420
         context_limit: 128000
@@ -140,7 +192,11 @@ providers:
         enabled: true
       - name: "deepseek-reasoner"
         tier: "T3"
-        billing_class: "standard"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 0.280
         output_cost_per_1m: 0.420
         context_limit: 128000
@@ -156,6 +212,10 @@ providers:
       - name: "grok-4-1-fast-non-reasoning"
         tier: "T1"
         billing_class: "standard"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 2.000
         output_cost_per_1m: 5.000
         context_limit: 2000000
@@ -164,6 +224,10 @@ providers:
       - name: "grok-4-1-fast-reasoning"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 2.000
         output_cost_per_1m: 5.000
         context_limit: 2000000
@@ -186,6 +250,10 @@ providers:
       - name: "claude-haiku-4-5"
         tier: "T1"
         billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 1.000
         output_cost_per_1m: 5.000
         context_limit: 200000
@@ -194,6 +262,10 @@ providers:
       - name: "claude-sonnet-4-6"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 3.000
         output_cost_per_1m: 15.000
         context_limit: 1000000
@@ -202,6 +274,10 @@ providers:
       - name: "claude-sonnet-4-5"
         tier: "T3"
         billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 3.000
         output_cost_per_1m: 15.000
         context_limit: 200000
@@ -209,7 +285,11 @@ providers:
         enabled: true
       - name: "claude-opus-4-5"
         tier: "T3"
-        billing_class: "ultra"
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 5.000
         output_cost_per_1m: 25.000
         context_limit: 200000
@@ -217,7 +297,11 @@ providers:
         enabled: true
       - name: "claude-opus-4-6"
         tier: "T3"
-        billing_class: "ultra"
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-29"
         input_cost_per_1m: 5.000
         output_cost_per_1m: 25.000
         context_limit: 1000000

@@ -72,6 +72,10 @@ export function ModelPicker({
     selectedModel.provider,
     selectedModel.model,
   );
+  const selectedCreditLabel =
+    "credit_usage_label" in selectedModel
+      ? selectedModel.credit_usage_label
+      : undefined;
   const listboxId = `${id}Options`;
   const disabledSet = new Set(disabledKeys);
   const lockedSet = new Set(lockedKeys);
@@ -210,11 +214,15 @@ export function ModelPicker({
         ref={buttonRef}
         type="button"
         className={`${styles.button} ${buttonClassName ?? ""}`}
-        aria-label={`${ariaLabel}: ${selectedMeta.label} (${selectedMeta.model})`}
+        aria-label={`${ariaLabel}: ${selectedMeta.label} (${selectedMeta.model})${
+          selectedCreditLabel ? `, ${selectedCreditLabel} credit use` : ""
+        }`}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
-        title={`${selectedMeta.label}\n${selectedMeta.model}`}
+        title={`${selectedMeta.label}\n${selectedMeta.model}${
+          selectedCreditLabel ? `\n${selectedCreditLabel} credit use` : ""
+        }`}
         onClick={() => setIsOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown") {
@@ -288,7 +296,12 @@ export function ModelPicker({
                   />
                   <span className={styles.optionText}>
                     <strong>{meta.label}</strong>
-                    <small>{meta.model}</small>
+                    <small>
+                      {meta.model}
+                      {model.credit_usage_label
+                        ? ` · ${model.credit_usage_label} credit use`
+                        : ""}
+                    </small>
                   </span>
                   {isSelected && (
                     <CortexIcon name="check" className={styles.checkIcon} />

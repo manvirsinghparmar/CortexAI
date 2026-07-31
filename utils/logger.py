@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 _REQUEST_ID_CONTEXT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_id",
     default=None,
@@ -101,7 +100,7 @@ class RequestContextFilter(logging.Filter):
         extra_fields = getattr(record, "extra_fields", None)
         if not isinstance(extra_fields, dict):
             extra_fields = {}
-            setattr(record, "extra_fields", extra_fields)
+            record.extra_fields = extra_fields
 
         request_id = get_request_id()
         if request_id and "request_id" not in extra_fields:

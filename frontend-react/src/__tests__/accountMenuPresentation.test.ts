@@ -9,8 +9,8 @@ describe("account menu subscription presentation", () => {
 
   it.each([
     ["free", "free", "Free plan", "Upgrade", "/pricing", false],
-    ["plus", "active", "Plus plan", "Manage plan", "/account/billing", false],
-    ["plus", "past_due", "Plus plan", "Update payment", "/account/billing", true],
+    ["plus", "active", "Plus plan", "Manage subscription", "/account/billing", false],
+    ["plus", "past_due", "Plus plan", "Update payment method", "/account/billing", true],
     ["free", "canceled", "Free plan", "View plans", "/pricing", false],
   ] as const)(
     "maps %s %s backend state to summary-only billing navigation",

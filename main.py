@@ -80,7 +80,9 @@ def _extract_routing_payload(response) -> tuple[dict, list[dict], dict]:
     if not isinstance(routing_metadata, dict):
         return {}, [], {}
 
-    attempt_rows = routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    attempt_rows = (
+        routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    )
     if not isinstance(attempt_rows, list):
         attempt_rows = []
 
@@ -91,7 +93,9 @@ def _extract_routing_payload(response) -> tuple[dict, list[dict], dict]:
     return routing_metadata, attempt_rows, features
 
 
-def _persist_routing_telemetry(db_session, llm_request_id: UUID, response, research_mode: str) -> None:
+def _persist_routing_telemetry(
+    db_session, llm_request_id: UUID, response, research_mode: str
+) -> None:
     """
     Persist routing decision + attempts for a single response when metadata is present.
     """
@@ -100,7 +104,9 @@ def _persist_routing_telemetry(db_session, llm_request_id: UUID, response, resea
         return
 
     metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    prompt_category = metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    prompt_category = (
+        metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    )
     normalized_research_mode = (
         metadata.get("research_mode")
         or routing_metadata.get("research_mode")
@@ -151,14 +157,6 @@ def _persist_single_interaction(
         return
 
     try:
-        request_group_id = None
-        raw_group_id = getattr(multi_resp, "request_group_id", None)
-        if raw_group_id:
-            try:
-                request_group_id = UUID(str(raw_group_id))
-            except Exception:
-                request_group_id = None
-
         # BEGIN TRANSACTION - All writes together
         # 1. Save user message
         save_message(db_session, db_session_id, "user", user_input)
@@ -235,6 +233,17 @@ def _persist_compare_interaction(
         return
 
     try:
+        request_group_id = None
+        raw_group_id = getattr(multi_resp, "request_group_id", None)
+        if raw_group_id:
+            try:
+                request_group_id = UUID(str(raw_group_id))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Compare response has an invalid request_group_id; "
+                    "persisting rows without a group"
+                )
+
         # BEGIN TRANSACTION - All writes together
         # 1. Save user message
         save_message(db_session, db_session_id, "user", user_input)
@@ -349,10 +358,12 @@ def display_research_info(response) -> None:
             print(f"      {source['url']}")
         print()
 
+
 def print_routing_debug(routing_metadata: dict) -> None:
     """
     Print routing metadata in a human-readable summary.
     """
+
     def _shorten(text: str | None, max_len: int = 220) -> str:
         if not text:
             return "-"
@@ -389,10 +400,7 @@ def print_routing_debug(routing_metadata: dict) -> None:
             # format: context_limit_below_required_128000_lt_200000_kept_as_fallback
             parts = reason.split("_")
             if len(parts) >= 11:
-                return (
-                    f"context below required ({parts[4]} < {parts[6]}), "
-                    f"kept as fallback"
-                )
+                return f"context below required ({parts[4]} < {parts[6]}), " f"kept as fallback"
             return reason.replace("_", " ")
 
         replace_map = {
@@ -502,9 +510,7 @@ def show_loading_animation(stop_event: threading.Event) -> None:
     sys.stdout.flush()
 
 
-def collect_multiline_input(
-    end_marker: str = "/end", cancel_marker: str = "/cancel"
-) -> str | None:
+def collect_multiline_input(end_marker: str = "/end", cancel_marker: str = "/cancel") -> str | None:
     """
     Collect multiline input until a marker is entered.
 
@@ -515,9 +521,7 @@ def collect_multiline_input(
     Returns:
         Combined multiline text, or None when cancelled.
     """
-    print(
-        f"\n[Paste mode: enter multiple lines, then type '{end_marker}' on a new line to submit]"
-    )
+    print(f"\n[Paste mode: enter multiple lines, then type '{end_marker}' on a new line to submit]")
     print(f"[Type '{cancel_marker}' on a new line to cancel]\n")
 
     lines: list[str] = []
@@ -559,9 +563,7 @@ def _looks_like_code_block(text: str) -> bool:
         "}",
     ]
     marker_hits = sum(1 for marker in code_markers if marker in text_lower)
-    indented_lines = sum(
-        1 for line in lines if line.startswith("    ") or line.startswith("\t")
-    )
+    indented_lines = sum(1 for line in lines if line.startswith("    ") or line.startswith("\t"))
 
     return marker_hits >= 2 or indented_lines >= 2
 
@@ -779,7 +781,9 @@ def main():
                     logger.debug("User requested conversation history")
                     continue
 
-                if not from_paste_mode and (user_input.lower() == "/new" or user_input.lower() == "new"):
+                if not from_paste_mode and (
+                    user_input.lower() == "/new" or user_input.lower() == "new"
+                ):
                     if DB_ENABLED and db_session and user_id:
                         mode = "compare" if COMPARE_MODE else "ask"
                         db_session_id = create_session(

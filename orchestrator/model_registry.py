@@ -176,6 +176,13 @@ class ModelRegistry:
                 for item in constraints.allowed_billing_classes
                 if str(item or "").strip()
             }
+        allowed_models = None
+        if constraints and constraints.allowed_models is not None:
+            allowed_models = {
+                str(item or "").strip().lower()
+                for item in constraints.allowed_models
+                if str(item or "").strip()
+            }
 
         results: list[ModelCandidate] = []
         for provider, models in self._providers.items():
@@ -189,6 +196,11 @@ class ModelRegistry:
                 if (
                     allowed_billing_classes is not None
                     and candidate.billing_class.value not in allowed_billing_classes
+                ):
+                    continue
+                if (
+                    allowed_models is not None
+                    and f"{candidate.provider}:{candidate.model_name}".lower() not in allowed_models
                 ):
                     continue
                 if constraints and constraints.min_context_limit is not None:
@@ -241,6 +253,8 @@ class ModelRegistry:
 
 def _positive_float(value: object, label: str) -> float:
     if isinstance(value, bool):
+        raise ValueError(f"Invalid {label}: expected a positive number")
+    if not isinstance(value, (str, int, float)):
         raise ValueError(f"Invalid {label}: expected a positive number")
     try:
         parsed = float(value)

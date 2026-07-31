@@ -41,6 +41,7 @@ from server.billing.metering_service import (
     release_usage,
     reserve_usage,
     settle_usage,
+    settle_usage_with_supplement,
 )
 from server.billing.plan_catalog import get_plan_catalog
 from server.billing.subscription_service import EffectiveSubscription
@@ -107,6 +108,12 @@ def metering_db(monkeypatch):
         Column("settled_quantities", JSON),
         Column("release_reason", String(255)),
         Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+        Column(
+            "last_activity_at",
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
         Column("settled_at", DateTime(timezone=True)),
         Column("released_at", DateTime(timezone=True)),
         Index("uq_usage_reservations_request", "billing_account_id", "request_id", unique=True),
@@ -200,12 +207,16 @@ def _user(db, tables):
 
 
 def _counter(db, tables, period_id):
-    return db.execute(
-        select(tables["usage_counters"]).where(
-            tables["usage_counters"].c.usage_period_id == period_id,
-            tables["usage_counters"].c.meter_key == "ai_credits",
+    return (
+        db.execute(
+            select(tables["usage_counters"]).where(
+                tables["usage_counters"].c.usage_period_id == period_id,
+                tables["usage_counters"].c.meter_key == "ai_credits",
+            )
         )
-    ).mappings().one()
+        .mappings()
+        .one()
+    )
 
 
 def test_credit_reservation_is_idempotent_and_conflict_safe(metering_db):
@@ -281,13 +292,164 @@ def test_stale_reservations_release_credit_capacity(metering_db):
         tables["usage_reservations"]
         .update()
         .where(tables["usage_reservations"].c.id == reservation.id)
-        .values(created_at=datetime.now(UTC) - timedelta(hours=1))
+        .values(last_activity_at=datetime.now(UTC) - timedelta(hours=1))
     )
-    assert expire_stale_reservations(
+    outcome = expire_stale_reservations(
         db,
         older_than=datetime.now(UTC) - timedelta(minutes=30),
-    ) == 1
+    )
+    assert outcome.inspected == 1
+    assert outcome.released == 1
+    assert outcome.credits_released == 4_000
     assert _counter(db, tables, effective.usage_period_id)["reserved_quantity"] == 0
+
+
+def test_active_reservation_heartbeat_prevents_stale_cleanup(metering_db):
+    db, tables = metering_db
+    effective = _effective(db)
+    reservation = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="active-heartbeat",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 4_000},
+    )
+    db.execute(
+        tables["usage_reservations"]
+        .update()
+        .where(tables["usage_reservations"].c.id == reservation.id)
+        .values(last_activity_at=datetime.now(UTC) - timedelta(hours=1))
+    )
+
+    assert repository.touch_usage_reservation_activity(db, [reservation.id]) == 1
+    outcome = expire_stale_reservations(
+        db,
+        older_than=datetime.now(UTC) - timedelta(minutes=30),
+    )
+
+    assert outcome.inspected == 0
+    assert outcome.released == 0
+    assert _counter(db, tables, effective.usage_period_id)["reserved_quantity"] == 4_000
+
+
+def test_recent_and_terminal_reservations_are_not_expired(metering_db):
+    db, tables = metering_db
+    effective = _effective(db)
+    recent = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="recent",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 1_000},
+    )
+    settled = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="already-settled",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 2_000},
+    )
+    settle_usage(
+        db,
+        reservation_id=settled.id,
+        successful_quantities={"ai_credits": 800},
+    )
+    released = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="already-released",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 3_000},
+    )
+    release_usage(db, reservation_id=released.id, reason="provider_failed")
+    db.execute(
+        tables["usage_reservations"]
+        .update()
+        .where(tables["usage_reservations"].c.id.in_([settled.id, released.id]))
+        .values(last_activity_at=datetime.now(UTC) - timedelta(hours=1))
+    )
+
+    outcome = expire_stale_reservations(
+        db,
+        older_than=datetime.now(UTC) - timedelta(minutes=30),
+    )
+
+    assert outcome.inspected == 0
+    assert outcome.released == 0
+    assert repository.get_usage_reservation_by_id(db, recent.id)["state"] == "reserved"
+    assert repository.get_usage_reservation_by_id(db, settled.id)["state"] == "settled"
+    assert repository.get_usage_reservation_by_id(db, released.id)["state"] == "released"
+
+
+def test_supplemental_settlement_bills_full_actual_usage_when_capacity_exists(
+    metering_db,
+):
+    db, tables = metering_db
+    effective = _effective(db)
+    reservation = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="supplement-success",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 1_000},
+    )
+
+    outcome = settle_usage_with_supplement(
+        db,
+        reservation_id=reservation.id,
+        actual_quantity=1_500,
+        allowance_limit=effective.plan.allowances.ai_credits,
+    )
+
+    assert outcome.billed_quantity == 1_500
+    assert outcome.supplemented_quantity == 500
+    assert outcome.unbilled_quantity == 0
+    assert _counter(db, tables, effective.usage_period_id)["used_quantity"] == 1_500
+    assert _counter(db, tables, effective.usage_period_id)["reserved_quantity"] == 0
+    persisted = repository.get_usage_reservation_by_id(db, reservation.id)
+    assert persisted["requested_quantities"] == {"ai_credits": 1_500}
+    assert persisted["settled_quantities"] == {"ai_credits": 1_500}
+
+
+def test_supplemental_settlement_caps_billing_without_negative_balance(metering_db):
+    db, tables = metering_db
+    effective = _effective(db)
+    reservation = reserve_usage(
+        db,
+        effective_subscription=effective,
+        request_id="supplement-insufficient",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 1_000},
+    )
+    counter = _counter(db, tables, effective.usage_period_id)
+    db.execute(
+        tables["usage_counters"]
+        .update()
+        .where(tables["usage_counters"].c.id == counter["id"])
+        .values(used_quantity=98_500)
+    )
+
+    outcome = settle_usage_with_supplement(
+        db,
+        reservation_id=reservation.id,
+        actual_quantity=2_000,
+        allowance_limit=effective.plan.allowances.ai_credits,
+    )
+
+    assert outcome.billed_quantity == 1_000
+    assert outcome.supplemented_quantity == 0
+    assert outcome.unbilled_quantity == 1_000
+    final_counter = _counter(db, tables, effective.usage_period_id)
+    assert final_counter["used_quantity"] == 99_500
+    assert final_counter["reserved_quantity"] == 0
+    repeated = settle_usage_with_supplement(
+        db,
+        reservation_id=reservation.id,
+        actual_quantity=2_000,
+        allowance_limit=effective.plan.allowances.ai_credits,
+    )
+    assert repeated.billed_quantity == 1_000
+    assert _counter(db, tables, effective.usage_period_id)["used_quantity"] == 99_500
 
 
 def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
@@ -321,9 +483,7 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
     counter = _counter(
         db,
         tables,
-        repository.get_usage_reservation_by_id(db, reservation.reservation_id)[
-            "usage_period_id"
-        ],
+        repository.get_usage_reservation_by_id(db, reservation.reservation_id)["usage_period_id"],
     )
     assert counter["used_quantity"] == 900
     assert counter["reserved_quantity"] == 0
@@ -336,6 +496,88 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
         "file_context": True,
         "prompt_optimization": False,
     }
+
+
+def test_optimizer_reservation_covers_every_configured_attempt(metering_db):
+    db, _tables = metering_db
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, _tables),
+        request_id="optimizer-three-attempts",
+        operation_type="optimize",
+        model_targets=(ModelTargetIntent("openai", "gpt-4.1-mini", "standard"),),
+        research_enabled=False,
+        optimization_enabled=True,
+        input_text="Improve this prompt.",
+        max_output_tokens=1800,
+        model_attempt_count=3,
+    )
+
+    assert len(reservation.model_estimates) == 3
+    assert len({item.total_credits for item in reservation.model_estimates}) == 1
+    assert reservation.requested_quantities["ai_credits"] == sum(
+        item.total_credits for item in reservation.model_estimates
+    )
+
+
+def test_under_reserved_provider_result_keeps_answer_billable_and_records_adjustment(
+    metering_db,
+):
+    db, tables = metering_db
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="ask-under-reserved",
+        operation_type="ask",
+        model_targets=(ModelTargetIntent("openai", "gpt-4.1-mini", "standard"),),
+        research_enabled=False,
+        input_text="Short request",
+        max_output_tokens=10,
+    )
+    reserved = reservation.requested_quantities["ai_credits"]
+    persisted = repository.get_usage_reservation_by_id(db, reservation.reservation_id)
+    counter = _counter(db, tables, persisted["usage_period_id"])
+    db.execute(
+        tables["usage_counters"]
+        .update()
+        .where(tables["usage_counters"].c.id == counter["id"])
+        .values(used_quantity=100_000 - reserved)
+    )
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        model_usages=(
+            BillableModelUsage(
+                provider="openai",
+                model="gpt-4.1-mini",
+                input_tokens=100,
+                output_tokens=200,
+                provider_cost_usd=0.01,
+            ),
+        ),
+        research_performed=False,
+    )
+
+    final_counter = _counter(db, tables, persisted["usage_period_id"])
+    assert final_counter["used_quantity"] == 100_000
+    assert final_counter["reserved_quantity"] == 0
+    items = (
+        db.execute(
+            select(tables["credit_transactions"]).order_by(
+                tables["credit_transactions"].c.item_index
+            )
+        )
+        .mappings()
+        .all()
+    )
+    assert sum(item["total_credits"] for item in items) == reserved
+    assert items[0]["metadata"]["under_reserved"] is True
+    assert items[0]["metadata"]["billed_total_credits"] == reserved
+    assert items[1]["item_type"] == "adjustment"
+    assert items[1]["total_credits"] == 0
+    assert items[1]["metadata"]["unbilled_credits"] > 0
+    assert items[1]["metadata"]["unbilled_provider_cost_usd"] > 0
 
 
 def test_compare_partial_success_charges_only_delivered_model(metering_db):
@@ -367,9 +609,7 @@ def test_compare_partial_success_charges_only_delivered_model(metering_db):
         research_performed=False,
     )
     items = db.execute(select(tables["credit_transactions"])).mappings().all()
-    assert [(item["provider"], item["model"]) for item in items] == [
-        ("openai", "gpt-4.1-mini")
-    ]
+    assert [(item["provider"], item["model"]) for item in items] == [("openai", "gpt-4.1-mini")]
     assert sum(item["total_credits"] for item in items) == 450
 
 
@@ -494,3 +734,188 @@ def test_smart_routing_reserves_allowed_worst_case_and_settles_actual(metering_d
     persisted = repository.get_usage_reservation_by_id(db, reservation.reservation_id)
     assert persisted["settled_quantities"]["ai_credits"] == 50
     assert reserved > 50
+
+
+def test_smart_routing_skips_unaffordable_expensive_candidate(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    effective = _effective(db)
+    monkeypatch.setattr(
+        "server.billing.enforcement_service.resolve_effective_subscription",
+        lambda _db, _user_id: effective,
+    )
+    counter = repository.get_or_create_usage_counter(
+        db,
+        effective.usage_period_id,
+        "ai_credits",
+    )
+    db.execute(
+        tables["usage_counters"]
+        .update()
+        .where(tables["usage_counters"].c.id == counter["id"])
+        .values(used_quantity=99_700)
+    )
+
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=uuid4(),
+        request_id="smart-low-balance",
+        operation_type="ask",
+        model_targets=(
+            ModelTargetIntent("openai", "gpt-5.4-mini", "standard"),
+            ModelTargetIntent("openai", "gpt-4.1-nano", "economical"),
+        ),
+        research_enabled=False,
+        smart_routing=True,
+        input_text="Give me one short fact.",
+        max_output_tokens=100,
+    )
+
+    assert reservation.smart_candidates
+    assert reservation.smart_candidates[0].model == "gpt-4.1-nano"
+    assert all(item.model != "gpt-5.4-mini" for item in reservation.smart_candidates)
+    assert reservation.requested_quantities["ai_credits"] <= 300
+
+
+def test_smart_routing_never_authorizes_model_outside_plan(
+    metering_db,
+    monkeypatch,
+):
+    db, _tables = metering_db
+    effective = _effective(db, "free")
+    monkeypatch.setattr(
+        "server.billing.enforcement_service.resolve_effective_subscription",
+        lambda _db, _user_id: effective,
+    )
+
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=uuid4(),
+        request_id="smart-plan-restriction",
+        operation_type="ask",
+        model_targets=(
+            ModelTargetIntent("claude", "claude-opus-4-6", "premium"),
+            ModelTargetIntent("openai", "gpt-4.1-nano", "economical"),
+        ),
+        research_enabled=False,
+        smart_routing=True,
+        input_text="Brief answer.",
+        max_output_tokens=50,
+    )
+
+    assert {item.billing_class for item in reservation.smart_candidates} <= {
+        "economical",
+        "standard",
+    }
+    assert all(item.model != "claude-opus-4-6" for item in reservation.smart_candidates)
+
+
+def test_smart_routing_keeps_advanced_candidate_for_plus_with_sufficient_balance(
+    metering_db,
+    monkeypatch,
+):
+    db, _tables = metering_db
+    effective = _effective(db, "plus")
+    monkeypatch.setattr(
+        "server.billing.enforcement_service.resolve_effective_subscription",
+        lambda _db, _user_id: effective,
+    )
+
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=uuid4(),
+        request_id="smart-plus-advanced",
+        operation_type="ask",
+        model_targets=(
+            ModelTargetIntent("openai", "gpt-5.1", "advanced"),
+            ModelTargetIntent("openai", "gpt-4.1-nano", "economical"),
+        ),
+        research_enabled=False,
+        smart_routing=True,
+        input_text="Analyze the failure modes of this distributed transaction.",
+        max_output_tokens=500,
+    )
+
+    assert reservation.current_plan == "plus"
+    assert reservation.smart_candidates[0].model == "gpt-5.1"
+    assert reservation.smart_candidates[0].billing_class == "advanced"
+    assert reservation.requested_quantities["ai_credits"] == (
+        reservation.smart_candidates[0].reservation_credits
+    )
+
+
+def test_smart_routing_keeps_premium_candidate_only_for_pro(
+    metering_db,
+    monkeypatch,
+):
+    db, _tables = metering_db
+    effective = _effective(db, "pro")
+    monkeypatch.setattr(
+        "server.billing.enforcement_service.resolve_effective_subscription",
+        lambda _db, _user_id: effective,
+    )
+
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=uuid4(),
+        request_id="smart-pro-premium",
+        operation_type="ask",
+        model_targets=(
+            ModelTargetIntent("claude", "claude-opus-4-6", "premium"),
+            ModelTargetIntent("openai", "gpt-5.4", "advanced"),
+        ),
+        research_enabled=False,
+        smart_routing=True,
+        input_text="Perform a rigorous architecture and security review.",
+        max_output_tokens=1_000,
+    )
+
+    assert reservation.current_plan == "pro"
+    assert reservation.smart_candidates[0].model == "claude-opus-4-6"
+    assert reservation.smart_candidates[0].billing_class == "premium"
+    assert "premium" in reservation.allowed_billing_classes
+
+
+def test_smart_routing_rejects_only_when_no_appropriate_candidate_is_affordable(
+    metering_db,
+    monkeypatch,
+):
+    db, tables = metering_db
+    effective = _effective(db)
+    monkeypatch.setattr(
+        "server.billing.enforcement_service.resolve_effective_subscription",
+        lambda _db, _user_id: effective,
+    )
+    counter = repository.get_or_create_usage_counter(
+        db,
+        effective.usage_period_id,
+        "ai_credits",
+    )
+    db.execute(
+        tables["usage_counters"]
+        .update()
+        .where(tables["usage_counters"].c.id == counter["id"])
+        .values(used_quantity=99_999)
+    )
+
+    with pytest.raises(EntitlementDeniedError) as exc_info:
+        authorize_and_reserve_usage(
+            db,
+            user_id=uuid4(),
+            request_id="smart-no-affordable",
+            operation_type="ask",
+            model_targets=(
+                ModelTargetIntent("openai", "gpt-5.4-mini", "standard"),
+                ModelTargetIntent("openai", "gpt-4.1-nano", "economical"),
+            ),
+            research_enabled=False,
+            smart_routing=True,
+            input_text="Brief answer.",
+            max_output_tokens=50,
+        )
+
+    assert exc_info.value.denial.code == "insufficient_credits"
+    assert exc_info.value.denial.remaining == 1
+    assert db.execute(select(tables["usage_reservations"])).all() == []

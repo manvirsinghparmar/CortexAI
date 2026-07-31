@@ -166,6 +166,28 @@ async function installResponsiveRoutes(page, state) {
             state.analysisRuns = [run, ...state.analysisRuns];
             return json(route, run, 201);
         }
+        if (url.pathname === "/v1/files/upload-batch" && method === "POST") {
+            const requestBody = request.postDataBuffer();
+            const multipartText = requestBody?.toString("latin1") ?? "";
+            const fileNames = [...multipartText.matchAll(/filename="([^"]+)"/g)].map(
+                match => match[1],
+            );
+            const uploadedFiles = fileNames.map((fileName, index) => {
+                const uploaded = {
+                    file_id: `file-${state.uploadedFiles.size + index + 1}`,
+                    original_filename: fileName,
+                    mime_type: "text/plain",
+                    size_bytes: requestBody?.byteLength ?? 0,
+                    status: "ready",
+                    ingestion_meta: {},
+                    created_at: "2026-06-12T12:00:00Z",
+                    deduplicated: false,
+                };
+                state.uploadedFiles.set(uploaded.file_id, uploaded);
+                return uploaded;
+            });
+            return json(route, { files: uploadedFiles });
+        }
         if (url.pathname === "/v1/files/upload" && method === "POST") {
             const fileName = request.headers()["x-file-name"] || "attachment.txt";
             const uploaded = {

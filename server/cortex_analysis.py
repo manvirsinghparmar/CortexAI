@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from api.openai_client import OpenAIClient
 
 DEFAULT_CORTEX_ANALYSIS_MODEL = "gpt-5.4-mini"
+CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS = 1800
 SUPPORTED_HIGH_STAKES_DOMAINS = {"financial", "medical", "legal", "safety"}
 _BANNED_COPY_REPLACEMENTS = (
     (
@@ -206,7 +207,7 @@ def analyze_responses(
     response = OpenAIClient(api_key=api_key, model_name=model).get_completion(
         messages=messages,
         model=model,
-        max_completion_tokens=1800,
+        max_completion_tokens=CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS,
         response_format=_analysis_response_format(),
         request_id=f"cortex-analysis-{uuid4()}",
     )

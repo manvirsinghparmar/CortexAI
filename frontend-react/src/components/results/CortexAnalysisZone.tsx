@@ -450,9 +450,8 @@ function ExplanationDialog({ onClose }: { onClose: () => void }) {
       >
         <h3 id="cortex-analysis-explanation-title">How Cortex made this</h3>
         <p>
-          Cortex shuffled and anonymized the successful responses before asking GPT-5.4 mini to
-          identify agreements, differences, unique observations, and points that may require
-          verification.
+          Cortex shuffled and anonymized the successful responses before identifying agreements,
+          differences, unique observations, and points that may require verification.
         </p>
         <p>
           This is a combined analysis based on the responses, not an independent source of truth.

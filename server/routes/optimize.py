@@ -1,7 +1,9 @@
 """POST /v1/optimize — optimize a prompt before sending to chat/compare."""
 
 import asyncio
+from concurrent.futures import Future
 import os
+import threading
 import time
 from typing import Literal
 from uuid import uuid4
@@ -19,6 +21,7 @@ from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import UserContextRequest
+from server.utils import effective_output_token_limit
 from utils.logger import get_logger
 from utils.prompt_optimizer import PromptOptimizer
 
@@ -120,6 +123,8 @@ def _reserve_optimization_usage(
     request_id: str,
     optimizer: PromptOptimizer,
     request: "OptimizeRequest",
+    max_attempts: int,
+    max_output_tokens: int,
 ) -> ReservedRequestUsage:
     try:
         resolution = _resolve_identity(auth=auth, request_id=request_id)
@@ -136,7 +141,8 @@ def _reserve_optimization_usage(
             research_enabled=False,
             optimization_enabled=True,
             input_text=_optimization_input_text(request),
-            max_output_tokens=optimizer.max_output_tokens,
+            max_output_tokens=max_output_tokens,
+            model_attempt_count=max_attempts,
         )
     except HTTPException:
         raise
@@ -210,7 +216,67 @@ def _release_optimization_usage_safely(
         logger.exception("Prompt optimization subscription release failed")
 
 
+def _start_optimizer_call(
+    optimizer: PromptOptimizer,
+    payload: dict,
+) -> Future:
+    """Run provider work independently from the request event loop."""
+
+    future: Future = Future()
+
+    def run() -> None:
+        try:
+            future.set_result(optimizer.optimize_prompt(payload))
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    threading.Thread(
+        target=run,
+        name="prompt-optimizer-provider-call",
+        daemon=True,
+    ).start()
+    return future
+
+
+def _finalize_timed_out_optimizer(
+    future: Future,
+    reservation: ReservedRequestUsage,
+) -> None:
+    """Reconcile provider work that completes after the HTTP timeout response."""
+
+    try:
+        late_result = future.result()
+        if _result_model_usages(late_result):
+            try:
+                _finalize_optimization_usage(reservation, late_result)
+            except Exception:
+                _release_optimization_usage_safely(
+                    reservation,
+                    reason="optimizer_late_settlement_failed",
+                )
+        else:
+            _release_optimization_usage_safely(
+                reservation,
+                reason="optimizer_timeout_no_billable_output",
+            )
+    except BaseException:
+        _release_optimization_usage_safely(
+            reservation,
+            reason="optimizer_timeout_provider_failed",
+        )
+
+
+def _schedule_timed_out_optimizer_finalization(
+    future: Future,
+    reservation: ReservedRequestUsage,
+) -> None:
+    future.add_done_callback(
+        lambda completed: _finalize_timed_out_optimizer(completed, reservation)
+    )
+
+
 # ── Request / Response schemas (local to this route for simplicity) ──────────
+
 
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="The raw user prompt to optimize")
@@ -235,6 +301,7 @@ class OptimizeResponse(BaseModel):
 
 
 # ── Endpoint ─────────────────────────────────────────────────────────────────
+
 
 @router.post("/optimize", response_model=OptimizeResponse)
 async def optimize_prompt(
@@ -280,19 +347,26 @@ async def optimize_prompt(
 
     billing_reservation: ReservedRequestUsage | None = None
     optimizer = _get_optimizer()
+    max_retries = _optimizer_route_max_retries()
+    effective_max_tokens = effective_output_token_limit(
+        getattr(optimizer, "max_output_tokens", None)
+    )
+    if hasattr(optimizer, "max_output_tokens"):
+        optimizer.max_output_tokens = effective_max_tokens
     if API_DB_ENABLED:
         billing_reservation = _reserve_optimization_usage(
             auth=auth,
             request_id=req_id,
             optimizer=optimizer,
             request=request,
+            max_attempts=max_retries,
+            max_output_tokens=effective_max_tokens,
         )
 
     optimizer_invoked = False
     result: dict | None = None
     try:
         timeout_seconds = _optimizer_timeout_seconds()
-        max_retries = _optimizer_route_max_retries()
         payload = {
             "prompt": request.prompt,
             "max_retries": max_retries,
@@ -305,11 +379,18 @@ async def optimize_prompt(
 
         optimizer_invoked = True
         try:
+            optimizer_future = _start_optimizer_call(optimizer, payload)
             result = await asyncio.wait_for(
-                asyncio.to_thread(optimizer.optimize_prompt, payload),
+                asyncio.shield(asyncio.wrap_future(optimizer_future)),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
+            if billing_reservation is not None:
+                _schedule_timed_out_optimizer_finalization(
+                    optimizer_future,
+                    billing_reservation,
+                )
+                billing_reservation = None
             duration_ms = int((time.monotonic() - started_at) * 1000)
             logger.warning(
                 "Prompt optimization timed out",
@@ -384,7 +465,14 @@ async def optimize_prompt(
     finally:
         if billing_reservation is not None:
             if optimizer_invoked and _result_model_usages(result):
-                _finalize_optimization_usage(billing_reservation, result)
+                try:
+                    _finalize_optimization_usage(billing_reservation, result)
+                except Exception:
+                    _release_optimization_usage_safely(
+                        billing_reservation,
+                        reason="optimizer_settlement_failed",
+                    )
+                    raise
             else:
                 _release_optimization_usage_safely(
                     billing_reservation,

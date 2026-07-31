@@ -51,6 +51,19 @@ class SmartRouter:
             reasons = decision.reasons
 
         candidates = self._registry.get_candidates(tier, constraints)
+        if not candidates and constraints and constraints.allowed_models:
+            for model_key in constraints.allowed_models:
+                provider, separator, model = str(model_key or "").partition(":")
+                if not separator:
+                    continue
+                candidate = self._registry.find_model(provider, model)
+                if candidate is None or not candidate.enabled:
+                    continue
+                tier = candidate.tier
+                candidates = self._registry.get_candidates(tier, constraints)
+                if candidates:
+                    reasons.append("credit_affordable_lower_tier")
+                    break
         selection = self._selector.select(features, candidates, constraints)
         ordered_candidates = [selection.primary_candidate, *selection.fallback_candidates]
 

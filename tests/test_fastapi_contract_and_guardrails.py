@@ -1016,10 +1016,248 @@ def test_optimize_times_out_to_original_prompt(client, monkeypatch):
     assert body["server_optimization_enabled"] is True
     assert body["optimization_status"] == "timeout"
     assert body["fallback_reason"] == "timeout"
+    time.sleep(0.1)
+    assert released == [
+        {
+            "reservation": reservation,
+            "reason": "optimizer_timeout_no_billable_output",
+        }
+    ]
+
+
+def test_optimize_timeout_settles_late_billable_provider_usage(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    reservation = object()
+    finalized: list[dict[str, Any]] = []
+    released: list[dict[str, Any]] = []
+
+    class SlowBillableOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
+        def optimize_prompt(self, payload):
+            time.sleep(0.03)
+            return {
+                "optimized_prompt": "This result completed after the HTTP timeout.",
+                "_billable_usages": [
+                    {
+                        "provider": self.provider,
+                        "model": self.model,
+                        "input_tokens": 20,
+                        "output_tokens": 10,
+                        "output_text": "This result completed after the HTTP timeout.",
+                        "provider_cost_usd": 0.0001,
+                    }
+                ],
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_TIMEOUT_MS", "1")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: SlowBillableOptimizer())
+    monkeypatch.setattr(
+        optimize_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: finalized.append(kwargs),
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["optimization_status"] == "timeout"
+    time.sleep(0.1)
+    assert len(finalized) == 1
+    assert len(finalized[0]["model_usages"]) == 1
+    assert released == []
+
+
+@pytest.mark.parametrize("attempt_count", [1, 2, 3])
+def test_optimize_reserves_and_settles_every_billable_attempt(
+    client,
+    monkeypatch,
+    attempt_count,
+):
+    from server.routes import optimize as optimize_route
+
+    reservation = object()
+    reserve_calls: list[dict[str, Any]] = []
+    finalize_calls: list[dict[str, Any]] = []
+
+    class RetryingOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": "Write a precise, testable implementation plan.",
+                "attempt_count": attempt_count,
+                "_billable_usages": [
+                    {
+                        "provider": self.provider,
+                        "model": self.model,
+                        "input_tokens": 20 + index,
+                        "output_tokens": 10 + index,
+                        "output_text": f"attempt {index + 1}",
+                        "provider_cost_usd": 0.0001,
+                    }
+                    for index in range(attempt_count)
+                ],
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setenv("PROMPT_OPTIMIZER_ROUTE_MAX_RETRIES", str(attempt_count))
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: RetryingOptimizer())
+
+    def reserve(**kwargs):
+        reserve_calls.append(kwargs)
+        return reservation
+
+    monkeypatch.setattr(optimize_route, "_reserve_subscription_usage", reserve)
+    monkeypatch.setattr(
+        optimize_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: finalize_calls.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert reserve_calls[0]["model_attempt_count"] == attempt_count
+    assert reserve_calls[0]["max_output_tokens"] == 1800
+    assert len(finalize_calls) == 1
+    assert len(finalize_calls[0]["model_usages"]) == attempt_count
+
+
+def test_optimize_provider_failure_releases_reserved_credits(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    reservation = object()
+    released: list[dict[str, Any]] = []
+
+    class FailedOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": payload["prompt"],
+                "attempt_count": 1,
+                "_billable_usages": [],
+                "error": {
+                    "code": "optimization_failed",
+                    "message": "Provider failed before returning usage.",
+                },
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: FailedOptimizer())
+    monkeypatch.setattr(
+        optimize_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["optimization_status"] == "failed"
     assert released == [
         {
             "reservation": reservation,
             "reason": "optimizer_no_billable_output",
+        }
+    ]
+
+
+def test_optimize_releases_reservation_after_settlement_failure(client, monkeypatch):
+    from server.routes import optimize as optimize_route
+
+    reservation = object()
+    released: list[dict[str, Any]] = []
+
+    class SuccessfulOptimizer:
+        provider = "openai"
+        model = "gpt-4.1-mini"
+        max_output_tokens = 1800
+
+        def optimize_prompt(self, payload):
+            return {
+                "optimized_prompt": "A more precise prompt.",
+                "_billable_usages": [
+                    {
+                        "provider": self.provider,
+                        "model": self.model,
+                        "input_tokens": 20,
+                        "output_tokens": 10,
+                        "output_text": "A more precise prompt.",
+                        "provider_cost_usd": 0.0001,
+                    }
+                ],
+            }
+
+    monkeypatch.setenv("ENABLE_PROMPT_OPTIMIZATION", "true")
+    monkeypatch.setattr(optimize_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(optimize_route, "_get_optimizer", lambda: SuccessfulOptimizer())
+    monkeypatch.setattr(
+        optimize_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_finalize_subscription_usage",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("settlement failed")),
+    )
+    monkeypatch.setattr(
+        optimize_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/optimize",
+        json={"prompt": "make this prompt better"},
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 500
+    assert released == [
+        {
+            "reservation": reservation,
+            "reason": "optimizer_settlement_failed",
         }
     ]
 
@@ -1182,6 +1420,8 @@ def test_explicit_improve_settles_fallback_once_and_chat_does_not_recount(
     assert optimize_response.json()["optimization_status"] == "kept_original"
     assert chat_response.status_code == 200
     assert optimize_reserves[0]["optimization_enabled"] is True
+    assert optimize_reserves[0]["model_attempt_count"] == 2
+    assert optimize_reserves[0]["max_output_tokens"] == 1800
     assert optimize_settles[0]["optimization_performed"] is True
     assert "optimization_enabled" not in chat_reserves[0]
 
@@ -1995,6 +2235,76 @@ def test_compare_clamps_max_tokens_to_server_cap(client, app):
     assert app.state.fake_orchestrator.last_compare_kwargs.get("max_tokens") == 2048
 
 
+def test_chat_uses_same_clamped_limit_for_billing_and_provider(
+    client,
+    app,
+    monkeypatch,
+):
+    chat_route, _ = _enable_subscription_route_test_mode(monkeypatch)
+    reservations: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        chat_route,
+        "_reserve_subscription_usage",
+        lambda **kwargs: reservations.append(kwargs) or _test_reservation("ask"),
+    )
+    monkeypatch.setattr(
+        chat_route,
+        "_finalize_subscription_usage",
+        lambda **_kwargs: None,
+    )
+
+    response = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "Give me a summary",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "max_tokens": 100_000_000,
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert reservations[0]["max_output_tokens"] == 2048
+    assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 2048
+
+
+def test_compare_uses_same_clamped_limit_for_billing_and_provider(
+    client,
+    app,
+    monkeypatch,
+):
+    _, compare_route = _enable_subscription_route_test_mode(monkeypatch)
+    reservations: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_subscription_usage",
+        lambda **kwargs: reservations.append(kwargs) or _test_reservation("compare"),
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_finalize_subscription_usage",
+        lambda **_kwargs: None,
+    )
+
+    response = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "Compare these",
+            "max_tokens": 100_000_000,
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    assert response.status_code == 200
+    assert reservations[0]["max_output_tokens"] == 2048
+    assert app.state.fake_orchestrator.last_compare_kwargs["max_tokens"] == 2048
+
+
 def test_chat_stream_auto_routing_includes_selected_target(client, app):
     payload = {
         "prompt": "Write a small Python function",
@@ -2375,7 +2685,9 @@ def test_chat_with_attachment_reserves_file_facts_and_settles_one_analysis_turn(
     monkeypatch.setattr(
         attachments_service,
         "materialize_inference_attachments",
-        lambda _attachments, **_kwargs: [{"mime_type": "text/plain", "text": "hello"}],
+        lambda _attachments, **_kwargs: [
+            {"mime_type": "text/plain", "extracted_text": "materialized file text"}
+        ],
     )
     monkeypatch.setattr(
         attachments_service,
@@ -2409,6 +2721,7 @@ def test_chat_with_attachment_reserves_file_facts_and_settles_one_analysis_turn(
     assert reserved[0]["attachment_count"] == 1
     assert reserved[0]["total_attachment_bytes"] == 2048
     assert reserved[0]["attachment_sizes"] == (2048,)
+    assert "materialized file text" in reserved[0]["input_text"]
     assert settled[0]["file_analysis_performed"] is True
 
 
@@ -2787,8 +3100,8 @@ def test_smart_chat_passes_plan_billing_classes_as_routing_constraint(
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(chat_route, "_finalize_chat_usage", lambda **_kwargs: None)
-    app.state.fake_orchestrator.model_billing_class = (
-        lambda _provider, model: "standard" if model == "gpt-4.1-mini" else "economical"
+    app.state.fake_orchestrator.model_billing_class = lambda _provider, model: (
+        "standard" if model == "gpt-4.1-mini" else "economical"
     )
 
     def preview_smart_target(**kwargs):

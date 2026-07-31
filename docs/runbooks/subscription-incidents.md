@@ -42,7 +42,11 @@ Invalid signatures are rejected before persistence. Never weaken timestamp toler
 - A Stripe period is identified by billing account plus period start. Duplicate invoice/subscription events reuse it and do not reset counters.
 - Same-period plan/end changes preserve the period row and existing counters.
 - Do not reset counters manually. Capture the period ID, counter totals, related reservation states, and provider event IDs for engineering review.
-- For leaked metering reservations unrelated to Stripe delivery, use the existing stale-reservation expiry workflow rather than changing webhook rows.
+- For leaked metering reservations unrelated to Stripe delivery, inspect
+  `billing.reservation_cleanup.*` and heartbeat logs first. Confirm
+  `ENABLE_BILLING_RESERVATION_CLEANUP_WORKER=true`, the default five-minute
+  interval, and the 30-minute stale threshold. The worker uses activity
+  heartbeats and locked rows; do not change webhook rows or counters manually.
 
 ## Payment failure and cancellation
 

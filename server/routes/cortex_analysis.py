@@ -226,7 +226,7 @@ async def create_analysis_run(
                     *(source.content for source in sources),
                 ]
             ),
-            max_output_tokens=1800,
+            max_output_tokens=analysis_service.CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS,
         )
     except Exception as exc:
         raise enforcement_http_exception(exc) from exc

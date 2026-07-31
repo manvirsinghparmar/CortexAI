@@ -18,12 +18,12 @@ export function getAccountMenuSubscriptionPresentation(
   return {
     planLabel: `${plan.display_name} plan`,
     billingActionLabel: billingPastDue
-      ? "Update payment"
+      ? "Update payment method"
       : cancelled
         ? "View plans"
         : plan.code === "free"
           ? "Upgrade"
-          : "Manage plan",
+          : "Manage subscription",
     billingPastDue,
     billingDestination:
       billingPastDue || (plan.code !== "free" && !cancelled) ? "/account/billing" : "/pricing",

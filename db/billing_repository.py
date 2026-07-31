@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, TypeAlias
 from uuid import UUID, uuid4
 
@@ -782,19 +783,18 @@ def create_usage_reservation(
         field_name="requested_quantities",
         require_positive=True,
     )
-    stmt = (
-        insert(usage_reservations)
-        .values(
-            id=_new_id_for(usage_reservations),
-            billing_account_id=billing_account_id,
-            usage_period_id=usage_period_id,
-            request_id=_required_text(request_id, "request_id"),
-            operation_type=_required_text(operation_type, "operation_type").lower(),
-            state="reserved",
-            requested_quantities=quantities,
-        )
-        .returning(*usage_reservations.c)
-    )
+    values: dict[str, Any] = {
+        "id": _new_id_for(usage_reservations),
+        "billing_account_id": billing_account_id,
+        "usage_period_id": usage_period_id,
+        "request_id": _required_text(request_id, "request_id"),
+        "operation_type": _required_text(operation_type, "operation_type").lower(),
+        "state": "reserved",
+        "requested_quantities": quantities,
+    }
+    if "last_activity_at" in usage_reservations.c:
+        values["last_activity_at"] = func.now()
+    stmt = insert(usage_reservations).values(**values).returning(*usage_reservations.c)
     persisted = _first_record(db.execute(stmt))
     if persisted is None:
         raise RuntimeError("Usage reservation could not be created")
@@ -853,18 +853,85 @@ def lock_stale_usage_reservations(
 ) -> list[BillingRecord]:
     """Lock clearly stale reservations while skipping rows owned by active workers."""
     usage_reservations = _table("usage_reservations")
+    activity_column = (
+        usage_reservations.c.last_activity_at
+        if "last_activity_at" in usage_reservations.c
+        else usage_reservations.c.created_at
+    )
     stmt = (
         select(usage_reservations)
         .where(
             and_(
                 usage_reservations.c.state == "reserved",
-                usage_reservations.c.created_at < older_than,
+                activity_column < older_than,
             )
         )
-        .order_by(usage_reservations.c.created_at, usage_reservations.c.id)
+        .order_by(activity_column, usage_reservations.c.id)
         .with_for_update(skip_locked=True)
     )
     return [dict(row) for row in db.execute(stmt).mappings().all()]
+
+
+def touch_usage_reservation_activity(
+    db: Session,
+    reservation_ids: Sequence[UUID],
+) -> int:
+    """Refresh active reservation leases without reviving terminal rows."""
+
+    normalized_ids = tuple(dict.fromkeys(reservation_ids))
+    if not normalized_ids:
+        return 0
+    usage_reservations = _table("usage_reservations")
+    if "last_activity_at" not in usage_reservations.c:
+        raise RuntimeError(
+            "usage_reservations.last_activity_at is missing; apply billing migrations"
+        )
+    result = db.execute(
+        update(usage_reservations)
+        .where(
+            and_(
+                usage_reservations.c.id.in_(normalized_ids),
+                usage_reservations.c.state == "reserved",
+            )
+        )
+        .values(last_activity_at=func.now())
+    )
+    return int(result.rowcount or 0)
+
+
+def update_usage_reservation_requested_quantities(
+    db: Session,
+    *,
+    reservation_id: UUID,
+    requested_quantities: Mapping[str, int],
+) -> BillingRecord:
+    """Expand one locked reservation while it remains active."""
+
+    quantities = _normalize_quantities(
+        requested_quantities,
+        field_name="requested_quantities",
+        require_positive=True,
+    )
+    usage_reservations = _table("usage_reservations")
+    values: dict[str, Any] = {"requested_quantities": quantities}
+    if "last_activity_at" in usage_reservations.c:
+        values["last_activity_at"] = func.now()
+    persisted = _first_record(
+        db.execute(
+            update(usage_reservations)
+            .where(
+                and_(
+                    usage_reservations.c.id == reservation_id,
+                    usage_reservations.c.state == "reserved",
+                )
+            )
+            .values(**values)
+            .returning(*usage_reservations.c)
+        )
+    )
+    if persisted is None:
+        raise RuntimeError("Usage reservation changed while it was being supplemented")
+    return persisted
 
 
 def settle_usage_reservation(
@@ -1090,8 +1157,13 @@ def create_credit_transaction(
         "total_credits",
         "usage_estimated",
         "pricing_version",
+        "metadata",
     )
     if any(existing.get(key) != values[key] for key in comparable):
+        raise ValueError("Credit transaction item was already recorded differently")
+    if Decimal(str(existing.get("provider_cost_usd") or 0)) != Decimal(
+        str(values["provider_cost_usd"])
+    ):
         raise ValueError("Credit transaction item was already recorded differently")
     return existing
 

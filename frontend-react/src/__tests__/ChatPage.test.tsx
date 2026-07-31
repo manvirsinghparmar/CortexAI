@@ -156,7 +156,9 @@ describe("ChatPage authentication gate", () => {
     });
 
     await user.click(screen.getAllByRole("button", { name: "Account" })[0]);
-    expect(screen.getByRole("menuitem", { name: "Plus plan, Manage plan" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Plus plan, Manage subscription" }),
+    ).toBeInTheDocument();
   });
 
   it("retries the latest failed turn through regeneration", async () => {

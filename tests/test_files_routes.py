@@ -50,6 +50,23 @@ def session_cookie():
     return {"cortex_session": "test-session-cookie"}
 
 
+def _upload_result(file_id: uuid.UUID, filename: str, *, size_bytes: int = 5):
+    return {
+        "file_id": str(file_id),
+        "original_filename": filename,
+        "mime_type": "text/plain",
+        "size_bytes": size_bytes,
+        "status": "ready",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {"ingestion_state": "none"},
+        "created_at": "2026-03-20T00:00:00Z",
+        "updated_at": "2026-03-20T00:00:00Z",
+        "expires_at": "2026-03-27T00:00:00Z",
+        "deduplicated": False,
+    }
+
+
 def test_files_upload_requires_auth(client):
     response = client.post(
         "/v1/files/upload",
@@ -118,6 +135,18 @@ def test_files_upload_is_free_and_does_not_meter_bytes(client, monkeypatch, sess
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
     monkeypatch.setattr(
         files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="free",
+            max_files=1,
+            max_file_bytes=10_000_000,
+            platform_max_files=5,
+            platform_max_file_bytes=20_000_000,
+        ),
+    )
+    monkeypatch.setattr(
+        files_service,
         "upload_user_file",
         lambda **_kwargs: {
             "file_id": "7f8bb1b7-e5ef-4d6d-b8a8-43d14d6fd7bb",
@@ -166,6 +195,18 @@ def test_files_upload_relies_on_file_service_for_validation(
         )
 
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="free",
+            max_files=1,
+            max_file_bytes=10_000_000,
+            platform_max_files=5,
+            platform_max_file_bytes=20_000_000,
+        ),
+    )
     monkeypatch.setattr(files_service, "upload_user_file", reject_upload)
 
     response = client.post(
@@ -188,6 +229,18 @@ def test_files_upload_failure_does_not_attempt_credit_release(client, monkeypatc
     from server.routes import files as files_route
 
     monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="free",
+            max_files=1,
+            max_file_bytes=10_000_000,
+            platform_max_files=5,
+            platform_max_file_bytes=20_000_000,
+        ),
+    )
 
     def fail_upload(**_kwargs):
         raise HTTPException(
@@ -373,3 +426,197 @@ def test_files_routes_reject_api_key_auth(client):
     )
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "session_auth_required"
+
+
+def test_batch_upload_rejects_plan_file_count_before_storage(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+    from server.routes import files as files_route
+
+    upload_calls: list[dict] = []
+    monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="free",
+            max_files=1,
+            max_file_bytes=10,
+            platform_max_files=5,
+            platform_max_file_bytes=20,
+        ),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "upload_user_file",
+        lambda **kwargs: upload_calls.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/files/upload-batch",
+        files=[
+            ("files", ("first.txt", b"one", "text/plain")),
+            ("files", ("second.txt", b"two", "text/plain")),
+        ],
+        cookies=session_cookie,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "feature_not_in_plan",
+        "message": "The Free plan allows up to 1 files per request and 10 bytes per file.",
+        "feature": "attachment_count",
+        "current_plan": "free",
+        "limit": 1,
+        "required": 2,
+        "recommended_plan": "plus",
+    }
+    assert upload_calls == []
+
+
+def test_batch_upload_rejects_size_and_mime_before_storage(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+    from server.routes import files as files_route
+
+    upload_calls: list[dict] = []
+    monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="free",
+            max_files=1,
+            max_file_bytes=4,
+            platform_max_files=5,
+            platform_max_file_bytes=20,
+        ),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "upload_user_file",
+        lambda **kwargs: upload_calls.append(kwargs),
+    )
+
+    too_large = client.post(
+        "/v1/files/upload-batch",
+        files=[("files", ("large.txt", b"hello", "text/plain"))],
+        cookies=session_cookie,
+    )
+    unsupported = client.post(
+        "/v1/files/upload-batch",
+        files=[("files", ("demo.exe", b"x", "application/octet-stream"))],
+        cookies=session_cookie,
+    )
+
+    assert too_large.status_code == 403
+    assert too_large.json()["detail"]["feature"] == "attachment_size"
+    assert unsupported.status_code == 415
+    assert unsupported.json()["detail"]["code"] == "unsupported_file_type"
+    assert upload_calls == []
+
+
+def test_batch_upload_rolls_back_created_objects_after_partial_failure(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+    from server.routes import files as files_route
+
+    first_file_id = uuid.uuid4()
+    upload_count = 0
+    rollbacks: list[uuid.UUID] = []
+
+    def upload(**kwargs):
+        nonlocal upload_count
+        upload_count += 1
+        if upload_count == 2:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "storage_upload_failed", "message": "Upload failed."},
+            )
+        return _upload_result(first_file_id, kwargs["filename"], size_bytes=len(kwargs["payload"]))
+
+    monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="plus",
+            max_files=3,
+            max_file_bytes=20,
+            platform_max_files=5,
+            platform_max_file_bytes=20,
+        ),
+    )
+    monkeypatch.setattr(files_service, "upload_user_file", upload)
+    monkeypatch.setattr(
+        files_service,
+        "rollback_batch_upload",
+        lambda **kwargs: rollbacks.append(kwargs["file_id"]),
+    )
+
+    response = client.post(
+        "/v1/files/upload-batch",
+        files=[
+            ("files", ("first.txt", b"one", "text/plain")),
+            ("files", ("second.txt", b"two", "text/plain")),
+        ],
+        cookies=session_cookie,
+    )
+
+    assert response.status_code == 502
+    assert rollbacks == [first_file_id]
+
+
+def test_batch_upload_returns_every_validated_file(client, monkeypatch, session_cookie):
+    from server import files_service
+    from server.routes import files as files_route
+
+    monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="plus",
+            max_files=3,
+            max_file_bytes=20,
+            platform_max_files=5,
+            platform_max_file_bytes=20,
+        ),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "upload_user_file",
+        lambda **kwargs: _upload_result(
+            uuid.uuid4(),
+            kwargs["filename"],
+            size_bytes=len(kwargs["payload"]),
+        ),
+    )
+
+    response = client.post(
+        "/v1/files/upload-batch",
+        files=[
+            ("files", ("first.txt", b"one", "text/plain")),
+            ("files", ("second.txt", b"two", "text/plain")),
+        ],
+        cookies=session_cookie,
+    )
+
+    assert response.status_code == 200
+    assert [item["original_filename"] for item in response.json()["files"]] == [
+        "first.txt",
+        "second.txt",
+    ]

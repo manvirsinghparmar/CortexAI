@@ -347,12 +347,12 @@ export interface FileUploadResponse {
   mime_type: string;
   size_bytes: number;
   status: FileUploadStatus;
-  error_code?: string;
-  error_message?: string;
+  error_code?: string | null;
+  error_message?: string | null;
   ingestion_meta: Record<string, unknown>;
   created_at: string;
-  updated_at?: string;
-  expires_at?: string;
+  updated_at?: string | null;
+  expires_at?: string | null;
   deduplicated: boolean;
 }
 

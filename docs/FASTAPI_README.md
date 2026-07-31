@@ -106,7 +106,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
 - React posts non-sensitive lifecycle diagnostics to `/v1/client-diagnostics`; backend logs them as `frontend.diagnostic` events so production refresh reports can be separated into reload/navigation, tab discard, back/forward cache restore, long main-thread task, or frontend error cases.
-- React attachment UX uses raw-byte `POST /v1/files/upload`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests. In DB mode, upload/storage is free while plan file count and per-file size remain backend-enforced. Text-extractable Office documents store a private parsed-text cache; follow-ups and Compare reuse it and select prompt-relevant chunks where the configured chunk budget requires clipping. The model call that consumes the selected file context is reserved and settled through the same AI-credit calculation as any other Ask/Compare generation.
+- React attachment UX submits the complete selection to multipart `POST /v1/files/upload-batch`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests. The legacy raw-byte `POST /v1/files/upload` remains a one-file contract. Both routes authenticate and resolve the effective plan before storage; the batch route validates file count, every byte size, MIME type, platform ceiling, and any known provider capability before its first S3 write, then rolls back newly created objects after a partial failure. Upload/storage remains free.
 - React Ask defaults `Web` on for new page sessions, React Compare defaults `With sources` on, and users can turn either off for the current page session. Compare streams `/v1/compare/stream` events into per-model response columns.
 - React Compare keeps every selected response visible in a responsive grid without horizontal response scrolling on desktop and tablet widths: three columns on wide desktop, two at tablet widths, and stacked tall cards at the app's tablet/mobile shell breakpoint. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and elevates the stuck switcher into a frosted provider-tinted bar without changing model-pill horizontal positions.
 - Model headers and action footers remain fixed inside each desktop/tablet Compare card while only the answer body scrolls. The transcript reserves bottom breathing room above the persistent composer so the input area does not compress the reading workspace.
@@ -128,11 +128,11 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `config/subscription_plans.yaml` is the server-owned Free/Plus/Pro plan catalogue. `server/billing/plan_catalog.py` validates and caches it during API startup, including ranks, prices, Stripe price environment-variable mappings, entitlements, allowances, limits, and allowed billing classes.
 - `db/billing_repository.py` provides transaction-neutral access to billing accounts, provider subscription snapshots, usage periods/counters/reservations, and webhook idempotency records created by `db/migrations/20260718_add_b2c_billing_foundation.sql`.
 - `server/billing/account_service.py` validates user ownership and lazily creates B2C accounts. `server/billing/subscription_service.py` applies the server-side lifecycle/grace policy and creates the effective usage period. `server/billing/entitlement_service.py` returns feature/model/file decisions and exact reservation quantities without mutating counters.
-- `server/billing/metering_service.py` owns atomic allowance mutation. It locks the billing owner for idempotency-key creation, locks required counters in deterministic order, rejects over-limit reservations before mutation, settles only successful quantities, releases unused quantities, and expires clearly stale reservations after a default 30-minute threshold. Every function uses the caller-owned transaction and never commits.
-- `server/billing/enforcement_service.py` composes effective-plan resolution, entitlement evaluation, atomic reservation, and output-aware settlement/release for DB-mode Ask, Compare, Optimize, upload, and attachment analysis. `server/persistence.py` owns the short committing units of work; no billing transaction remains open during a provider, optimizer, or object-storage call.
+- `server/billing/metering_service.py` owns atomic allowance mutation. It locks the billing owner for idempotency-key creation, locks required counters in deterministic order, rejects over-limit reservations before mutation, supplements underestimates when capacity exists, settles only safe successful quantities, releases unused quantities, and expires clearly stale reservations after a default 30-minute threshold. The API runs cleanup once at startup and every five minutes by default, while persisted heartbeats protect demonstrably active requests and `FOR UPDATE SKIP LOCKED` makes multiple instances safe.
+- `server/billing/enforcement_service.py` composes effective-plan resolution, entitlement evaluation, atomic reservation, and output-aware settlement/release for DB-mode Ask, Compare, Optimize, Cortex Analysis, and attachment-backed model calls. `server/persistence.py` owns the short committing units of work; no billing transaction remains open during a provider, optimizer, or object-storage call.
 - `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout, Portal, and webhook routes return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. The `unrestricted` development value additionally requires `DEV_SUBSCRIPTION_BYPASS_ENABLED=true`; prefer the guarded `run_app.py --subscription-plan unrestricted` entrypoint.
 - With billing enabled, startup validates the secret key, webhook signing secret, paid-plan Price IDs, server redirect URLs, and optional API version. The API rejects client-supplied Price IDs, amounts, currencies, Customer IDs, and redirects. `server/billing/webhook_service.py` makes verified Stripe Checkout/subscription/invoice state authoritative, locks provider-event retries, rejects stale snapshots, preserves usage counters across same-period changes, and delegates paid/grace/cancellation access to `subscription_service.py`.
-- `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` reserve a conservative AI-credit estimate before provider execution. They settle actual successful input/output token credits, release unused estimates and failed targets, and add the fixed 15,000-credit Advanced Web Search item only when retrieval ran. Compare shares retrieval and performs aggregate partial settlement. `/v1/optimize` bills its GPT-4.1 mini provider attempts, and Cortex Analysis is a separate billable model call. `/v1/files/upload` enforces file access/size but upload/storage itself is free; file context is accounted by the model call that consumes it. Plus and Pro may export usage CSV; Free receives a structured feature denial.
+- `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` calculate one effective output limit and use it for both provider execution and credit reservation. They settle actual successful input/output credits, release unused estimates and failed targets, and add the fixed 15,000-credit Advanced Web Search item only when retrieval ran. Compare shares retrieval and performs aggregate partial settlement. Improve Prompt reserves all configured attempts and settles each billable usage item. Cortex Analysis reserves and settles its source-context synthesis as a separate unified-wallet call without charging again for reused Compare research. Upload/storage itself is free.
 - Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_stripe_billing.py tests/test_stripe_webhooks.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
 - `/v1/models` exposes `billing_class`/`access_category` as `economical`, `standard`, `advanced`, or `premium`, plus input/output credit multipliers, credit-usage label, and pricing version. These values are independent from the existing smart-routing `tier`; every enabled model must define them explicitly.
 - Pending Ask and Compare cards show independent contextual loading blocks with a subtle sparkle and skeleton lines. A card removes its loading state on its first streamed token or error without waiting for the other Compare targets.
@@ -153,6 +153,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
+- `POST /v1/files/upload-batch`
 - `GET /v1/files/{file_id}`
 - `POST /v1/client-diagnostics`
 - `POST /v1/chat`
@@ -390,7 +391,7 @@ Notes:
 Prompt optimization:
 - `POST /v1/optimize` is gated by `ENABLE_PROMPT_OPTIMIZATION=true`.
 - `/v1/optimize` is the UI optimization path; chat/compare do not auto-optimize by default.
-- In DB mode, the endpoint resolves the server-owned plan, checks prompt-improvement access, and reserves a conservative GPT-4.1 mini AI-credit estimate before optimizer setup. Setup failures release it; provider attempts with billable usage settle actual input/output credits.
+- In DB mode, the endpoint resolves the server-owned plan, checks prompt-improvement access, and reserves every configured GPT-4.1 mini optimizer attempt before setup. Setup failures release the reservation; each provider attempt with billable usage settles actual input/output credits, and unused attempt capacity is released.
 - Improve Prompt counts as one submitted action against the effective plan's requests-per-minute limit.
 - Sending the returned prompt through Ask or Compare is a separate model call charged through the normal Ask/Compare credit calculation; it does not duplicate the optimizer charge.
 - Set `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true` only when chat/compare should automatically rewrite prompts without the explicit optimize endpoint.
@@ -518,8 +519,8 @@ Rules:
 
 Subscription enforcement:
 - The effective plan, model billing classes, feature access, and meter quantities are resolved server-side; client-supplied billing identifiers are ignored.
-- Entitlement/model denials return structured `403` responses before provider execution. Monthly exhaustion returns `429`; unsafe billing configuration returns a provider-safe `500`.
-- Smart Ask receives the plan's allowed billing classes as an independent routing constraint. It conservatively reserves the premium-meter envelope through the highest allowed Smart class, settles only the actual successful class, and releases unused premium reservations. This accommodates the existing reservation schema, which cannot transfer units between premium meter keys.
+- Entitlement/model denials return structured `403` responses before provider execution. Insufficient monthly AI credits return `402 insufficient_credits`; unsafe billing configuration returns a provider-safe `500`.
+- Smart Ask resolves and ranks only enabled models allowed by the effective plan, estimates every appropriate candidate from materialized input, bounded research context, model-specific multipliers, the exact clamped output ceiling, and any fixed retrieval charge, then removes unaffordable candidates. It reserves the first appropriate affordable candidate without an arbitrary percentage. A more expensive fallback must atomically supplement the same reservation before invocation; if that fails, the router skips it and continues with an affordable candidate.
 - Streaming reservations are created before the `StreamingResponse` is returned. Ask settles a successful model after its first meaningful output is emitted, releases model units on a pre-output disconnect, and still settles performed research once. Compare finalizes aggregate successful targets before `done`, or settles only partial targets whose output started on disconnect/error.
 
 Persistence:
@@ -606,17 +607,25 @@ Notes:
 - Each run includes `analysisId`, `requestGroupId`, `sessionId`, `model`, the structured result sections, `sourceResponses`, `createdAt`, and `isStale`.
 - `sourceResponses` records the exact `requestId` and `responseVersion` inputs. A later Compare response regeneration changes the current source fingerprint, so earlier runs remain available with `isStale=true`.
 
-The browser hydrates these runs with session history after reload or History reopening. It shows the newest analysis by default and exposes all prior runs through Analysis history. Cortex Analysis currently has no subscription, tier, credit, trial, or upgrade enforcement.
+The browser hydrates these runs with session history after reload or History
+reopening. It shows the newest analysis by default and exposes all prior runs
+through Analysis history. Creation and regeneration are new synthesized model
+calls charged against the unified AI-credit wallet; there is no separate Cortex
+quota. The reservation includes the Compare question and successful source
+responses with a 1,800-token output ceiling. Existing Compare research is reused
+without another Tavily charge. Historical runs remain readable after downgrade.
 
 ## Schema Migrations
 
 Apply these when enabling updated persistence flows:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
 psql "$DATABASE_URL" -f db/migrations/20260218_add_request_group_id_to_llm_requests.sql
+psql "$DATABASE_URL" -f db/migrations/20260218_llm_requests_api_key_owner_guard.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 ```
 
 The Cortex Analysis migration adds Compare response revision metadata and the
@@ -626,7 +635,12 @@ permission to alter that table. Restart the API after applying the migration so
 SQLAlchemy reflects the new columns. Shared Ask/Compare session continuity
 itself remains implemented in persistence/session resolution logic.
 
-The B2C billing migration is additive and leaves `users`, sessions, messages, `llm_requests`, and `llm_responses` unchanged. Apply it before deploying code that uses the billing repository. See `docs/runbooks/db-migrations.md` for verification and rollback guidance.
+The billing foundation, Cortex revision table, unified-credit ledger, and
+reservation-activity migration are all required. They are additive and
+idempotent under the repository migration convention. PostgreSQL startup checks
+the required tables and columns and fails before serving provider routes when a
+migration is missing. See `docs/runbooks/db-migrations.md` for verification and
+rollback guidance.
 
 ## OpenAI Compatibility Note
 

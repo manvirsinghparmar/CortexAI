@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { uploadFile } from "../api/files";
+import { uploadFiles } from "../api/files";
 import { AttachmentStrip } from "../components/composer/AttachmentStrip";
 import { CompareSelector } from "../components/composer/CompareSelector";
 import { ModelSelector } from "../components/composer/ModelSelector";
@@ -21,7 +21,7 @@ import type {
 } from "../types";
 
 vi.mock("../api/files", () => ({
-  uploadFile: vi.fn(),
+  uploadFiles: vi.fn(),
   deleteFile: vi.fn().mockResolvedValue(undefined),
   fetchFileStatus: vi.fn(),
 }));
@@ -261,8 +261,67 @@ describe("subscription feature gating", () => {
         "attachment_size",
       );
     });
-    expect(uploadFile).not.toHaveBeenCalled();
+    expect(uploadFiles).not.toHaveBeenCalled();
     expect(useChatStore.getState().attachments).toEqual([]);
+  });
+
+  it("uploads an accepted multi-file selection through one batch request", async () => {
+    const entitlements = {
+      ...entitlementFixture({
+        code: "plus",
+        display_name: "Plus",
+        status: "active",
+        source: "stripe",
+      }),
+      limits: { max_files_per_request: 3, max_file_bytes: 20_000_000 },
+    };
+    const uploaded = [
+      {
+        file_id: "file-one",
+        original_filename: "one.txt",
+        mime_type: "text/plain",
+        size_bytes: 3,
+        status: "ready" as const,
+        error_code: null,
+        error_message: null,
+        ingestion_meta: {},
+        created_at: "2026-07-30T00:00:00Z",
+        updated_at: "2026-07-30T00:00:00Z",
+        expires_at: "2026-08-06T00:00:00Z",
+        deduplicated: false,
+      },
+      {
+        file_id: "file-two",
+        original_filename: "two.txt",
+        mime_type: "text/plain",
+        size_bytes: 3,
+        status: "ready" as const,
+        error_code: null,
+        error_message: null,
+        ingestion_meta: {},
+        created_at: "2026-07-30T00:00:00Z",
+        updated_at: "2026-07-30T00:00:00Z",
+        expires_at: "2026-08-06T00:00:00Z",
+        deduplicated: false,
+      },
+    ];
+    vi.mocked(uploadFiles).mockResolvedValue(uploaded);
+    render(<AttachmentStrip entitlements={entitlements} plans={plansFixture()} />);
+    const selected = [
+      new File(["one"], "one.txt", { type: "text/plain" }),
+      new File(["two"], "two.txt", { type: "text/plain" }),
+    ];
+
+    fireEvent.change(document.querySelector("#attachmentInput")!, {
+      target: { files: selected },
+    });
+
+    await waitFor(() => expect(useChatStore.getState().attachments).toHaveLength(2));
+    expect(uploadFiles).toHaveBeenCalledTimes(1);
+    expect(uploadFiles).toHaveBeenCalledWith(selected, {
+      provider: "openai",
+      model: "gpt-5.1",
+    });
   });
 
   it("keeps allowance details and denial actions available at a phone viewport", () => {

@@ -67,6 +67,22 @@ python scripts/db_mode_smoke.py
 3. Apply the same migration to production.
 4. Deploy API code that depends on new schema.
 
+For the current subscription/Cortex release, apply these additive scripts in
+this exact order before starting the new API:
+
+```powershell
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
+```
+
+The `20260727` script alters `llm_requests`, so the migration connection must
+own that table. The later unified-credit and activity scripts depend on the
+`20260718` billing foundation. PostgreSQL startup validates the complete table
+and column contract and exits before serving provider traffic if any script is
+missing.
+
 For breaking/large migrations:
 
 1. Expand schema first (backward compatible).
@@ -111,6 +127,16 @@ LIMIT 20;
 
 SELECT id, request_group_id, source_fingerprint, created_at
 FROM cortex_analysis_runs
+ORDER BY created_at DESC
+LIMIT 20;
+
+SELECT id, request_id, state, last_activity_at
+FROM usage_reservations
+ORDER BY last_activity_at DESC
+LIMIT 20;
+
+SELECT request_id, operation_type, item_type, total_credits, metadata, created_at
+FROM credit_transactions
 ORDER BY created_at DESC
 LIMIT 20;
 ```
@@ -225,25 +251,48 @@ python -m pytest tests/test_credit_calculator.py tests/test_billing_repository.p
 BILLING_TEST_DATABASE_URL="postgresql+psycopg://..." python -m pytest tests/test_billing_postgres_integration.py -q
 ```
 
-### Atomic metering operations
+### Atomic metering and automatic cleanup
 
-Work Package 4 uses the existing `usage_counters` and `usage_reservations` tables; it does not require another migration. `server/billing/metering_service.py` reserves, settles, releases, and expires usage inside the caller-owned transaction. Keep these transactions short and commit the reservation before starting a provider call.
+Migration:
 
-Stale cleanup defaults to reservations older than 30 minutes and uses `SELECT ... FOR UPDATE SKIP LOCKED` before releasing counter quantities. No background scheduler is installed in this package; a future worker or operational task must call `expire_stale_reservations`. Inspect candidates without mutating them:
+`db/migrations/20260730_add_usage_reservation_activity.sql`
+
+Apply it after the unified-credit migration. It adds non-null
+`usage_reservations.last_activity_at` plus the state/activity index used by the
+cleanup worker. `server/billing/metering_service.py` reserves, supplements,
+settles, releases, and expires usage inside caller-owned transactions. Keep
+these transactions short and commit the reservation before starting a provider
+call.
+
+The API runs one cleanup cycle at startup and subsequent cycles every 300
+seconds by default. Active in-process reservations are persisted every 60
+seconds; cleanup considers a reservation stale after 1,800 seconds. Configure
+with `ENABLE_BILLING_RESERVATION_CLEANUP_WORKER`,
+`BILLING_RESERVATION_CLEANUP_INTERVAL_SECONDS`,
+`BILLING_RESERVATION_STALE_AFTER_SECONDS`, and
+`BILLING_RESERVATION_HEARTBEAT_INTERVAL_SECONDS`. Cleanup uses
+`SELECT ... FOR UPDATE SKIP LOCKED`, so concurrent application instances cannot
+release the same row twice. Inspect candidates without mutating them:
 
 ```sql
-SELECT id, billing_account_id, request_id, operation_type, created_at
+SELECT id, billing_account_id, request_id, operation_type, last_activity_at
 FROM public.usage_reservations
 WHERE state = 'reserved'
-  AND created_at < NOW() - INTERVAL '30 minutes'
-ORDER BY created_at;
+  AND last_activity_at < NOW() - INTERVAL '30 minutes'
+ORDER BY last_activity_at;
 ```
 
-Do not repair `reserved_quantity` with ad hoc SQL. Run the metering cleanup in a reviewed caller-owned unit of work so each reservation and every related counter transition remain atomic and auditable.
+Do not repair `reserved_quantity` with ad hoc SQL. Investigate worker logs
+(`billing.reservation_cleanup.*`) and restore the worker before considering a
+reviewed manual call to the same cleanup service.
 
 ### Ask and Compare enforcement deployment
 
-Work Package 5 also uses the existing billing tables and requires no new migration. Apply and verify `20260718_add_b2c_billing_foundation.sql` before deploying the WP5 API: database-mode `/v1/chat*` and `/v1/compare*` now create Free-plan reservations even while `BILLING_ENABLED=false`. A missing billing table therefore fails the request conservatively before any provider call.
+Apply and verify all four release migrations listed above before deploying the
+API. Database-mode Ask, Compare, Improve Prompt, and Cortex Analysis create
+unified-credit reservations even while `BILLING_ENABLED=false`. A missing
+billing table or required column fails PostgreSQL startup before any provider
+call.
 
 Work Package 8 also requires no new migration. Its verified Stripe webhook lifecycle uses the existing `billing_webhook_events`, `subscriptions`, `usage_periods`, and `usage_counters` columns from `20260718_add_b2c_billing_foundation.sql`. Apply and verify that migration before registering the Stripe webhook endpoint; otherwise verified events return a non-2xx response and remain retryable at Stripe.
 

@@ -24,14 +24,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from db import (  # noqa: E402
+from db import (
     SessionLocal,
     create_api_key,
     generate_api_key,
     get_table,
     upsert_api_key_settings,
 )
-from server import byok_service  # noqa: E402
+from server import byok_service
 
 
 def _ensure_database_url() -> None:
@@ -124,10 +124,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--email", required=True, help="Tenant owner email")
     parser.add_argument("--name", default="Startup Tenant", help="Tenant display name")
     parser.add_argument("--label", default="tenant-primary", help="API key label")
-    parser.add_argument("--api-key", default=None, help="Explicit API key (optional; generated if omitted)")
+    parser.add_argument(
+        "--api-key", default=None, help="Explicit API key (optional; generated if omitted)"
+    )
     parser.add_argument("--api-key-prefix", default="cortex", help="Prefix for generated API key")
 
-    parser.add_argument("--baseline-model-id", default=None, help="Baseline in provider:model format")
+    parser.add_argument(
+        "--baseline-model-id", default=None, help="Baseline in provider:model format"
+    )
     parser.add_argument("--baseline-provider", default=None, help="Baseline provider")
     parser.add_argument("--baseline-model", default=None, help="Baseline model")
     parser.add_argument("--requests-per-minute", type=int, default=None, help="Tenant RPM override")
@@ -137,7 +141,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--byok-deepseek", default=None, help="Optional BYOK DeepSeek API key")
     parser.add_argument("--byok-grok", default=None, help="Optional BYOK Grok API key")
 
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Base URL for printed examples")
+    parser.add_argument(
+        "--base-url", default="http://127.0.0.1:8000", help="Base URL for printed examples"
+    )
     return parser.parse_args(argv)
 
 
@@ -202,26 +208,24 @@ def main(argv: list[str] | None = None) -> int:
     print(f"email: {args.email}")
     print(f"label: {args.label}")
     print(f"baseline: {baseline_provider}:{baseline_model}")
-    print(f"requests_per_minute: {args.requests_per_minute if args.requests_per_minute is not None else '(default)'}")
+    print(
+        f"requests_per_minute: {args.requests_per_minute if args.requests_per_minute is not None else '(default)'}"
+    )
     print(f"byok_providers: {updated_byok if updated_byok else '[]'}")
     print()
     print("Use this API key header:")
     print(f"X-API-Key: {raw_api_key}")
     print()
     print("Quick curl checks:")
-    print(f"curl -H \"X-API-Key: {raw_api_key}\" {base_url}/v1/whoami")
+    print(f'curl -H "X-API-Key: {raw_api_key}" {base_url}/v1/whoami')
     print(
         "curl -X POST "
         f"{base_url}/v1/chat "
-        f"-H \"X-API-Key: {raw_api_key}\" "
-        "-H \"Content-Type: application/json\" "
-        f"-d '{{\"prompt\":\"hello from {args.email}\",\"provider\":\"openai\",\"model\":\"gpt-4o-mini\"}}'"
+        f'-H "X-API-Key: {raw_api_key}" '
+        '-H "Content-Type: application/json" '
+        f'-d \'{{"prompt":"hello from {args.email}","provider":"openai","model":"gpt-4o-mini"}}\''
     )
-    print(
-        "curl -H "
-        f"\"X-API-Key: {raw_api_key}\" "
-        f"\"{base_url}/v1/usage?group_by=day\""
-    )
+    print("curl -H " f'"X-API-Key: {raw_api_key}" ' f'"{base_url}/v1/usage?group_by=day"')
     print()
     print("Reminder: ensure API_KEYS in your server environment includes this key.")
     return 0

@@ -147,7 +147,7 @@ describe("BillingPageContent", () => {
       "124000",
     );
 
-    await user.click(screen.getByRole("button", { name: "Manage plan" }));
+    await user.click(screen.getByRole("button", { name: "Manage subscription" }));
     expect(onPortal).toHaveBeenCalledTimes(1);
   });
 
@@ -162,7 +162,18 @@ describe("BillingPageContent", () => {
     expect(screen.getByText("FREE PLAN")).toBeInTheDocument();
     expect(screen.getByText(/paid billing is unavailable/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Billing unavailable" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage subscription" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the backend-authorized Portal action visible when can_manage is true", () => {
+    renderBilling({
+      loggedIn: true,
+      plans: plansResponse(false),
+      subscription: { ...subscriptionResponse("plus"), can_manage: true },
+      entitlements: entitlementsResponse("plus"),
+    });
+
+    expect(screen.getByRole("button", { name: "Manage subscription" })).toBeInTheDocument();
   });
 
   it("shows the grace deadline and Update payment action for past-due plans", async () => {
@@ -176,8 +187,48 @@ describe("BillingPageContent", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent("before July 21, 2026");
-    await user.click(screen.getByRole("button", { name: "Update payment" }));
+    await user.click(screen.getByRole("button", { name: "Update payment method" }));
     expect(onPortal).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["past_due", "unpaid", "incomplete"] as const)(
+    "keeps payment recovery visible for effective-Free %s subscriptions",
+    async (status) => {
+      const user = userEvent.setup();
+      const onPortal = vi.fn();
+      renderBilling({
+        loggedIn: true,
+        subscription: {
+          ...subscriptionResponse("free", status),
+          provider: "stripe",
+          can_manage: true,
+        },
+        entitlements: entitlementsResponse("free", status),
+        onPortal,
+      });
+
+      expect(screen.getByText("FREE PLAN")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Update payment method" }));
+      expect(onPortal).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("shows subscription management for active Pro and scheduled cancellation", () => {
+    const { rerender } = renderBilling({
+      loggedIn: true,
+      subscription: subscriptionResponse("pro"),
+      entitlements: entitlementsResponse("pro"),
+    });
+    expect(screen.getByRole("button", { name: "Manage subscription" })).toBeInTheDocument();
+
+    rerender(
+      billingElement({
+        loggedIn: true,
+        subscription: { ...subscriptionResponse("pro"), cancel_at_period_end: true },
+        entitlements: entitlementsResponse("pro", "active", true),
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Manage subscription" })).toBeInTheDocument();
   });
 
   it("renders cancellation-at-period-end and fully cancelled lifecycle states", () => {

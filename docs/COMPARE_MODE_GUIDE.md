@@ -15,7 +15,7 @@ This guide covers both:
 - Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
 - Browser Cortex Analysis, an on-demand synthesis of two or three completed Compare responses.
 
-## Cortex Analysis Prototype (2026-07-27)
+## Cortex Analysis
 
 - After at least two Compare responses complete successfully, the browser offers `Analyze responses with Cortex` below the model answers.
 - The analysis runs only when requested. `gpt-5.4-mini` is the default analysis model and can be changed with `CORTEX_ANALYSIS_MODEL`.
@@ -30,8 +30,16 @@ This guide covers both:
 - Re-running Cortex Analysis temporarily hides the previous combined result and
   shows only the processing state. A failed re-run restores the saved result
   alongside the retry state.
-- The prototype deliberately has no subscription, tier, credit, trial, upgrade, or automatic-analysis behavior.
-- Required migration: `db/migrations/20260727_add_cortex_analysis_runs.sql`.
+- Each analysis or re-analysis is a synthesized model call charged against the
+  unified AI-credit wallet. The reservation includes the Compare question and
+  successful source responses plus the analysis output ceiling. Reused Compare
+  research does not add a second Tavily charge, and there is no separate Cortex
+  quota. Saved runs stay readable after downgrade.
+- The required subscription/Cortex migrations are
+  `20260718_add_b2c_billing_foundation.sql`,
+  `20260727_add_cortex_analysis_runs.sql`,
+  `20260729_add_unified_ai_credits.sql`, and
+  `20260730_add_usage_reservation_activity.sql`, applied in that order.
 
 The API accepts two or three explicit targets. Subscription enforcement may reduce the effective maximum: Free and Plus allow two targets, while Pro allows three. The four-provider examples below describe the legacy CLI `COMPARE_MODE=true` flow, not the FastAPI request limit.
 
@@ -49,8 +57,8 @@ In database-backed API mode, all target/model entitlements and monthly counters 
   - mapped key owner is authoritative
   - unmapped key behavior controlled by `AUTO_REGISTER_UNMAPPED_API_KEYS` and `ALLOW_UNMAPPED_API_KEY_PERSIST`
 - Required DB migrations for compare persistence:
-  - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
   - `db/migrations/20260218_add_request_group_id_to_llm_requests.sql`
+  - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
 
 ## How to Enable Compare Mode
 

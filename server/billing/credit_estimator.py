@@ -12,7 +12,7 @@ from server.billing.credit_calculator import (
     calculate_credit_charge,
 )
 
-DEFAULT_MAX_OUTPUT_TOKENS = 4_096
+DEFAULT_MAX_OUTPUT_TOKENS = 2_048
 
 
 @dataclass(frozen=True)

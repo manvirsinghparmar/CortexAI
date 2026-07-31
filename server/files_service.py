@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,9 @@ from server.object_storage import (
     ObjectStorageOperationError,
     get_object_storage,
 )
+from server.billing.plan_catalog import get_plan_catalog
+from server.billing.subscription_service import resolve_effective_subscription
+from orchestrator.model_registry import ModelRegistry
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +41,17 @@ API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _db_uow = persistence_service.db_uow
 _resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
 _resolve_identity = persistence_service.resolve_identity
+
+
+@dataclass(frozen=True)
+class UploadPolicy:
+    user_id: UUID
+    plan_code: str
+    max_files: int
+    max_file_bytes: int
+    platform_max_files: int
+    platform_max_file_bytes: int
+
 
 DEFAULT_ALLOWED_MIME_TYPES = (
     "image/jpeg",
@@ -113,11 +128,7 @@ def _allowed_mime_types() -> set[str]:
     raw = str(os.getenv("ATTACHMENTS_ALLOWED_MIME_TYPES", "") or "").strip()
     if not raw:
         return set(DEFAULT_ALLOWED_MIME_TYPES)
-    parsed = {
-        part.strip().lower()
-        for part in raw.split(",")
-        if part and part.strip()
-    }
+    parsed = {part.strip().lower() for part in raw.split(",") if part and part.strip()}
     return parsed or set(DEFAULT_ALLOWED_MIME_TYPES)
 
 
@@ -216,9 +227,18 @@ def _get_client_safe_upload_error_message(
         return None
 
     lowered = raw.lower()
-    if "payload too large" in lowered or "request entity too large" in lowered or "too large" in lowered:
+    if (
+        "payload too large" in lowered
+        or "request entity too large" in lowered
+        or "too large" in lowered
+    ):
         return "Upload failed. This file is too large."
-    if "unsupported" in lowered or "mime type" in lowered or "file type" in lowered or "media type" in lowered:
+    if (
+        "unsupported" in lowered
+        or "mime type" in lowered
+        or "file type" in lowered
+        or "media type" in lowered
+    ):
         return "Upload failed. This file type is not supported."
     if "timeout" in lowered or "timed out" in lowered:
         return "Upload failed because the request timed out. Please try again."
@@ -264,6 +284,97 @@ def _attachment_ttl_hours() -> int:
 
 def _max_upload_bytes() -> int:
     return _parse_positive_int_env("ATTACHMENTS_MAX_FILE_BYTES", default=20 * 1024 * 1024)
+
+
+def _max_upload_files() -> int:
+    return _parse_positive_int_env("ATTACHMENTS_MAX_FILES_PER_REQUEST", default=5)
+
+
+def resolve_upload_policy(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    provider: str | None = None,
+    model: str | None = None,
+) -> UploadPolicy:
+    """Resolve plan/platform/provider upload ceilings before object storage."""
+
+    _assert_feature_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        effective = resolve_effective_subscription(db_session, resolution.user_id)
+
+    platform_max_files = _max_upload_files()
+    platform_max_bytes = _max_upload_bytes()
+    max_files = min(effective.plan.limits.max_files_per_request, platform_max_files)
+    max_bytes = min(effective.plan.limits.max_file_bytes, platform_max_bytes)
+
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip()
+    if normalized_provider and normalized_model:
+        candidate = ModelRegistry.from_yaml().find_model(normalized_provider, normalized_model)
+        if candidate is not None and candidate.enabled:
+            if candidate.max_attachments_per_request is not None:
+                max_files = min(max_files, candidate.max_attachments_per_request)
+            if candidate.max_attachment_bytes is not None:
+                max_bytes = min(max_bytes, candidate.max_attachment_bytes)
+
+    return UploadPolicy(
+        user_id=resolution.user_id,
+        plan_code=effective.plan.code,
+        max_files=max_files,
+        max_file_bytes=max_bytes,
+        platform_max_files=platform_max_files,
+        platform_max_file_bytes=platform_max_bytes,
+    )
+
+
+def required_plan_for_upload(*, file_count: int, max_file_bytes: int) -> str | None:
+    for plan in get_plan_catalog().list_plans():
+        if (
+            plan.limits.max_files_per_request >= file_count
+            and plan.limits.max_file_bytes >= max_file_bytes
+        ):
+            return plan.code
+    return None
+
+
+def rollback_batch_upload(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    file_id: UUID,
+) -> None:
+    """Best-effort object removal for a newly created partial batch item."""
+
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        row = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+        )
+        if row is None:
+            return
+        storage_key = str(row.get("storage_key") or "").strip()
+        if storage_key:
+            get_object_storage().delete_object(key=storage_key)
+        update_uploaded_file_status(
+            db_session,
+            file_id=file_id,
+            status="deleted",
+            error_code="batch_upload_rolled_back",
+            error_message="Upload batch did not complete.",
+        )
 
 
 def _sync_ingest_timeout_seconds() -> int:
@@ -351,9 +462,7 @@ def _run_sync_ingestion(
                 ),
                 "artifact_meta": dict(artifact_meta) if isinstance(artifact_meta, dict) else {},
                 "cached_extracted_text": str(
-                    artifact.get("extracted_source_text")
-                    or artifact.get("extracted_text")
-                    or ""
+                    artifact.get("extracted_source_text") or artifact.get("extracted_text") or ""
                 ),
             },
         )
@@ -371,9 +480,11 @@ def _run_sync_ingestion(
                     "effective_transform_mode": str(
                         artifact.get("effective_transform_mode") or "text_only"
                     ),
-                    "chunk_count": int((artifact_meta or {}).get("chunk_count") or 0)
-                    if isinstance(artifact_meta, dict)
-                    else 0,
+                    "chunk_count": (
+                        int((artifact_meta or {}).get("chunk_count") or 0)
+                        if isinstance(artifact_meta, dict)
+                        else 0
+                    ),
                 }
             },
         )
@@ -567,6 +678,7 @@ def upload_user_file(
     filename: str,
     mime_type: str,
     payload: bytes,
+    max_file_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Validate, store, and persist attachment metadata for one authenticated user file."""
     _assert_feature_enabled(request_id=request_id)
@@ -626,7 +738,10 @@ def upload_user_file(
             },
         )
 
-    max_file_bytes = _max_upload_bytes()
+    effective_max_file_bytes = min(
+        _max_upload_bytes(),
+        max_file_bytes if max_file_bytes is not None else _max_upload_bytes(),
+    )
     if not payload:
         logger.warning(
             "Attachment upload rejected: empty payload",
@@ -643,7 +758,7 @@ def upload_user_file(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "empty_file", "message": "Uploaded file is empty."},
         )
-    if len(payload) > max_file_bytes:
+    if len(payload) > effective_max_file_bytes:
         logger.warning(
             "Attachment upload rejected: file too large",
             extra={
@@ -653,7 +768,7 @@ def upload_user_file(
                     "mime_type": normalized_mime,
                     "filename_hash": _hash_for_logs(filename),
                     "size_bytes": len(payload),
-                    "max_file_bytes": max_file_bytes,
+                    "max_file_bytes": effective_max_file_bytes,
                 }
             },
         )
@@ -661,8 +776,8 @@ def upload_user_file(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail={
                 "code": "file_too_large",
-                "message": f"File exceeds ATTACHMENTS_MAX_FILE_BYTES ({max_file_bytes}).",
-                "max_file_bytes": max_file_bytes,
+                "message": f"File exceeds the allowed size ({effective_max_file_bytes} bytes).",
+                "max_file_bytes": effective_max_file_bytes,
             },
         )
 
@@ -862,13 +977,15 @@ def upload_user_file(
 
             if ingestion_required:
                 if len(payload) <= _sync_ingest_inline_max_bytes():
-                    sync_status, sync_meta, sync_error_code, sync_error_message = _run_sync_ingestion(
-                        payload=payload,
-                        normalized_mime=normalized_mime,
-                        filename=normalized_filename,
-                        base_meta=ingestion_meta,
-                        request_id=request_id,
-                        file_id=uploaded_file_id,
+                    sync_status, sync_meta, sync_error_code, sync_error_message = (
+                        _run_sync_ingestion(
+                            payload=payload,
+                            normalized_mime=normalized_mime,
+                            filename=normalized_filename,
+                            base_meta=ingestion_meta,
+                            request_id=request_id,
+                            file_id=uploaded_file_id,
+                        )
                     )
                     update_uploaded_file_status(
                         db_session,
@@ -897,7 +1014,9 @@ def upload_user_file(
                         {
                             "ingestion_state": "processing",
                             "deferred_reason": "size_exceeds_sync_inline_limit",
-                            "deferred_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "deferred_at": datetime.now(timezone.utc)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
                         },
                     )
                     update_uploaded_file_status(

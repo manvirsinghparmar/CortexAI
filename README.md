@@ -198,10 +198,10 @@ COGNITO_SSL_VERIFY=true            # set false to skip TLS verification for Cogn
 - Keep both files in sync when provider pricing changes.
 - Smart-routing tiers (`T0`-`T3`) and consumer model access categories (`economical`, `standard`, `advanced`, `premium`) are separate controls. Every configured model must declare an access category, input/output credit multipliers, a customer-facing credit-usage label, and a pricing version; missing or unknown values fail registry loading.
 - The current plan catalogue defines server-owned Free, Plus, and Pro prices, entitlements, allowances, and safety limits. `server/billing/subscription_service.py` resolves a database-backed effective plan, applies the lifecycle/grace policy, and creates the matching usage period. `server/billing/entitlement_service.py` exposes feature/model/file decisions and exact reservation quantities without mutating counters.
-- `server/billing/metering_service.py` atomically reserves, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and stale cleanup defaults to reservations older than 30 minutes.
+- `server/billing/metering_service.py` atomically reserves, supplements, partially settles, releases, and expires allowance reservations inside a caller-owned transaction. Idempotency keys are scoped to a billing account, counter rows are locked in deterministic order, terminal transitions are repeat-safe, and the API runs concurrency-safe stale cleanup at startup and every five minutes by default while heartbeat activity protects live requests.
 - `BILLING_ENABLED=false` is the safe default and resolves every account to Free. It keeps Stripe lazy and makes Checkout, Portal, and webhook routes return `503 billing_not_configured` without requiring Stripe credentials. A local-only `DEV_SUBSCRIPTION_PLAN` override is ignored when billing is enabled or the runtime is not explicitly local/development.
 - When billing is enabled, startup validates the Stripe secret key, webhook signing secret, every paid plan's configured Price ID, all backend redirect URLs, and any explicit API version. The client can submit only `plan_code` and `billing_period`; extra Price, amount, currency, Customer, or redirect fields are rejected. `POST /v1/billing/webhook` verifies the exact raw body and `Stripe-Signature`, stores provider event IDs idempotently, synchronizes Checkout/subscription/invoice lifecycle events, rejects stale snapshots, applies payment grace and cancellation policy, and creates each paid usage period once. Verified webhook state is authoritative for paid access.
-- DB-mode Ask, Compare, Optimize, Cortex Analysis, and attachment-backed generation use one short reserve/settle/release lifecycle. A preflight estimate reserves AI credits before provider work; settlement charges each successful model by actual input/output tokens and configured multipliers, then releases the unused estimate. Missing provider usage is conservatively estimated and marked in the reconciliation ledger. Advanced Web Search adds a fixed 15,000 credits once per performed retrieval; Compare shares research and charges only successful targets; file upload itself is free. `/v1/optimize` and Cortex Analysis are separate model calls and are charged once per successful provider attempt. Smart-routing tiers (`T0`-`T3`) remain independent from model access categories.
+- DB-mode Ask, Compare, Optimize, Cortex Analysis, and attachment-backed generation use one short reserve/settle/release lifecycle. A preflight estimate reserves AI credits before provider work; settlement charges each successful model by actual input/output tokens and configured multipliers, then releases the unused estimate. If actual usage is higher, settlement atomically supplements the reservation when capacity exists; otherwise it bills only the authorized amount, never makes the wallet negative, and records the unbilled difference as a reconciliation adjustment without discarding the answer. Advanced Web Search adds a fixed 15,000 credits once per performed retrieval; Compare and Cortex reuse existing Compare research without a second retrieval charge. Improve Prompt reserves every configured provider attempt. Smart Routing ranks plan-allowed candidates, removes unaffordable candidates, reserves the first appropriate affordable candidate using materialized input plus the clamped output ceiling, and requires supplemental authorization before a more expensive fallback. No percentage buffer is added.
 - Current pricing tables were refreshed on `2026-03-02`.
 - Validation command:
 ```bash
@@ -334,7 +334,7 @@ Frontend runtime config (`/runtime-config.js`):
 - React Smart, Web/With sources, and Improve chips expose concise guidance through accessible tooltips. Enabled chips use a theme-aware high-contrast fill, label, and accent ring so their state remains clear in light and dark themes. Compare's With sources and Improve controls use the same background, border, label, and shadow treatment whenever they share the same toggle state. Tooltips open on pointer hover or keyboard focus and stay within narrow viewports. On touch screens, the same tap toggles the chip and shows its tooltip for two seconds.
 - On mobile answer screens, the follow-up composer rests as a docked pill above the fixed Ask/Compare/History navigation. The pill shows the current routing context and opens the bottom sheet on tap; that same tap focuses the textarea and places the cursor at the end of any draft so typing can begin immediately. The expanded sheet keeps attachment chips, routing controls, and the fixed-size send action clear of the tab bar. Answer transcripts reserve enough bottom scroll clearance for response copy, regenerate, and feedback actions to remain reachable above the dock.
 - Mobile exposes one persistent square-pen action in the header for starting a new session from Ask, Compare, or History. It cancels active generation, clears the current thread, returns to chat, and preserves the selected mode; History does not duplicate this action.
-- React file upload uses the current raw-byte `POST /v1/files/upload` contract, polls `GET /v1/files/{file_id}` while uploads are processing, and sends attachment IDs on Ask/Compare requests.
+- React file selection uses one multipart `POST /v1/files/upload-batch` request so the backend can authenticate and enforce the complete plan/platform file count and per-file size before storing the first object. The legacy raw-byte `POST /v1/files/upload` remains available for one-file clients. React polls `GET /v1/files/{file_id}` while uploads are processing and sends attachment IDs on Ask/Compare requests.
 - Compare response cards use compact footers while the compare summary bar carries aggregate tokens, usage, and success counts. Completed duration, token, and cost metrics render as a packed mono strip with abbreviated values (`s`, `tok`, dollars); fastest/cheapest winners get the success tint, with the text label shown only where desktop space allows.
 - Mobile and desktop response cards show completed duration, token, and cost metadata directly in the header without a run-details chevron. Pending and failed cards keep their muted elapsed/status line visible on mobile and desktop. Response-card duration uses the same UI-observed elapsed timing when live timestamps are available, falls back to API `latency_ms` for restored rows, and unavailable token counts stay hidden instead of rendering zero-token placeholders.
 - The latest completed Ask response can render deterministic suggested follow-up chips when the assistant ends with clear offered options, one concrete follow-up offer, or a quoted follow-up query. The row lives inside `ResponseCard` below the answer body and above the response action toolbar; tapping a chip sends that chip text as a new follow-up turn through the normal chat streaming path while skipping the Improve prompt-optimization flow and preserving any composer draft.
@@ -421,6 +421,7 @@ Response includes:
 - `GET /v1/providers`
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
+- `POST /v1/files/upload-batch`
 - `GET /v1/files/{file_id}`
 - `POST /v1/client-diagnostics`
 - `POST /v1/chat`
@@ -477,7 +478,7 @@ The monthly plan budgets are Free 100,000, Plus 1,000,000, and Pro 3,000,000 AI 
 
 Ask and Compare enforcement is backend-authoritative in database mode. Feature/model denials happen before provider execution and return structured `403`; insufficient credits return `402 insufficient_credits` with required and remaining credit values; request-rate exhaustion returns `429`; unsafe billing configuration returns a provider-safe `500`. Compare accepts two or three targets at the platform boundary; Free and Plus allow two, while Pro allows three. Streaming reservations are finalized inside the response generator: successful output settles actual credits, disconnects before output release them, performed research still settles once, and Compare partially settles only successful targets.
 
-Smart Ask receives `allowed_billing_classes` as a routing constraint. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's access categories are removed. Preflight reserves the worst-case credit estimate among allowed Smart candidates and settlement charges only the model actually used.
+Smart Ask receives `allowed_billing_classes` and an affordability-filtered model list as routing constraints. The router still chooses by its independent `T0`-`T3` tier logic, but candidates outside the effective plan's access categories or remaining wallet are removed. Preflight reserves the first appropriate affordable candidate using materialized input, bounded tool context, and the full clamped output ceiling; a more expensive fallback must supplement that reservation before invocation. Settlement charges only billable provider usage.
 
 ### Stripe Checkout and Customer Portal
 
@@ -534,7 +535,12 @@ To enable "Sign in with Google" via Amazon Cognito:
 
 ## Attachment Upload Contract (Current)
 
-`POST /v1/files/upload` accepts raw bytes in the request body.
+`POST /v1/files/upload` accepts one file as raw bytes. Browser multi-file
+selection uses `POST /v1/files/upload-batch` with repeated multipart field
+`files`. The batch route validates the complete selection against the effective
+plan, platform ceiling, MIME allowlist, and known provider capability before
+the first S3 write. If a later storage operation fails, newly created objects
+from that batch are rolled back.
 
 In DB mode, upload access and the plan per-file limit are enforced from the authenticated user's server-resolved plan. Upload and storage are free; credits are charged only when a model processes file context as part of a billable generation.
 
@@ -621,7 +627,7 @@ For Ask (`/v1/chat`, `/v1/chat/stream`) requests:
 Prompt optimization (`/v1/optimize`):
 - disabled by default unless `ENABLE_PROMPT_OPTIMIZATION=true`
 - this explicit endpoint is the UI optimization path; chat/compare do not auto-optimize by default
-- in DB mode, the explicit endpoint checks `prompt_improvement_enabled`, reserves a conservative GPT-4.1 mini credit estimate before optimizer setup, and settles each provider attempt that actually returns billable usage
+- in DB mode, the explicit endpoint checks `prompt_improvement_enabled`, reserves every configured GPT-4.1 mini optimizer attempt before setup, and settles each attempt that actually returns billable usage
 - Improve Prompt counts as one submitted user action against the effective plan's requests-per-minute limit
 - a later Ask/Compare submission of the returned prompt is a separate model call and uses the normal Ask/Compare credit calculation; it does not duplicate the optimizer charge
 - optional orchestrator-level auto-optimization for chat/compare requires `ENABLE_ORCHESTRATOR_PROMPT_OPTIMIZATION=true`
@@ -694,9 +700,10 @@ For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 
 ## Cortex Analysis
 
-Cortex Analysis is an on-demand synthesis layer below completed browser Compare responses. It is functional independently of subscription, tier, credit, trial, or upgrade rules.
+Cortex Analysis is an on-demand synthesized model call below completed browser Compare responses. It consumes the same unified monthly AI-credit wallet and has no separate Cortex quota.
 
 - `POST /v1/compare/{request_group_id}/analysis` analyzes the latest successful revisions from two or three responses with `CORTEX_ANALYSIS_MODEL` (default `gpt-5.4-mini`) and returns `201`.
+- Before invoking the model, the route resolves the effective plan, verifies model access, and reserves for the Compare question, source responses, and a clamped 1,800-token output ceiling. Successful actual input/output usage settles the reservation; generation failure releases it. Each re-run is a new billable model call.
 - Provider/model identities are removed before the analysis model receives
   shuffled `Response A/B/C` content. After generation, the server replaces
   those anonymous labels with the real provider display names in every
@@ -709,7 +716,7 @@ Cortex Analysis is an on-demand synthesis layer below completed browser Compare 
 - `GET /v1/compare/analysis-runs` requires either `session_id` or `request_group_id` and returns every owned run newest-first.
 - Each run snapshots exact source `requestId` and `responseVersion` values. If a source response is regenerated later, earlier analyses remain readable and return `isStale: true`; the browser offers an explicit update action.
 - Reloading or reopening a history thread hydrates its Compare transcript and all saved Cortex Analysis runs. The result area defaults to the newest run and exposes older runs through Analysis history.
-- Analysis starts only after a user action and only when at least two Compare responses succeeded. There is no automatic synthesis, subscription gate, credit counter, or Cortex-only mobile tab.
+- Analysis starts only after a user action and only when at least two Compare responses succeeded. Existing Compare research context is reused without another 15,000-credit retrieval charge. Saved runs stay readable after downgrade; a new run can still be denied if its configured model is no longer allowed or the unified wallet has insufficient credits. There is no automatic synthesis, separate Cortex quota, or Cortex-only mobile tab.
 
 Apply `db/migrations/20260727_add_cortex_analysis_runs.sql` with a database role
 that owns `llm_requests` before deploying this behavior, then restart the API so
@@ -989,20 +996,16 @@ These artifacts are intentionally separate so frontend-only or API-only changes 
 ## DB Migration Runbook
 
 - See `docs/runbooks/db-migrations.md` for migration authoring, apply order, rollback strategy, and verification checks.
-- Apply the additive B2C billing foundation before deploying code that imports `db/billing_repository.py`:
+- Apply the required subscription and Cortex migrations in this deterministic order before deploying the API:
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_add_b2c_billing_foundation.sql
-```
-
-- The migration creates only `billing_accounts`, `subscriptions`, `usage_periods`, `usage_counters`, `usage_reservations`, and `billing_webhook_events`, plus their constraints and indexes. It does not alter `users`, chat history, or existing LLM request/response tables.
-- Apply the Cortex Analysis migration with an owner/admin connection before deploying analysis routes, then restart the API so reflected metadata includes the new columns and table:
-
-```bash
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 ```
 
-- This migration adds append-only Compare response revision columns to `llm_requests` and creates `cortex_analysis_runs`. The normal application role may not own `llm_requests`, so use a migration role with table ownership and schema `CREATE` permission.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs and therefore needs a role that owns `llm_requests`; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` counter contract; `20260730` adds reservation heartbeats used by automatic stale cleanup. The scripts are additive/idempotent. Restart the API after apply. PostgreSQL startup now validates every required billing table/column and exits with a clear migration error before any provider call when the schema is incomplete.
 
 ## Release Gate
 
@@ -1199,6 +1202,9 @@ OpenAIProject/
       20260222_go_live_hardening.sql
       20260320_add_attachments_foundation.sql
       20260718_add_b2c_billing_foundation.sql
+      20260727_add_cortex_analysis_runs.sql
+      20260729_add_unified_ai_credits.sql
+      20260730_add_usage_reservation_activity.sql
     repository.py
     session.py
     tables.py

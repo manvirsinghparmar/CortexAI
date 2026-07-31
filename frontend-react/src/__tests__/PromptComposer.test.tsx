@@ -14,7 +14,7 @@ import { useChatStore } from "../store/chatStore";
 import type { FileUploadResponse } from "../types";
 
 vi.mock("../api/files", () => ({
-  uploadFile: vi.fn(),
+  uploadFiles: vi.fn(),
   deleteFile: vi.fn().mockResolvedValue(undefined),
   fetchFileStatus: vi.fn(),
 }));

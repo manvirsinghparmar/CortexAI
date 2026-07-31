@@ -14,6 +14,7 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 
 from api.base_client import BaseAIClient
@@ -917,6 +918,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         allowed_billing_classes = raw.get("allowed_billing_classes")
         if isinstance(allowed_billing_classes, str):
             allowed_billing_classes = [allowed_billing_classes]
+        allowed_models = raw.get("allowed_models")
+        if isinstance(allowed_models, str):
+            allowed_models = [allowed_models]
 
         return RoutingConstraints(
             max_cost_usd=raw.get("max_cost_usd"),
@@ -924,6 +928,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             preferred_provider=raw.get("preferred_provider"),
             allowed_providers=allowed_providers,
             allowed_billing_classes=allowed_billing_classes,
+            allowed_models=allowed_models,
             min_context_limit=raw.get("min_context_limit"),
             json_only=bool(raw.get("json_only", False)),
             strict_format=bool(raw.get("strict_format", False)),
@@ -1019,6 +1024,63 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         except Exception:
             logger.exception("preview_smart_target() failed")
             return None
+
+    def plan_smart_targets(
+        self,
+        *,
+        prompt: str,
+        context: UserContext | None = None,
+        routing_mode: str = "smart",
+        routing_constraints: dict[str, Any] | None = None,
+        provider_api_keys: dict[str, str] | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the ordered provider/model plan without invoking providers."""
+
+        if not self._smart_router or not self._model_registry or not self._selector:
+            return ()
+        constraints = self._build_routing_constraints(routing_constraints)
+        constraints = self._constrain_to_routable_providers(
+            constraints,
+            provider_api_keys=provider_api_keys,
+        )
+        if constraints.allowed_providers == []:
+            return ()
+        features, tier, ordered, _metadata = self._smart_router.route_once_plan(
+            prompt=prompt,
+            context=context,
+            routing_mode=(routing_mode or "smart").lower().strip() or "smart",
+            constraints=constraints,
+            runtime_messages=None,
+        )
+        planned: list[ModelCandidate] = list(ordered)
+        tier_order = [
+            Tier(value)
+            for value in self._model_registry.routing_defaults().get(
+                "tier_order",
+                ["T0", "T1", "T2", "T3"],
+            )
+        ]
+        initial_index = tier_order.index(tier)
+        fallback_tiers = [
+            *reversed(tier_order[:initial_index]),
+            *tier_order[initial_index + 1 :],
+        ]
+        for fallback_tier in fallback_tiers:
+            candidates = self._model_registry.get_candidates(fallback_tier, constraints)
+            if not candidates:
+                continue
+            selection = self._selector.select(features, candidates, constraints)
+            planned.extend([selection.primary_candidate, *selection.fallback_candidates])
+
+        result: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in planned:
+            key = (candidate.provider, candidate.model_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return tuple(result)
 
     def _validate_explicit_model_selection(
         self, model_type: str | None, model_name: str | None
@@ -1193,6 +1255,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         routing_mode: str,
         routing_constraints: RoutingConstraints | None,
         provider_api_keys: dict[str, str] | None = None,
+        candidate_authorizer: Callable[[str, str], bool] | None = None,
         **kwargs,
     ) -> UnifiedResponse:
         if not self._smart_router or not self._model_registry or not self._validator:
@@ -1274,6 +1337,32 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 continue
 
             candidate = current_candidates.pop(0)
+            if candidate_authorizer is not None:
+                try:
+                    authorized = candidate_authorizer(
+                        candidate.provider,
+                        candidate.model_name,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Smart candidate credit authorization failed",
+                        extra={
+                            "extra_fields": {
+                                "provider": candidate.provider,
+                                "model": candidate.model_name,
+                            }
+                        },
+                    )
+                    authorized = False
+                if not authorized:
+                    routing_md.setdefault("credit_exclusions", []).append(
+                        {
+                            "provider": candidate.provider,
+                            "model": candidate.model_name,
+                            "reason": "supplemental_reservation_denied",
+                        }
+                    )
+                    continue
             resp = self._invoke_candidate(
                 candidate,
                 messages,
@@ -1386,6 +1475,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
             if not isinstance(provider_api_keys, dict):
                 provider_api_keys = {}
+            candidate_authorizer = kwargs.pop("_smart_candidate_authorizer", None)
             prepared_messages = kwargs.pop("_prepared_messages", None)
             prepared_research_metadata = kwargs.pop("_prepared_research_metadata", None)
             prepared_opt_metadata = kwargs.pop("_prepared_opt_metadata", None)
@@ -1484,6 +1574,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     routing_mode=routing_mode_norm,
                     routing_constraints=constraints,
                     provider_api_keys=provider_api_keys,
+                    candidate_authorizer=(
+                        candidate_authorizer if callable(candidate_authorizer) else None
+                    ),
                     **kwargs,
                 )
             else:

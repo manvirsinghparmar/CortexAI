@@ -48,6 +48,22 @@ class UsageReservation:
     released_at: datetime | None
 
 
+@dataclass(frozen=True)
+class StaleReservationExpiry:
+    inspected: int
+    released: int
+    credits_released: int
+
+
+@dataclass(frozen=True)
+class SupplementalSettlement:
+    reservation: UsageReservation
+    actual_quantity: int
+    billed_quantity: int
+    supplemented_quantity: int
+    unbilled_quantity: int
+
+
 def _required_text(value: str, field_name: str, *, max_length: int = 255) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -376,6 +392,202 @@ def settle_usage(
     return _to_reservation(persisted)
 
 
+def settle_usage_with_supplement(
+    db_session: Session,
+    *,
+    reservation_id: UUID,
+    actual_quantity: int,
+    allowance_limit: int,
+    meter: str = "ai_credits",
+) -> SupplementalSettlement:
+    """Settle actual usage, atomically supplementing an underestimate when possible."""
+
+    if isinstance(actual_quantity, bool) or actual_quantity < 0:
+        raise ValueError("actual_quantity must be a nonnegative integer")
+    if isinstance(allowance_limit, bool) or allowance_limit < 0:
+        raise ValueError("allowance_limit must be a nonnegative integer")
+
+    record = _locked_reservation(db_session, reservation_id)
+    state = str(record.get("state") or "")
+    requested = _record_quantities(record, "requested_quantities")
+    originally_reserved = int(requested.get(meter, 0))
+
+    if state == "settled":
+        settled = _record_quantities(record, "settled_quantities")
+        billed = int(settled.get(meter, 0))
+        return SupplementalSettlement(
+            reservation=_to_reservation(record),
+            actual_quantity=actual_quantity,
+            billed_quantity=billed,
+            supplemented_quantity=max(0, int(requested.get(meter, 0)) - originally_reserved),
+            unbilled_quantity=max(0, actual_quantity - billed),
+        )
+    if state != "reserved":
+        raise UsageReservationStateError(f"Cannot settle a reservation in state {state}")
+    if meter not in requested:
+        raise BillingConfigurationError(f"The reservation does not contain the {meter} meter")
+
+    counters = _lock_and_validate_counters(
+        db_session,
+        usage_period_id=cast(UUID, record["usage_period_id"]),
+        quantities=requested,
+        enforce_limits=False,
+    )
+    _validate_reserved_counters(counters, requested)
+    counter = next(item for item in counters if str(item["meter_key"]) == meter)
+    used = int(counter.get("used_quantity") or 0)
+    all_reserved = int(counter.get("reserved_quantity") or 0)
+    additional = max(0, actual_quantity - originally_reserved)
+    remaining = max(0, allowance_limit - used - all_reserved)
+    supplemented = 0
+
+    if additional and additional <= remaining:
+        try:
+            repository.reserve_usage_quantities(
+                db_session,
+                cast(UUID, record["usage_period_id"]),
+                {meter: additional},
+            )
+            requested = {**requested, meter: originally_reserved + additional}
+            record = repository.update_usage_reservation_requested_quantities(
+                db_session,
+                reservation_id=reservation_id,
+                requested_quantities=requested,
+            )
+            supplemented = additional
+            logger.info(
+                "Supplemental credit reservation succeeded",
+                extra={
+                    "extra_fields": {
+                        "event": "billing.supplemental_reservation.succeeded",
+                        "reservation_id": str(reservation_id),
+                        "reserved_credits": originally_reserved,
+                        "actual_credits": actual_quantity,
+                        "supplemental_credits": additional,
+                    }
+                },
+            )
+        except Exception as exc:
+            logger.exception(
+                "Supplemental credit reservation failed",
+                extra={
+                    "extra_fields": {
+                        "event": "billing.supplemental_reservation.failed",
+                        "reservation_id": str(reservation_id),
+                        "supplemental_credits": additional,
+                    }
+                },
+            )
+            raise BillingConfigurationError(
+                "Supplemental credit reservation could not be applied atomically"
+            ) from exc
+    elif additional:
+        logger.warning(
+            "Credit reservation underestimated actual usage",
+            extra={
+                "extra_fields": {
+                    "event": "billing.reservation_underestimate.insufficient_balance",
+                    "reservation_id": str(reservation_id),
+                    "reserved_credits": originally_reserved,
+                    "actual_credits": actual_quantity,
+                    "supplemental_credits_required": additional,
+                    "remaining_credits": remaining,
+                }
+            },
+        )
+
+    authorized = int(requested[meter])
+    billed = min(actual_quantity, authorized)
+    successful = {meter: billed} if billed else {}
+    try:
+        repository.settle_usage_quantities(
+            db_session,
+            cast(UUID, record["usage_period_id"]),
+            requested_quantities=requested,
+            successful_quantities=successful,
+        )
+        persisted = repository.settle_usage_reservation(
+            db_session,
+            billing_account_id=cast(UUID, record["billing_account_id"]),
+            request_id=str(record["request_id"]),
+            settled_quantities=successful,
+        )
+    except Exception as exc:
+        raise BillingConfigurationError("Usage could not be settled atomically") from exc
+
+    unbilled = max(0, actual_quantity - billed)
+    if unbilled:
+        logger.warning(
+            "Provider usage exceeded the safely billable amount",
+            extra={
+                "extra_fields": {
+                    "event": "billing.unbilled_provider_cost_adjustment",
+                    "reservation_id": str(reservation_id),
+                    "actual_credits": actual_quantity,
+                    "billed_credits": billed,
+                    "unbilled_credits": unbilled,
+                }
+            },
+        )
+    return SupplementalSettlement(
+        reservation=_to_reservation(persisted),
+        actual_quantity=actual_quantity,
+        billed_quantity=billed,
+        supplemented_quantity=supplemented,
+        unbilled_quantity=unbilled,
+    )
+
+
+def supplement_usage_reservation(
+    db_session: Session,
+    *,
+    reservation_id: UUID,
+    target_quantity: int,
+    allowance_limit: int,
+    meter: str = "ai_credits",
+) -> bool:
+    """Expand an active reservation to a target ceiling before provider fallback."""
+
+    if isinstance(target_quantity, bool) or target_quantity <= 0:
+        raise ValueError("target_quantity must be a positive integer")
+    record = _locked_reservation(db_session, reservation_id)
+    if str(record.get("state") or "") != "reserved":
+        raise UsageReservationStateError("Only active reservations can be supplemented")
+    requested = _record_quantities(record, "requested_quantities")
+    current = int(requested.get(meter, 0))
+    if target_quantity <= current:
+        return True
+    counters = _lock_and_validate_counters(
+        db_session,
+        usage_period_id=cast(UUID, record["usage_period_id"]),
+        quantities=requested,
+        enforce_limits=False,
+    )
+    _validate_reserved_counters(counters, requested)
+    counter = next(item for item in counters if str(item["meter_key"]) == meter)
+    used = int(counter.get("used_quantity") or 0)
+    all_reserved = int(counter.get("reserved_quantity") or 0)
+    additional = target_quantity - current
+    if additional > max(0, allowance_limit - used - all_reserved):
+        return False
+    try:
+        repository.reserve_usage_quantities(
+            db_session,
+            cast(UUID, record["usage_period_id"]),
+            {meter: additional},
+        )
+        repository.update_usage_reservation_requested_quantities(
+            db_session,
+            reservation_id=reservation_id,
+            requested_quantities={**requested, meter: target_quantity},
+        )
+    except Exception as exc:
+        raise BillingConfigurationError(
+            "Fallback credit reservation could not be supplemented atomically"
+        ) from exc
+    return True
+
+
 def release_usage(
     db_session: Session,
     *,
@@ -420,7 +632,7 @@ def expire_stale_reservations(
     db_session: Session,
     *,
     older_than: datetime | None = None,
-) -> int:
+) -> StaleReservationExpiry:
     """Release clearly stale reservations, defaulting to a 30-minute cutoff."""
     threshold = older_than or (datetime.now(UTC) - DEFAULT_RESERVATION_TTL)
     if threshold.tzinfo is None:
@@ -432,6 +644,7 @@ def expire_stale_reservations(
             older_than=threshold.astimezone(UTC),
         )
         expired = 0
+        credits_released = 0
         for record in stale:
             requested = _record_quantities(record, "requested_quantities")
             counters = _lock_and_validate_counters(
@@ -452,7 +665,12 @@ def expire_stale_reservations(
                 release_reason=_EXPIRY_REASON,
             )
             expired += 1
-        return expired
+            credits_released += sum(requested.values())
+        return StaleReservationExpiry(
+            inspected=len(stale),
+            released=expired,
+            credits_released=credits_released,
+        )
     except (ValueError, UsageReservationStateError):
         raise
     except Exception as exc:

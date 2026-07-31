@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { uploadFile, deleteFile, fetchFileStatus } from "../../api/files";
+import { uploadFiles, deleteFile, fetchFileStatus } from "../../api/files";
 import { CortexIcon } from "../shared/CortexIcon";
 import { useChatStore } from "../../store/chatStore";
 import styles from "./AttachmentStrip.module.css";
@@ -27,6 +27,9 @@ export function AttachmentStrip({
   const removeAttachment = useChatStore((s) => s.removeAttachment);
   const setError = useChatStore((s) => s.setError);
   const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
+  const mode = useChatStore((s) => s.mode);
+  const smartMode = useChatStore((s) => s.smartMode);
+  const selectedModelKey = useChatStore((s) => s.selectedModelKey);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = async (files: FileList | null) => {
@@ -44,20 +47,30 @@ export function AttachmentStrip({
       return;
     }
 
-    for (const file of selectedFiles) {
-      try {
-        const uploaded = await uploadFile(file);
+    try {
+      const separatorIndex = selectedModelKey.indexOf(":");
+      const selectedTarget =
+        mode === "single" && !smartMode && separatorIndex > 0
+          ? {
+              provider: selectedModelKey.slice(0, separatorIndex),
+              model: selectedModelKey.slice(separatorIndex + 1),
+            }
+          : undefined;
+      const uploadedFiles = selectedTarget
+        ? await uploadFiles(selectedFiles, selectedTarget)
+        : await uploadFiles(selectedFiles);
+      for (const uploaded of uploadedFiles) {
         addAttachment(uploaded);
         if (uploaded.status === "processing") {
           void pollAttachment(uploaded.file_id);
         }
-      } catch (err) {
-        const subscriptionError = toSubscriptionError(err, "Upload failed");
-        if (isSubscriptionDenial(subscriptionError)) {
-          setSubscriptionError(subscriptionError);
-        } else {
-          setError(err instanceof Error ? err.message : "Upload failed");
-        }
+      }
+    } catch (err) {
+      const subscriptionError = toSubscriptionError(err, "Upload failed");
+      if (isSubscriptionDenial(subscriptionError)) {
+        setSubscriptionError(subscriptionError);
+      } else {
+        setError(err instanceof Error ? err.message : "Upload failed");
       }
     }
     if (fileInputRef.current) fileInputRef.current.value = "";

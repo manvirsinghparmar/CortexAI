@@ -103,7 +103,7 @@ export function BillingPageContent({
   const paymentPastDue = isPaymentPastDue(status);
   const cancelled = isCancelled(status);
   const paidPlan = Boolean(plan && plan.code !== "free");
-  const canManage = Boolean(subscription?.can_manage && billingEnabled);
+  const canManage = Boolean(subscription?.can_manage);
   const periodEnd = plan?.renews_at ?? subscription?.current_period_end ?? null;
 
   return (
@@ -205,7 +205,7 @@ export function BillingPageContent({
                 </div>
               </div>
               <div className={styles.actionRow}>
-                {paidPlan && canManage ? (
+                {canManage ? (
                   <button
                     type="button"
                     className={styles.primaryButton}
@@ -215,8 +215,8 @@ export function BillingPageContent({
                     {action === "portal"
                       ? "Opening…"
                       : paymentPastDue
-                        ? "Update payment"
-                        : "Manage plan"}
+                        ? "Update payment method"
+                        : "Manage subscription"}
                   </button>
                 ) : null}
                 {!billingEnabled ? (

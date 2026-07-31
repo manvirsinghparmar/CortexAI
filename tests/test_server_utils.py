@@ -1,6 +1,7 @@
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server.utils import (
     clamp_max_tokens,
+    effective_output_token_limit,
     normalize_empty_success_response,
     redact_sensitive_headers,
     sanitize_provider_error_response,
@@ -38,6 +39,14 @@ def test_clamp_max_tokens_caps_at_server_limit():
 
 def test_clamp_max_tokens_preserves_small_values():
     assert clamp_max_tokens(128) == 128
+
+
+def test_effective_output_limit_matches_provider_clamp_and_default():
+    assert effective_output_token_limit(128) == 128
+    assert effective_output_token_limit(2048) == 2048
+    assert effective_output_token_limit(2049) == 2048
+    assert effective_output_token_limit(100_000_000) == 2048
+    assert effective_output_token_limit(None) == 2048
 
 
 def test_normalize_empty_success_keeps_non_empty_response():
@@ -126,7 +135,10 @@ def test_sanitize_provider_error_response_hides_raw_transient_capacity_payload()
     sanitized = sanitize_provider_error_response(original)
 
     assert sanitized.error is not None
-    assert sanitized.error.message == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert (
+        sanitized.error.message
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert sanitized.error.details["kind"] == "transient_capacity"
     assert sanitized.error.details["client_safe"] is True
     assert "UNAVAILABLE" not in sanitized.error.message

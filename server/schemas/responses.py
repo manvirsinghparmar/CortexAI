@@ -124,22 +124,26 @@ class ChatResponseDTO(BaseModel):
             token_usage=TokenUsageDTO(
                 prompt_tokens=ur.token_usage.prompt_tokens,
                 completion_tokens=ur.token_usage.completion_tokens,
-                total_tokens=ur.token_usage.total_tokens
+                total_tokens=ur.token_usage.total_tokens,
             ),
             estimated_cost=ur.estimated_cost,
             cost_currency=ur.cost_currency,
             ai_credits=ai_credits,
             credit_usage_estimated=credit_usage_estimated,
             finish_reason=ur.finish_reason,
-            error=ErrorDTO(
-                code=ur.error.code,
-                message=ur.error.message,
-                provider=ur.error.provider,
-                retryable=ur.error.retryable,
-                details=ur.error.details
-            ) if ur.error else None,
+            error=(
+                ErrorDTO(
+                    code=ur.error.code,
+                    message=ur.error.message,
+                    provider=ur.error.provider,
+                    retryable=ur.error.retryable,
+                    details=ur.error.details,
+                )
+                if ur.error
+                else None
+            ),
             web_source_items=normalized_sources,
-            timestamp=ur.timestamp
+            timestamp=ur.timestamp,
         )
 
 
@@ -183,7 +187,7 @@ class CompareResponseDTO(BaseModel):
                 sum(item.ai_credits for item in response_dtos)
                 + (ADVANCED_WEB_SEARCH_CREDITS if research_charged else 0)
             ),
-            timestamp=mur.timestamp
+            timestamp=mur.timestamp,
         )
 
 
@@ -564,6 +568,10 @@ class FileBaseDTO(BaseModel):
 
 class FileUploadResponseDTO(FileBaseDTO):
     deduplicated: bool = False
+
+
+class FileBatchUploadResponseDTO(BaseModel):
+    files: List[FileUploadResponseDTO] = Field(default_factory=list)
 
 
 class FileStatusResponseDTO(FileBaseDTO):

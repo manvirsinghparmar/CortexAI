@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from server import files_service
+from server.billing.plan_catalog import get_plan_catalog
 from server.dependencies import AuthResult
 from server.object_storage import ObjectStorageOperationError
 
@@ -27,6 +28,74 @@ def _configure_enabled_db(monkeypatch):
         "_resolve_api_key_for_request",
         lambda **_kwargs: SimpleNamespace(user_id=uuid4(), api_key_id=uuid4()),
     )
+
+
+def _configure_policy_resolution(monkeypatch, plan_code: str) -> AuthResult:
+    user_id = uuid4()
+    _configure_enabled_db(monkeypatch)
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_identity",
+        lambda **_kwargs: SimpleNamespace(user_id=user_id),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "resolve_effective_subscription",
+        lambda *_args, **_kwargs: SimpleNamespace(plan=get_plan_catalog().require(plan_code)),
+    )
+    return AuthResult(api_key=None, cognito_claims=None, user_id=user_id)
+
+
+@pytest.mark.parametrize(
+    ("plan_code", "expected_files", "expected_bytes"),
+    [
+        ("free", 1, 10_000_000),
+        ("plus", 3, 20_000_000),
+        ("pro", 5, 20_000_000),
+    ],
+)
+def test_upload_policy_uses_exact_plan_file_limits(
+    monkeypatch,
+    plan_code,
+    expected_files,
+    expected_bytes,
+):
+    auth = _configure_policy_resolution(monkeypatch, plan_code)
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILES_PER_REQUEST", "10")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILE_BYTES", "25000000")
+
+    policy = files_service.resolve_upload_policy(
+        auth=auth,
+        request_id=f"policy-{plan_code}",
+    )
+
+    assert policy.plan_code == plan_code
+    assert policy.max_files == expected_files
+    assert policy.max_file_bytes == expected_bytes
+
+
+def test_upload_policy_applies_stricter_platform_and_provider_limits(monkeypatch):
+    auth = _configure_policy_resolution(monkeypatch, "pro")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILES_PER_REQUEST", "2")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILE_BYTES", "5000000")
+
+    platform_policy = files_service.resolve_upload_policy(
+        auth=auth,
+        request_id="policy-platform",
+    )
+    assert platform_policy.max_files == 2
+    assert platform_policy.max_file_bytes == 5_000_000
+
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILES_PER_REQUEST", "10")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILE_BYTES", "25000000")
+    provider_policy = files_service.resolve_upload_policy(
+        auth=auth,
+        request_id="policy-provider",
+        provider="grok",
+        model="grok-4-1-fast-reasoning",
+    )
+    assert provider_policy.max_files == 5
+    assert provider_policy.max_file_bytes == 10_485_760
 
 
 def test_upload_rejects_when_attachments_disabled(monkeypatch):
@@ -81,7 +150,9 @@ def test_upload_rejects_too_large(monkeypatch):
 
 def test_upload_storage_operation_error_is_sanitized(monkeypatch):
     _configure_enabled_db(monkeypatch)
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None
+    )
 
     class _FailingStorage:
         bucket = "cortex-attachments"
@@ -108,7 +179,10 @@ def test_upload_storage_operation_error_is_sanitized(monkeypatch):
 
     assert exc.value.status_code == 502
     assert exc.value.detail["code"] == "storage_upload_failed"
-    assert exc.value.detail["message"] == "This file could not be uploaded right now. Please try again in a moment."
+    assert (
+        exc.value.detail["message"]
+        == "This file could not be uploaded right now. Please try again in a moment."
+    )
     assert "bucket" not in exc.value.detail["message"].lower()
 
 
@@ -134,7 +208,10 @@ def test_serialize_uploaded_row_hides_sensitive_error_details():
 
     payload = files_service._serialize_uploaded_file_row(row, deduplicated=False)
 
-    assert payload["error_message"] == "This file could not be uploaded right now. Please try again in a moment."
+    assert (
+        payload["error_message"]
+        == "This file could not be uploaded right now. Please try again in a moment."
+    )
     assert payload["ingestion_meta"]["ingestion_state"] == "failed"
     assert payload["ingestion_meta"]["artifact_meta"]["materialization"] == "text"
     assert "last_error" not in payload["ingestion_meta"]
@@ -163,7 +240,9 @@ def test_upload_returns_dedup_row_when_hash_exists(monkeypatch):
         "updated_at": "2026-03-20T00:00:00Z",
         "expires_at": "2026-03-27T00:00:00Z",
     }
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: existing_row)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: existing_row
+    )
     monkeypatch.setattr(files_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         files_service,
@@ -193,7 +272,9 @@ def test_upload_stores_object_and_metadata(monkeypatch):
         "_resolve_api_key_for_request",
         lambda **_kwargs: SimpleNamespace(user_id=user_id, api_key_id=uuid4()),
     )
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(files_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
 
     storage_calls: dict[str, object] = {}
@@ -214,7 +295,9 @@ def test_upload_stores_object_and_metadata(monkeypatch):
     monkeypatch.setattr(files_service, "get_object_storage", lambda: _FakeStorage())
 
     created_file_id = uuid4()
-    monkeypatch.setattr(files_service, "create_uploaded_file", lambda *_args, **_kwargs: created_file_id)
+    monkeypatch.setattr(
+        files_service, "create_uploaded_file", lambda *_args, **_kwargs: created_file_id
+    )
     monkeypatch.setattr(
         files_service,
         "get_uploaded_file_for_user",
@@ -257,7 +340,9 @@ def test_upload_docx_runs_sync_ingestion_when_small(monkeypatch):
         "_resolve_api_key_for_request",
         lambda **_kwargs: SimpleNamespace(user_id=user_id, api_key_id=uuid4()),
     )
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(files_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
 
     class _FakeStorage:
@@ -308,8 +393,12 @@ def test_upload_docx_runs_sync_ingestion_when_small(monkeypatch):
         return True
 
     monkeypatch.setattr(files_service, "create_uploaded_file", _fake_create_uploaded_file)
-    monkeypatch.setattr(files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status)
-    monkeypatch.setattr(files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state))
+    monkeypatch.setattr(
+        files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status
+    )
+    monkeypatch.setattr(
+        files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state)
+    )
     monkeypatch.setattr(
         files_service.attachments_service,
         "extract_text_attachment_artifact",
@@ -346,12 +435,16 @@ def test_upload_docx_large_defers_processing(monkeypatch):
         "_resolve_api_key_for_request",
         lambda **_kwargs: SimpleNamespace(user_id=user_id, api_key_id=uuid4()),
     )
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(files_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         files_service.attachments_service,
         "extract_text_attachment_artifact",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("sync extraction should be deferred")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("sync extraction should be deferred")
+        ),
     )
 
     class _FakeStorage:
@@ -402,8 +495,12 @@ def test_upload_docx_large_defers_processing(monkeypatch):
         return True
 
     monkeypatch.setattr(files_service, "create_uploaded_file", _fake_create_uploaded_file)
-    monkeypatch.setattr(files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status)
-    monkeypatch.setattr(files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state))
+    monkeypatch.setattr(
+        files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status
+    )
+    monkeypatch.setattr(
+        files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state)
+    )
 
     result = files_service.upload_user_file(
         api_key="dev-key-1",
@@ -444,8 +541,12 @@ def test_get_user_file_finalizes_processing_file(monkeypatch):
         "_resolve_api_key_for_request",
         lambda **_kwargs: SimpleNamespace(user_id=user_id, api_key_id=uuid4()),
     )
-    monkeypatch.setattr(files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state))
-    monkeypatch.setattr(files_service, "get_uploaded_file_by_id", lambda *_args, **_kwargs: dict(row_state))
+    monkeypatch.setattr(
+        files_service, "get_uploaded_file_for_user", lambda *_args, **_kwargs: dict(row_state)
+    )
+    monkeypatch.setattr(
+        files_service, "get_uploaded_file_by_id", lambda *_args, **_kwargs: dict(row_state)
+    )
 
     class _FakeStorage:
         def get_bytes(self, *, key):
@@ -474,7 +575,9 @@ def test_get_user_file_finalizes_processing_file(monkeypatch):
         )
         return True
 
-    monkeypatch.setattr(files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status)
+    monkeypatch.setattr(
+        files_service, "update_uploaded_file_status", _fake_update_uploaded_file_status
+    )
 
     result = files_service.get_user_file(
         api_key="dev-key-1",
@@ -499,7 +602,9 @@ def test_upload_resolves_identity_from_session_auth(monkeypatch):
     monkeypatch.setattr(
         files_service,
         "_resolve_api_key_for_request",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API-key-only resolver should not be used")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("API-key-only resolver should not be used")
+        ),
     )
 
     existing_row = {
@@ -515,7 +620,9 @@ def test_upload_resolves_identity_from_session_auth(monkeypatch):
         "updated_at": "2026-03-20T00:00:00Z",
         "expires_at": "2026-03-27T00:00:00Z",
     }
-    monkeypatch.setattr(files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: existing_row)
+    monkeypatch.setattr(
+        files_service, "find_active_uploaded_file_by_hash", lambda *_args, **_kwargs: existing_row
+    )
 
     payload = files_service.upload_user_file(
         auth=AuthResult(api_key=None, cognito_claims=None, user_id=session_user_id),
@@ -542,7 +649,9 @@ def test_get_user_file_resolves_identity_from_session_auth(monkeypatch):
     monkeypatch.setattr(
         files_service,
         "_resolve_api_key_for_request",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API-key-only resolver should not be used")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("API-key-only resolver should not be used")
+        ),
     )
     monkeypatch.setattr(
         files_service,

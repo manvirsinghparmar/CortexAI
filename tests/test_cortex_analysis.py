@@ -382,15 +382,22 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
         lambda **kwargs: generated,
     )
     billing_reservation = SimpleNamespace()
+    reserved = {}
+    finalized = {}
+
+    def fake_reserve(**kwargs):
+        reserved.update(kwargs)
+        return billing_reservation
+
     monkeypatch.setattr(
         analysis_route.persistence_service,
         "reserve_subscription_usage",
-        lambda **kwargs: billing_reservation,
+        fake_reserve,
     )
     monkeypatch.setattr(
         analysis_route.persistence_service,
         "finalize_subscription_usage",
-        lambda **kwargs: None,
+        lambda **kwargs: finalized.update(kwargs),
     )
 
     def fake_create(*args, **kwargs):
@@ -418,6 +425,15 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     assert result.is_stale is False
     assert created["recommended_answer"] == generated.recommended_answer
     assert created["combined_response_count"] == 2
+    assert reserved["operation_type"] == "cortex_analysis"
+    assert reserved["research_enabled"] is False
+    assert reserved["max_output_tokens"] == 1800
+    assert "Choose an approach" in reserved["input_text"]
+    assert "\nA\nB" in reserved["input_text"]
+    assert finalized["reservation"] is billing_reservation
+    assert finalized["research_performed"] is False
+    assert finalized["model_usages"][0].input_tokens == 10
+    assert finalized["model_usages"][0].output_tokens == 20
 
 
 @pytest.mark.unit

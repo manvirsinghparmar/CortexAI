@@ -53,6 +53,8 @@ from server.billing.enforcement_service import (
     finalize_reserved_usage,
     release_reserved_usage,
 )
+from server.billing.metering_service import supplement_usage_reservation
+from server.billing.plan_catalog import get_plan_catalog
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.subscription_service import resolve_effective_subscription
 from utils.logger import get_logger
@@ -326,9 +328,7 @@ def resolve_compare_regeneration_context(
 
     session_id = coerce_uuid(str(source.get("session_id") or ""))
     request_group_id = coerce_uuid(str(source.get("request_group_id") or ""))
-    revision_root_id = coerce_uuid(
-        str(source.get("response_revision_root_id") or "")
-    )
+    revision_root_id = coerce_uuid(str(source.get("response_revision_root_id") or ""))
     if session_id is None or request_group_id is None or revision_root_id is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -687,6 +687,8 @@ def resolve_and_enforce_usage_caps(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
         ) from exc
+
+
 def reserve_subscription_usage(
     *,
     user_id: UUID,
@@ -701,10 +703,11 @@ def reserve_subscription_usage(
     attachment_sizes: Iterable[int] = (),
     input_text: str = "",
     max_output_tokens: int | None = None,
+    model_attempt_count: int = 1,
 ) -> ReservedRequestUsage:
     """Authorize and atomically reserve subscription usage before provider work."""
     with db_uow() as db_session:
-        return authorize_and_reserve_usage(
+        reservation = authorize_and_reserve_usage(
             db_session,
             user_id=user_id,
             request_id=request_id,
@@ -718,7 +721,12 @@ def reserve_subscription_usage(
             attachment_sizes=tuple(attachment_sizes),
             input_text=input_text,
             max_output_tokens=max_output_tokens,
+            model_attempt_count=model_attempt_count,
         )
+    from server.billing.reservation_cleanup import register_active_reservation
+
+    register_active_reservation(reservation.reservation_id)
+    return reservation
 
 
 def finalize_subscription_usage(
@@ -733,18 +741,23 @@ def finalize_subscription_usage(
     release_reason: str = "provider_failed_before_billable_output",
 ) -> None:
     """Settle successful subscription units and release unused units."""
-    with db_uow() as db_session:
-        finalize_reserved_usage(
-            db_session,
-            reservation=reservation,
-            successful_targets=tuple(successful_targets),
-            model_usages=tuple(model_usages),
-            research_performed=research_performed,
-            optimization_performed=optimization_performed,
-            file_analysis_performed=file_analysis_performed,
-            uploaded_bytes=uploaded_bytes,
-            release_reason=release_reason,
-        )
+    from server.billing.reservation_cleanup import unregister_active_reservation
+
+    try:
+        with db_uow() as db_session:
+            finalize_reserved_usage(
+                db_session,
+                reservation=reservation,
+                successful_targets=tuple(successful_targets),
+                model_usages=tuple(model_usages),
+                research_performed=research_performed,
+                optimization_performed=optimization_performed,
+                file_analysis_performed=file_analysis_performed,
+                uploaded_bytes=uploaded_bytes,
+                release_reason=release_reason,
+            )
+    finally:
+        unregister_active_reservation(reservation.reservation_id)
 
 
 def release_subscription_usage(
@@ -753,11 +766,45 @@ def release_subscription_usage(
     reason: str,
 ) -> None:
     """Release all units for a request that never reached finalization."""
+    from server.billing.reservation_cleanup import unregister_active_reservation
+
+    try:
+        with db_uow() as db_session:
+            release_reserved_usage(
+                db_session,
+                reservation=reservation,
+                reason=reason,
+            )
+    finally:
+        unregister_active_reservation(reservation.reservation_id)
+
+
+def authorize_smart_fallback(
+    *,
+    reservation: ReservedRequestUsage,
+    provider: str,
+    model: str,
+) -> bool:
+    """Ensure one planned Smart fallback fits the active reservation ceiling."""
+
+    candidate = next(
+        (
+            item
+            for item in reservation.smart_candidates
+            if item.provider == str(provider or "").strip().lower()
+            and item.model == str(model or "").strip()
+        ),
+        None,
+    )
+    if candidate is None:
+        return False
+    plan = get_plan_catalog().require(reservation.current_plan)
     with db_uow() as db_session:
-        release_reserved_usage(
+        return supplement_usage_reservation(
             db_session,
-            reservation=reservation,
-            reason=reason,
+            reservation_id=reservation.reservation_id,
+            target_quantity=candidate.reservation_credits,
+            allowance_limit=plan.allowances.ai_credits,
         )
 
 
@@ -1040,9 +1087,7 @@ def _persist_request_attachments(
             transform_mode = str(item.get("transform_mode") or "auto")
             order_index = int(item.get("order_index", idx))
             meta_raw = item.get("resolved_artifact_meta")
-            resolved_artifact_meta = (
-                dict(meta_raw) if isinstance(meta_raw, dict) else {}
-            )
+            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
         else:
             file_id = getattr(item, "file_id", None)
             usage_role = str(getattr(item, "usage_role", "primary") or "primary")
@@ -1115,20 +1160,14 @@ def persist_chat_interaction(
             model=response.model,
             prompt=prompt,
             session_id=session_id,
-            request_group_id=(
-                regeneration.request_group_id if regeneration is not None else None
-            ),
+            request_group_id=(regeneration.request_group_id if regeneration is not None else None),
             api_key_id=resolution.api_key_id,
             store_prompt=True,
             prompt_text_override=stored_user_message,
             response_revision_root_id=(
-                regeneration.response_revision_root_id
-                if regeneration is not None
-                else None
+                regeneration.response_revision_root_id if regeneration is not None else None
             ),
-            response_revision=(
-                regeneration.response_revision if regeneration is not None else 1
-            ),
+            response_revision=(regeneration.response_revision if regeneration is not None else 1),
         )
         _persist_request_attachments(
             db_session,

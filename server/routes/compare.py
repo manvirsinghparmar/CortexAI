@@ -35,7 +35,7 @@ from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.stream_observability import StreamLogContext
 from server.utils import (
-    clamp_max_tokens,
+    effective_output_token_limit,
     get_client_safe_error_display_text,
     normalize_empty_success_response,
     sanitize_provider_error_response,
@@ -208,6 +208,7 @@ def _reserve_compare_usage(
     research_enabled: bool,
     orchestrator: CortexOrchestrator,
     resolved_attachments: list[attachments_service.ResolvedAttachment],
+    max_output_tokens: int,
 ) -> ReservedRequestUsage:
     try:
         targets = tuple(
@@ -229,7 +230,7 @@ def _reserve_compare_usage(
             total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
             attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
             input_text=_billing_input_text(request),
-            max_output_tokens=request.max_tokens,
+            max_output_tokens=max_output_tokens,
         )
     except HTTPException:
         raise
@@ -460,11 +461,11 @@ async def compare(
 
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
+    effective_max_tokens = effective_output_token_limit(request.max_tokens)
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    if request.max_tokens is not None:
-        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    kwargs["max_tokens"] = effective_max_tokens
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -480,6 +481,7 @@ async def compare(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            max_output_tokens=effective_max_tokens,
         )
 
     provider_completed = False
@@ -626,11 +628,11 @@ async def compare_stream(
         has_attachments=bool(resolved_attachments),
     )
 
+    effective_max_tokens = effective_output_token_limit(request.max_tokens)
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    if request.max_tokens is not None:
-        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    kwargs["max_tokens"] = effective_max_tokens
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -647,6 +649,7 @@ async def compare_stream(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            max_output_tokens=effective_max_tokens,
         )
 
     async def event_stream():

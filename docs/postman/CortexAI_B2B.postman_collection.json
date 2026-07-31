@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions and webhooks, catalog discovery, file upload/status, chat/compare (sync + streaming), append-only Cortex Analysis runs, BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions and webhooks, catalog discovery, single and batch file upload/status, chat/compare (sync + streaming), unified-credit Cortex Analysis runs, BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup, and PostgreSQL startup fails early when required billing migrations are missing. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -602,6 +602,63 @@
                   "    pm.expect(denial.code).to.be.a('string');",
                   "    pm.expect(denial.message).to.be.a('string');",
                   "    pm.expect(denial.current_plan).to.be.a('string');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/files/upload-batch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "description": "Validates the complete selection against the effective plan, platform safety ceilings, MIME allowlist, and any known provider capability before storing the first object. Upload alone consumes no AI credits.",
+            "url": "{{base_url}}/v1/files/upload-batch"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects batch upload, auth, validation, or subscription outcome', function () {",
+                  "  pm.expect([200, 400, 401, 403, 413, 415, 501, 502]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('batch response returns every uploaded file', function () {",
+                  "    pm.expect(body.files).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(body.files[0].file_id).to.be.a('string');",
+                  "  });",
+                  "  pm.collectionVariables.set('file_id', body.files[0].file_id);",
+                  "} else if (pm.response.code === 403) {",
+                  "  var denial = pm.response.json().detail;",
+                  "  pm.test('plan upload denial is structured', function () {",
+                  "    pm.expect(denial.code).to.eql('feature_not_in_plan');",
+                  "    pm.expect(denial.current_plan).to.be.a('string');",
+                  "    pm.expect(denial.limit).to.be.a('number');",
                   "  });",
                   "}"
                 ]

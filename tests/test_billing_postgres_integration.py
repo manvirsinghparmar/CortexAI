@@ -13,7 +13,12 @@ from sqlalchemy.orm import sessionmaker
 
 from db import billing_repository as repository
 from server.billing.errors import UsageAllowanceExceededError
-from server.billing.metering_service import reserve_usage, settle_usage
+from server.billing.metering_service import (
+    expire_stale_reservations,
+    reserve_usage,
+    settle_usage,
+    settle_usage_with_supplement,
+)
 from server.billing.plan_catalog import get_plan_catalog
 from server.billing.subscription_service import EffectiveSubscription
 
@@ -59,6 +64,10 @@ def postgres_runtime(monkeypatch):
 def _delete_test_account(engine, account_id) -> None:
     with engine.begin() as connection:
         connection.execute(
+            text("DELETE FROM credit_transactions WHERE billing_account_id = :account_id"),
+            {"account_id": account_id},
+        )
+        connection.execute(
             text("DELETE FROM usage_reservations WHERE billing_account_id = :account_id"),
             {"account_id": account_id},
         )
@@ -92,11 +101,14 @@ def test_billing_schema_is_queryable_through_reflection(postgres_runtime):
         "usage_periods",
         "usage_counters",
         "usage_reservations",
+        "credit_transactions",
         "billing_webhook_events",
+        "cortex_analysis_runs",
     ):
         table = get_table(table_name)
         assert table.name == table_name
         assert table.schema == "public"
+    assert "last_activity_at" in get_table("usage_reservations").c
 
 
 def test_lock_usage_counters_serializes_concurrent_reservation_paths(postgres_runtime):
@@ -201,7 +213,9 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
     )
     usage_counters = get_table("usage_counters")
     setup_session.execute(
-        update(usage_counters).where(usage_counters.c.id == counter["id"]).values(used_quantity=29)
+        update(usage_counters)
+        .where(usage_counters.c.id == counter["id"])
+        .values(used_quantity=get_plan_catalog().require("free").allowances.ai_credits - 1)
     )
     setup_session.commit()
     setup_session.close()
@@ -266,7 +280,8 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
                 period["id"],
                 "ai_credits",
             )
-            assert before_settlement["used_quantity"] == 29
+            allowance_limit = get_plan_catalog().require("free").allowances.ai_credits
+            assert before_settlement["used_quantity"] == allowance_limit - 1
             assert before_settlement["reserved_quantity"] == 1
 
             settle_usage(
@@ -280,8 +295,214 @@ def test_concurrent_metering_prevents_overuse_and_settles_the_winner(postgres_ru
                 period["id"],
                 "ai_credits",
             )
-            assert after_settlement["used_quantity"] == 30
+            assert after_settlement["used_quantity"] == allowance_limit
             assert after_settlement["reserved_quantity"] == 0
+        finally:
+            verification.close()
+    finally:
+        for thread in threads:
+            thread.join(timeout=5)
+        _delete_test_account(postgres_runtime, account["id"])
+
+
+def test_concurrent_supplemental_settlement_allocates_remaining_credits_once(
+    postgres_runtime,
+):
+    from db.tables import get_table
+
+    session_factory = sessionmaker(bind=postgres_runtime)
+    setup_session = session_factory()
+    account = repository.get_or_create_billing_account_for_user(setup_session, uuid4())
+    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
+    period = repository.create_usage_period(
+        setup_session,
+        billing_account_id=account["id"],
+        plan_code="free",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(days=31),
+    )
+    counter = repository.get_or_create_usage_counter(
+        setup_session,
+        period["id"],
+        "ai_credits",
+    )
+    allowance_limit = get_plan_catalog().require("free").allowances.ai_credits
+    usage_counters = get_table("usage_counters")
+    setup_session.execute(
+        update(usage_counters)
+        .where(usage_counters.c.id == counter["id"])
+        .values(used_quantity=allowance_limit - 350)
+    )
+    effective = EffectiveSubscription(
+        billing_account_id=account["id"],
+        usage_period_id=period["id"],
+        plan=get_plan_catalog().require("free"),
+        source="test",
+        provider=None,
+        provider_subscription_id=None,
+        status="free",
+        current_period_start=starts_at,
+        current_period_end=starts_at + timedelta(days=31),
+        cancel_at_period_end=False,
+        grace_until=None,
+    )
+    reservations = [
+        reserve_usage(
+            setup_session,
+            effective_subscription=effective,
+            request_id=f"supplement-concurrent-{index}",
+            operation_type="ask",
+            requested_quantities={"ai_credits": 100},
+        )
+        for index in range(2)
+    ]
+    setup_session.commit()
+    setup_session.close()
+
+    start = threading.Barrier(2)
+    outcomes: Queue[tuple[int, int]] = Queue()
+    failures: Queue[BaseException] = Queue()
+
+    def settle(reservation_id) -> None:
+        session = session_factory()
+        try:
+            start.wait(timeout=5)
+            outcome = settle_usage_with_supplement(
+                session,
+                reservation_id=reservation_id,
+                actual_quantity=200,
+                allowance_limit=allowance_limit,
+            )
+            session.commit()
+            outcomes.put((outcome.billed_quantity, outcome.supplemented_quantity))
+        except BaseException as exc:
+            session.rollback()
+            failures.put(exc)
+        finally:
+            session.close()
+
+    threads = [
+        threading.Thread(target=settle, args=(reservation.id,)) for reservation in reservations
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert all(not thread.is_alive() for thread in threads)
+        assert failures.empty(), list(failures.queue)
+        assert sorted(outcomes.get_nowait() for _ in range(2)) == [(100, 0), (200, 100)]
+
+        verification = session_factory()
+        try:
+            final_counter = repository.get_or_create_usage_counter(
+                verification,
+                period["id"],
+                "ai_credits",
+            )
+            assert final_counter["used_quantity"] == allowance_limit - 50
+            assert final_counter["reserved_quantity"] == 0
+            assert final_counter["used_quantity"] <= allowance_limit
+        finally:
+            verification.close()
+    finally:
+        for thread in threads:
+            thread.join(timeout=5)
+        _delete_test_account(postgres_runtime, account["id"])
+
+
+def test_concurrent_cleanup_workers_release_one_stale_reservation_once(
+    postgres_runtime,
+):
+    from db.tables import get_table
+
+    session_factory = sessionmaker(bind=postgres_runtime)
+    setup_session = session_factory()
+    account = repository.get_or_create_billing_account_for_user(setup_session, uuid4())
+    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
+    period = repository.create_usage_period(
+        setup_session,
+        billing_account_id=account["id"],
+        plan_code="free",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(days=31),
+    )
+    effective = EffectiveSubscription(
+        billing_account_id=account["id"],
+        usage_period_id=period["id"],
+        plan=get_plan_catalog().require("free"),
+        source="test",
+        provider=None,
+        provider_subscription_id=None,
+        status="free",
+        current_period_start=starts_at,
+        current_period_end=starts_at + timedelta(days=31),
+        cancel_at_period_end=False,
+        grace_until=None,
+    )
+    reservation = reserve_usage(
+        setup_session,
+        effective_subscription=effective,
+        request_id="cleanup-concurrent",
+        operation_type="ask",
+        requested_quantities={"ai_credits": 500},
+    )
+    usage_reservations = get_table("usage_reservations")
+    setup_session.execute(
+        update(usage_reservations)
+        .where(usage_reservations.c.id == reservation.id)
+        .values(last_activity_at=datetime.now(UTC) - timedelta(hours=1))
+    )
+    setup_session.commit()
+    setup_session.close()
+
+    start = threading.Barrier(2)
+    outcomes: Queue[tuple[int, int]] = Queue()
+    failures: Queue[BaseException] = Queue()
+
+    def cleanup() -> None:
+        session = session_factory()
+        try:
+            start.wait(timeout=5)
+            outcome = expire_stale_reservations(
+                session,
+                older_than=datetime.now(UTC) - timedelta(minutes=30),
+            )
+            session.commit()
+            outcomes.put((outcome.released, outcome.credits_released))
+        except BaseException as exc:
+            session.rollback()
+            failures.put(exc)
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=cleanup) for _ in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert all(not thread.is_alive() for thread in threads)
+        assert failures.empty(), list(failures.queue)
+        cleanup_results = [outcomes.get_nowait() for _ in range(2)]
+        assert sum(item[0] for item in cleanup_results) == 1
+        assert sum(item[1] for item in cleanup_results) == 500
+
+        verification = session_factory()
+        try:
+            persisted = repository.get_usage_reservation_by_id(
+                verification,
+                reservation.id,
+            )
+            counter = repository.get_or_create_usage_counter(
+                verification,
+                period["id"],
+                "ai_credits",
+            )
+            assert persisted["state"] == "released"
+            assert persisted["release_reason"] == "stale_reservation_expired"
+            assert counter["reserved_quantity"] == 0
+            assert counter["used_quantity"] == 0
         finally:
             verification.close()
     finally:

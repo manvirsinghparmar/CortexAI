@@ -34,7 +34,7 @@ from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.stream_observability import StreamLogContext
 from server.utils import (
-    clamp_max_tokens,
+    effective_output_token_limit,
     get_client_safe_error_display_text,
     normalize_empty_success_response,
     sanitize_provider_error_response,
@@ -278,6 +278,7 @@ def _resolve_chat_execution_plan(
     provider_api_keys: dict[str, str] | None = None,
     attachment_compatible_providers: list[str] | None = None,
     allowed_billing_classes: frozenset[str] | None = None,
+    allowed_models: tuple[str, ...] | None = None,
 ) -> ChatExecutionPlan:
     manual_provider = (request.provider or "").strip().lower()
     manual_model = (request.model or "").strip()
@@ -304,6 +305,9 @@ def _resolve_chat_execution_plan(
         if allowed_billing_classes is not None:
             constraints = dict(constraints or {})
             constraints["allowed_billing_classes"] = sorted(allowed_billing_classes)
+        if allowed_models is not None:
+            constraints = dict(constraints or {})
+            constraints["allowed_models"] = list(allowed_models)
         if attachment_compatible_providers:
             compatible_providers = _normalize_provider_list(attachment_compatible_providers)
             if compatible_providers:
@@ -505,6 +509,19 @@ def _billing_input_text(request: ChatRequest) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def _billing_materialized_input_text(
+    request: ChatRequest,
+    inference_attachments: list[dict[str, Any]],
+) -> str:
+    parts = [_billing_input_text(request)]
+    parts.extend(
+        str(item.get("extracted_text") or "")
+        for item in inference_attachments
+        if str(item.get("extracted_text") or "").strip()
+    )
+    return "\n".join(part for part in parts if part)
+
+
 def _billing_operation_type(request: ChatRequest) -> str:
     if request.regeneration is not None:
         return "regenerate"
@@ -540,18 +557,27 @@ def _reserve_chat_usage(
     input_text: str,
     max_output_tokens: int | None,
     operation_type: str,
+    smart_targets: tuple[tuple[str, str], ...] = (),
 ) -> ReservedRequestUsage:
     try:
-        target = resolve_model_target(
-            provider=execution_plan.preview_provider,
-            model=execution_plan.preview_model,
-            orchestrator=orchestrator,
+        target_pairs = (
+            smart_targets
+            if execution_plan.strategy == "smart_orchestrator" and smart_targets
+            else ((execution_plan.preview_provider, execution_plan.preview_model),)
+        )
+        targets = tuple(
+            resolve_model_target(
+                provider=provider,
+                model=model,
+                orchestrator=orchestrator,
+            )
+            for provider, model in target_pairs
         )
         return _reserve_subscription_usage(
             user_id=resolution.user_id,
             request_id=request_id,
             operation_type=operation_type,
-            model_targets=(target,),
+            model_targets=targets,
             research_enabled=research_enabled,
             smart_routing=execution_plan.strategy == "smart_orchestrator",
             attachment_count=len(resolved_attachments),
@@ -592,11 +618,7 @@ def _finalize_chat_usage(
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=successful_targets,
-            model_usages=(
-                _billable_model_usages(response)
-                if settle_model_response
-                else ()
-            ),
+            model_usages=(_billable_model_usages(response) if settle_model_response else ()),
             research_performed=_research_was_performed(response),
             file_analysis_performed=attachments_present and bool(successful_targets),
         )
@@ -736,11 +758,11 @@ async def chat(
             inference_attachments=inference_attachments,
         )
 
+    effective_max_tokens = effective_output_token_limit(request.max_tokens)
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    if request.max_tokens is not None:
-        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    kwargs["max_tokens"] = effective_max_tokens
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -749,6 +771,19 @@ async def chat(
 
     billing_reservation: ReservedRequestUsage | None = None
     if API_DB_ENABLED and persistence_resolution is not None:
+        smart_targets: tuple[tuple[str, str], ...] = ()
+        if execution_plan.strategy == "smart_orchestrator":
+            plan_fn = getattr(orchestrator, "plan_smart_targets", None)
+            if callable(plan_fn):
+                smart_targets = tuple(
+                    plan_fn(
+                        prompt=effective_prompt,
+                        context=context,
+                        routing_mode=execution_plan.routing_mode,
+                        routing_constraints=execution_plan.routing_constraints,
+                        provider_api_keys=provider_api_keys,
+                    )
+                )
         billing_reservation = _reserve_chat_usage(
             resolution=persistence_resolution,
             request_id=f"{req_id}:chat:{uuid4()}",
@@ -756,12 +791,16 @@ async def chat(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
-            input_text=_billing_input_text(request),
-            max_output_tokens=request.max_tokens,
+            input_text=_billing_materialized_input_text(request, inference_attachments),
+            max_output_tokens=effective_max_tokens,
             operation_type=_billing_operation_type(request),
+            smart_targets=smart_targets,
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:
+                allowed_models = tuple(
+                    f"{item.provider}:{item.model}" for item in billing_reservation.smart_candidates
+                )
                 execution_plan = _resolve_chat_execution_plan(
                     request,
                     effective_prompt=effective_prompt,
@@ -770,6 +809,14 @@ async def chat(
                     provider_api_keys=provider_api_keys,
                     attachment_compatible_providers=attachment_compatible_providers,
                     allowed_billing_classes=billing_reservation.allowed_billing_classes,
+                    allowed_models=allowed_models,
+                )
+                kwargs["_smart_candidate_authorizer"] = (
+                    lambda provider, model: persistence_service.authorize_smart_fallback(
+                        reservation=billing_reservation,
+                        provider=provider,
+                        model=model,
+                    )
                 )
                 if resolved_attachments:
                     attachments_service.enforce_model_attachment_compatibility(
@@ -837,9 +884,7 @@ async def chat(
         response,
         session_id=resolved_session_id,
         response_version=(
-            regeneration_context.response_revision
-            if regeneration_context is not None
-            else 1
+            regeneration_context.response_revision if regeneration_context is not None else 1
         ),
     )
     return dto
@@ -965,11 +1010,11 @@ async def chat_stream(
     target_provider = execution_plan.preview_provider
     target_model = execution_plan.preview_model
 
+    effective_max_tokens = effective_output_token_limit(request.max_tokens)
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    if request.max_tokens is not None:
-        kwargs["max_tokens"] = clamp_max_tokens(request.max_tokens)
+    kwargs["max_tokens"] = effective_max_tokens
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -978,6 +1023,19 @@ async def chat_stream(
 
     billing_reservation: ReservedRequestUsage | None = None
     if API_DB_ENABLED and persistence_resolution is not None:
+        smart_targets: tuple[tuple[str, str], ...] = ()
+        if execution_plan.strategy == "smart_orchestrator":
+            plan_fn = getattr(orchestrator, "plan_smart_targets", None)
+            if callable(plan_fn):
+                smart_targets = tuple(
+                    plan_fn(
+                        prompt=effective_prompt,
+                        context=context,
+                        routing_mode=execution_plan.routing_mode,
+                        routing_constraints=execution_plan.routing_constraints,
+                        provider_api_keys=provider_api_keys,
+                    )
+                )
         billing_reservation = _reserve_chat_usage(
             resolution=persistence_resolution,
             request_id=f"{req_id}:chat-stream:{uuid4()}",
@@ -985,12 +1043,16 @@ async def chat_stream(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
-            input_text=_billing_input_text(request),
-            max_output_tokens=request.max_tokens,
+            input_text=_billing_materialized_input_text(request, inference_attachments),
+            max_output_tokens=effective_max_tokens,
             operation_type=_billing_operation_type(request),
+            smart_targets=smart_targets,
         )
         if execution_plan.strategy == "smart_orchestrator":
             try:
+                allowed_models = tuple(
+                    f"{item.provider}:{item.model}" for item in billing_reservation.smart_candidates
+                )
                 execution_plan = _resolve_chat_execution_plan(
                     request,
                     effective_prompt=effective_prompt,
@@ -999,6 +1061,14 @@ async def chat_stream(
                     provider_api_keys=provider_api_keys,
                     attachment_compatible_providers=attachment_compatible_providers,
                     allowed_billing_classes=billing_reservation.allowed_billing_classes,
+                    allowed_models=allowed_models,
+                )
+                kwargs["_smart_candidate_authorizer"] = (
+                    lambda provider, model: persistence_service.authorize_smart_fallback(
+                        reservation=billing_reservation,
+                        provider=provider,
+                        model=model,
+                    )
                 )
                 if resolved_attachments:
                     attachments_service.enforce_model_attachment_compatibility(

@@ -101,6 +101,16 @@ def clamp_max_tokens(max_tokens):
     return min(max_tokens, MAX_OUTPUT_TOKENS)
 
 
+def effective_output_token_limit(max_tokens: int | None) -> int:
+    """Return the exact output limit shared by execution and billing."""
+
+    if max_tokens is None:
+        return MAX_OUTPUT_TOKENS
+    if isinstance(max_tokens, bool) or max_tokens <= 0:
+        raise ValueError("max_tokens must be a positive integer")
+    return min(int(max_tokens), MAX_OUTPUT_TOKENS)
+
+
 def redact_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
     """
     Redact auth-bearing headers before logging.

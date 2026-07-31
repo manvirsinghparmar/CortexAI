@@ -48,7 +48,7 @@ Listening only to required event types reduces load and avoids retaining unrelat
 
 For fast entitlement UX testing without Stripe, run `python run_app.py --subscription-plan free`, `plus`, `pro`, or `unrestricted`. These profiles are accepted only when both runner hosts are loopback addresses, force billing off and local dev-session login on, and override conflicting subscription values from `.env`. `unrestricted` uses the Pro feature set with very large subscription allowances while retaining authentication, provider requirements, upload/file safety ceilings, and production guards. Omit `--subscription-plan` when validating the real Stripe lifecycle below.
 
-1. Apply and verify `db/migrations/20260718_add_b2c_billing_foundation.sql`.
+1. Apply and verify, in order, `20260718_add_b2c_billing_foundation.sql`, `20260727_add_cortex_analysis_runs.sql`, `20260729_add_unified_ai_credits.sql`, and `20260730_add_usage_reservation_activity.sql` as documented in `docs/runbooks/db-migrations.md`.
 2. Use Stripe test keys, test Prices, and a CLI forwarding secret only.
 3. Forward the six required events to the local API, for example with Stripe CLI event filtering and `--forward-to http://127.0.0.1:8000/v1/billing/webhook`.
 4. Set the `whsec_...` value printed by that CLI process as `STRIPE_WEBHOOK_SECRET`; do not reuse a Dashboard endpoint secret.

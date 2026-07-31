@@ -143,20 +143,16 @@ async def billing_plans():
                 features=PublicBillingPlanFeaturesDTO(
                     max_compare_models=plan.entitlements.max_compare_models,
                     research_enabled=plan.entitlements.research_enabled,
-                    prompt_improvement_enabled=(
-                        plan.entitlements.prompt_improvement_enabled
-                    ),
+                    prompt_improvement_enabled=(plan.entitlements.prompt_improvement_enabled),
                     file_analysis_enabled=plan.entitlements.file_analysis_enabled,
-                    allowed_billing_classes=sorted(
-                        plan.entitlements.allowed_billing_classes
-                    ),
+                    allowed_billing_classes=sorted(plan.entitlements.allowed_billing_classes),
                 ),
                 allowances=PublicBillingPlanAllowancesDTO(
                     ai_credits=plan.allowances.ai_credits,
                 ),
             )
             for plan in catalog.list_plans()
-        ]
+        ],
     )
 
 
@@ -199,9 +195,7 @@ async def current_subscription(
         current_period_start=_iso(effective.current_period_start),
         current_period_end=_iso(effective.current_period_end),
         cancel_at_period_end=effective.cancel_at_period_end,
-        can_manage=bool(
-            effective.provider == "stripe" and effective.provider_subscription_id
-        ),
+        can_manage=bool(effective.provider == "stripe" and effective.provider_subscription_id),
     )
 
 

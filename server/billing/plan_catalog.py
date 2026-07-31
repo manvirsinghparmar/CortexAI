@@ -19,13 +19,10 @@ from server.billing.models import (
     SubscriptionPlan,
 )
 
-
 _ALLOWANCE_KEYS = frozenset(PlanAllowances.__dataclass_fields__)
 _LIMIT_KEYS = frozenset(PlanLimits.__dataclass_fields__)
 _ENTITLEMENT_KEYS = frozenset(PlanEntitlements.__dataclass_fields__)
-_PLAN_KEYS = frozenset(
-    {"display_name", "rank", "price", "entitlements", "allowances", "limits"}
-)
+_PLAN_KEYS = frozenset({"display_name", "rank", "price", "entitlements", "allowances", "limits"})
 _PRICE_KEYS = frozenset({"monthly_usd", "stripe_price_env"})
 
 
@@ -131,9 +128,7 @@ def _parse_plan(code: str, raw_plan: Any) -> SubscriptionPlan:
     _require_keys(allowances_raw, _ALLOWANCE_KEYS, f"plans.{code}.allowances")
     allowances = PlanAllowances(
         **{
-            key: _require_non_negative_int(
-                allowances_raw[key], f"plans.{code}.allowances.{key}"
-            )
+            key: _require_non_negative_int(allowances_raw[key], f"plans.{code}.allowances.{key}")
             for key in _ALLOWANCE_KEYS
         }
     )
@@ -148,9 +143,7 @@ def _parse_plan(code: str, raw_plan: Any) -> SubscriptionPlan:
         }
     )
 
-    entitlements_raw = _require_mapping(
-        plan["entitlements"], f"plans.{code}.entitlements"
-    )
+    entitlements_raw = _require_mapping(plan["entitlements"], f"plans.{code}.entitlements")
     _reject_unknown_keys(entitlements_raw, _ENTITLEMENT_KEYS, f"plans.{code}.entitlements")
     _require_keys(entitlements_raw, _ENTITLEMENT_KEYS, f"plans.{code}.entitlements")
 

@@ -287,9 +287,7 @@ def webhook_harness(monkeypatch):
     gateway = _FakeWebhookGateway()
 
     def assert_outside_transaction() -> None:
-        assert active_uows == 0, (
-            "Stripe provider call occurred inside a database transaction"
-        )
+        assert active_uows == 0, "Stripe provider call occurred inside a database transaction"
 
     gateway.assert_outside_transaction = assert_outside_transaction
     monkeypatch.setattr(billing_route, "_gateway_factory", lambda _config: gateway)

@@ -118,6 +118,7 @@ def _development_override(catalog: PlanCatalog) -> SubscriptionPlan | None:
         logger.warning("Ignoring DEV_SUBSCRIPTION_PLAN outside a local development environment")
         return None
 
+    plan: SubscriptionPlan | None
     if raw_plan == _UNRESTRICTED_PLAN_NAME:
         if not _env_bool("DEV_SUBSCRIPTION_BYPASS_ENABLED", default=False):
             logger.warning(

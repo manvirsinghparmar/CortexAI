@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from server.app import create_app
 from server.billing.plan_catalog import PlanCatalog, get_plan_catalog
 
-
 CATALOG_PATH = Path("config/subscription_plans.yaml")
 
 
@@ -40,7 +39,7 @@ def test_default_plan_catalog_loads_as_immutable_decimal_backed_types():
     assert [plan.limits.requests_per_minute for plan in catalog.list_plans()] == [5, 15, 30]
     assert catalog.require("free").entitlements.usage_export_enabled is False
     with pytest.raises(FrozenInstanceError):
-        catalog.require("free").rank = 99  # type: ignore[misc]
+        catalog.require("free").rank = 99
 
 
 def test_default_plan_catalog_is_process_cached():
@@ -57,21 +56,15 @@ def test_default_plan_catalog_is_process_cached():
     [
         (lambda data: data["plans"].pop("free"), "missing required 'free' plan"),
         (
-            lambda data: data["plans"]["plus"].update(
-                {"rank": data["plans"]["free"]["rank"]}
-            ),
+            lambda data: data["plans"]["plus"].update({"rank": data["plans"]["free"]["rank"]}),
             "duplicate plan rank",
         ),
         (
-            lambda data: data["plans"]["free"]["allowances"].update(
-                {"ai_credits": -1}
-            ),
+            lambda data: data["plans"]["free"]["allowances"].update({"ai_credits": -1}),
             "cannot be negative",
         ),
         (
-            lambda data: data["plans"]["free"]["entitlements"].update(
-                {"unknown_feature": True}
-            ),
+            lambda data: data["plans"]["free"]["entitlements"].update({"unknown_feature": True}),
             "unknown key",
         ),
         (
@@ -81,15 +74,11 @@ def test_default_plan_catalog_is_process_cached():
             "unknown billing class",
         ),
         (
-            lambda data: data["plans"]["plus"]["price"].update(
-                {"stripe_price_env": None}
-            ),
+            lambda data: data["plans"]["plus"]["price"].update({"stripe_price_env": None}),
             "stripe_price_env is required",
         ),
         (
-            lambda data: data["plans"]["free"]["entitlements"].update(
-                {"max_compare_models": 1}
-            ),
+            lambda data: data["plans"]["free"]["entitlements"].update({"max_compare_models": 1}),
             "max_compare_models must be at least 2",
         ),
         (

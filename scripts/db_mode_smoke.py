@@ -207,7 +207,9 @@ def main() -> int:
     from server.routes import chat as chat_route
 
     class _FakeOrchestrator:
-        def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+        def ask(
+            self, prompt: str, model_type: str | None = None, context=None, **kwargs
+        ) -> UnifiedResponse:
             return UnifiedResponse(
                 request_id="release-gate-smoke-1",
                 text="db-smoke-ok",
@@ -228,7 +230,7 @@ def main() -> int:
         cognito_claims=None,
         # SQLite reflection exposes UUID columns as strings in this deliberately
         # minimal smoke schema.
-        user_id=smoke_user_id.hex,  # type: ignore[arg-type]
+        user_id=smoke_user_id.hex,
     )
     # This smoke covers core request/response persistence using a deliberately
     # minimal SQLite schema. Subscription persistence has its own complete
@@ -238,9 +240,7 @@ def main() -> int:
         request_id="release-gate-smoke-1",
         operation_type="ask",
         requested_quantities={"ai_credits": 100_000},
-        allowed_billing_classes=frozenset(
-            {"economical", "standard", "advanced", "premium"}
-        ),
+        allowed_billing_classes=frozenset({"economical", "standard", "advanced", "premium"}),
         current_plan="pro",
         reset_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
     )
@@ -278,9 +278,7 @@ def main() -> int:
     if int(usage_daily_count or 0) < 1:
         raise RuntimeError("DB smoke failed: expected at least 1 usage_daily row")
 
-    print(
-        f"DB smoke passed (llm_requests={llm_request_count}, usage_daily={usage_daily_count})"
-    )
+    print(f"DB smoke passed (llm_requests={llm_request_count}, usage_daily={usage_daily_count})")
     return 0
 
 

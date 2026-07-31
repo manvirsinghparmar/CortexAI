@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
-
 ROOT = Path(__file__).resolve().parent
 FRONTEND_REACT_DIR = ROOT / "frontend-react"
 LOCAL_SUBSCRIPTION_PLANS = ("free", "plus", "pro", "unrestricted")
@@ -74,9 +73,7 @@ def _configure_local_subscription(
     env["BILLING_ENABLED"] = "false"
     env["ENABLE_DEV_SESSION_LOGIN"] = "true"
     env["DEV_SUBSCRIPTION_PLAN"] = "" if plan == "free" else plan
-    env["DEV_SUBSCRIPTION_BYPASS_ENABLED"] = (
-        "true" if plan == "unrestricted" else "false"
-    )
+    env["DEV_SUBSCRIPTION_BYPASS_ENABLED"] = "true" if plan == "unrestricted" else "false"
 
 
 def _require_port_available(name: str, host: str, port: int) -> None:

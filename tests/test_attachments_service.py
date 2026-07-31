@@ -23,7 +23,9 @@ def test_resolve_attachments_rejects_when_feature_disabled(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         attachments_service.resolve_request_attachments(
             user_id=uuid4(),
-            attachments=[SimpleNamespace(file_id=uuid4(), usage_role="primary", transform_mode="auto")],
+            attachments=[
+                SimpleNamespace(file_id=uuid4(), usage_role="primary", transform_mode="auto")
+            ],
         )
 
     assert exc.value.status_code == 404
@@ -74,7 +76,9 @@ def test_resolve_attachments_returns_ready_owned_rows(monkeypatch):
 
     resolved = attachments_service.resolve_request_attachments(
         user_id=uuid4(),
-        attachments=[SimpleNamespace(file_id=file_id, usage_role="reference", transform_mode="auto")],
+        attachments=[
+            SimpleNamespace(file_id=file_id, usage_role="reference", transform_mode="auto")
+        ],
     )
     assert len(resolved) == 1
     assert resolved[0].file_id == file_id
@@ -210,9 +214,7 @@ def test_materialize_reuses_cached_parse_without_reading_storage(monkeypatch):
 
     items = attachments_service.materialize_inference_attachments([attachment])
 
-    assert items[0]["extracted_text"].endswith(
-        "Parsed once and reused for future questions."
-    )
+    assert items[0]["extracted_text"].endswith("Parsed once and reused for future questions.")
     assert items[0]["artifact_meta"]["parse_cache_reused"] is True
     assert "data_base64" not in items[0]
 

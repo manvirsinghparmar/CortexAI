@@ -46,8 +46,7 @@ def _validate_provider_or_400(provider: str | None) -> str | None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Unsupported provider '{provider_norm}'. "
-                f"Supported providers: {allowed_text}"
+                f"Unsupported provider '{provider_norm}'. " f"Supported providers: {allowed_text}"
             ),
         )
     return provider_norm

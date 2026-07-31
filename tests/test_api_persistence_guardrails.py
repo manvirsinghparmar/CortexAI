@@ -902,11 +902,7 @@ def test_cortex_analysis_runs_persist_and_regeneration_marks_them_stale(
         params={"session_id": session_id, "limit": 20},
     )
     assert history.status_code == 200
-    compare_rows = [
-        item
-        for item in history.json()
-        if item["request_group_id"] == group_id
-    ]
+    compare_rows = [item for item in history.json() if item["request_group_id"] == group_id]
     assert len(compare_rows) == 2
     assert any(item["response_version"] == 2 for item in compare_rows)
 

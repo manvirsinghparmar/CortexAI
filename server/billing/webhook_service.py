@@ -426,12 +426,11 @@ def _process_checkout_completed(
         prefix="sub_",
         label="Stripe Subscription ID",
     )
-    if _expandable_id(
-        subscription.get("id"), prefix="sub_", label="Stripe Subscription ID"
-    ) != subscription_id:
-        raise BillingWebhookProcessingError(
-            "Checkout and retrieved Subscription IDs do not match"
-        )
+    if (
+        _expandable_id(subscription.get("id"), prefix="sub_", label="Stripe Subscription ID")
+        != subscription_id
+    ):
+        raise BillingWebhookProcessingError("Checkout and retrieved Subscription IDs do not match")
     state = _parse_subscription_state(subscription, config=config)
     if state.customer_id != customer_id:
         raise BillingWebhookProcessingError("Checkout and Subscription Customer do not match")
@@ -484,12 +483,11 @@ def _process_invoice_event(
 ) -> Literal["processed", "stale"]:
     invoice_id = _expandable_id(event_object.get("id"), prefix="in_", label="Stripe Invoice ID")
     subscription_id = _invoice_subscription_id(event_object)
-    if _expandable_id(
-        subscription.get("id"), prefix="sub_", label="Stripe Subscription ID"
-    ) != subscription_id:
-        raise BillingWebhookProcessingError(
-            "Invoice and retrieved Subscription IDs do not match"
-        )
+    if (
+        _expandable_id(subscription.get("id"), prefix="sub_", label="Stripe Subscription ID")
+        != subscription_id
+    ):
+        raise BillingWebhookProcessingError("Invoice and retrieved Subscription IDs do not match")
     state = _parse_subscription_state(subscription, config=config)
     invoice_customer = event_object.get("customer")
     if invoice_customer is not None:
@@ -525,9 +523,7 @@ def _dispatch_event(
         # Checkout contains only a Subscription reference. The retrieved
         # snapshot is authoritative as of processing time.
         if retrieved_subscription is None:
-            raise BillingWebhookProcessingError(
-                "Checkout Subscription state was not retrieved"
-            )
+            raise BillingWebhookProcessingError("Checkout Subscription state was not retrieved")
         return _process_checkout_completed(
             db,
             event_object=event_object,
@@ -571,9 +567,7 @@ async def _retrieve_event_subscription(
     """Retrieve current provider state without holding a database transaction."""
     if event_type == "checkout.session.completed":
         if event_object.get("mode") != "subscription":
-            raise BillingWebhookProcessingError(
-                "Stripe Checkout Session is not subscription mode"
-            )
+            raise BillingWebhookProcessingError("Stripe Checkout Session is not subscription mode")
         subscription_id = _expandable_id(
             event_object.get("subscription"),
             prefix="sub_",
@@ -581,9 +575,7 @@ async def _retrieve_event_subscription(
         )
         return await gateway.retrieve_subscription(subscription_id)
     if event_type in {"invoice.paid", "invoice.payment_failed"}:
-        return await gateway.retrieve_subscription(
-            _invoice_subscription_id(event_object)
-        )
+        return await gateway.retrieve_subscription(_invoice_subscription_id(event_object))
     return None
 
 

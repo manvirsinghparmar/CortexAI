@@ -81,10 +81,10 @@ async def list_history(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow(commit_on_success=False) as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
         return get_llm_history_entries(
             db_session,
             resolution.user_id,
@@ -105,10 +105,10 @@ async def delete_entry(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
         removed = delete_llm_history_entry(db_session, resolution.user_id, entry_id)
 
     if not removed:
@@ -163,8 +163,8 @@ async def clear_history(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
         clear_llm_history(db_session, resolution.user_id, session_id=session_id)

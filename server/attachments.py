@@ -106,7 +106,7 @@ def _truncate_text(value: str, *, filename: str, max_chars: int) -> str:
     text = str(value or "").strip()
     if len(text) <= max_chars:
         return text
-    clipped = text[:max(0, max_chars - 120)].rstrip()
+    clipped = text[: max(0, max_chars - 120)].rstrip()
     return (
         f"{clipped}\n\n[truncated] Attachment '{filename}' exceeded {max_chars} characters "
         "after extraction."
@@ -130,7 +130,10 @@ def _materializes_as_text(*, mime_type: str, requested_mode: str) -> bool:
         mime_type=mime_type,
         requested_mode=requested_mode,
     )
-    return effective_mode in {"text_only", "table_summary"} and mime_type in TEXT_EXTRACTABLE_MIME_TYPES
+    return (
+        effective_mode in {"text_only", "table_summary"}
+        and mime_type in TEXT_EXTRACTABLE_MIME_TYPES
+    )
 
 
 def _extract_txt(payload: bytes) -> str:
@@ -154,7 +157,9 @@ def _extract_csv(payload: bytes) -> str:
         if row_idx >= MAX_EXTRACT_ROWS:
             lines.append("[truncated rows]")
             break
-        normalized = [str(cell or "").strip().replace("\n", " ") for cell in row[:MAX_EXTRACT_COLUMNS]]
+        normalized = [
+            str(cell or "").strip().replace("\n", " ") for cell in row[:MAX_EXTRACT_COLUMNS]
+        ]
         if len(row) > MAX_EXTRACT_COLUMNS:
             normalized.append("...")
         lines.append(" | ".join(normalized))
@@ -243,11 +248,11 @@ def _extract_xlsx(payload: bytes) -> str:
             with archive.open(sheet_name) as handle:
                 root = ElementTree.parse(handle).getroot()
                 rows = []
-                for row in root.iter():
-                    if _local_name(row.tag) != "row":
+                for worksheet_row in root.iter():
+                    if _local_name(worksheet_row.tag) != "row":
                         continue
                     current = []
-                    for cell in row:
+                    for cell in worksheet_row:
                         if _local_name(cell.tag) != "c":
                             continue
                         current.append(_xlsx_cell_value(cell, shared_strings))
@@ -257,9 +262,12 @@ def _extract_xlsx(payload: bytes) -> str:
                         break
                 if rows:
                     lines.append(f"[Sheet {sheet_idx}]")
-                    for row in rows:
-                        normalized = [str(cell or "").strip().replace("\n", " ") for cell in row[:MAX_EXTRACT_COLUMNS]]
-                        if len(row) > MAX_EXTRACT_COLUMNS:
+                    for worksheet_values in rows:
+                        normalized = [
+                            str(cell or "").strip().replace("\n", " ")
+                            for cell in worksheet_values[:MAX_EXTRACT_COLUMNS]
+                        ]
+                        if len(worksheet_values) > MAX_EXTRACT_COLUMNS:
                             normalized.append("...")
                         lines.append(" | ".join(normalized))
     return "\n".join(lines)
@@ -289,7 +297,9 @@ def _extract_text_payload(*, payload: bytes, mime_type: str, filename: str) -> s
     )
 
 
-def _split_text_into_chunks(text: str, *, chunk_chars: int, max_chunks: int) -> tuple[list[str], bool]:
+def _split_text_into_chunks(
+    text: str, *, chunk_chars: int, max_chunks: int
+) -> tuple[list[str], bool]:
     raw = str(text or "").strip()
     if not raw:
         return [], False
@@ -607,6 +617,7 @@ def resolve_request_attachments(
                     },
                 )
 
+            ingestion_meta = row.get("ingestion_meta")
             resolved.append(
                 ResolvedAttachment(
                     file_id=file_id,
@@ -620,9 +631,7 @@ def resolve_request_attachments(
                     storage_bucket=str(row.get("storage_bucket") or "").strip(),
                     storage_key=str(row.get("storage_key") or "").strip(),
                     ingestion_meta=(
-                        dict(row.get("ingestion_meta"))
-                        if isinstance(row.get("ingestion_meta"), dict)
-                        else {}
+                        dict(ingestion_meta) if isinstance(ingestion_meta, dict) else {}
                     ),
                 )
             )
@@ -646,9 +655,7 @@ def materialize_inference_attachments(
             mime_type=attachment.mime_type,
             requested_mode=attachment.transform_mode,
         )
-        cached_text = str(
-            attachment.ingestion_meta.get("cached_extracted_text") or ""
-        ).strip()
+        cached_text = str(attachment.ingestion_meta.get("cached_extracted_text") or "").strip()
         if (
             cached_text
             and attachment.ingestion_meta.get("ingestion_state") == "ready"
@@ -746,26 +753,30 @@ def materialize_inference_attachments(
                     },
                 ) from exc
 
+            artifact_meta_value = artifact.get("artifact_meta")
             items.append(
                 {
                     "file_id": str(attachment.file_id),
                     "usage_role": attachment.usage_role,
-                    "transform_mode": str(artifact.get("effective_transform_mode") or effective_mode),
+                    "transform_mode": str(
+                        artifact.get("effective_transform_mode") or effective_mode
+                    ),
                     "order_index": attachment.order_index,
                     "filename": attachment.original_filename or "file",
                     "mime_type": attachment.mime_type,
                     "size_bytes": attachment.size_bytes,
                     "extracted_text": str(artifact.get("extracted_text") or ""),
                     "artifact_meta": (
-                        dict(artifact.get("artifact_meta"))
-                        if isinstance(artifact.get("artifact_meta"), dict)
-                        else {}
+                        dict(artifact_meta_value) if isinstance(artifact_meta_value, dict) else {}
                     ),
                 }
             )
             continue
 
-        if effective_mode in {"text_only", "table_summary"} and attachment.mime_type not in TEXT_EXTRACTABLE_MIME_TYPES:
+        if (
+            effective_mode in {"text_only", "table_summary"}
+            and attachment.mime_type not in TEXT_EXTRACTABLE_MIME_TYPES
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -917,14 +928,12 @@ def compatible_providers_for_attachments(
         if not candidate.supports_image_input:
             continue
 
-        if (
-            candidate.max_attachments_per_request is not None
-            and count > int(candidate.max_attachments_per_request)
+        if candidate.max_attachments_per_request is not None and count > int(
+            candidate.max_attachments_per_request
         ):
             continue
-        if (
-            candidate.max_attachment_bytes is not None
-            and largest_size > int(candidate.max_attachment_bytes)
+        if candidate.max_attachment_bytes is not None and largest_size > int(
+            candidate.max_attachment_bytes
         ):
             continue
 
@@ -974,9 +983,8 @@ def enforce_model_attachment_compatibility(
         )
 
     attachment_count = len(binary_attachments)
-    if (
-        candidate.max_attachments_per_request is not None
-        and attachment_count > int(candidate.max_attachments_per_request)
+    if candidate.max_attachments_per_request is not None and attachment_count > int(
+        candidate.max_attachments_per_request
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -992,9 +1000,8 @@ def enforce_model_attachment_compatibility(
         )
 
     largest_size = max(attachment.size_bytes for attachment in binary_attachments)
-    if (
-        candidate.max_attachment_bytes is not None
-        and largest_size > int(candidate.max_attachment_bytes)
+    if candidate.max_attachment_bytes is not None and largest_size > int(
+        candidate.max_attachment_bytes
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1015,9 +1022,7 @@ def enforce_model_attachment_compatibility(
         if str(mime).strip()
     }
     attachment_mime_types = sorted({attachment.mime_type for attachment in binary_attachments})
-    unsupported = sorted(
-        mime for mime in attachment_mime_types if mime not in supported_mime_types
-    )
+    unsupported = sorted(mime for mime in attachment_mime_types if mime not in supported_mime_types)
     if unsupported:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

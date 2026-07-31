@@ -300,7 +300,9 @@ class PromptOptimizer:
                 raise ValueError("Invalid JSON from optimizer response") from first_exc
 
         if not isinstance(parsed, dict):
-            raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
+            raise ValueError(
+                "Invalid optimizer response schema: missing or invalid optimized_prompt"
+            )
         return parsed
 
     def _parse_ai_response(self, response_text: str, original_prompt: str) -> dict[str, Any]:
@@ -308,11 +310,15 @@ class PromptOptimizer:
         parsed = self._load_optimizer_json(cleaned)
 
         if not self._is_valid_output(parsed):
-            raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
+            raise ValueError(
+                "Invalid optimizer response schema: missing or invalid optimized_prompt"
+            )
 
         optimized_prompt = parsed["optimized_prompt"].strip() or original_prompt
         if self._looks_like_answer_instead_of_prompt(original_prompt, optimized_prompt):
-            raise ValueError("Optimizer response appears to answer the prompt instead of rewriting it")
+            raise ValueError(
+                "Optimizer response appears to answer the prompt instead of rewriting it"
+            )
         if self._contains_introduced_placeholder(original_prompt, optimized_prompt):
             raise ValueError("Optimizer response contains unresolved placeholder text")
 
@@ -352,7 +358,11 @@ class PromptOptimizer:
         words = re.findall(r"[a-z0-9_/-]+", compact)
         word_count = len(words)
         has_context = bool(context_hint) or bool(self._compact_context(context))
-        if has_context and word_count <= 8 and any(term in compact for term in ("this", "that", "it")):
+        if (
+            has_context
+            and word_count <= 8
+            and any(term in compact for term in ("this", "that", "it"))
+        ):
             return "reference_dependent"
 
         starts_generic = any(compact.startswith(phrase) for phrase in _WEAK_GENERIC_PHRASES)
@@ -454,7 +464,7 @@ class PromptOptimizer:
         if not messages:
             return ""
 
-        selected = messages[-self._context_message_limit(prompt_quality):]
+        selected = messages[-self._context_message_limit(prompt_quality) :]
         hint = "\n".join(f"- {item['role']}: {item['content']}" for item in selected)
         return hint[: self._context_hint_limit(prompt_quality)].rstrip()
 
@@ -477,8 +487,7 @@ class PromptOptimizer:
 
         if compact_context_hint:
             parts.append(
-                "Conversation context for reference resolution only:\n"
-                f"{compact_context_hint}"
+                "Conversation context for reference resolution only:\n" f"{compact_context_hint}"
             )
 
         parts.append(f"Latest user prompt to rewrite:\n{prompt}")
@@ -628,7 +637,9 @@ class PromptOptimizer:
             next_retry_reason = None
 
             if response.is_error:
-                last_error = response.error.message if response.error else "Optimizer request failed"
+                last_error = (
+                    response.error.message if response.error else "Optimizer request failed"
+                )
                 last_error_code = "optimization_failed"
                 retry_reasons.append("provider_error")
                 continue
@@ -673,7 +684,11 @@ class PromptOptimizer:
                 last_error_code = "unchanged_after_retry"
                 continue
 
-            if unchanged and prompt_quality == "weak" and (unchanged_retry_used or attempt_count > 1):
+            if (
+                unchanged
+                and prompt_quality == "weak"
+                and (unchanged_retry_used or attempt_count > 1)
+            ):
                 result["fallback_reason"] = "unchanged_after_retry"
 
             completed = self._attach_metadata(
@@ -710,9 +725,7 @@ class PromptOptimizer:
             return prompt, False
 
         context = UserContext(
-            conversation_history=[
-                {"role": "system", "content": _PLAIN_SYSTEM_INSTRUCTION}
-            ]
+            conversation_history=[{"role": "system", "content": _PLAIN_SYSTEM_INSTRUCTION}]
         )
 
         try:
@@ -727,9 +740,11 @@ class PromptOptimizer:
             if response.is_error or not response.text:
                 logger.warning(
                     "Prompt optimization failed - using original",
-                    extra={"extra_fields": {
-                        "error": str(response.error) if response.error else "empty_response"
-                    }},
+                    extra={
+                        "extra_fields": {
+                            "error": str(response.error) if response.error else "empty_response"
+                        }
+                    },
                 )
                 return prompt, False
 
@@ -739,11 +754,13 @@ class PromptOptimizer:
 
             logger.info(
                 "Prompt optimized successfully",
-                extra={"extra_fields": {
-                    "original_len": len(prompt),
-                    "optimized_len": len(optimized),
-                    "provider": self.provider,
-                }},
+                extra={
+                    "extra_fields": {
+                        "original_len": len(prompt),
+                        "optimized_len": len(optimized),
+                        "provider": self.provider,
+                    }
+                },
             )
             return optimized, True
 

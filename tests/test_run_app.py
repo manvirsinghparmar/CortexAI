@@ -73,9 +73,7 @@ def test_configure_local_subscription_sets_safe_runner_environment(plan):
     assert env["BILLING_ENABLED"] == "false"
     assert env["ENABLE_DEV_SESSION_LOGIN"] == "true"
     assert env["DEV_SUBSCRIPTION_PLAN"] == ("" if plan == "free" else plan)
-    assert env["DEV_SUBSCRIPTION_BYPASS_ENABLED"] == (
-        "true" if plan == "unrestricted" else "false"
-    )
+    assert env["DEV_SUBSCRIPTION_BYPASS_ENABLED"] == ("true" if plan == "unrestricted" else "false")
 
 
 @pytest.mark.parametrize(

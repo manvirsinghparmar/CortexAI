@@ -120,7 +120,9 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     provider_ids = {item["provider"] for item in providers_payload["providers"]}
     assert provider_id in provider_ids
 
-    zai_provider = next(item for item in providers_payload["providers"] if item["provider"] == provider_id)
+    zai_provider = next(
+        item for item in providers_payload["providers"] if item["provider"] == provider_id
+    )
     assert zai_provider["label"] == "Z.AI"
     assert zai_provider["default_model"] == "zai-chat"
     assert zai_provider["enabled_model_count"] >= 1

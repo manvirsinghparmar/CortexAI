@@ -9,6 +9,7 @@ const models = [
   model("claude", "claude-sonnet-4-5"),
   model("deepseek", "deepseek-chat"),
   model("gemini", "gemini-2.5-flash"),
+  model("grok", "grok-4"),
 ];
 
 describe("ModelSelector", () => {
@@ -27,7 +28,7 @@ describe("ModelSelector", () => {
 
     const nativeSelect = container.querySelector<HTMLSelectElement>("#singleModel");
     expect(nativeSelect).toHaveValue("openai:gpt-5.1");
-    expect(nativeSelect?.querySelectorAll("option")).toHaveLength(4);
+    expect(nativeSelect?.querySelectorAll("option")).toHaveLength(5);
 
     await user.click(screen.getByRole("button", { name: /Using: GPT-5\.1/ }));
     const listbox = screen.getByRole("listbox", { name: "Using options" });
@@ -40,10 +41,15 @@ describe("ModelSelector", () => {
     const geminiLogo = listbox.querySelector<HTMLImageElement>(
       'img[src*="domain_url=gemini.google.com"]',
     );
+    const grokLogo = listbox.querySelector<HTMLImageElement>(
+      'img[src*="domain_url=grok.com"]',
+    );
     expect(deepSeekLogo).toHaveAttribute("width", "20");
     expect(deepSeekLogo).toHaveAttribute("height", "20");
     expect(geminiLogo).toHaveAttribute("width", "20");
     expect(geminiLogo).toHaveAttribute("height", "20");
+    expect(grokLogo).toHaveAttribute("width", "20");
+    expect(grokLogo).toHaveAttribute("height", "20");
 
     await user.click(within(listbox).getByRole("option", { name: /DeepSeek Chat/ }));
     expect(onChange).toHaveBeenCalledWith("deepseek:deepseek-chat");

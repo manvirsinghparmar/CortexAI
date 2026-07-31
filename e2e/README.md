@@ -45,7 +45,7 @@ npm run --prefix e2e install:browsers
 npm run --prefix e2e test
 ```
 
-The live `test` command requires the E2E database, API key, and provider configuration described above. Its global setup builds `frontend-react/dist`, starts FastAPI with that React build as the browser target, and enables the production-blocked dev-session endpoint only inside the E2E server process.
+The live `test` command requires the E2E database, API key, and provider configuration described above. Its global setup builds `frontend-react/dist`, starts FastAPI with that React build as the browser target, and enables the production-blocked dev-session endpoint only inside the E2E server process. The E2E bootstrap forces the guarded local `unrestricted` subscription profile so serial provider cases still exercise reservation/settlement without exhausting a shared Free or paid usage period.
 
 Responsive UI suites do not require PostgreSQL, provider keys, or a running backend. They start Vite directly and mock the frontend API contracts:
 

@@ -142,7 +142,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Update routing docs (`README.md`, `docs/SMART_ROUTING_DIAGRAM.md`)
 
 - Change web research or Tavily retrieval behavior:
-  1. Update `tools/web/intent.py`, `tools/web/tavily_service.py`, `tools/web/tavily_client.py`, or `tools/web/tavily_resolver.py`
+  1. Update `tools/web/intent.py`, `tools/web/contracts.py`, `tools/web/tavily_service.py`, `tools/web/tavily_client.py`, or `tools/web/tavily_resolver.py`
   2. Validate with Tavily/research tests
   3. Update `README.md`, `docs/TAVILY_INTEGRATION.md`, and logging/runbook docs when option or telemetry behavior changes
 
@@ -152,7 +152,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Update contract docs and tests
 
 - Change subscription plan definitions or model credit economics:
-  1. Update `config/subscription_plans.yaml` and/or each model's access category, input/output multipliers, usage label, and pricing version in `config/model_registry.yaml`
+  1. Update `config/subscription_plans.yaml`, `server/billing/credit_calculator.py`, and/or each model's access category, input/output multipliers, usage label, and pricing version in `config/model_registry.yaml`; Tavily research settlement uses provider credits from research metadata
   2. Keep model access categories separate from smart-routing `T0`-`T3` tiers; never add a fallback multiplier
   3. Validate with `tests/test_credit_calculator.py`, `tests/test_subscription_plan_catalog.py`, `tests/test_model_registry_capabilities.py`, and the `/v1/models` contract tests
 

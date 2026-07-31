@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker
 
 from db import billing_repository as repository
-from server.billing.credit_calculator import ADVANCED_WEB_SEARCH_CREDITS
+from server.billing.credit_calculator import calculate_research_credit_charge
 from server.billing.enforcement_service import (
     BillableModelUsage,
     authorize_and_reserve_usage,
@@ -477,7 +477,7 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
                 provider_cost_usd=0.001,
             ),
         ),
-        research_performed=False,
+        research_provider_credits_used=0,
         file_analysis_performed=True,
     )
     counter = _counter(
@@ -556,7 +556,7 @@ def test_under_reserved_provider_result_keeps_answer_billable_and_records_adjust
                 provider_cost_usd=0.01,
             ),
         ),
-        research_performed=False,
+        research_provider_credits_used=0,
     )
 
     final_counter = _counter(db, tables, persisted["usage_period_id"])
@@ -606,14 +606,14 @@ def test_compare_partial_success_charges_only_delivered_model(metering_db):
                 output_tokens=100,
             ),
         ),
-        research_performed=False,
+        research_provider_credits_used=0,
     )
     items = db.execute(select(tables["credit_transactions"])).mappings().all()
     assert [(item["provider"], item["model"]) for item in items] == [("openai", "gpt-4.1-mini")]
     assert sum(item["total_credits"] for item in items) == 450
 
 
-def test_successful_research_remains_charged_when_model_fails(metering_db):
+def test_provider_reported_research_usage_is_charged_when_model_fails(metering_db):
     db, tables = metering_db
     reservation = authorize_and_reserve_usage(
         db,
@@ -629,11 +629,41 @@ def test_successful_research_remains_charged_when_model_fails(metering_db):
         db,
         reservation=reservation,
         model_usages=(),
-        research_performed=True,
+        research_provider_credits_used=3,
     )
     item = db.execute(select(tables["credit_transactions"])).mappings().one()
     assert item["item_type"] == "research"
-    assert item["total_credits"] == ADVANCED_WEB_SEARCH_CREDITS
+    assert item["total_credits"] == calculate_research_credit_charge(3)
+    assert item["metadata"] == {
+        "provider_credits_used": 3,
+        "cortex_credits_per_provider_credit": 5_000,
+    }
+
+
+def test_research_fallback_usage_is_marked_estimated_in_ledger(metering_db):
+    db, tables = metering_db
+    reservation = authorize_and_reserve_usage(
+        db,
+        user_id=_user(db, tables),
+        request_id="research-estimated",
+        operation_type="ask",
+        model_targets=(ModelTargetIntent("openai", "gpt-4.1-mini", "standard"),),
+        research_enabled=True,
+        input_text="Current facts",
+        max_output_tokens=200,
+    )
+
+    finalize_reserved_usage(
+        db,
+        reservation=reservation,
+        model_usages=(),
+        research_provider_credits_used=2,
+        research_usage_estimated=True,
+    )
+
+    item = db.execute(select(tables["credit_transactions"])).mappings().one()
+    assert item["total_credits"] == 10_000
+    assert item["usage_estimated"] is True
 
 
 def test_missing_provider_usage_is_estimated_and_marked(metering_db):
@@ -660,7 +690,7 @@ def test_missing_provider_usage_is_estimated_and_marked(metering_db):
                 output_text="A short answer.",
             ),
         ),
-        research_performed=False,
+        research_provider_credits_used=0,
     )
     item = db.execute(select(tables["credit_transactions"])).mappings().one()
     assert item["usage_estimated"] is True
@@ -729,7 +759,7 @@ def test_smart_routing_reserves_allowed_worst_case_and_settles_actual(metering_d
                 output_tokens=40,
             ),
         ),
-        research_performed=False,
+        research_provider_credits_used=0,
     )
     persisted = repository.get_usage_reservation_by_id(db, reservation.reservation_id)
     assert persisted["settled_quantities"]["ai_credits"] == 50

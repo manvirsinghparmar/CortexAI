@@ -1,6 +1,7 @@
 """Tavily-based research service."""
 
 import hashlib
+from dataclasses import replace
 
 from utils.logger import get_logger
 
@@ -72,8 +73,12 @@ class TavilyResearchService:
                             }
                         },
                     )
-                    cached.cache_hit = True
-                    return cached
+                    return replace(
+                        cached,
+                        cache_hit=True,
+                        provider_credits_used=0,
+                        provider_credits_estimated=False,
+                    )
             else:
                 logger.info(
                     "Research cache bypassed",
@@ -120,11 +125,12 @@ class TavilyResearchService:
                     }
                 },
             )
-            sources = self.client.search(
+            search_response = self.client.search_with_usage(
                 query=search_query,
                 max_results=self.max_sources,
                 search_depth="advanced",
             )
+            sources = search_response.sources
 
             if not sources:
                 logger.warning(
@@ -140,7 +146,13 @@ class TavilyResearchService:
                         }
                     },
                 )
-                return ResearchContext(used=False, error="no_search_results", search_query=search_query)
+                return ResearchContext(
+                    used=False,
+                    error="no_search_results",
+                    search_query=search_query,
+                    provider_credits_used=search_response.provider_credits_used,
+                    provider_credits_estimated=search_response.provider_credits_estimated,
+                )
 
             injected_text = build_injected_text(sources)
             context = ResearchContext(
@@ -149,6 +161,8 @@ class TavilyResearchService:
                 sources=sources,
                 cache_hit=False,
                 search_query=search_query,
+                provider_credits_used=search_response.provider_credits_used,
+                provider_credits_estimated=search_response.provider_credits_estimated,
             )
 
             if use_cache:

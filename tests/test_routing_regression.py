@@ -142,6 +142,8 @@ class FakeResearchContext:
         ]
         self.cache_hit = False
         self.error = None
+        self.provider_credits_used = 2
+        self.provider_credits_estimated = False
 
 
 class FakeResearchService:
@@ -883,6 +885,8 @@ def test_research_mode_off_does_not_reuse_prior_web_context():
     assert updated_messages == messages
     assert metadata["research_used"] is False
     assert metadata["research_reused"] is False
+    assert metadata["research_provider_credits_used"] == 0
+    assert metadata["research_provider_credits_estimated"] is False
     assert metadata["sources"] == []
 
 
@@ -1104,6 +1108,8 @@ def test_research_mode_on_forces_fresh_search_instead_of_reuse():
     assert fake_research.calls[0]["use_cache"] is False
     assert metadata["research_used"] is True
     assert metadata["research_reused"] is False
+    assert metadata["research_provider_credits_used"] == 2
+    assert metadata["research_provider_credits_estimated"] is False
     assert metadata["sources"] == [
         {
             "id": 1,

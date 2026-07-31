@@ -72,7 +72,7 @@ import json
 import logging
 from contextlib import suppress
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -86,7 +86,7 @@ from config.provider_catalog import get_provider_catalog, get_provider_ids
 from orchestrator.model_registry import ModelRegistry
 from server.app import create_app
 from models.unified_response import UnifiedResponse, TokenUsage, NormalizedError
-from server.schemas.responses import CompareResponseDTO
+from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.billing.enforcement_service import ReservedRequestUsage
 from server.billing.entitlement_service import EntitlementDenial
 from server.billing.errors import EntitlementDeniedError
@@ -1543,6 +1543,72 @@ def test_compare_dto_mapping_smoke():
     assert dto is not None
 
 
+def test_chat_dto_adds_formula_based_research_credits():
+    base = UnifiedResponse(
+        request_id="research-chat",
+        text="Answer",
+        provider="openai",
+        model="gpt-4o-mini",
+        latency_ms=10,
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        estimated_cost=0.00001,
+        finish_reason="stop",
+        error=None,
+        metadata={},
+    )
+    fresh = replace(
+        base,
+        metadata={
+            "research_used": True,
+            "research_reused": False,
+            "research_provider_credits_used": 3,
+        },
+    )
+
+    base_dto = ChatResponseDTO.from_unified_response(base)
+    fresh_dto = ChatResponseDTO.from_unified_response(fresh)
+
+    assert fresh_dto.ai_credits - base_dto.ai_credits == 15_000
+
+
+def test_compare_dto_adds_shared_research_charge_once():
+    metadata = {
+        "research_used": True,
+        "research_reused": False,
+        "research_provider_credits_used": 3,
+    }
+    responses = [
+        UnifiedResponse(
+            request_id=f"research-compare-{index}",
+            text="Answer",
+            provider="openai",
+            model="gpt-4o-mini",
+            latency_ms=10,
+            token_usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            estimated_cost=0.00001,
+            finish_reason="stop",
+            error=None,
+            metadata=metadata,
+        )
+        for index in range(2)
+    ]
+    mur = FakeMultiUnifiedResponse(
+        request_id="research-compare",
+        request_group_id="research-compare-group",
+        prompt="latest facts",
+        responses=responses,
+        success_count=2,
+        failure_count=0,
+        error_count=0,
+        total_tokens=6,
+        total_cost=0.00002,
+    )
+
+    dto = CompareResponseDTO.from_multi_unified_response(mur)
+
+    assert dto.total_ai_credits - sum(item.ai_credits for item in dto.responses) == 15_000
+
+
 def test_compare_never_returns_500(client):
     payload = {
         "prompt": "Explain async/await",
@@ -2930,7 +2996,8 @@ def test_compare_partial_success_settles_only_successful_target(client, app, mon
     assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
         ("openai", "gpt-4o-mini")
     ]
-    assert settled[0]["research_performed"] is True
+    assert settled[0]["research_provider_credits_used"] == 2
+    assert settled[0]["research_usage_estimated"] is True
 
 
 def test_compare_stream_partial_success_uses_aggregate_settlement(client, app, monkeypatch):

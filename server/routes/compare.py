@@ -27,6 +27,10 @@ from server.billing.enforcement_service import (
     ReservedRequestUsage,
     resolve_model_target,
 )
+from server.billing.credit_calculator import (
+    ResearchCreditUsage,
+    research_credit_usage_from_metadata,
+)
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
@@ -130,22 +134,35 @@ def _to_ndjson(event: dict) -> str:
     return json.dumps(event, ensure_ascii=False) + "\n"
 
 
-def _research_was_performed(responses: list[UnifiedResponse]) -> bool:
-    return any(
-        isinstance(response.metadata, dict)
-        and bool(response.metadata.get("research_used"))
-        and not bool(response.metadata.get("research_reused"))
-        for response in responses
+def _max_research_usage(*usages: ResearchCreditUsage) -> ResearchCreditUsage:
+    return max(
+        usages or (ResearchCreditUsage(0, 0, False),),
+        key=lambda usage: (usage.provider_credits_used, not usage.estimated),
     )
+
+
+def _research_credit_usage(responses: list[UnifiedResponse]) -> ResearchCreditUsage:
+    return _max_research_usage(
+        *(
+            research_credit_usage_from_metadata(response.metadata)
+            for response in responses
+        )
+    )
+
+
+def _research_was_performed(responses: list[UnifiedResponse]) -> bool:
+    return _research_credit_usage(responses).provider_credits_used > 0
+
+
+def _prepared_research_credit_usage(
+    prepared_turn: dict[str, Any] | None,
+) -> ResearchCreditUsage:
+    metadata = prepared_turn.get("research_metadata") if prepared_turn else None
+    return research_credit_usage_from_metadata(metadata)
 
 
 def _prepared_research_was_performed(prepared_turn: dict[str, Any] | None) -> bool:
-    metadata = prepared_turn.get("research_metadata") if prepared_turn else None
-    return bool(
-        isinstance(metadata, dict)
-        and metadata.get("research_used")
-        and not metadata.get("research_reused")
-    )
+    return _prepared_research_credit_usage(prepared_turn).provider_credits_used > 0
 
 
 def _billable_stream_responses(
@@ -249,7 +266,7 @@ def _finalize_compare_usage(
     reservation: ReservedRequestUsage,
     responses: list[UnifiedResponse],
     orchestrator: CortexOrchestrator,
-    research_performed: bool | None = None,
+    research_usage: ResearchCreditUsage | None = None,
     attachments_present: bool = False,
 ) -> None:
     try:
@@ -257,15 +274,13 @@ def _finalize_compare_usage(
             responses,
             orchestrator=orchestrator,
         )
+        resolved_research_usage = research_usage or _research_credit_usage(responses)
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=successful_targets,
             model_usages=_billable_model_usages(responses),
-            research_performed=(
-                _research_was_performed(responses)
-                if research_performed is None
-                else research_performed
-            ),
+            research_provider_credits_used=resolved_research_usage.provider_credits_used,
+            research_usage_estimated=resolved_research_usage.estimated,
             file_analysis_performed=attachments_present and bool(successful_targets),
         )
     except Exception as exc:
@@ -855,14 +870,17 @@ async def compare_stream(
                     )
 
             raw_responses = [r for r in ordered_responses if r is not None]
+            research_usage = _max_research_usage(
+                _prepared_research_credit_usage(prepared_turn),
+                _research_credit_usage(raw_responses),
+            )
             if billing_reservation is not None:
-                prepared_research = _prepared_research_was_performed(prepared_turn)
                 billing_finalization_attempted = True
                 _finalize_compare_usage(
                     reservation=billing_reservation,
                     responses=raw_responses,
                     orchestrator=orchestrator,
-                    research_performed=prepared_research or _research_was_performed(raw_responses),
+                    research_usage=research_usage,
                     attachments_present=bool(resolved_attachments),
                 )
             resolved_session_id = requested_session_id
@@ -900,12 +918,7 @@ async def compare_stream(
                 "total_cost": sum(r.estimated_cost for r in dtos),
                 "total_ai_credits": (
                     sum(r.ai_credits for r in dtos)
-                    + (
-                        15_000
-                        if _prepared_research_was_performed(prepared_turn)
-                        or _research_was_performed(raw_responses)
-                        else 0
-                    )
+                    + research_usage.cortex_credits
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
@@ -934,11 +947,11 @@ async def compare_stream(
                 completed_responses = [
                     response for response in ordered_responses if response is not None
                 ]
-                prepared_research = _prepared_research_was_performed(prepared_turn)
-                research_performed = prepared_research or _research_was_performed(
-                    completed_responses
+                research_usage = _max_research_usage(
+                    _prepared_research_credit_usage(prepared_turn),
+                    _research_credit_usage(completed_responses),
                 )
-                if partial_responses or research_performed:
+                if partial_responses or research_usage.provider_credits_used:
                     try:
                         billing_finalization_attempted = True
                         if billing_reservation is not None:
@@ -946,7 +959,7 @@ async def compare_stream(
                                 reservation=billing_reservation,
                                 responses=partial_responses,
                                 orchestrator=orchestrator,
-                                research_performed=research_performed,
+                                research_usage=research_usage,
                                 attachments_present=bool(resolved_attachments),
                             )
                     except Exception:
@@ -974,11 +987,11 @@ async def compare_stream(
                 completed_responses = [
                     response for response in ordered_responses if response is not None
                 ]
-                prepared_research = _prepared_research_was_performed(prepared_turn)
-                research_performed = prepared_research or _research_was_performed(
-                    completed_responses
+                research_usage = _max_research_usage(
+                    _prepared_research_credit_usage(prepared_turn),
+                    _research_credit_usage(completed_responses),
                 )
-                if partial_responses or research_performed:
+                if partial_responses or research_usage.provider_credits_used:
                     try:
                         billing_finalization_attempted = True
                         if billing_reservation is not None:
@@ -986,7 +999,7 @@ async def compare_stream(
                                 reservation=billing_reservation,
                                 responses=partial_responses,
                                 orchestrator=orchestrator,
-                                research_performed=research_performed,
+                                research_usage=research_usage,
                                 attachments_present=bool(resolved_attachments),
                             )
                     except Exception:

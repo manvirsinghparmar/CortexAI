@@ -16,8 +16,10 @@ from orchestrator.model_registry import ModelRegistry
 from orchestrator.routing_types import ModelCandidate
 from server.billing.credit_calculator import (
     ADVANCED_WEB_SEARCH_CREDITS,
+    CORTEX_CREDITS_PER_TAVILY_CREDIT,
     CreditCharge,
     calculate_credit_charge,
+    calculate_research_credit_charge,
 )
 from server.billing.credit_estimator import estimate_model_credits, fallback_actual_tokens
 from server.billing.entitlement_service import (
@@ -456,7 +458,8 @@ def finalize_reserved_usage(
     reservation: ReservedRequestUsage,
     successful_targets: Sequence[ModelTargetIntent] = (),
     model_usages: Sequence[BillableModelUsage] = (),
-    research_performed: bool,
+    research_provider_credits_used: int,
+    research_usage_estimated: bool = False,
     optimization_performed: bool = False,
     file_analysis_performed: bool = False,
     uploaded_bytes: int = 0,
@@ -492,8 +495,9 @@ def finalize_reserved_usage(
                 },
             }
         )
-    if research_performed:
-        total_credits += ADVANCED_WEB_SEARCH_CREDITS
+    research_credits = calculate_research_credit_charge(research_provider_credits_used)
+    if research_credits:
+        total_credits += research_credits
         transaction_items.append(
             {
                 "item_type": "research",
@@ -503,12 +507,15 @@ def finalize_reserved_usage(
                 "output_tokens": 0,
                 "input_credits": 0,
                 "output_credits": 0,
-                "fixed_credits": ADVANCED_WEB_SEARCH_CREDITS,
-                "total_credits": ADVANCED_WEB_SEARCH_CREDITS,
+                "fixed_credits": research_credits,
+                "total_credits": research_credits,
                 "provider_cost_usd": 0.0,
-                "usage_estimated": False,
-                "pricing_version": "research-2026-07-29",
-                "metadata": {},
+                "usage_estimated": bool(research_usage_estimated),
+                "pricing_version": "research-2026-07-31",
+                "metadata": {
+                    "provider_credits_used": research_provider_credits_used,
+                    "cortex_credits_per_provider_credit": CORTEX_CREDITS_PER_TAVILY_CREDIT,
+                },
             }
         )
     if total_credits == 0:
@@ -555,7 +562,7 @@ def _reconcile_transaction_items(
     remaining = max(0, billed_credits)
     reconciled: list[_CreditTransactionItem] = []
     unbilled_provider_cost = 0.0
-    # Fixed research is deterministic and was included explicitly in preflight.
+    # Research is prioritized because its normal two-credit cost is included in preflight.
     ordered = sorted(items, key=lambda item: 0 if item.get("item_type") == "research" else 1)
     for original in ordered:
         item = original.copy()

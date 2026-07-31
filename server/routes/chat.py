@@ -25,6 +25,7 @@ from server.billing.enforcement_service import (
     ReservedRequestUsage,
     resolve_model_target,
 )
+from server.billing.credit_calculator import research_credit_usage_from_metadata
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
@@ -479,11 +480,7 @@ def _to_ndjson(event: dict) -> str:
 
 def _research_was_performed(response: object) -> bool:
     metadata = getattr(response, "metadata", None)
-    return bool(
-        isinstance(metadata, dict)
-        and metadata.get("research_used")
-        and not metadata.get("research_reused")
-    )
+    return research_credit_usage_from_metadata(metadata).provider_credits_used > 0
 
 
 def _successful_billing_targets(
@@ -615,11 +612,15 @@ def _finalize_chat_usage(
             if settle_model_response
             else ()
         )
+        research_usage = research_credit_usage_from_metadata(
+            getattr(response, "metadata", None)
+        )
         _finalize_subscription_usage(
             reservation=reservation,
             successful_targets=successful_targets,
             model_usages=(_billable_model_usages(response) if settle_model_response else ()),
-            research_performed=_research_was_performed(response),
+            research_provider_credits_used=research_usage.provider_credits_used,
+            research_usage_estimated=research_usage.estimated,
             file_analysis_performed=attachments_present and bool(successful_targets),
         )
     except Exception as exc:

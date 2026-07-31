@@ -279,7 +279,7 @@ async def create_analysis_run(
                         provider_cost_usd=generated.estimated_cost,
                     ),
                 ),
-                research_performed=False,
+                research_provider_credits_used=0,
             )
         except Exception as exc:
             raise enforcement_http_exception(exc) from exc

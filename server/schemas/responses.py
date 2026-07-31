@@ -6,8 +6,8 @@ from functools import lru_cache
 
 from orchestrator.model_registry import ModelRegistry
 from server.billing.credit_calculator import (
-    ADVANCED_WEB_SEARCH_CREDITS,
     calculate_credit_charge,
+    research_credit_usage_from_metadata,
 )
 from server.billing.credit_estimator import fallback_actual_tokens
 
@@ -107,12 +107,8 @@ class ChatResponseDTO(BaseModel):
                     break
 
         ai_credits, credit_usage_estimated = _response_credit_usage(ur)
-        if (
-            include_research_charge
-            and metadata.get("research_used")
-            and not metadata.get("research_reused")
-        ):
-            ai_credits += ADVANCED_WEB_SEARCH_CREDITS
+        if include_research_charge:
+            ai_credits += research_credit_usage_from_metadata(metadata).cortex_credits
         return cls(
             request_id=ur.request_id,
             response_version=max(1, int(response_version)),
@@ -169,11 +165,14 @@ class CompareResponseDTO(BaseModel):
             )
             for r in mur.responses
         ]
-        research_charged = any(
-            isinstance(getattr(r, "metadata", None), dict)
-            and r.metadata.get("research_used")
-            and not r.metadata.get("research_reused")
-            for r in mur.responses
+        research_credits = max(
+            (
+                research_credit_usage_from_metadata(
+                    getattr(response, "metadata", None)
+                ).cortex_credits
+                for response in mur.responses
+            ),
+            default=0,
         )
         return cls(
             request_group_id=mur.request_group_id,
@@ -185,7 +184,7 @@ class CompareResponseDTO(BaseModel):
             total_cost=mur.total_cost,
             total_ai_credits=(
                 sum(item.ai_credits for item in response_dtos)
-                + (ADVANCED_WEB_SEARCH_CREDITS if research_charged else 0)
+                + research_credits
             ),
             timestamp=mur.timestamp,
         )

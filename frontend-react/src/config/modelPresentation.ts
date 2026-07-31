@@ -42,7 +42,7 @@ const PROVIDERS: Record<
   },
   grok: {
     label: "Grok",
-    logoUrl: "https://www.google.com/s2/favicons?domain_url=x.ai&sz=64",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=grok.com&sz=64",
     color: "#1DA1F2",
   },
   claude: {

@@ -431,7 +431,7 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     assert "Choose an approach" in reserved["input_text"]
     assert "\nA\nB" in reserved["input_text"]
     assert finalized["reservation"] is billing_reservation
-    assert finalized["research_performed"] is False
+    assert finalized["research_provider_credits_used"] == 0
     assert finalized["model_usages"][0].input_tokens == 10
     assert finalized["model_usages"][0].output_tokens == 20
 

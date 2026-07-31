@@ -328,6 +328,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         return {
             "research_used": False,
             "research_reused": False,
+            "research_provider_credits_used": 0,
+            "research_provider_credits_estimated": False,
             "research_topic": None,
             "research_error": error,
             "sources": [],
@@ -512,6 +514,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": None,
                 "sources": [],
@@ -535,6 +539,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             metadata = {
                 "research_used": True,
                 "research_reused": True,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": state.topic if state.topic else None,
                 "research_error": None,
                 "sources": [
@@ -555,6 +561,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": None,
                 "sources": [],
@@ -565,6 +573,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": "service_not_configured",
                 "sources": [],
@@ -599,6 +609,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": "invalid_query",
                 "sources": [],
@@ -657,7 +669,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
             metadata = {
                 "research_used": True,
-                "research_reused": False,
+                "research_reused": bool(research_ctx.cache_hit),
+                "research_provider_credits_used": max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
+                "research_provider_credits_estimated": bool(
+                    getattr(research_ctx, "provider_credits_estimated", False)
+                ),
                 "research_topic": topic,
                 "research_error": None,
                 "sources": [
@@ -672,6 +690,12 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
+                "research_provider_credits_estimated": bool(
+                    getattr(research_ctx, "provider_credits_estimated", False)
+                ),
                 "research_topic": None,
                 "research_error": research_ctx.error,
                 "sources": [],
@@ -1667,6 +1691,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         research_metadata: dict[str, Any] = {
             "research_used": False,
             "research_reused": False,
+            "research_provider_credits_used": 0,
+            "research_provider_credits_estimated": False,
             "research_topic": None,
             "research_error": "not_performed",
             "sources": [],
@@ -1706,6 +1732,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 research_metadata = {
                     "research_used": False,
                     "research_reused": False,
+                    "research_provider_credits_used": 0,
+                    "research_provider_credits_estimated": False,
                     "research_topic": None,
                     "research_error": "service_not_configured",
                     "sources": [],

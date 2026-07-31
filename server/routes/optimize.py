@@ -195,7 +195,7 @@ def _finalize_optimization_usage(
             reservation=reservation,
             successful_targets=(),
             model_usages=_result_model_usages(result),
-            research_performed=False,
+            research_provider_credits_used=0,
             optimization_performed=True,
         )
     except Exception as exc:

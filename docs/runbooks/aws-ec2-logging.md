@@ -267,7 +267,7 @@ Resolver fields to check when search quality looks poor:
 - `country_sent`
 - `domain_rule`
 - `include_domain_count`
-- `source_content_lengths` and `credits_used` on `research.search.success`
+- `source_content_lengths`, `credits_used`, and `credits_estimated` on `research.search.success`
 
 ### Network diagnostics event
 

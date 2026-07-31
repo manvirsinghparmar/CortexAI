@@ -134,3 +134,43 @@ def test_search_invalid_chunk_env_uses_default(monkeypatch):
 
     call = client.client.calls[0]
     assert call["chunks_per_source"] == 3
+
+
+def test_search_with_usage_returns_provider_reported_credits():
+    client = _make_client(
+        {
+            "usage": {"credits": 3},
+            "results": [
+                {
+                    "title": "Doc",
+                    "url": "https://example.com/doc",
+                    "content": "snippet",
+                }
+            ],
+        }
+    )
+
+    result = client.search_with_usage("latest docs")
+
+    assert len(result.sources) == 1
+    assert result.provider_credits_used == 3
+    assert result.provider_credits_estimated is False
+
+
+def test_search_with_usage_marks_default_when_provider_omits_usage():
+    client = _make_client({"results": []})
+
+    result = client.search_with_usage("latest docs")
+
+    assert result.sources == []
+    assert result.provider_credits_used == 2
+    assert result.provider_credits_estimated is True
+
+
+def test_search_with_usage_preserves_explicit_zero_provider_credits():
+    client = _make_client({"usage": {"credits": 0}, "results": []})
+
+    result = client.search_with_usage("latest docs")
+
+    assert result.provider_credits_used == 0
+    assert result.provider_credits_estimated is False

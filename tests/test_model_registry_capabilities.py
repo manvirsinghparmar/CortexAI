@@ -5,6 +5,7 @@ import yaml
 
 from orchestrator.model_registry import ModelRegistry
 from server.billing.models import ModelBillingClass
+from server.billing.plan_catalog import get_plan_catalog
 
 
 def test_registry_exposes_attachment_capabilities():
@@ -73,3 +74,84 @@ def test_registry_rejects_unknown_billing_class(tmp_path):
 
     with pytest.raises(ValueError, match="Invalid billing_class 'vip'"):
         ModelRegistry.from_yaml(str(path))
+
+
+def test_registry_separates_selectable_models_from_compatibility_entries():
+    registry = ModelRegistry.from_yaml()
+    selectable = {
+        (candidate.provider, candidate.model_name)
+        for candidate in registry.list_selectable_models()
+    }
+
+    assert ("openai", "gpt-5.6-sol") in selectable
+    assert ("deepseek", "deepseek-v4-flash") in selectable
+    assert ("claude", "claude-sonnet-4-6") in selectable
+    assert ("claude", "claude-opus-4-6") in selectable
+    assert ("claude", "claude-opus-4-5") in selectable
+    assert ("openai", "gpt-5.2-codex") not in selectable
+    assert ("grok", "grok-4-1-fast-reasoning") not in selectable
+
+
+def test_active_claude_4_models_use_the_requested_subscription_classes():
+    registry = ModelRegistry.from_yaml()
+    catalog = get_plan_catalog()
+    expected = {
+        "claude-sonnet-4-6": (
+            ModelBillingClass.ADVANCED,
+            {"plus", "pro"},
+            3.0,
+            15.0,
+        ),
+        "claude-opus-4-6": (
+            ModelBillingClass.PREMIUM,
+            {"pro"},
+            5.0,
+            25.0,
+        ),
+        "claude-opus-4-5": (
+            ModelBillingClass.PREMIUM,
+            {"pro"},
+            5.0,
+            25.0,
+        ),
+    }
+
+    for model_name, (
+        billing_class,
+        allowed_plans,
+        input_rate,
+        output_rate,
+    ) in expected.items():
+        candidate = registry.find_model("claude", model_name)
+        assert candidate is not None
+        assert candidate.enabled is True
+        assert candidate.selectable is True
+        assert candidate.lifecycle_status == "ACTIVE"
+        assert candidate.billing_class is billing_class
+        assert candidate.input_cost_per_1m == input_rate
+        assert candidate.output_cost_per_1m == output_rate
+
+        actual_plans = {
+            plan.code
+            for plan in catalog.list_plans()
+            if billing_class.value in plan.entitlements.allowed_billing_classes
+        }
+        assert actual_plans == allowed_plans
+
+
+def test_registry_resolves_retired_and_redirected_ids_without_losing_request_identity():
+    registry = ModelRegistry.from_yaml()
+
+    codex = registry.resolve_model_identity("openai", "gpt-5.2-codex")
+    grok = registry.resolve_model_identity("grok", "grok-4-1-fast-reasoning")
+
+    assert codex is not None
+    assert codex["requested_model"] == "gpt-5.2-codex"
+    assert codex["runtime_model"] == "gpt-5.6-sol"
+    assert codex["lifecycle_status"] == "RETIRED"
+    assert codex["alias_redirected"] is True
+    assert codex["replacement_model"] == "gpt-5.6-sol"
+    assert "removed" in codex["migration_reason"].lower()
+    assert grok is not None
+    assert grok["runtime_model"] == "grok-4.3"
+    assert grok["lifecycle_status"] == "ALIAS_REDIRECTED"

@@ -115,6 +115,10 @@ function modelDisplayLabel(
 }
 
 function capabilityWord(model: string): string {
+  if (model.includes("fable")) return "Fable";
+  if (model.includes("terra")) return "Terra";
+  if (model.includes("luna")) return "Luna";
+  if (model.includes("sol")) return "Sol";
   if (model.includes("flash")) return "Flash";
   if (model.includes("pro")) return "Pro";
   if (model.includes("mini")) return "Mini";

@@ -25,6 +25,7 @@ test("mobile Compare opens the visible model picker and updates its selection", 
             const separator = option.value.indexOf(":");
             return {
                 value: option.value,
+                provider: separator >= 0 ? option.value.slice(0, separator) : "",
                 modelId: separator >= 0 ? option.value.slice(separator + 1) : option.value,
             };
         },
@@ -37,6 +38,9 @@ test("mobile Compare opens the visible model picker and updates its selection", 
     const listbox = page.getByRole("listbox", { name: "Compare model 1 options" });
     await expect(listbox).toBeVisible();
     expect(await listbox.evaluate(element => element.parentElement === document.body)).toBe(true);
+    await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+    await listbox.locator(`[data-provider-key="${target.provider}"]`).click();
+    await expect(listbox).toHaveAttribute("data-picker-view", "models");
 
     const geometry = await listbox.evaluate(element => {
         const rect = element.getBoundingClientRect();

@@ -74,7 +74,7 @@ describe("ModelsPage", () => {
     renderPage();
 
     expect(screen.getAllByRole("heading", { name: "Models" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("22 of 22 models")).toBeInTheDocument();
+    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute(
       "aria-current",
       "page",
@@ -84,8 +84,8 @@ describe("ModelsPage", () => {
       "false",
     );
     expect(screen.getByLabelText("Smart routing hint")).toHaveTextContent("Smart routing");
-    expect(screen.getByRole("button", { name: "GPT-5.4 details" })).toBeInTheDocument();
-    expect(screen.getAllByRole("img", { name: "Speed: Medium" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "GPT-5.6 Luna details" })).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: "Speed: Fast" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("img", { name: "Depth: Deep" }).length).toBeGreaterThan(0);
   });
 
@@ -95,16 +95,16 @@ describe("ModelsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Coding" }));
 
-    expect(screen.getByText("15 of 22 models")).toBeInTheDocument();
+    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Coding" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(screen.getByLabelText("Best model for Coding")).toHaveTextContent(
-      "Claude Sonnet 4.6",
+      "DeepSeek V4 Flash",
     );
     const sonnetRow = screen
-      .getByRole("button", { name: "Claude Sonnet 4.6 details" })
+      .getByRole("button", { name: "DeepSeek V4 Flash details" })
       .closest("article");
     expect(sonnetRow).not.toBeNull();
     expect(within(sonnetRow!).getByText("★ TOP")).toBeInTheDocument();
@@ -116,12 +116,12 @@ describe("ModelsPage", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "Search models" }), "not-a-model");
 
-    expect(screen.getByText("0 of 22 models")).toBeInTheDocument();
+    expect(screen.getByText("0 of 3 models")).toBeInTheDocument();
     expect(screen.getByText("No models match — clear filters")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
 
-    expect(screen.getByText("22 of 22 models")).toBeInTheDocument();
+    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "Search models" })).toHaveValue("");
   });
 
@@ -129,14 +129,14 @@ describe("ModelsPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    const rowButton = screen.getByRole("button", { name: "GPT-5.2 Codex details" });
+    const rowButton = screen.getByRole("button", { name: "DeepSeek V4 Flash details" });
     expect(rowButton).toHaveAttribute("aria-expanded", "false");
 
     await user.click(rowButton);
 
     expect(rowButton).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("openai:gpt-5.2-codex")).toBeInTheDocument();
-    expect(screen.getByText("Repo-scale context handling")).toBeInTheDocument();
+    expect(screen.getByText("deepseek:deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning modes: none, thinking")).toBeInTheDocument();
     expect(screen.getAllByText("Long context").length).toBeGreaterThan(1);
   });
 
@@ -146,7 +146,7 @@ describe("ModelsPage", () => {
     expect(screen.getByLabelText("Loading models")).toHaveAttribute("aria-busy", "true");
   });
 
-  it("joins live billing classes to the static catalogue and keeps locked models visible", async () => {
+  it("keeps a live premium catalogue model visible while explaining its lock", async () => {
     const user = userEvent.setup();
     const onAccessDenied = vi.fn();
     render(

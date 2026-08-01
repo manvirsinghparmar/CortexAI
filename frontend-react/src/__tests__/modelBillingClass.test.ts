@@ -16,7 +16,7 @@ describe("model billing classes", () => {
       ),
     ).toBe(true);
     expect(
-      DEFAULT_MODELS.find((model) => model.model === "deepseek-chat")?.billing_class,
+      DEFAULT_MODELS.find((model) => model.model === "deepseek-v4-flash")?.billing_class,
     ).toBe("economical");
   });
 });

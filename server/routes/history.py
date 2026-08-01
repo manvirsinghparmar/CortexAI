@@ -51,6 +51,16 @@ class HistoryEntry(BaseModel):
     prompt: str
     provider: str
     model: str
+    requested_model: Optional[str] = None
+    served_model: Optional[str] = None
+    pricing_model: Optional[str] = None
+    model_lifecycle_status: Optional[str] = None
+    alias_redirected: bool = False
+    replacement_model: Optional[str] = None
+    migration_reason: Optional[str] = None
+    pricing_rule_applied: Optional[str] = None
+    pricing_version: Optional[str] = None
+    pricing_unknown: bool = False
     response_version: int = 1
     response: str
     latency_ms: Optional[int] = None

@@ -7,72 +7,72 @@ import {
 import type { ModelCatalogItem } from "../types";
 
 describe("compare model defaults", () => {
-  it("selects GPT-5.1 and Claude Sonnet 4.5 by name, independent of catalog order", () => {
+  it("selects GPT-5.6 Luna and Claude Sonnet 5 by name, independent of catalog order", () => {
     const models = [
       model("claude", "claude-haiku-4-5"),
-      model("deepseek", "deepseek-chat"),
-      model("claude", "claude-sonnet-4-5"),
-      model("openai", "gpt-5.1"),
+      model("deepseek", "deepseek-v4-flash"),
+      model("claude", "claude-sonnet-5"),
+      model("openai", "gpt-5.6-luna"),
     ];
 
     expect(resolveCompareModelKeys(models, ["", "", ""])).toEqual([
-      "openai:gpt-5.1",
-      "claude:claude-sonnet-4-5",
+      "openai:gpt-5.6-luna",
+      "claude:claude-sonnet-5",
       "",
     ]);
   });
 
   it("preserves valid manual selections", () => {
     const models = [
-      model("gemini", "gemini-2.5-flash"),
-      model("openai", "gpt-5.1"),
-      model("claude", "claude-sonnet-4-5"),
+      model("gemini", "gemini-3.6-flash"),
+      model("openai", "gpt-5.6-luna"),
+      model("claude", "claude-sonnet-5"),
     ];
 
     expect(
       resolveCompareModelKeys(models, [
-        "gemini:gemini-2.5-flash",
-        "claude:claude-sonnet-4-5",
+        "gemini:gemini-3.6-flash",
+        "claude:claude-sonnet-5",
         "",
       ]),
     ).toEqual([
-      "gemini:gemini-2.5-flash",
-      "claude:claude-sonnet-4-5",
+      "gemini:gemini-3.6-flash",
+      "claude:claude-sonnet-5",
       "",
     ]);
   });
 
-  it("uses DeepSeek Chat when a third model is added", () => {
+  it("uses DeepSeek V4 Flash when a third model is added", () => {
     const models = [
-      model("openai", "gpt-5.1"),
-      model("claude", "claude-sonnet-4-5"),
-      model("deepseek", "deepseek-chat"),
+      model("openai", "gpt-5.6-luna"),
+      model("claude", "claude-sonnet-5"),
+      model("deepseek", "deepseek-v4-flash"),
     ];
 
     expect(
       resolveAddedCompareModelKey(models, [
-        "openai:gpt-5.1",
-        "claude:claude-sonnet-4-5",
+        "openai:gpt-5.6-luna",
+        "claude:claude-sonnet-5",
         "",
       ]),
-    ).toBe("deepseek:deepseek-chat");
+    ).toBe("deepseek:deepseek-v4-flash");
   });
 
   it("falls back to available distinct models when a preference is disabled", () => {
     const models = [
-      model("gemini", "gemini-2.5-flash"),
+      model("gemini", "gemini-3.6-flash"),
       model("claude", "claude-haiku-4-5"),
       model("grok", "grok-4"),
     ];
 
     expect(resolveCompareModelKeys(models, ["", "", ""])).toEqual([
-      "gemini:gemini-2.5-flash",
+      "gemini:gemini-3.6-flash",
       "claude:claude-haiku-4-5",
       "",
     ]);
     expect(
       resolveAddedCompareModelKey(models, [
-        "gemini:gemini-2.5-flash",
+        "gemini:gemini-3.6-flash",
         "claude:claude-haiku-4-5",
         "",
       ]),
@@ -80,16 +80,16 @@ describe("compare model defaults", () => {
   });
 
   it.each([
-    [0, ["claude:claude-sonnet-4-5", "deepseek:deepseek-chat", ""]],
-    [1, ["openai:gpt-5.1", "deepseek:deepseek-chat", ""]],
-    [2, ["openai:gpt-5.1", "claude:claude-sonnet-4-5", ""]],
+    [0, ["claude:claude-sonnet-5", "deepseek:deepseek-v4-flash", ""]],
+    [1, ["openai:gpt-5.6-luna", "deepseek:deepseek-v4-flash", ""]],
+    [2, ["openai:gpt-5.6-luna", "claude:claude-sonnet-5", ""]],
   ] as const)("removes and compacts compare slot %i", (removeIndex, expected) => {
     expect(
       removeCompareModelKey(
         [
-          "openai:gpt-5.1",
-          "claude:claude-sonnet-4-5",
-          "deepseek:deepseek-chat",
+          "openai:gpt-5.6-luna",
+          "claude:claude-sonnet-5",
+          "deepseek:deepseek-v4-flash",
         ],
         removeIndex,
       ),

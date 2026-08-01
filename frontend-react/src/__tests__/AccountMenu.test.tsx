@@ -200,7 +200,7 @@ describe("AccountMenu", () => {
     const menu = screen.getByRole("menu", { name: "Account menu" });
     const items = within(menu).getAllByRole("menuitem");
     expect(items[0]).toHaveTextContent("Models");
-    expect(items[0]).toHaveTextContent("22 across 5 providers");
+    expect(items[0]).toHaveTextContent("Current model catalogue");
 
     await user.click(within(menu).getByRole("menuitem", { name: /Models/ }));
 

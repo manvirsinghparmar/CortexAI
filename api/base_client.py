@@ -38,6 +38,12 @@ class BaseAIClient(ABC):
         """
         self.api_key = api_key
         self.model_name = kwargs.get("model_name")
+        self.requested_model_name = kwargs.get("requested_model_name") or self.model_name
+        self.model_identity = (
+            dict(kwargs.get("model_identity"))
+            if isinstance(kwargs.get("model_identity"), dict)
+            else {}
+        )
         self.provider_name = self.__class__.__name__.replace("Client", "").lower()
 
     @abstractmethod
@@ -275,6 +281,122 @@ class BaseAIClient(ABC):
         """
         provided = str(kwargs.pop("request_id", "") or "").strip()
         return provided or self._generate_request_id()
+
+    @staticmethod
+    def _usage_field(value: Any, name: str, default: Any = 0) -> Any:
+        if isinstance(value, dict):
+            return value.get(name, default)
+        return getattr(value, name, default)
+
+    @staticmethod
+    def _usage_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _served_model(value: Any, fallback: str) -> str:
+        return value.strip() if isinstance(value, str) and value.strip() else fallback
+
+    @classmethod
+    def _openai_compatible_token_usage(cls, usage: Any) -> TokenUsage:
+        """Normalize OpenAI-compatible usage, including cache/reasoning details."""
+
+        if usage is None:
+            return TokenUsage()
+        prompt_tokens = cls._usage_int(cls._usage_field(usage, "prompt_tokens", 0))
+        if prompt_tokens <= 0:
+            prompt_tokens = cls._usage_int(cls._usage_field(usage, "input_tokens", 0))
+        completion_tokens = cls._usage_int(
+            cls._usage_field(usage, "completion_tokens", 0)
+        )
+        if completion_tokens <= 0:
+            completion_tokens = cls._usage_int(cls._usage_field(usage, "output_tokens", 0))
+        prompt_details = cls._usage_field(
+            usage,
+            "prompt_tokens_details",
+            cls._usage_field(usage, "input_tokens_details", None),
+        )
+        completion_details = cls._usage_field(
+            usage,
+            "completion_tokens_details",
+            cls._usage_field(usage, "output_tokens_details", None),
+        )
+        cached_tokens = cls._usage_int(
+            cls._usage_field(
+                prompt_details,
+                "cached_tokens",
+                cls._usage_field(usage, "prompt_cache_hit_tokens", 0),
+            )
+            or 0
+        )
+        cache_write_tokens = cls._usage_int(
+            cls._usage_field(
+                prompt_details,
+                "cache_write_tokens",
+                cls._usage_field(usage, "cache_creation_input_tokens", 0),
+            )
+            or 0
+        )
+        reasoning_tokens = cls._usage_int(
+            cls._usage_field(completion_details, "reasoning_tokens", 0) or 0
+        )
+        total_tokens = cls._usage_int(cls._usage_field(usage, "total_tokens", 0))
+        if total_tokens <= 0:
+            total_tokens = prompt_tokens + completion_tokens
+        return TokenUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cached_input_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
+        )
+
+    def _response_audit_fields(
+        self,
+        *,
+        served_model: str,
+        cost: dict[str, Any],
+        reasoning_mode: str | None = None,
+    ) -> dict[str, Any]:
+        requested_model = str(self.requested_model_name or self.model_name or served_model)
+        return {
+            "requested_model": requested_model,
+            "served_model": served_model,
+            "pricing_model": str(cost.get("pricing_model") or served_model),
+            "model_lifecycle_status": str(
+                self.model_identity.get("lifecycle_status") or "ACTIVE"
+            ),
+            "alias_redirected": bool(
+                self.model_identity.get("alias_redirected", False)
+                or requested_model != served_model
+            ),
+            "replacement_model": (
+                str(self.model_identity.get("replacement_model") or "").strip() or None
+            ),
+            "migration_reason": (
+                str(self.model_identity.get("migration_reason") or "").strip() or None
+            ),
+            "reasoning_mode": (
+                reasoning_mode
+                or str(self.model_identity.get("default_reasoning_mode") or "").strip()
+                or None
+            ),
+            "pricing_rule_applied": str(cost.get("pricing_rule_applied") or "") or None,
+            "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+            "pricing_snapshot": {
+                "rule_id": cost.get("pricing_rule_applied"),
+                "pricing_version": cost.get("pricing_version"),
+                "processing_mode": cost.get("processing_mode"),
+                "long_context_applied": bool(cost.get("long_context_applied", False)),
+                "source_url": cost.get("source_url"),
+                "source_verified_at": cost.get("source_verified_at"),
+                "rates_per_1m": dict(cost.get("rates_per_1m") or {}),
+            },
+            "pricing_version": str(cost.get("pricing_version") or "") or None,
+        }
 
     def _measure_latency(self, start_time: float) -> int:
         """
@@ -518,6 +640,24 @@ class BaseAIClient(ABC):
             text="",
             provider=self.provider_name,
             model=model or self.model_name or "unknown",
+            requested_model=self.requested_model_name or model or self.model_name or "unknown",
+            served_model=model or self.model_name or "unknown",
+            pricing_model=(
+                str(self.model_identity.get("pricing_model") or "")
+                or model
+                or self.model_name
+                or "unknown"
+            ),
+            model_lifecycle_status=str(
+                self.model_identity.get("lifecycle_status") or "UNKNOWN"
+            ),
+            alias_redirected=bool(self.model_identity.get("alias_redirected", False)),
+            replacement_model=(
+                str(self.model_identity.get("replacement_model") or "").strip() or None
+            ),
+            migration_reason=(
+                str(self.model_identity.get("migration_reason") or "").strip() or None
+            ),
             latency_ms=latency_ms,
             token_usage=TokenUsage(),
             estimated_cost=0.0,

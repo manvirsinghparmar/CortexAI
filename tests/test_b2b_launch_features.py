@@ -5,7 +5,7 @@ import io
 import shutil
 import tempfile
 from contextlib import redirect_stdout, suppress
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -853,6 +853,7 @@ def test_usage_and_savings_reporting_endpoints_and_csv_export(b2b_db_client):
         billing_accounts = get_table("billing_accounts")
         subscriptions = get_table("subscriptions")
         billing_account_id = uuid4().hex
+        subscription_now = datetime.utcnow()
         db.execute(
             insert(billing_accounts).values(
                 id=billing_account_id,
@@ -869,8 +870,8 @@ def test_usage_and_savings_reporting_endpoints_and_csv_export(b2b_db_client):
                 provider_subscription_id=f"sub_{uuid4().hex}",
                 plan_code="plus",
                 status="active",
-                current_period_start=datetime(2026, 7, 1),
-                current_period_end=datetime(2026, 8, 1),
+                current_period_start=subscription_now - timedelta(days=1),
+                current_period_end=subscription_now + timedelta(days=30),
                 cancel_at_period_end=False,
             )
         )

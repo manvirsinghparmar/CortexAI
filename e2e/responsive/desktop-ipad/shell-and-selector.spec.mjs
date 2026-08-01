@@ -386,23 +386,27 @@ test("desktop Compare picker remains visible and selectable", async ({ responsiv
     const select = page.locator("#compareModel2");
     const currentValue = await select.inputValue();
     const target = await select.locator("option:not(:disabled)").evaluateAll(
-        (options, selectedValue) =>
-            options.find(option => option.value !== selectedValue)?.value ?? "",
+        (options, selectedValue) => {
+            const option = options.find(candidate => candidate.value !== selectedValue);
+            if (!option) return null;
+            const separator = option.value.indexOf(":");
+            return {
+                value: option.value,
+                provider: separator >= 0 ? option.value.slice(0, separator) : "",
+            };
+        },
         currentValue,
     );
-    expect(target).not.toBe("");
+    expect(target).not.toBeNull();
 
     await page.getByRole("button", { name: /Compare model 2:/ }).click();
     const listbox = page.getByRole("listbox", { name: "Compare model 2 options" });
     await expect(listbox).toBeVisible();
-    await listbox.locator(`[role="option"]`).evaluateAll(
-        (options, value) => {
-            const targetOption = options.find(option => option.title?.includes(value.split(":").at(-1)));
-            targetOption?.click();
-        },
-        target,
-    );
-    await expect(select).toHaveValue(target);
+    await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+    await listbox.locator(`[data-provider-key="${target.provider}"]`).click();
+    await expect(listbox).toHaveAttribute("data-picker-view", "models");
+    await listbox.locator(`[data-model-key="${target.value}"]`).click();
+    await expect(select).toHaveValue(target.value);
 });
 
 test("iPad landscape keeps the desktop workspace usable", async ({ responsiveApp }) => {

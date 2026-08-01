@@ -92,8 +92,8 @@ Edit `config/config.py` to customize which models are compared:
 ```python
 COMPARE_TARGETS = [
     {"provider": "openai", "model": "gpt-4o-mini"},
-    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-    {"provider": "deepseek", "model": "deepseek-chat"},
+    {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
+    {"provider": "deepseek", "model": "deepseek-v4-flash"},
     {"provider": "grok", "model": "grok-4-latest"},
 ]
 ```
@@ -128,11 +128,11 @@ You: What is Python?
     Latency: 347ms | Tokens: 45 | Cost: $0.000023
     Response: Python is a high-level, interpreted programming language...
 
-[2] GEMINI/gemini-2.5-flash-lite
+[2] GEMINI/gemini-3.5-flash-lite
     Latency: 289ms | Tokens: 52 | Cost: $0.000015
     Response: Python is a versatile programming language known for...
 
-[3] DEEPSEEK/deepseek-chat
+[3] DEEPSEEK/deepseek-v4-flash
     Latency: 412ms | Tokens: 38 | Cost: $0.000008
     Response: Python is an easy-to-learn programming language...
 
@@ -185,10 +185,10 @@ If some models fail, the system continues with successful responses:
 [1] OPENAI/gpt-4o-mini
     Response: Successfully completed...
 
-[2] GEMINI/gemini-2.5-flash-lite
+[2] GEMINI/gemini-3.5-flash-lite
     [ERROR] timeout: Request timed out after 60s
 
-[3] DEEPSEEK/deepseek-chat
+[3] DEEPSEEK/deepseek-v4-flash
     Response: Successfully completed...
 
 === Summary ===
@@ -269,7 +269,7 @@ Solution: Edit `COMPARE_TARGETS` to include only the models you want:
 ```python
 COMPARE_TARGETS = [
     {"provider": "openai", "model": "gpt-4o-mini"},
-    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+    {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
 ]
 ```
 

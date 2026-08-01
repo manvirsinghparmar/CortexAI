@@ -205,16 +205,35 @@ class ClaudeClient(BaseAIClient):
 
             text = self._extract_text(response)
             usage = getattr(response, "usage", None)
-            prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            completion_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            normal_input_tokens = self._usage_int(getattr(usage, "input_tokens", 0))
+            cached_input_tokens = self._usage_int(
+                getattr(usage, "cache_read_input_tokens", 0)
+            )
+            cache_write_tokens = self._usage_int(
+                getattr(usage, "cache_creation_input_tokens", 0)
+            )
+            prompt_tokens = normal_input_tokens + cached_input_tokens + cache_write_tokens
+            completion_tokens = self._usage_int(getattr(usage, "output_tokens", 0))
             token_usage = TokenUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
 
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            served_model = self._served_model(getattr(response, "model", model), model)
+
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("claude", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -253,18 +272,26 @@ class ClaudeClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="claude",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "messages.create", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "messages.create",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "messages.create"}
+                    else {
+                        "endpoint": "messages.create",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(served_model=served_model, cost=cost),
             )
 
         except Exception as e:

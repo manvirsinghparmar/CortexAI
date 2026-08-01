@@ -286,9 +286,65 @@ Do not repair `reserved_quantity` with ad hoc SQL. Investigate worker logs
 (`billing.reservation_cleanup.*`) and restore the worker before considering a
 reviewed manual call to the same cleanup service.
 
+### Model identity and pricing audit
+
+Migration:
+
+`db/migrations/20260731_add_model_pricing_audit.sql`
+
+Apply it with a role that owns `llm_requests` and `llm_responses` before
+deploying the canonical catalogue/pricing runtime:
+
+```powershell
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
+```
+
+The additive migration records the originally requested model on requests and
+the provider-served/pricing identities, lifecycle/alias resolution, detailed
+cache/reasoning token usage, price-rule/version, unknown-price flag, and JSONB
+price snapshot on responses. Existing response rows are retained and are
+explicitly marked `pricing_unknown=true`; the migration does not invent
+historical evidence that was not stored previously.
+
+The new identity columns remain nullable at the database layer so the migration
+can be applied safely before a rolling application deployment. The upgraded
+write path always supplies them; rows written by an older instance during the
+rollout remain distinguishable as incomplete audit evidence.
+
+Verify the columns and inspect recent audit rows:
+
+```sql
+SELECT table_name, column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND (
+    (table_name = 'llm_requests' AND column_name = 'requested_model')
+    OR
+    (table_name = 'llm_responses' AND column_name IN (
+      'served_model', 'pricing_model', 'model_lifecycle_status',
+      'replacement_model', 'model_migration_reason',
+      'pricing_rule_applied', 'pricing_version', 'pricing_unknown',
+      'pricing_snapshot'
+    ))
+  )
+ORDER BY table_name, column_name;
+
+SELECT r.requested_model, s.served_model, s.pricing_model,
+       s.pricing_rule_id, s.pricing_version, s.pricing_unknown
+FROM public.llm_requests AS r
+JOIN public.llm_responses AS s ON s.request_id = r.id
+ORDER BY s.created_at DESC
+LIMIT 20;
+```
+
+Restart the API after apply so reflected SQLAlchemy metadata includes the new
+columns. A missing required audit column fails PostgreSQL startup before
+provider traffic. Roll back the application by redeploying the prior version
+and retain these additive audit columns; do not delete billing evidence.
+
 ### Ask and Compare enforcement deployment
 
-Apply and verify all four release migrations listed above before deploying the
+Apply and verify all five release migrations listed above before deploying the
 API. Database-mode Ask, Compare, Improve Prompt, and Cortex Analysis create
 unified-credit reservations even while `BILLING_ENABLED=false`. A missing
 billing table or required column fails PostgreSQL startup before any provider

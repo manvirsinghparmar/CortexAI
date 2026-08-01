@@ -131,6 +131,11 @@ describe("subscription feature gating", () => {
     await user.click(
       screen.getByRole("button", { name: /Model: ChatGPT \(standard-model\)/ }),
     );
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", {
+        name: /ChatGPT, 2 models/,
+      }),
+    );
     const locked = within(screen.getByRole("listbox")).getByRole("option", {
       name: /ChatGPT.*premium-model.*Pro/,
     });

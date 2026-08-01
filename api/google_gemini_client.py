@@ -202,15 +202,46 @@ class GeminiClient(BaseAIClient):
             token_usage = TokenUsage()
             if hasattr(response, "usage_metadata"):
                 usage_metadata = response.usage_metadata
+                cached_input_tokens = self._usage_int(
+                    getattr(usage_metadata, "cached_content_token_count", 0)
+                )
+                reasoning_tokens = self._usage_int(
+                    getattr(usage_metadata, "thoughts_token_count", 0)
+                )
+                completion_tokens = self._usage_int(
+                    getattr(usage_metadata, "candidates_token_count", 0)
+                ) + reasoning_tokens
+                prompt_tokens = self._usage_int(
+                    getattr(usage_metadata, "prompt_token_count", 0)
+                )
+                total_tokens = self._usage_int(
+                    getattr(usage_metadata, "total_token_count", 0)
+                )
+                if total_tokens <= 0:
+                    total_tokens = prompt_tokens + completion_tokens
                 token_usage = TokenUsage(
-                    prompt_tokens=getattr(usage_metadata, "prompt_token_count", 0),
-                    completion_tokens=getattr(usage_metadata, "candidates_token_count", 0),
-                    total_tokens=getattr(usage_metadata, "total_token_count", 0),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    reasoning_tokens=reasoning_tokens,
                 )
 
+            served_model = self._served_model(
+                getattr(response, "model_version", model_name), model_name
+            )
+
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("gemini", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -262,18 +293,26 @@ class GeminiClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="gemini",
-                model=model_name,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "models.generate_content", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "models.generate_content",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "models.generate_content"}
+                    else {
+                        "endpoint": "models.generate_content",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(served_model=served_model, cost=cost),
             )
 
         except Exception as e:

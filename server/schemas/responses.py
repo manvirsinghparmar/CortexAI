@@ -45,6 +45,9 @@ class TokenUsageDTO(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
 
 class ErrorDTO(BaseModel):
@@ -62,10 +65,22 @@ class ChatResponseDTO(BaseModel):
     text: str
     provider: str
     model: str
+    requested_model: Optional[str] = None
+    served_model: Optional[str] = None
+    pricing_model: Optional[str] = None
+    model_lifecycle_status: str = "UNKNOWN"
+    alias_redirected: bool = False
+    replacement_model: Optional[str] = None
+    migration_reason: Optional[str] = None
+    reasoning_mode: Optional[str] = None
     latency_ms: int
     token_usage: TokenUsageDTO
     estimated_cost: float
     cost_currency: str = "USD"
+    pricing_version: Optional[str] = None
+    pricing_rule_applied: Optional[str] = None
+    pricing_unknown: bool = False
+    pricing_snapshot: Dict[str, Any] = Field(default_factory=dict)
     ai_credits: int = 0
     credit_usage_estimated: bool = False
     finish_reason: Optional[str] = None
@@ -116,14 +131,31 @@ class ChatResponseDTO(BaseModel):
             text=ur.text,
             provider=ur.provider,
             model=ur.model,
+            requested_model=getattr(ur, "requested_model", None) or ur.model,
+            served_model=getattr(ur, "served_model", None) or ur.model,
+            pricing_model=getattr(ur, "pricing_model", None) or ur.model,
+            model_lifecycle_status=str(
+                getattr(ur, "model_lifecycle_status", "UNKNOWN") or "UNKNOWN"
+            ),
+            alias_redirected=bool(getattr(ur, "alias_redirected", False)),
+            replacement_model=getattr(ur, "replacement_model", None),
+            migration_reason=getattr(ur, "migration_reason", None),
+            reasoning_mode=getattr(ur, "reasoning_mode", None),
             latency_ms=ur.latency_ms,
             token_usage=TokenUsageDTO(
                 prompt_tokens=ur.token_usage.prompt_tokens,
                 completion_tokens=ur.token_usage.completion_tokens,
                 total_tokens=ur.token_usage.total_tokens,
+                cached_input_tokens=getattr(ur.token_usage, "cached_input_tokens", 0),
+                cache_write_tokens=getattr(ur.token_usage, "cache_write_tokens", 0),
+                reasoning_tokens=getattr(ur.token_usage, "reasoning_tokens", 0),
             ),
             estimated_cost=ur.estimated_cost,
             cost_currency=ur.cost_currency,
+            pricing_version=getattr(ur, "pricing_version", None),
+            pricing_rule_applied=getattr(ur, "pricing_rule_applied", None),
+            pricing_unknown=bool(getattr(ur, "pricing_unknown", False)),
+            pricing_snapshot=dict(getattr(ur, "pricing_snapshot", {}) or {}),
             ai_credits=ai_credits,
             credit_usage_estimated=credit_usage_estimated,
             finish_reason=ur.finish_reason,
@@ -208,9 +240,31 @@ class ModelCatalogItemDTO(BaseModel):
     credit_pricing_version: str
     input_cost_per_1m: float
     output_cost_per_1m: float
+    cached_input_cost_per_1m: Optional[float] = None
+    cache_write_cost_per_1m: Optional[float] = None
     context_limit: int
+    max_output_tokens: Optional[int] = None
     tags: List[str] = Field(default_factory=list)
     enabled: bool
+    selectable: bool = True
+    display_name: str = ""
+    description: str = ""
+    release_status: str = "unknown"
+    lifecycle_status: str = "ACTIVE"
+    replacement_model: Optional[str] = None
+    retirement_date: Optional[str] = None
+    migration_reason: Optional[str] = None
+    pricing_model: Optional[str] = None
+    pricing_rule_id: Optional[str] = None
+    pricing_effective_from: Optional[str] = None
+    pricing_effective_until: Optional[str] = None
+    long_context_threshold_tokens: Optional[int] = None
+    aliases: List[str] = Field(default_factory=list)
+    reasoning_modes: List[str] = Field(default_factory=list)
+    default_reasoning_mode: Optional[str] = None
+    pricing_source_url: Optional[str] = None
+    lifecycle_source_url: Optional[str] = None
+    source_verified_at: Optional[str] = None
     supports_image_input: bool = False
     supported_attachment_mime_types: List[str] = Field(default_factory=list)
     max_attachment_bytes: Optional[int] = None

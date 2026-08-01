@@ -250,26 +250,45 @@ class CortexOrchestrator:
         api_key_override: str | None = None,
     ) -> BaseAIClient:
         model_type = (model_type or "").lower().strip()
+        requested_model = str(model_name or "").strip() or None
+        identity = None
+        if requested_model and self._model_registry:
+            identity = self._model_registry.resolve_model_identity(model_type, requested_model)
+        runtime_model = (
+            str(identity.get("runtime_model") or "").strip()
+            if isinstance(identity, dict)
+            else ""
+        ) or requested_model
         key_scope = (
             hashlib.sha256(api_key_override.encode("utf-8")).hexdigest()[:12]
             if api_key_override
             else "env"
         )
-        cache_key = f"{model_type}:{model_name or 'default'}:{key_scope}"
+        cache_key = f"{model_type}:{requested_model or 'default'}:{runtime_model or 'default'}:{key_scope}"
         if cache_key in self._client_cache:
             return self._client_cache[cache_key]
 
         client = self._client_registry.create_client(
             model_type,
-            model_name=model_name,
+            model_name=runtime_model,
             api_key_override=api_key_override,
         )
-        resolved_model = client.model_name or model_name
+        resolved_model = client.model_name or runtime_model
+        if identity is None and resolved_model and self._model_registry:
+            identity = self._model_registry.resolve_model_identity(model_type, resolved_model)
+        client.requested_model_name = requested_model or resolved_model
+        client.model_identity = dict(identity or {})
 
         self._client_cache[cache_key] = client
         logger.info(
             "Initialized client",
-            extra={"extra_fields": {"provider": model_type, "model": resolved_model}},
+            extra={
+                "extra_fields": {
+                    "provider": model_type,
+                    "requested_model": requested_model or resolved_model,
+                    "runtime_model": resolved_model,
+                }
+            },
         )
         return client
 

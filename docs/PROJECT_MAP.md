@@ -40,7 +40,8 @@ This map is the quick "where do I change X?" reference for the current API-first
 ## Config Sources of Truth
 
 - Provider catalog and defaults: `config/providers.yaml`
-- Smart-router model tiers and metadata: `config/model_registry.yaml`
+- Canonical model catalogue, lifecycle, official source evidence, effective-dated provider pricing, smart-router metadata, and consumer credit metadata: `config/model_registry.yaml`; loaders/resolution: `config/pricing.py`, `orchestrator/model_registry.py`
+- Subscription placement is data-driven through each registry row's `billing_class` and the plan catalogue's allowed classes. Claude Sonnet 4.6 is `advanced` (Plus/Pro), while Claude Opus 4.5 and 4.6 are `premium` (Pro); do not duplicate per-model plan lists elsewhere.
 - Consumer subscription plans: `config/subscription_plans.yaml`
 - Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
 - Effective account/subscription lifecycle and entitlement decisions: `server/billing/account_service.py`, `server/billing/subscription_service.py`, `server/billing/entitlement_service.py`, `server/billing/errors.py`
@@ -50,14 +51,14 @@ This map is the quick "where do I change X?" reference for the current API-first
 - Server-owned Stripe config and API adapter: `server/billing/stripe_gateway.py`; Customer/Checkout/Portal orchestration: `server/billing/session_service.py`; verified event lifecycle/reconciliation: `server/billing/webhook_service.py`; public plans, effective subscription, hosted-session, and webhook endpoints: `server/routes/billing.py`
 - React subscription transport, access presentation, and in-memory authority boundary: `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, `frontend-react/src/hooks/useSubscription.ts`, `frontend-react/src/subscription/subscriptionErrors.ts`, `frontend-react/src/subscription/subscriptionAccess.ts`; contract/denial tests: `frontend-react/src/__tests__/subscriptionDataLayer.test.tsx`, `subscriptionDenialDraft.test.tsx`
 - React consumer plan management: route wiring in `frontend-react/src/App.tsx`; public catalogue in `frontend-react/src/pages/PricingPage.tsx`; authenticated lifecycle/allowance view in `frontend-react/src/pages/BillingPage.tsx`; shared responsive account shell in `frontend-react/src/components/subscription/SubscriptionPageShell.tsx`; backend-plan-to-menu mapping in `frontend-react/src/subscription/accountMenuPresentation.ts`; summary navigation in `frontend-react/src/components/layout/AccountMenu.tsx` across Chat, Models, Usage, AI credits, Pricing, and Billing; state/route tests in `frontend-react/src/__tests__/subscriptionPages.test.tsx`, `accountMenuPresentation.test.ts`, and `subscriptionRoutes.test.tsx`
-- React entitlement UX: reusable dialog/badge/allowance/banner components in `frontend-react/src/components/subscription/`; model/Compare/Web/Improve/file controls in `frontend-react/src/components/composer/`; draft-safe backend denial handling plus shared Prompt Optimizer/Ask/Compare credit activity IDs in `frontend-react/src/hooks/useChat.ts` and `optimization/promptOptimization.ts`; static-to-live model-category/credit metadata join in `frontend-react/src/pages/ModelsPage.tsx`; activity-grouped AI-credit totals and expandable breakdowns that fold optimizer-plus-answer charges into one final optimized answer in `frontend-react/src/pages/CreditsPage.tsx`; behavior/accessibility coverage in `frontend-react/src/__tests__/subscriptionGating.test.tsx`, `promptOptimization.test.tsx`, and `CreditsPage.test.tsx`
-- Cost tables: `config/pricing.py`
+- React entitlement UX: reusable dialog/badge/allowance/banner components in `frontend-react/src/components/subscription/`; model/Compare/Web/Improve/file controls in `frontend-react/src/components/composer/`; draft-safe backend denial handling plus shared Prompt Optimizer/Ask/Compare credit activity IDs in `frontend-react/src/hooks/useChat.ts` and `optimization/promptOptimization.ts`; live `/v1/models` catalogue transformation and official pricing evidence in `frontend-react/src/config/modelsCatalog.ts` plus `frontend-react/src/pages/ModelsPage.tsx`; activity-grouped AI-credit totals and expandable breakdowns that fold optimizer-plus-answer charges into one final optimized answer in `frontend-react/src/pages/CreditsPage.tsx`; behavior/accessibility coverage in `frontend-react/src/__tests__/subscriptionGating.test.tsx`, `promptOptimization.test.tsx`, and `CreditsPage.test.tsx`
+- Provider cost calculation and requested/served/pricing-model resolution: `config/pricing.py`, `utils/cost_calculator.py`, `api/base_client.py`, provider clients under `api/`
 - Attachment ownership/capability preflight, cached parsing, query-relevant chunk selection, and provider-neutral materialization: `server/attachments.py`; effective-plan upload policy, batch rollback, upload/ingestion lifecycle, and private parsed-text caching: `server/files_service.py`; one-file and authoritative batch routes: `server/routes/files.py`
 
 ## Persistence and Reporting
 
 - SQLAlchemy table reflection and repository access: `db/`
-- B2C billing/Cortex persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/migrations/20260727_add_cortex_analysis_runs.sql`, `db/migrations/20260729_add_unified_ai_credits.sql`, `db/migrations/20260730_add_usage_reservation_activity.sql`, `db/billing_repository.py`, `db/tables.py`
+- B2C billing/Cortex/pricing-audit persistence and transaction-neutral repository operations: `db/migrations/20260718_add_b2c_billing_foundation.sql`, `db/migrations/20260727_add_cortex_analysis_runs.sql`, `db/migrations/20260729_add_unified_ai_credits.sql`, `db/migrations/20260730_add_usage_reservation_activity.sql`, `db/migrations/20260731_add_model_pricing_audit.sql`, `db/billing_repository.py`, `db/repository.py`, `db/tables.py`
 - Credit arithmetic, schema preflight, lifecycle, entitlement, supplemental metering, Stripe, route, upload-batch, and opt-in PostgreSQL concurrency coverage: `tests/test_credit_calculator.py`, `tests/test_billing_schema_preflight.py`, `tests/test_billing_repository.py`, `tests/test_billing_entitlements.py`, `tests/test_billing_metering.py`, `tests/test_stripe_billing.py`, `tests/test_stripe_webhooks.py`, `tests/test_baseline_safety_rails.py`, `tests/test_fastapi_contract_and_guardrails.py`, `tests/test_files_routes.py`, `tests/test_billing_postgres_integration.py`
 - Persistence service: `server/persistence.py`
 - Cortex Analysis source normalization, anonymized GPT-5.4-mini call, structured validation, and source fingerprinting: `server/cortex_analysis.py`
@@ -75,10 +76,10 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Browser boot/reload diagnostics: `frontend-react/src/diagnostics/bootDiagnostics.ts`
   - API hooks/client: `frontend-react/src/api/`, `frontend-react/src/hooks/`
   - Shared visual primitives: `frontend-react/src/components/common/`
-  - Task-first Models destination, static display catalogue, and live billing-class access join: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/modelsCatalog.ts`, `frontend-react/src/hooks/useModels.ts`
+  - Task-first Models destination, live `/v1/models` catalogue transformation/evidence, presentation-only JSON, and offline fallback: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/defaultModels.ts`, `frontend-react/src/config/modelsCatalog.ts`, `frontend-react/src/hooks/useModels.ts`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
-  - Shared manual Ask/Compare model picker: `frontend-react/src/components/composer/ModelPicker.tsx`
+  - Shared provider-first manual Ask/Compare picker, provider grouping, model drill-down, keyboard navigation, portal positioning, plan locks, and duplicate-state presentation: `frontend-react/src/components/composer/ModelPicker.tsx`, `frontend-react/src/components/composer/ModelPicker.module.css`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
   - History thread grouping, persisted session rename, per-thread delete, and Compare-turn reconstruction: `server/routes/history.py`, `db/repository.py`, `frontend-react/src/api/history.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
   - Cortex Analysis API/run hydration, append-only run state, stale-source detection, history selector, and result presentation: `server/routes/cortex_analysis.py`, `server/schemas/cortex_analysis.py`, `frontend-react/src/api/cortexAnalysis.ts`, `frontend-react/src/hooks/useCortexAnalysis.ts`, `frontend-react/src/store/chatStore.ts`, `frontend-react/src/components/results/CortexAnalysisZone.tsx`
@@ -148,9 +149,10 @@ This map is the quick "where do I change X?" reference for the current API-first
   3. Update `README.md`, `docs/TAVILY_INTEGRATION.md`, and logging/runbook docs when option or telemetry behavior changes
 
 - Change token/cost behavior:
-  1. Update provider clients and/or `server/utils.py`
-  2. Keep `config/pricing.py` and `config/model_registry.yaml` aligned
-  3. Update contract docs and tests
+  1. Verify current pricing/lifecycle against official provider pages, then update the effective-dated record and `source_verified_at` in `config/model_registry.yaml`
+  2. Update provider usage extraction only when the provider SDK response shape changes; `config/pricing.py` must stay a loader/resolver, not a second price table
+  3. Preserve requested/served/pricing identity and pricing snapshot fields through `UnifiedResponse`, persistence, history, and reporting
+  4. Update contract docs and tests
 
 - Change subscription plan definitions or model credit economics:
   1. Update `config/subscription_plans.yaml`, `server/billing/credit_calculator.py`, and/or each model's access category, input/output multipliers, usage label, and pricing version in `config/model_registry.yaml`; Tavily research settlement uses provider credits from research metadata

@@ -65,9 +65,31 @@ def _model_to_dto(candidate) -> ModelCatalogItemDTO:
         credit_pricing_version=candidate.credit_pricing_version,
         input_cost_per_1m=float(candidate.input_cost_per_1m),
         output_cost_per_1m=float(candidate.output_cost_per_1m),
+        cached_input_cost_per_1m=candidate.cached_input_cost_per_1m,
+        cache_write_cost_per_1m=candidate.cache_write_cost_per_1m,
         context_limit=int(candidate.context_limit),
+        max_output_tokens=candidate.max_output_tokens,
         tags=list(candidate.tags or []),
         enabled=bool(candidate.enabled),
+        selectable=bool(candidate.selectable),
+        display_name=candidate.display_name,
+        description=candidate.description,
+        release_status=candidate.release_status,
+        lifecycle_status=candidate.lifecycle_status,
+        replacement_model=candidate.replacement_model,
+        retirement_date=candidate.retirement_date,
+        migration_reason=candidate.migration_reason,
+        pricing_model=candidate.pricing_model,
+        pricing_rule_id=candidate.pricing_rule_id,
+        pricing_effective_from=candidate.pricing_effective_from,
+        pricing_effective_until=candidate.pricing_effective_until,
+        long_context_threshold_tokens=candidate.long_context_threshold_tokens,
+        aliases=list(candidate.aliases or []),
+        reasoning_modes=list(candidate.reasoning_modes or []),
+        default_reasoning_mode=candidate.default_reasoning_mode,
+        pricing_source_url=candidate.pricing_source_url,
+        lifecycle_source_url=candidate.lifecycle_source_url,
+        source_verified_at=candidate.source_verified_at,
         supports_image_input=bool(getattr(candidate, "supports_image_input", False)),
         supported_attachment_mime_types=list(
             getattr(candidate, "supported_attachment_mime_types", []) or []
@@ -91,7 +113,7 @@ async def list_providers(
     items: list[ProviderCatalogItemDTO] = []
     for spec in catalog.provider_specs():
         all_models = registry.list_models(spec.provider_id, include_disabled=True)
-        enabled_models = [model for model in all_models if model.enabled]
+        enabled_models = [model for model in all_models if model.enabled and model.selectable]
         items.append(
             ProviderCatalogItemDTO(
                 provider=spec.provider_id,
@@ -127,9 +149,10 @@ async def list_models(
     provider_norm = _validate_provider_or_400(provider)
     registry = ModelRegistry.from_yaml()
 
-    candidates = registry.list_models(
-        provider=provider_norm,
-        include_disabled=not enabled_only,
+    candidates = (
+        registry.list_selectable_models(provider=provider_norm)
+        if enabled_only
+        else registry.list_models(provider=provider_norm, include_disabled=True)
     )
     items = [_model_to_dto(candidate) for candidate in candidates]
     items.sort(key=lambda item: (item.provider, item.model))

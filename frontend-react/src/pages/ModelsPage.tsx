@@ -11,6 +11,7 @@ import { SubscriptionBanner } from "../components/subscription/SubscriptionBanne
 import { UpgradeDialog } from "../components/subscription/UpgradeDialog";
 import {
   MODELS_CATALOG,
+  buildModelsCatalogFromLiveModels,
   findCatalogModelById,
   getDepthInfo,
   getModelSearchText,
@@ -87,6 +88,12 @@ export function ModelsPage() {
   const { models: liveModels, loading: modelsLoading } = useModels(
     !authLoading && (!authEnabled || loggedIn),
   );
+  const liveCatalogSummary = modelsLoading
+    ? getModelsCatalogSummary()
+    : {
+        providerCount: new Set(liveModels.map((model) => model.provider)).size,
+        modelCount: liveModels.length,
+      };
   const [accessError, setAccessError] = useState<SubscriptionError | null>(null);
 
   useEffect(() => {
@@ -157,7 +164,7 @@ export function ModelsPage() {
           </button>
           <div className={styles.mobileTitleBlock}>
             <h1>Models</h1>
-            <p>{formatCatalogSummary(getModelsCatalogSummary())}</p>
+            <p>{formatCatalogSummary(liveCatalogSummary)}</p>
           </div>
           <AccountMenu
             authEnabled={authEnabled}
@@ -220,17 +227,27 @@ export function ModelsCatalogScreen({
   liveModels?: ModelCatalogItem[];
   onAccessDenied?: (error: SubscriptionError) => void;
 }) {
+  const effectiveCatalog = useMemo(
+    () =>
+      liveModels && liveModels.length > 0
+        ? buildModelsCatalogFromLiveModels(liveModels, catalog)
+        : catalog,
+    [catalog, liveModels],
+  );
   const [selectedTask, setSelectedTask] = useState(catalog.tasks[0] ?? "All");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const summary = useMemo(() => getModelsCatalogSummary(catalog), [catalog]);
+  const summary = useMemo(
+    () => getModelsCatalogSummary(effectiveCatalog),
+    [effectiveCatalog],
+  );
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const isAllTask = selectedTask === "All";
-  const recId = isAllTask ? undefined : catalog.rec[selectedTask];
-  const recommendation = isAllTask ? null : findCatalogModelById(recId, catalog);
+  const recId = isAllTask ? undefined : effectiveCatalog.rec[selectedTask];
+  const recommendation = isAllTask ? null : findCatalogModelById(recId, effectiveCatalog);
 
   const filteredProviders = useMemo<FilteredProvider[]>(() => {
-    return catalog.providers
+    return effectiveCatalog.providers
       .map((provider) => ({
         provider,
         models: provider.models.filter((model) => {
@@ -241,7 +258,7 @@ export function ModelsCatalogScreen({
         }),
       }))
       .filter((group) => group.models.length > 0);
-  }, [catalog, isAllTask, normalizedSearch, selectedTask]);
+  }, [effectiveCatalog, isAllTask, normalizedSearch, selectedTask]);
 
   const shownCount = filteredProviders.reduce((total, group) => total + group.models.length, 0);
   const visibleIds = useMemo(
@@ -287,7 +304,7 @@ export function ModelsCatalogScreen({
             </span>
           </div>
           <div className={styles.taskChips} aria-label="Model task filters">
-            {catalog.tasks.map((task) => {
+            {effectiveCatalog.tasks.map((task) => {
               const selected = selectedTask === task;
               return (
                 <button
@@ -554,6 +571,17 @@ function ModelRow({
             ))}
           </ul>
           <code>{model.id}</code>
+          {model.pricingLabel ? (
+            <p className={styles.pricingEvidence}>
+              <span>{model.pricingLabel}</span>
+              {model.pricingSourceUrl ? (
+                <a href={model.pricingSourceUrl} target="_blank" rel="noreferrer">
+                  Official pricing
+                  {model.sourceVerifiedAt ? ` · verified ${model.sourceVerifiedAt}` : ""}
+                </a>
+              ) : null}
+            </p>
+          ) : null}
           {recommended ? (
             <span className={styles.recommendedNote}>Recommended for {selectedTask}</span>
           ) : null}

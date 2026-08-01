@@ -44,7 +44,7 @@ from server.billing.metering_service import (
     settle_usage_with_supplement,
 )
 from server.billing.plan_catalog import get_plan_catalog
-from server.billing.subscription_service import EffectiveSubscription
+from server.billing.subscription_service import EffectiveSubscription, resolve_effective_subscription
 
 
 @pytest.fixture()
@@ -176,8 +176,9 @@ def metering_db(monkeypatch):
 
 def _effective(db, plan_code: str = "free") -> EffectiveSubscription:
     account = repository.get_or_create_billing_account_for_user(db, uuid4())
-    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
-    ends_at = datetime(2026, 8, 1, tzinfo=UTC)
+    now = datetime.now(UTC)
+    starts_at = now - timedelta(days=1)
+    ends_at = now + timedelta(days=30)
     period = repository.create_usage_period(
         db,
         billing_account_id=account["id"],
@@ -714,16 +715,10 @@ def test_missing_provider_usage_is_estimated_and_marked(metering_db):
 def test_insufficient_credits_prevents_reservation(metering_db):
     db, tables = metering_db
     user_id = _user(db, tables)
-    account = repository.get_or_create_billing_account_for_user(db, user_id)
-    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
-    period = repository.create_usage_period(
-        db,
-        billing_account_id=account["id"],
-        plan_code="free",
-        starts_at=starts_at,
-        ends_at=datetime(2026, 8, 1, tzinfo=UTC),
+    effective = resolve_effective_subscription(db, user_id)
+    counter = repository.get_or_create_usage_counter(
+        db, effective.usage_period_id, "ai_credits"
     )
-    counter = repository.get_or_create_usage_counter(db, period["id"], "ai_credits")
     db.execute(
         tables["usage_counters"]
         .update()

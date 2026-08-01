@@ -618,7 +618,7 @@ def test_providers_catalog_returns_catalog_and_model_counts(client):
         assert item["ui"] == dict(spec.ui)
 
         expected_all = registry.list_models(spec.provider_id, include_disabled=True)
-        expected_enabled = registry.list_models(spec.provider_id, include_disabled=False)
+        expected_enabled = registry.list_selectable_models(spec.provider_id)
         assert item["model_count"] == len(expected_all)
         assert item["enabled_model_count"] == len(expected_enabled)
 
@@ -633,6 +633,7 @@ def test_models_catalog_lists_enabled_models_by_default(client):
     assert body["total"] == len(body["models"])
     assert isinstance(body.get("timestamp"), str) and body["timestamp"]
     assert all(item["enabled"] is True for item in body["models"])
+    assert all(item["selectable"] is True for item in body["models"])
 
     required_keys = {
         "provider",
@@ -646,9 +647,19 @@ def test_models_catalog_lists_enabled_models_by_default(client):
         "credit_pricing_version",
         "input_cost_per_1m",
         "output_cost_per_1m",
+        "cached_input_cost_per_1m",
+        "cache_write_cost_per_1m",
         "context_limit",
+        "max_output_tokens",
         "tags",
         "enabled",
+        "selectable",
+        "display_name",
+        "description",
+        "release_status",
+        "lifecycle_status",
+        "pricing_source_url",
+        "source_verified_at",
         "supports_image_input",
         "supported_attachment_mime_types",
         "max_attachment_bytes",
@@ -666,10 +677,17 @@ def test_models_catalog_lists_enabled_models_by_default(client):
     registry = ModelRegistry.from_yaml()
     expected_pairs = {
         (candidate.provider, candidate.model_name)
-        for candidate in registry.list_models(include_disabled=False)
+        for candidate in registry.list_selectable_models()
     }
     actual_pairs = {(item["provider"], item["model"]) for item in body["models"]}
     assert actual_pairs == expected_pairs
+
+    claude_by_model = {
+        item["model"]: item for item in body["models"] if item["provider"] == "claude"
+    }
+    assert claude_by_model["claude-sonnet-4-6"]["billing_class"] == "advanced"
+    assert claude_by_model["claude-opus-4-6"]["billing_class"] == "premium"
+    assert claude_by_model["claude-opus-4-5"]["billing_class"] == "premium"
 
 
 def test_models_catalog_filters_by_provider_case_insensitive(client):
@@ -688,7 +706,7 @@ def test_models_catalog_filters_by_provider_case_insensitive(client):
     registry = ModelRegistry.from_yaml()
     expected_names = sorted(
         candidate.model_name
-        for candidate in registry.list_models(provider=provider, include_disabled=False)
+        for candidate in registry.list_selectable_models(provider=provider)
     )
     actual_names = sorted(item["model"] for item in body["models"])
     assert actual_names == expected_names

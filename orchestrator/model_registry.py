@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from config.pricing import ModelPricing
 from orchestrator.routing_types import ModelCandidate, RoutingConstraints, Tier
 from server.billing.models import ALLOWED_MODEL_BILLING_CLASSES, ModelBillingClass
 from utils.logger import get_logger
@@ -17,6 +18,7 @@ logger = get_logger(__name__)
 class ModelRegistry:
     _providers: dict[str, list[ModelCandidate]]
     _routing_defaults: dict[str, Any]
+    _catalog_path: str
 
     @classmethod
     def from_yaml(cls, path: str | None = None) -> "ModelRegistry":
@@ -50,8 +52,6 @@ class ModelRegistry:
                     "output_credit_multiplier",
                     "credit_usage_label",
                     "credit_pricing_version",
-                    "input_cost_per_1m",
-                    "output_cost_per_1m",
                     "context_limit",
                     "tags",
                 ]
@@ -96,13 +96,55 @@ class ModelRegistry:
                 if max_attachments_raw not in (None, ""):
                     max_attachments = int(max_attachments_raw)
 
+                pricing_snapshot: dict[str, Any] | None = None
+                if "input_cost_per_1m" in model and "output_cost_per_1m" in model:
+                    input_cost_per_1m = float(model["input_cost_per_1m"])
+                    output_cost_per_1m = float(model["output_cost_per_1m"])
+                else:
+                    pricing_snapshot = ModelPricing.get_pricing_snapshot(
+                        provider,
+                        str(model["name"]),
+                        catalog_path=registry_path,
+                    )
+                    if pricing_snapshot is None:
+                        raise ValueError(
+                            f"Missing effective pricing rule for {provider}:{model['name']}"
+                        )
+                    input_cost_per_1m = float(pricing_snapshot["input"])
+                    output_cost_per_1m = float(pricing_snapshot["output"])
+
+                lifecycle = model.get("lifecycle")
+                if not isinstance(lifecycle, dict):
+                    lifecycle = {}
+                aliases = model.get("aliases", [])
+                if not isinstance(aliases, list):
+                    aliases = []
+                reasoning_modes = model.get("reasoning_modes", [])
+                if not isinstance(reasoning_modes, list):
+                    reasoning_modes = []
+                pricing_source_url = str(
+                    model.get("pricing_source_url")
+                    or provider_defaults.get("pricing_source_url")
+                    or ""
+                ).strip()
+                lifecycle_source_url = str(
+                    model.get("lifecycle_source_url")
+                    or provider_defaults.get("lifecycle_source_url")
+                    or ""
+                ).strip()
+                source_verified_at = str(
+                    model.get("source_verified_at")
+                    or provider_defaults.get("source_verified_at")
+                    or ""
+                ).strip()
+
                 candidates.append(
                     ModelCandidate(
                         provider=provider,
                         model_name=model["name"],
                         tier=tier,
-                        input_cost_per_1m=float(model["input_cost_per_1m"]),
-                        output_cost_per_1m=float(model["output_cost_per_1m"]),
+                        input_cost_per_1m=input_cost_per_1m,
+                        output_cost_per_1m=output_cost_per_1m,
                         context_limit=int(model["context_limit"]),
                         tags=list(model.get("tags", [])),
                         billing_class=billing_class,
@@ -123,6 +165,74 @@ class ModelRegistry:
                             f"{provider}:{model['name']}.credit_pricing_version",
                         ),
                         enabled=bool(model.get("enabled", True)),
+                        selectable=bool(model.get("selectable", model.get("enabled", True))),
+                        display_name=str(model.get("display_name") or model["name"]),
+                        description=str(model.get("description") or ""),
+                        release_status=str(model.get("release_status") or "unknown"),
+                        lifecycle_status=str(lifecycle.get("status") or "ACTIVE").upper(),
+                        replacement_model=(
+                            str(lifecycle.get("replacement_model") or "").strip() or None
+                        ),
+                        retirement_date=(
+                            str(lifecycle.get("retirement_date") or "").strip() or None
+                        ),
+                        migration_reason=(
+                            str(lifecycle.get("migration_reason") or "").strip() or None
+                        ),
+                        pricing_model=(
+                            str(model.get("pricing_model") or "").strip()
+                            or (
+                                str(pricing_snapshot.get("pricing_model") or "").strip()
+                                if pricing_snapshot
+                                else str(model["name"])
+                            )
+                        ),
+                        pricing_rule_id=(
+                            str(pricing_snapshot.get("pricing_rule_id") or "").strip() or None
+                            if pricing_snapshot
+                            else None
+                        ),
+                        pricing_effective_from=(
+                            str(pricing_snapshot.get("effective_from") or "").strip() or None
+                            if pricing_snapshot
+                            else None
+                        ),
+                        pricing_effective_until=(
+                            str(pricing_snapshot.get("effective_until") or "").strip() or None
+                            if pricing_snapshot
+                            else None
+                        ),
+                        long_context_threshold_tokens=(
+                            int(pricing_snapshot["long_context_threshold_tokens"])
+                            if pricing_snapshot
+                            and pricing_snapshot.get("long_context_threshold_tokens")
+                            else None
+                        ),
+                        cached_input_cost_per_1m=(
+                            float(pricing_snapshot["cached_input"])
+                            if pricing_snapshot is not None
+                            else None
+                        ),
+                        cache_write_cost_per_1m=(
+                            float(pricing_snapshot["cache_write"])
+                            if pricing_snapshot is not None
+                            else None
+                        ),
+                        max_output_tokens=(
+                            int(model["max_output_tokens"])
+                            if model.get("max_output_tokens") not in (None, "")
+                            else None
+                        ),
+                        aliases=[str(alias).strip() for alias in aliases if str(alias).strip()],
+                        reasoning_modes=[
+                            str(mode).strip() for mode in reasoning_modes if str(mode).strip()
+                        ],
+                        default_reasoning_mode=(
+                            str(model.get("default_reasoning_mode") or "").strip() or None
+                        ),
+                        pricing_source_url=pricing_source_url or None,
+                        lifecycle_source_url=lifecycle_source_url or None,
+                        source_verified_at=source_verified_at or None,
                         supports_image_input=bool(
                             model.get(
                                 "supports_image_input",
@@ -141,7 +251,11 @@ class ModelRegistry:
             providers[provider] = candidates
 
         routing_defaults = data.get("routing_defaults", {})
-        return cls(_providers=providers, _routing_defaults=routing_defaults)
+        return cls(
+            _providers=providers,
+            _routing_defaults=routing_defaults,
+            _catalog_path=str(registry_path),
+        )
 
     def routing_defaults(self) -> dict[str, Any]:
         return self._routing_defaults
@@ -191,6 +305,8 @@ class ModelRegistry:
             for candidate in models:
                 if not candidate.enabled:
                     continue
+                if not candidate.selectable:
+                    continue
                 if candidate.tier != tier:
                     continue
                 if (
@@ -218,9 +334,16 @@ class ModelRegistry:
 
         models = self._providers.get(provider_norm, [])
         for candidate in models:
-            if candidate.model_name == model_norm:
+            if candidate.model_name == model_norm or model_norm in candidate.aliases:
                 return candidate
         return None
+
+    def resolve_model_identity(self, provider: str, model_name: str) -> dict[str, Any] | None:
+        return ModelPricing.resolve_model_identity(
+            provider,
+            model_name,
+            catalog_path=self._catalog_path,
+        )
 
     def is_enabled_model(self, provider: str, model_name: str) -> bool:
         candidate = self.find_model(provider, model_name)
@@ -231,6 +354,13 @@ class ModelRegistry:
         for candidates in self._providers.values():
             out.extend([c for c in candidates if c.enabled])
         return out
+
+    def list_selectable_models(self, provider: str | None = None) -> list[ModelCandidate]:
+        return [
+            candidate
+            for candidate in self.list_models(provider=provider, include_disabled=False)
+            if candidate.selectable
+        ]
 
     def list_models(
         self,

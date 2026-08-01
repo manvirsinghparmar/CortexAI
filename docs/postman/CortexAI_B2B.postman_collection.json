@@ -27,7 +27,7 @@
     },
     {
       "key": "chat_model",
-      "value": "gpt-4o-mini"
+      "value": "gpt-5.6-luna"
     },
     {
       "key": "compare_provider",
@@ -35,7 +35,7 @@
     },
     {
       "key": "compare_model",
-      "value": "gemini-2.5-flash-lite"
+      "value": "gemini-3.5-flash-lite"
     },
     {
       "key": "request_group_id",
@@ -522,7 +522,8 @@
                 "value": "Bearer {{bearer_token}}"
               }
             ],
-            "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true"
+            "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true",
+            "description": "Returns selectable catalogue rows from config/model_registry.yaml. Each row includes its subscription billing class, lifecycle, current effective prices, pricing rule/version, and official provider evidence; use enabled_only=false to inspect retained compatibility/history identities. Claude Sonnet 4.6 is advanced (Plus/Pro), while Claude Opus 4.5 and 4.6 are premium (Pro)."
           },
           "event": [
             {
@@ -542,6 +543,13 @@
                   "    pm.expect(body.models[0].output_credit_multiplier).to.be.above(0);",
                   "    pm.expect(body.models[0]).to.have.property('credit_usage_label');",
                   "    pm.expect(body.models[0]).to.have.property('credit_pricing_version');",
+                  "    pm.expect(body.models[0].selectable).to.eql(true);",
+                  "    pm.expect(body.models[0]).to.have.property('lifecycle_status');",
+                  "    pm.expect(body.models[0]).to.have.property('pricing_model');",
+                  "    pm.expect(body.models[0]).to.have.property('pricing_rule_id');",
+                  "    pm.expect(body.models[0].pricing_source_url).to.match(/^https:\\/\\//);",
+                  "    pm.expect(body.models[0].lifecycle_source_url).to.match(/^https:\\/\\//);",
+                  "    pm.expect(body.models[0]).to.have.property('source_verified_at');",
                   "    pm.expect(body.models[0]).to.have.property('supports_image_input');",
                   "  }",
                   "});"
@@ -738,6 +746,12 @@
                   "  pm.expect(body.request_id).to.be.a('string');",
                   "  pm.expect(body.provider).to.be.a('string');",
                   "  pm.expect(body.model).to.be.a('string');",
+                  "  pm.expect(body.requested_model).to.be.a('string');",
+                  "  pm.expect(body.served_model).to.be.a('string');",
+                  "  pm.expect(body.pricing_model).to.be.a('string');",
+                  "  pm.expect(body).to.have.property('pricing_rule_id');",
+                  "  pm.expect(body).to.have.property('pricing_version');",
+                  "  pm.expect(body).to.have.property('pricing_unknown');",
                   "});"
                 ]
               }

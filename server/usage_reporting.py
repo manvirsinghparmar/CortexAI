@@ -227,6 +227,12 @@ def build_usage_summary(
 ) -> dict:
     llm_requests = get_table("llm_requests")
     llm_responses = get_table("llm_responses")
+    response_columns = {column.name for column in llm_responses.columns}
+    served_model_expr = (
+        llm_responses.c.served_model
+        if "served_model" in response_columns
+        else llm_requests.c.model
+    )
     routing_decisions = get_table("routing_decisions")
     request_response_join = llm_requests.outerjoin(
         llm_responses,
@@ -296,14 +302,14 @@ def build_usage_summary(
     model_stmt = (
         select(
             llm_requests.c.provider.label("provider"),
-            llm_requests.c.model.label("modelId"),
+            served_model_expr.label("modelId"),
             func.count(llm_requests.c.id).label("replies"),
             func.coalesce(func.sum(smart_expr), 0).label("viaSmart"),
         )
         .select_from(telemetry_join)
         .where(llm_requests.c.user_id == user_id)
-        .group_by(llm_requests.c.provider, llm_requests.c.model)
-        .order_by(func.count(llm_requests.c.id).desc(), llm_requests.c.provider, llm_requests.c.model)
+        .group_by(llm_requests.c.provider, served_model_expr)
+        .order_by(func.count(llm_requests.c.id).desc(), llm_requests.c.provider, served_model_expr)
     )
     model_stmt = _apply_request_date_range(
         model_stmt,

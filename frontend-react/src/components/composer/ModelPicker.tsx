@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,9 +19,18 @@ export type ModelPickerPlacement = "up" | "down";
 export type ModelPickerAlignment = "left" | "center" | "right";
 
 const MENU_GAP = 7;
-const MENU_MAX_HEIGHT = 300;
+const MENU_MAX_HEIGHT = 340;
 const MENU_MAX_WIDTH = 380;
 const VIEWPORT_MARGIN = 20;
+const EMPTY_MODELS: ModelCatalogItem[] = [];
+
+interface ProviderGroup {
+  key: string;
+  label: string;
+  logoUrl: string;
+  color: string;
+  models: ModelCatalogItem[];
+}
 
 interface ModelPickerProps {
   id: string;
@@ -62,24 +72,32 @@ export function ModelPicker({
   menuClassName,
 }: ModelPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const selectedModel =
-    models.find((model) => modelKey(model) === value) ?? modelFromKey(value);
-  const selectedMeta = getModelPresentation(
-    selectedModel.provider,
-    selectedModel.model,
-  );
+  const providerOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const modelOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const selectedModel = models.find((model) => modelKey(model) === value) ?? modelFromKey(value);
+  const selectedMeta = getModelPresentation(selectedModel.provider, selectedModel.model);
   const selectedCreditLabel =
-    "credit_usage_label" in selectedModel
-      ? selectedModel.credit_usage_label
-      : undefined;
+    "credit_usage_label" in selectedModel ? selectedModel.credit_usage_label : undefined;
   const listboxId = `${id}Options`;
   const disabledSet = new Set(disabledKeys);
   const lockedSet = new Set(lockedKeys);
   const selectedSet = new Set(selectedKeys.filter((key) => key !== value));
+  const providerGroups = useMemo(() => groupModelsByProvider(models), [models]);
+  const activeProviderGroup = providerGroups.find((group) => group.key === activeProvider) ?? null;
+  const activeModels = activeProviderGroup?.models ?? EMPTY_MODELS;
+
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setIsOpen(false);
+    setActiveProvider(null);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => buttonRef.current?.focus());
+    }
+  }, []);
 
   const updateMenuPosition = useCallback(() => {
     const button = buttonRef.current;
@@ -88,17 +106,14 @@ export function ModelPicker({
     const triggerRect = button.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const width = Math.min(
-      MENU_MAX_WIDTH,
-      Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2),
-    );
+    const width = Math.min(MENU_MAX_WIDTH, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2));
     const naturalHeight =
       menuRef.current?.scrollHeight ??
-      Math.min(MENU_MAX_HEIGHT, models.length * 52 + 12);
-    const availableAbove = Math.max(
-      0,
-      triggerRect.top - MENU_GAP - VIEWPORT_MARGIN,
-    );
+      Math.min(
+        MENU_MAX_HEIGHT,
+        activeProvider ? activeModels.length * 52 + 58 : providerGroups.length * 56 + 46,
+      );
+    const availableAbove = Math.max(0, triggerRect.top - MENU_GAP - VIEWPORT_MARGIN);
     const availableBelow = Math.max(
       0,
       viewportHeight - triggerRect.bottom - MENU_GAP - VIEWPORT_MARGIN,
@@ -136,7 +151,7 @@ export function ModelPicker({
       width,
       maxHeight,
     });
-  }, [align, models.length, placement]);
+  }, [activeModels.length, activeProvider, align, placement, providerGroups.length]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -152,18 +167,35 @@ export function ModelPicker({
     };
   }, [isOpen, updateMenuPosition]);
 
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+
+    if (activeProvider) {
+      const preferredKey = selectedModel.provider === activeProvider ? value : "";
+      const preferredOption = preferredKey ? modelOptionRefs.current.get(preferredKey) : undefined;
+      const firstAvailable = activeModels
+        .map((model) => modelOptionRefs.current.get(modelKey(model)))
+        .find((option) => option && !option.disabled);
+      (preferredOption ?? firstAvailable)?.focus();
+      return;
+    }
+
+    const currentProviderOption = providerOptionRefs.current.get(selectedModel.provider);
+    (currentProviderOption ?? providerOptionRefs.current.values().next().value)?.focus();
+  }, [activeModels, activeProvider, isOpen, selectedModel.provider, value]);
+
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (
-        !rootRef.current?.contains(target) &&
-        !menuRef.current?.contains(target)
-      ) {
-        setIsOpen(false);
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        closeMenu();
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
+      if (event.key === "Escape" && isOpen) {
+        event.preventDefault();
+        closeMenu(true);
+      }
     };
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -171,11 +203,9 @@ export function ModelPicker({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [closeMenu, isOpen]);
 
-  const menuClasses = [styles.menu, menuClassName ?? ""]
-    .filter(Boolean)
-    .join(" ");
+  const menuClasses = [styles.menu, menuClassName ?? ""].filter(Boolean).join(" ");
 
   return (
     <span ref={rootRef} className={`${styles.root} ${className ?? ""}`}>
@@ -200,9 +230,7 @@ export function ModelPicker({
             <option
               key={key}
               value={key}
-              disabled={
-                selectedSet.has(key) || disabledSet.has(key) || lockedSet.has(key)
-              }
+              disabled={selectedSet.has(key) || disabledSet.has(key) || lockedSet.has(key)}
             >
               {getModelPresentation(model.provider, model.model).label}
             </option>
@@ -223,10 +251,18 @@ export function ModelPicker({
         title={`${selectedMeta.label}\n${selectedMeta.model}${
           selectedCreditLabel ? `\n${selectedCreditLabel} credit use` : ""
         }`}
-        onClick={() => setIsOpen((current) => !current)}
+        onClick={() => {
+          if (isOpen) {
+            closeMenu();
+            return;
+          }
+          setActiveProvider(null);
+          setIsOpen(true);
+        }}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown") {
             event.preventDefault();
+            setActiveProvider(null);
             setIsOpen(true);
           }
         }}
@@ -259,62 +295,176 @@ export function ModelPicker({
             style={menuStyle}
             role="listbox"
             aria-label={listboxLabel}
-          >
-            {models.map((model) => {
-              const key = modelKey(model);
-              const meta = getModelPresentation(model.provider, model.model);
-              const isSelected = key === value;
-              const isDisabled = selectedSet.has(key) || disabledSet.has(key);
-              const isLocked = lockedSet.has(key);
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  className={`${styles.option} ${isSelected ? styles.optionActive : ""} ${
-                    isLocked ? styles.optionLocked : ""
-                  }`}
-                  role="option"
-                  aria-selected={isSelected}
-                  aria-disabled={isDisabled || isLocked}
-                  disabled={isDisabled}
-                  title={`${meta.label}\n${meta.model}`}
-                  onClick={() => {
-                    if (isLocked) {
-                      onLockedSelect?.(key);
-                      setIsOpen(false);
-                      return;
-                    }
-                    onChange(key);
-                    setIsOpen(false);
-                  }}
-                >
-                  <ProviderLogo
-                    provider={model.provider}
-                    logoUrl={meta.logoUrl}
-                    color={meta.color}
-                    size={20}
-                  />
-                  <span className={styles.optionText}>
-                    <strong>{meta.label}</strong>
-                    <small>
-                      {meta.model}
-                      {model.credit_usage_label
-                        ? ` · ${model.credit_usage_label} credit use`
-                        : ""}
-                    </small>
-                  </span>
-                  {isSelected && (
-                    <CortexIcon name="check" className={styles.checkIcon} />
-                  )}
-                  {isLocked ? (
-                    <PlanBadge
-                      label={lockedLabels[key] ?? "Upgrade"}
-                      tone="locked"
-                    />
-                  ) : null}
-                </button>
+            data-picker-view={activeProvider ? "models" : "providers"}
+            onKeyDown={(event) => {
+              if (activeProvider && event.key === "ArrowLeft") {
+                event.preventDefault();
+                setActiveProvider(null);
+                return;
+              }
+              if (
+                event.key !== "ArrowDown" &&
+                event.key !== "ArrowUp" &&
+                event.key !== "Home" &&
+                event.key !== "End"
+              ) {
+                return;
+              }
+
+              const options = Array.from(
+                menuRef.current?.querySelectorAll<HTMLButtonElement>(
+                  'button[role="option"]:not(:disabled)',
+                ) ?? [],
               );
-            })}
+              if (options.length === 0) return;
+              event.preventDefault();
+              const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement);
+              const nextIndex =
+                currentIndex < 0
+                  ? event.key === "ArrowUp" || event.key === "End"
+                    ? options.length - 1
+                    : 0
+                  : event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? options.length - 1
+                      : event.key === "ArrowDown"
+                        ? (currentIndex + 1) % options.length
+                        : (currentIndex - 1 + options.length) % options.length;
+              options[nextIndex]?.focus();
+            }}
+          >
+            {activeProviderGroup ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.backOption}
+                  role="option"
+                  aria-selected="false"
+                  aria-label="Back to providers"
+                  onClick={() => setActiveProvider(null)}
+                >
+                  <CortexIcon name="chevron-left" />
+                  <span className={styles.backText}>
+                    <small>Providers</small>
+                    <strong>{activeProviderGroup.label} models</strong>
+                  </span>
+                </button>
+                {activeModels.map((model) => {
+                  const key = modelKey(model);
+                  const meta = getModelPresentation(model.provider, model.model);
+                  const isSelected = key === value;
+                  const isDisabled = selectedSet.has(key) || disabledSet.has(key);
+                  const isLocked = lockedSet.has(key);
+                  return (
+                    <button
+                      ref={(node) => {
+                        if (node) modelOptionRefs.current.set(key, node);
+                        else modelOptionRefs.current.delete(key);
+                      }}
+                      key={key}
+                      type="button"
+                      className={`${styles.option} ${
+                        isSelected ? styles.optionActive : ""
+                      } ${isLocked ? styles.optionLocked : ""}`}
+                      role="option"
+                      aria-selected={isSelected}
+                      aria-disabled={isDisabled || isLocked}
+                      data-model-key={key}
+                      disabled={isDisabled}
+                      title={`${meta.label}\n${meta.model}`}
+                      onClick={() => {
+                        if (isLocked) {
+                          onLockedSelect?.(key);
+                          closeMenu();
+                          return;
+                        }
+                        onChange(key);
+                        closeMenu();
+                      }}
+                    >
+                      <ProviderLogo
+                        provider={model.provider}
+                        logoUrl={meta.logoUrl}
+                        color={meta.color}
+                        size={20}
+                      />
+                      <span className={styles.optionText}>
+                        <strong>{meta.label}</strong>
+                        <small>
+                          {meta.model}
+                          {model.credit_usage_label
+                            ? ` \u00b7 ${model.credit_usage_label} credit use`
+                            : ""}
+                        </small>
+                      </span>
+                      {isSelected && <CortexIcon name="check" className={styles.checkIcon} />}
+                      {isLocked ? (
+                        <PlanBadge label={lockedLabels[key] ?? "Upgrade"} tone="locked" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </>
+            ) : (
+              <>
+                <div className={styles.menuHeader} role="presentation">
+                  <strong>Choose a provider</strong>
+                  <span>
+                    {providerGroups.length} provider
+                    {providerGroups.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                {providerGroups.map((group) => {
+                  const isCurrentProvider = group.key === selectedModel.provider;
+                  return (
+                    <button
+                      ref={(node) => {
+                        if (node) providerOptionRefs.current.set(group.key, node);
+                        else providerOptionRefs.current.delete(group.key);
+                      }}
+                      key={group.key}
+                      type="button"
+                      className={`${styles.option} ${styles.providerOption} ${
+                        isCurrentProvider ? styles.providerOptionCurrent : ""
+                      }`}
+                      role="option"
+                      aria-selected={isCurrentProvider}
+                      data-provider-key={group.key}
+                      aria-label={`${group.label}, ${group.models.length} ${
+                        group.models.length === 1 ? "model" : "models"
+                      }${
+                        isCurrentProvider
+                          ? `, current provider, selected ${selectedMeta.label}`
+                          : ""
+                      }`}
+                      title={`View ${group.label} models`}
+                      onClick={() => setActiveProvider(group.key)}
+                    >
+                      <ProviderLogo
+                        provider={group.key}
+                        logoUrl={group.logoUrl}
+                        color={group.color}
+                        size={20}
+                      />
+                      <span className={styles.optionText}>
+                        <strong>{group.label}</strong>
+                        <small>
+                          {group.models.length} {group.models.length === 1 ? "model" : "models"}
+                          {isCurrentProvider ? ` \u00b7 ${selectedMeta.label} selected` : ""}
+                        </small>
+                      </span>
+                      <span className={styles.providerActions} aria-hidden="true">
+                        {isCurrentProvider ? (
+                          <CortexIcon name="check" className={styles.checkIcon} />
+                        ) : null}
+                        <CortexIcon name="chevron-right" className={styles.providerChevron} />
+                      </span>
+                    </button>
+                  );
+                })}
+              </>
+            )}
           </div>,
           document.body,
         )}
@@ -333,4 +483,25 @@ function modelFromKey(key: string): Pick<ModelCatalogItem, "provider" | "model">
     provider: key.slice(0, separator),
     model: key.slice(separator + 1),
   };
+}
+
+function groupModelsByProvider(models: ModelCatalogItem[]): ProviderGroup[] {
+  const groups = new Map<string, ProviderGroup>();
+  for (const model of models) {
+    const existing = groups.get(model.provider);
+    if (existing) {
+      existing.models.push(model);
+      continue;
+    }
+
+    const meta = getModelPresentation(model.provider, model.model);
+    groups.set(model.provider, {
+      key: model.provider,
+      label: meta.providerLabel,
+      logoUrl: meta.logoUrl,
+      color: meta.color,
+      models: [model],
+    });
+  }
+  return Array.from(groups.values());
 }

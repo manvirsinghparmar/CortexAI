@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getModelsCatalogSummary } from "../../config/modelsCatalog";
 import { CortexIcon, type CortexIconName } from "../shared/CortexIcon";
 import type { AppTheme } from "../../hooks/useTheme";
 import styles from "./AccountMenu.module.css";
@@ -66,7 +65,6 @@ export function AccountMenu({
   const canToggleTheme = !!theme && !!onToggleTheme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const menuActions: AccountMenuAction[] = [];
-  const modelSummary = getModelsCatalogSummary();
   if (canOpenBilling) {
     menuActions.push({
       key: "billing",
@@ -82,7 +80,7 @@ export function AccountMenu({
     menuActions.push({
       key: "models",
       label: "Models",
-      subtitle: `${modelSummary.modelCount} across ${modelSummary.providerCount} providers`,
+      subtitle: "Current model catalogue",
       icon: "models",
       accent: true,
     });
@@ -108,7 +106,7 @@ export function AccountMenu({
     menuActions.push({
       key: "models",
       label: "Models",
-      subtitle: `${modelSummary.modelCount} across ${modelSummary.providerCount} providers`,
+      subtitle: "Current model catalogue",
       icon: "models",
     });
   }

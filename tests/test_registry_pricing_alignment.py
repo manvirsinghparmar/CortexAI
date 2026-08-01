@@ -1,4 +1,5 @@
 from config.pricing import ModelPricing
+from config.provider_catalog import get_provider_catalog
 from orchestrator.model_registry import ModelRegistry
 from utils.cost_calculator import CostCalculator
 
@@ -40,7 +41,35 @@ def test_all_enabled_registry_model_prices_match_pricing_table():
     assert mismatches == [], f"Registry/pricing mismatch: {mismatches}"
 
 
-def test_unknown_model_pricing_fallback_is_zero_cost():
+def test_unknown_model_pricing_uses_flagged_conservative_fallback():
     calc = CostCalculator(model_type="openai", model_name="unknown-model-name")
     costs = calc.calculate_cost(prompt_tokens=1000, completion_tokens=500)
-    assert costs == {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
+    assert costs["total_cost"] > 0.0
+    assert costs["pricing_unknown"] is True
+    assert costs["pricing_rule_applied"] == "conservative-fallback:openai"
+
+
+def test_provider_defaults_and_compare_defaults_are_current_selectable_models():
+    registry = ModelRegistry.from_yaml()
+
+    for spec in get_provider_catalog().provider_specs():
+        for configured_model in (spec.default_model, spec.compare_default_model):
+            candidate = registry.find_model(spec.provider_id, configured_model)
+            assert candidate is not None, f"Missing default {spec.provider_id}:{configured_model}"
+            assert candidate.enabled is True
+            assert candidate.selectable is True
+            assert candidate.lifecycle_status == "ACTIVE"
+            assert candidate.pricing_source_url
+            assert candidate.source_verified_at == "2026-07-31"
+
+
+def test_every_selectable_model_has_official_evidence_and_nonzero_rates():
+    registry = ModelRegistry.from_yaml()
+
+    for candidate in registry.list_selectable_models():
+        assert candidate.input_cost_per_1m > 0
+        assert candidate.output_cost_per_1m > 0
+        assert candidate.pricing_rule_id
+        assert candidate.pricing_source_url and candidate.pricing_source_url.startswith("https://")
+        assert candidate.lifecycle_source_url and candidate.lifecycle_source_url.startswith("https://")
+        assert candidate.source_verified_at == "2026-07-31"

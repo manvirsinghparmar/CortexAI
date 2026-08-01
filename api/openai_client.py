@@ -92,6 +92,7 @@ class OpenAIClient(BaseAIClient):
             if endpoint_used == "responses":
                 text = self._extract_responses_text(response)
                 token_usage = self._extract_responses_usage(response)
+                served_model = self._served_model(self._field(response, "model", model), model)
                 finish_reason = self._normalize_finish_reason(
                     self._extract_responses_finish_reason(response),
                     provider="openai",
@@ -102,13 +103,10 @@ class OpenAIClient(BaseAIClient):
                 text = self._extract_chat_completions_text(response)
 
                 # Extract token usage
-                token_usage = TokenUsage(
-                    prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
-                    completion_tokens=(
-                        response.usage.completion_tokens if hasattr(response, "usage") else 0
-                    ),
-                    total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
+                token_usage = self._openai_compatible_token_usage(
+                    response.usage if hasattr(response, "usage") else None
                 )
+                served_model = self._served_model(getattr(response, "model", model), model)
 
                 # Normalize finish reason
                 finish_reason = self._normalize_finish_reason(
@@ -147,12 +145,22 @@ class OpenAIClient(BaseAIClient):
                     }
 
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("openai", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
             metadata = {"endpoint": endpoint_used}
+            metadata["pricing_unknown"] = bool(cost.get("pricing_unknown", False))
             if adaptive_retry:
                 metadata["adaptive_retry"] = adaptive_retry
 
@@ -174,7 +182,7 @@ class OpenAIClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="openai",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
@@ -182,6 +190,7 @@ class OpenAIClient(BaseAIClient):
                 error=None,
                 metadata=metadata,
                 raw=raw,
+                **self._response_audit_fields(served_model=served_model, cost=cost),
             )
 
         except Exception as e:
@@ -569,20 +578,7 @@ class OpenAIClient(BaseAIClient):
     @classmethod
     def _extract_responses_usage(cls, response: Any) -> TokenUsage:
         usage = cls._field(response, "usage")
-        prompt_tokens = int(
-            cls._field(usage, "input_tokens", cls._field(usage, "prompt_tokens", 0)) or 0
-        )
-        completion_tokens = int(
-            cls._field(usage, "output_tokens", cls._field(usage, "completion_tokens", 0)) or 0
-        )
-        total_tokens = int(cls._field(usage, "total_tokens", 0) or 0)
-        if total_tokens <= 0:
-            total_tokens = prompt_tokens + completion_tokens
-        return TokenUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-        )
+        return cls._openai_compatible_token_usage(usage)
 
     @classmethod
     def _extract_responses_finish_reason(cls, response: Any) -> str | None:

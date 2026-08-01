@@ -507,6 +507,27 @@
   white-space: nowrap;
 }
 
+.pricingEvidence {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  color: var(--cx-ink-600);
+  font: 500 11px/1.4 var(--font-mono);
+}
+
+.pricingEvidence a {
+  color: var(--cx-accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pricingEvidence a:hover,
+.pricingEvidence a:focus-visible {
+  text-decoration: underline;
+}
+
 .recommendedNote {
   grid-column: 1 / -1;
   color: var(--cx-accent);

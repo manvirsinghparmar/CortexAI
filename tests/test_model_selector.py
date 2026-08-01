@@ -100,37 +100,37 @@ def test_coding_prefers_latest_frontier_coding_order():
         ),
         ModelCandidate(
             provider="deepseek",
-            model_name="deepseek-reasoner",
+            model_name="deepseek-v4-pro",
             tier=Tier.T3,
-            input_cost_per_1m=0.28,
-            output_cost_per_1m=0.42,
-            context_limit=128000,
+            input_cost_per_1m=0.435,
+            output_cost_per_1m=0.87,
+            context_limit=1_000_000,
             tags=["reasoning", "coding", "cheap", "long_context"],
             enabled=True,
         ),
         ModelCandidate(
             provider="openai",
-            model_name="gpt-5.2-codex",
+            model_name="gpt-5.6-sol",
             tier=Tier.T3,
-            input_cost_per_1m=1.75,
-            output_cost_per_1m=14.00,
-            context_limit=128000,
+            input_cost_per_1m=5.00,
+            output_cost_per_1m=30.00,
+            context_limit=1_050_000,
             tags=["strong", "reasoning", "coding", "production_code", "long_context"],
             enabled=True,
         ),
         ModelCandidate(
-            provider="claude",
-            model_name="claude-sonnet-4-6",
+            provider="grok",
+            model_name="grok-4.5",
             tier=Tier.T3,
-            input_cost_per_1m=3.00,
-            output_cost_per_1m=15.00,
-            context_limit=1_000_000,
+            input_cost_per_1m=2.00,
+            output_cost_per_1m=6.00,
+            context_limit=2_000_000,
             tags=["strong", "reasoning", "coding", "accurate", "long_context"],
             enabled=True,
         ),
         ModelCandidate(
             provider="claude",
-            model_name="claude-opus-4-6",
+            model_name="claude-opus-5",
             tier=Tier.T3,
             input_cost_per_1m=5.00,
             output_cost_per_1m=25.00,
@@ -144,7 +144,8 @@ def test_coding_prefers_latest_frontier_coding_order():
     ordered = [result.primary_candidate, *result.fallback_candidates]
     ordered_names = [candidate.model_name for candidate in ordered]
 
-    assert ordered_names[0] == "gpt-5.4"
-    assert ordered_names[1] == "gpt-5.2-codex"
-    assert ordered_names[2] == "claude-sonnet-4-6"
-    assert ordered_names[3] == "claude-opus-4-6"
+    assert ordered_names[0] == "gpt-5.6-sol"
+    assert ordered_names[1] == "gpt-5.4"
+    assert ordered_names[2] == "claude-opus-5"
+    assert ordered_names[3] == "deepseek-v4-pro"
+    assert ordered_names[4] == "grok-4.5"

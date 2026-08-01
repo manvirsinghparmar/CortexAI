@@ -1,11 +1,11 @@
 import type { ModelCatalogItem } from "../types";
 
 export const DEFAULT_COMPARE_MODEL_KEYS = [
-  "openai:gpt-5.1",
-  "claude:claude-sonnet-4-5",
+  "openai:gpt-5.6-luna",
+  "claude:claude-sonnet-5",
 ] as const;
 
-export const DEFAULT_ADDED_COMPARE_MODEL_KEY = "deepseek:deepseek-chat";
+export const DEFAULT_ADDED_COMPARE_MODEL_KEY = "deepseek:deepseek-v4-flash";
 
 export function resolveCompareModelKeys(
   models: ModelCatalogItem[],

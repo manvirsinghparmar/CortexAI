@@ -65,6 +65,7 @@ class GrokClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        reasoning_mode = str(kwargs.get("reasoning_effort") or "").strip() or None
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -103,6 +104,8 @@ class GrokClient(BaseAIClient):
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
+            if reasoning_mode:
+                request_payload["reasoning_effort"] = reasoning_mode
             adaptive_retry = None
 
             try:
@@ -117,6 +120,7 @@ class GrokClient(BaseAIClient):
                         "presence_penalty",
                         "frequency_penalty",
                         "max_tokens",
+                        "reasoning_effort",
                     },
                 )
                 if retry_payload is not None and dropped_param is not None:
@@ -146,17 +150,23 @@ class GrokClient(BaseAIClient):
             text = response.choices[0].message.content or ""
 
             # Extract token usage
-            token_usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
-                completion_tokens=(
-                    response.usage.completion_tokens if hasattr(response, "usage") else 0
-                ),
-                total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
+            token_usage = self._openai_compatible_token_usage(
+                response.usage if hasattr(response, "usage") else None
             )
+            served_model = self._served_model(getattr(response, "model", model), model)
 
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("grok", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -212,18 +222,30 @@ class GrokClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="grok",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "chat.completions", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "chat.completions",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "chat.completions"}
+                    else {
+                        "endpoint": "chat.completions",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode,
+                ),
             )
 
         except Exception as e:

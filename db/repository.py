@@ -1165,6 +1165,7 @@ def create_llm_request(
     prompt_text_override: str | None = None,
     response_revision_root_id: UUID | None = None,
     response_revision: int = 1,
+    requested_model: str | None = None,
 ) -> UUID:
     """
     Insert a row into llm_requests table.
@@ -1215,6 +1216,8 @@ def create_llm_request(
         "api_key_id": api_key_id,
     }
     column_names = {col.name for col in llm_requests.columns}
+    if "requested_model" in column_names:
+        values["requested_model"] = str(requested_model or model)
     if "request_group_id" in column_names:
         group_column = llm_requests.c.request_group_id
         values["request_group_id"] = (
@@ -1262,18 +1265,38 @@ def create_llm_response(db: Session, llm_request_id: UUID, response: UnifiedResp
         error_type = response.error.code
         error_message = response.error.message
 
-    stmt = insert(llm_responses).values(
-        llm_request_id=llm_request_id,
-        text=response.text,
-        finish_reason=response.finish_reason,
-        latency_ms=response.latency_ms,
-        prompt_tokens=response.token_usage.prompt_tokens,
-        completion_tokens=response.token_usage.completion_tokens,
-        total_tokens=response.token_usage.total_tokens,
-        estimated_cost=response.estimated_cost,
-        error_type=error_type,
-        error_message=error_message,
-    )
+    values: dict[str, Any] = {
+        "llm_request_id": llm_request_id,
+        "text": response.text,
+        "finish_reason": response.finish_reason,
+        "latency_ms": response.latency_ms,
+        "prompt_tokens": response.token_usage.prompt_tokens,
+        "completion_tokens": response.token_usage.completion_tokens,
+        "total_tokens": response.token_usage.total_tokens,
+        "estimated_cost": response.estimated_cost,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    column_names = {column.name for column in llm_responses.columns}
+    audit_values: dict[str, Any] = {
+        "served_model": response.served_model or response.model,
+        "pricing_model": response.pricing_model or response.served_model or response.model,
+        "model_lifecycle_status": response.model_lifecycle_status,
+        "alias_redirected": response.alias_redirected,
+        "replacement_model": response.replacement_model,
+        "model_migration_reason": response.migration_reason,
+        "reasoning_mode": response.reasoning_mode,
+        "cached_input_tokens": response.token_usage.cached_input_tokens,
+        "cache_write_tokens": response.token_usage.cache_write_tokens,
+        "reasoning_tokens": response.token_usage.reasoning_tokens,
+        "pricing_rule_applied": response.pricing_rule_applied,
+        "pricing_version": response.pricing_version,
+        "pricing_unknown": response.pricing_unknown,
+        "pricing_snapshot": dict(response.pricing_snapshot or {}),
+    }
+    values.update({key: value for key, value in audit_values.items() if key in column_names})
+
+    stmt = insert(llm_responses).values(**values)
 
     db.execute(stmt)
 
@@ -2098,7 +2121,11 @@ def get_usage_aggregates(
 
     created_col = llm_requests.c.created_at if "created_at" in req_cols else None
     provider_col = llm_requests.c.provider if "provider" in req_cols else None
-    model_col = llm_requests.c.model if "model" in req_cols else None
+    model_col = (
+        llm_responses.c.served_model
+        if "served_model" in resp_cols
+        else (llm_requests.c.model if "model" in req_cols else None)
+    )
     tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
 
@@ -2774,6 +2801,9 @@ def get_llm_history_entries(
     req_group_col = llm_requests.c.request_group_id if "request_group_id" in req_cols else None
     req_provider_col = llm_requests.c.provider if "provider" in req_cols else None
     req_model_col = llm_requests.c.model if "model" in req_cols else None
+    req_requested_model_col = (
+        llm_requests.c.requested_model if "requested_model" in req_cols else req_model_col
+    )
     req_revision_root_col = (
         llm_requests.c.response_revision_root_id
         if "response_revision_root_id" in req_cols
@@ -2786,6 +2816,17 @@ def get_llm_history_entries(
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
+    resp_served_model_col = (
+        llm_responses.c.served_model if "served_model" in resp_cols else None
+    )
+    resp_pricing_model_col = (
+        llm_responses.c.pricing_model if "pricing_model" in resp_cols else None
+    )
+    resp_lifecycle_col = (
+        llm_responses.c.model_lifecycle_status
+        if "model_lifecycle_status" in resp_cols
+        else None
+    )
     routing_req_col = (
         routing_decisions.c.llm_request_id
         if routing_decisions is not None and "llm_request_id" in routing_cols
@@ -2803,6 +2844,9 @@ def get_llm_history_entries(
     request_group_expr = req_group_col if req_group_col is not None else literal(None)
     provider_expr = req_provider_col if req_provider_col is not None else literal("unknown")
     model_expr = req_model_col if req_model_col is not None else literal("unknown")
+    requested_model_expr = (
+        req_requested_model_col if req_requested_model_col is not None else model_expr
+    )
     mode_expr = req_mode_col if req_mode_col is not None else literal("chat")
     timestamp_expr = req_created_col if req_created_col is not None else literal(None)
     response_text_expr = resp_text_col if resp_text_col is not None else literal("")
@@ -2810,6 +2854,37 @@ def get_llm_history_entries(
     tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
     error_expr = resp_error_col if resp_error_col is not None else literal(None)
+    served_model_expr = resp_served_model_col if resp_served_model_col is not None else model_expr
+    pricing_model_expr = (
+        resp_pricing_model_col if resp_pricing_model_col is not None else served_model_expr
+    )
+    lifecycle_expr = resp_lifecycle_col if resp_lifecycle_col is not None else literal(None)
+    alias_redirected_expr = (
+        llm_responses.c.alias_redirected
+        if "alias_redirected" in resp_cols
+        else literal(False)
+    )
+    replacement_model_expr = (
+        llm_responses.c.replacement_model
+        if "replacement_model" in resp_cols
+        else literal(None)
+    )
+    migration_reason_expr = (
+        llm_responses.c.model_migration_reason
+        if "model_migration_reason" in resp_cols
+        else literal(None)
+    )
+    pricing_rule_expr = (
+        llm_responses.c.pricing_rule_applied
+        if "pricing_rule_applied" in resp_cols
+        else literal(None)
+    )
+    pricing_version_expr = (
+        llm_responses.c.pricing_version if "pricing_version" in resp_cols else literal(None)
+    )
+    pricing_unknown_expr = (
+        llm_responses.c.pricing_unknown if "pricing_unknown" in resp_cols else literal(False)
+    )
     routing_trace_expr = routing_trace_col if routing_trace_col is not None else literal(None)
     session_title_expr = sessions.c.title if "title" in session_cols else literal(None)
     response_revision_root_expr = (
@@ -2842,6 +2917,16 @@ def get_llm_history_entries(
             prompt_hash_expr.label("prompt_hash"),
             provider_expr.label("provider"),
             model_expr.label("model"),
+            requested_model_expr.label("requested_model"),
+            served_model_expr.label("served_model"),
+            pricing_model_expr.label("pricing_model"),
+            lifecycle_expr.label("model_lifecycle_status"),
+            alias_redirected_expr.label("alias_redirected"),
+            replacement_model_expr.label("replacement_model"),
+            migration_reason_expr.label("migration_reason"),
+            pricing_rule_expr.label("pricing_rule_applied"),
+            pricing_version_expr.label("pricing_version"),
+            pricing_unknown_expr.label("pricing_unknown"),
             response_revision_root_expr.label("response_revision_root_id"),
             response_revision_expr.label("response_revision"),
             timestamp_expr.label("created_at"),
@@ -2920,6 +3005,23 @@ def get_llm_history_entries(
                 "prompt": str(prompt_text),
                 "provider": str(payload.get("provider") or "unknown"),
                 "model": str(payload.get("model") or "unknown"),
+                "requested_model": str(
+                    payload.get("requested_model") or payload.get("model") or "unknown"
+                ),
+                "served_model": str(payload.get("served_model") or payload.get("model") or "unknown"),
+                "pricing_model": str(
+                    payload.get("pricing_model")
+                    or payload.get("served_model")
+                    or payload.get("model")
+                    or "unknown"
+                ),
+                "model_lifecycle_status": payload.get("model_lifecycle_status"),
+                "alias_redirected": bool(payload.get("alias_redirected", False)),
+                "replacement_model": payload.get("replacement_model"),
+                "migration_reason": payload.get("migration_reason"),
+                "pricing_rule_applied": payload.get("pricing_rule_applied"),
+                "pricing_version": payload.get("pricing_version"),
+                "pricing_unknown": bool(payload.get("pricing_unknown", False)),
                 "response_version": int(payload.get("response_revision") or 1),
                 "response": str(response_text),
                 "latency_ms": payload.get("latency_ms"),

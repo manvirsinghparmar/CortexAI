@@ -26,6 +26,7 @@ interface SubscriptionPageShellProps {
   billingActionLabel?: string;
   billingPastDue?: boolean;
   billingDestination?: "/pricing" | "/account/billing";
+  activeView?: "account" | "credits";
 }
 
 export function SubscriptionPageShell({
@@ -42,6 +43,7 @@ export function SubscriptionPageShell({
   billingActionLabel,
   billingPastDue,
   billingDestination = "/account/billing",
+  activeView = "account",
 }: SubscriptionPageShellProps) {
   const navigate = useNavigate();
   const { load: loadHistory } = useHistory();
@@ -93,6 +95,7 @@ export function SubscriptionPageShell({
       onBilling={planLabel ? () => navigate(billingDestination) : undefined}
       onModels={() => navigate("/models")}
       onUsageInsights={() => navigate("/usage")}
+      onCredits={() => navigate("/credits")}
       theme={theme}
       onToggleTheme={toggleTheme}
     />
@@ -102,9 +105,10 @@ export function SubscriptionPageShell({
     <div className={styles.layout}>
       <Sidebar
         onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
-        activeView="account"
+        activeView={activeView}
         onNavigateChat={openChatMode}
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateCredits={() => navigate("/credits")}
         onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}

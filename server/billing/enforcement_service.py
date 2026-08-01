@@ -81,6 +81,8 @@ class ReservedRequestUsage:
     current_plan: str
     reset_at: datetime
     input_text: str = ""
+    initial_query: str | None = None
+    credit_activity_id: str | None = None
     model_estimates: tuple[ReservedModelEstimate, ...] = ()
     smart_candidates: tuple[SmartCandidateEstimate, ...] = ()
 
@@ -217,6 +219,8 @@ def authorize_and_reserve_usage(
     total_attachment_bytes: int = 0,
     attachment_sizes: Sequence[int] = (),
     input_text: str = "",
+    initial_query: str | None = None,
+    credit_activity_id: str | None = None,
     max_output_tokens: int | None = None,
     model_attempt_count: int = 1,
 ) -> ReservedRequestUsage:
@@ -395,6 +399,8 @@ def authorize_and_reserve_usage(
         current_plan=effective.plan.code,
         reset_at=effective.current_period_end,
         input_text=str(input_text or ""),
+        initial_query=str(initial_query or "").strip() or None,
+        credit_activity_id=str(credit_activity_id or "").strip() or None,
         model_estimates=tuple(estimates),
         smart_candidates=tuple(smart_candidate_estimates),
     )
@@ -536,6 +542,12 @@ def finalize_reserved_usage(
         actual_credits=total_credits,
     )
     for index, item in enumerate(transaction_items):
+        metadata = dict(item.get("metadata") or {})
+        if reservation.initial_query:
+            metadata["initial_query"] = reservation.initial_query
+        if reservation.credit_activity_id:
+            metadata["credit_activity_id"] = reservation.credit_activity_id
+        item["metadata"] = metadata
         repository.create_credit_transaction(
             db_session,
             billing_account_id=settled.billing_account_id,

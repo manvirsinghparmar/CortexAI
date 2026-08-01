@@ -17,9 +17,13 @@ const METER_PRESENTATION: Array<{
 export function UsageAllowance({
   entitlements,
   compact = false,
+  title = "Plan allowances",
+  eyebrow = "Current billing period",
 }: {
   entitlements: EntitlementsResponse;
   compact?: boolean;
+  title?: string;
+  eyebrow?: string;
 }) {
   const meters = METER_PRESENTATION.filter(
     ({ key }) => entitlements.allowances[key] !== undefined,
@@ -32,8 +36,8 @@ export function UsageAllowance({
     >
       <header className={styles.header}>
         <div>
-          <span className={styles.eyebrow}>Current billing period</span>
-          <h2 id="subscription-allowances-title">Plan allowances</h2>
+          <span className={styles.eyebrow}>{eyebrow}</span>
+          <h2 id="subscription-allowances-title">{title}</h2>
         </div>
         <div className={styles.planMeta}>
           <PlanBadge label={entitlements.plan.display_name} tone="current" />

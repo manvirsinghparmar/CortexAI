@@ -827,7 +827,11 @@ def test_credit_transactions_endpoint_returns_itemized_reconciliation(
             provider_cost_usd=0.001,
             usage_estimated=False,
             pricing_version="2026-07-29",
-            metadata={"file_context": True},
+            metadata={
+                "credit_activity_id": "activity-credit-route",
+                "file_context": True,
+                "initial_query": "How do atomic credit reservations work?",
+            },
             created_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
         )
     )
@@ -854,6 +858,8 @@ def test_credit_transactions_endpoint_returns_itemized_reconciliation(
     assert response.json()["items"][0] == {
         "id": response.json()["items"][0]["id"],
         "request_id": "credit-route-request",
+        "activity_id": "activity-credit-route",
+        "query": "How do atomic credit reservations work?",
         "operation_type": "ask",
         "item_type": "model",
         "provider": "openai",
@@ -867,7 +873,11 @@ def test_credit_transactions_endpoint_returns_itemized_reconciliation(
         "provider_cost_usd": 0.001,
         "usage_estimated": False,
         "pricing_version": "2026-07-29",
-        "metadata": {"file_context": True},
+        "metadata": {
+            "credit_activity_id": "activity-credit-route",
+            "file_context": True,
+            "initial_query": "How do atomic credit reservations work?",
+        },
         "created_at": "2026-07-29T12:00:00Z",
     }
 

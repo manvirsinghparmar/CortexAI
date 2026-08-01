@@ -141,6 +141,8 @@ def _reserve_optimization_usage(
             research_enabled=False,
             optimization_enabled=True,
             input_text=_optimization_input_text(request),
+            initial_query=request.prompt,
+            credit_activity_id=request.credit_activity_id,
             max_output_tokens=max_output_tokens,
             model_attempt_count=max_attempts,
         )
@@ -280,6 +282,7 @@ def _schedule_timed_out_optimizer_finalization(
 
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="The raw user prompt to optimize")
+    credit_activity_id: str | None = Field(default=None, min_length=1, max_length=96)
     context_hint: str | None = Field(
         default=None,
         max_length=4000,

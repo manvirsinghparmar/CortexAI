@@ -169,6 +169,19 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
   });
 
+  it("opens AI credits from the account menu when wired", async () => {
+    const user = userEvent.setup();
+    const onCredits = vi.fn();
+
+    render(<AccountMenu authEnabled={false} loggedIn={false} onCredits={onCredits} />);
+
+    await user.click(screen.getByRole("button", { name: "Guest account" }));
+    await user.click(screen.getByRole("menuitem", { name: "AI credits" }));
+
+    expect(onCredits).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu", { name: "Account menu" })).not.toBeInTheDocument();
+  });
+
   it("shows Models as the first account menu tile when wired", async () => {
     const user = userEvent.setup();
     const onModels = vi.fn();

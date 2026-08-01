@@ -226,6 +226,7 @@ async def create_analysis_run(
                     *(source.content for source in sources),
                 ]
             ),
+            initial_query=str(source_payload.get("question") or ""),
             max_output_tokens=analysis_service.CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS,
         )
     except Exception as exc:

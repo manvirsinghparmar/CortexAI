@@ -66,6 +66,7 @@ export function useChat() {
     let finalPrompt = rawPrompt;
     let turnId: string | undefined;
     let optimization: PromptOptimizationState | undefined;
+    const creditActivityId = createCreditActivityId();
     const requestStartedAt = new Date().toISOString();
     const attachmentItems = toAttachmentItems(attachments);
     const conversationHistory = buildConversationHistory(state.turns);
@@ -101,6 +102,7 @@ export function useChat() {
               conversationHistory,
               context,
               attachments,
+              creditActivityId,
             }),
             controller.signal,
           );
@@ -130,6 +132,8 @@ export function useChat() {
           signal: controller.signal,
           turnId,
           optimization,
+          creditActivityId,
+          initialQuery: rawPrompt,
           startedAt: requestStartedAt,
           clearComposer,
         });
@@ -143,6 +147,8 @@ export function useChat() {
           signal: controller.signal,
           turnId,
           optimization,
+          creditActivityId,
+          initialQuery: rawPrompt,
           startedAt: requestStartedAt,
           clearComposer,
         });
@@ -272,6 +278,8 @@ async function runAskTurn({
   signal,
   turnId,
   optimization,
+  creditActivityId,
+  initialQuery,
   startedAt,
   targetOverride,
   researchEnabledOverride,
@@ -285,6 +293,8 @@ async function runAskTurn({
   signal: AbortSignal;
   turnId?: string;
   optimization?: PromptOptimizationState;
+  creditActivityId: string;
+  initialQuery: string;
   startedAt: string;
   targetOverride?: Partial<CompareTargetRequest>;
   researchEnabledOverride?: boolean;
@@ -298,6 +308,8 @@ async function runAskTurn({
   const researchEnabled = researchEnabledOverride ?? state.researchMode;
   const request: ChatRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: creditActivityId,
+    initial_query: initialQuery,
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
@@ -428,6 +440,8 @@ async function runCompareTurn({
   signal,
   turnId,
   optimization,
+  creditActivityId,
+  initialQuery,
   startedAt,
   clearComposer,
 }: {
@@ -439,6 +453,8 @@ async function runCompareTurn({
   signal: AbortSignal;
   turnId?: string;
   optimization?: PromptOptimizationState;
+  creditActivityId: string;
+  initialQuery: string;
   startedAt: string;
   clearComposer: boolean;
 }) {
@@ -462,6 +478,8 @@ async function runCompareTurn({
   );
   const request: CompareRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: creditActivityId,
+    initial_query: initialQuery,
     targets,
     routing: { smart_mode: false, research_mode: researchEnabled },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
@@ -576,6 +594,8 @@ async function runRegenerateResponse({
   const researchEnabled = researchEnabledOverride ?? state.researchMode;
   const request: ChatRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: createCreditActivityId(),
+    initial_query: submittedPrompt,
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
@@ -843,6 +863,13 @@ function getDetailRecord(body: unknown): Record<string, unknown> | null {
   if (typeof body !== "object" || body === null) return null;
   const detail = (body as Record<string, unknown>).detail;
   return typeof detail === "object" && detail !== null ? (detail as Record<string, unknown>) : null;
+}
+
+function createCreditActivityId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `credit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function beginRequestController(): AbortController {

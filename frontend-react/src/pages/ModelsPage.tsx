@@ -138,6 +138,7 @@ export function ModelsPage() {
         activeView="models"
         onNavigateChat={openChatMode}
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateCredits={() => navigate("/credits")}
         onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
@@ -171,6 +172,7 @@ export function ModelsPage() {
             }
             onModels={() => navigate("/models")}
             onUsageInsights={() => navigate("/usage")}
+            onCredits={() => navigate("/credits")}
             theme={theme}
             onToggleTheme={toggleTheme}
           />

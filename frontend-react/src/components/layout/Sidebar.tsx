@@ -18,9 +18,10 @@ import styles from "./Sidebar.module.css";
 
 interface SidebarProps {
   onSelectThread: (thread: HistoryThread) => void;
-  activeView?: "chat" | "usage" | "models" | "account";
+  activeView?: "chat" | "usage" | "credits" | "models" | "account";
   onNavigateChat?: (mode: ChatMode) => void;
   onNavigateUsage?: () => void;
+  onNavigateCredits?: () => void;
   onNavigateModels?: () => void;
   whoAmI?: WhoAmIResponse | null;
   loggedIn?: boolean;
@@ -39,6 +40,7 @@ export function Sidebar({
   activeView = "chat",
   onNavigateChat,
   onNavigateUsage,
+  onNavigateCredits,
   onNavigateModels,
   whoAmI,
   loggedIn,
@@ -214,6 +216,7 @@ export function Sidebar({
   };
 
   const usageActive = activeView === "usage";
+  const creditsActive = activeView === "credits";
   const modelsActive = activeView === "models";
   const askActive = activeView === "chat" && mode === "single";
   const compareActive = activeView === "chat" && mode === "compare";
@@ -307,6 +310,18 @@ export function Sidebar({
         >
           <CortexIcon name="usage" />
           <span>Usage</span>
+        </button>
+        <button
+          type="button"
+          className={creditsActive ? styles.navItemActive : styles.navItem}
+          onClick={onNavigateCredits}
+          aria-current={creditsActive ? "page" : undefined}
+          aria-label="AI credits"
+          title={isCollapsed ? "AI credits" : undefined}
+          disabled={signedOut}
+        >
+          <CortexIcon name="cost" />
+          <span>AI credits</span>
         </button>
         <button
           type="button"

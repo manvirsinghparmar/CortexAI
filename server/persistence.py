@@ -702,6 +702,8 @@ def reserve_subscription_usage(
     total_attachment_bytes: int = 0,
     attachment_sizes: Iterable[int] = (),
     input_text: str = "",
+    initial_query: str = "",
+    credit_activity_id: str | None = None,
     max_output_tokens: int | None = None,
     model_attempt_count: int = 1,
 ) -> ReservedRequestUsage:
@@ -720,6 +722,12 @@ def reserve_subscription_usage(
             total_attachment_bytes=total_attachment_bytes,
             attachment_sizes=tuple(attachment_sizes),
             input_text=input_text,
+            initial_query=(
+                None
+                if privacy_service.is_metadata_only()
+                else privacy_service.sanitize_user_message_for_storage(initial_query)
+            ),
+            credit_activity_id=credit_activity_id,
             max_output_tokens=max_output_tokens,
             model_attempt_count=model_attempt_count,
         )

@@ -29,6 +29,8 @@ export interface AttachmentRequestItem {
 
 export interface ChatRequest {
   prompt: string;
+  credit_activity_id?: string;
+  initial_query?: string;
   provider?: string;
   model?: string;
   context?: UserContextRequest;
@@ -49,6 +51,8 @@ export interface CompareTargetRequest {
 
 export interface CompareRequest {
   prompt: string;
+  credit_activity_id?: string;
+  initial_query?: string;
   targets: CompareTargetRequest[];
   routing?: ChatRoutingRequest;
   context?: UserContextRequest;
@@ -221,6 +225,8 @@ export interface EntitlementsResponse {
 export interface CreditTransaction {
   id: string;
   request_id: string;
+  activity_id: string;
+  query: string | null;
   operation_type: string;
   item_type: "model" | "research" | "adjustment";
   provider: string | null;
@@ -444,6 +450,7 @@ export interface UsageSummary {
 
 export interface OptimizeRequest {
   prompt: string;
+  credit_activity_id?: string;
   context_hint?: string;
   context?: UserContextRequest;
 }

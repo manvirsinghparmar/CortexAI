@@ -57,6 +57,8 @@ class CompareResponseRegenerationRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str = Field("", min_length=0)
+    credit_activity_id: Optional[str] = Field(None, min_length=1, max_length=96)
+    initial_query: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
     context: Optional[UserContextRequest] = None
@@ -96,6 +98,8 @@ class CompareTargetRequest(BaseModel):
 
 class CompareRequest(BaseModel):
     prompt: str = Field("", min_length=0)
+    credit_activity_id: Optional[str] = Field(None, min_length=1, max_length=96)
+    initial_query: Optional[str] = None
     targets: List[CompareTargetRequest] = Field(..., min_length=2, max_length=3)
     routing: Optional[ChatRoutingRequest] = None
     context: Optional[UserContextRequest] = None

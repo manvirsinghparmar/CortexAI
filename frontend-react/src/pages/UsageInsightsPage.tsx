@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchCortexAnalysisRuns } from "../api/cortexAnalysis";
-import { fetchCreditTransactions } from "../api/entitlements";
 import { fetchHistory } from "../api/history";
 import { exportUsageCsv, type UsageSummaryParams } from "../api/usage";
 import { AccountMenu } from "../components/layout/AccountMenu";
@@ -9,7 +8,6 @@ import { Sidebar } from "../components/layout/Sidebar";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { CortexIcon, type CortexIconName } from "../components/shared/CortexIcon";
 import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
-import { UsageAllowance } from "../components/subscription/UsageAllowance";
 import { getModelPresentation } from "../config/modelPresentation";
 import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
@@ -22,7 +20,6 @@ import { useChatStore } from "../store/chatStore";
 import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
 import type {
   ChatMode,
-  CreditTransaction,
   HistoryThread,
   UsageSummary,
   UsageSummaryPeriod,
@@ -45,7 +42,6 @@ export function UsageInsightsPage() {
   const [periodMenuOpen, setPeriodMenuOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
-  const [creditTransactions, setCreditTransactions] = useState<CreditTransaction[] | null>(null);
   const periodControlRef = useRef<HTMLDivElement>(null);
   const selectedPeriod = getUsagePeriodOption(selectedPeriodKey);
   const usageParams = useMemo(() => buildUsagePeriodParams(selectedPeriodKey), [selectedPeriodKey]);
@@ -56,21 +52,6 @@ export function UsageInsightsPage() {
       subscriptionState.entitlements,
   );
 
-  useEffect(() => {
-    if (!loggedIn) {
-      setCreditTransactions(null);
-      return;
-    }
-    const controller = new AbortController();
-    setCreditTransactions(null);
-    void fetchCreditTransactions(20, 0, controller.signal)
-      .then((response) => setCreditTransactions(response.items))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setCreditTransactions([]);
-      });
-    return () => controller.abort();
-  }, [loggedIn, subscriptionState.lastLoadedAt]);
   const accountBillingDestination = accountSubscription.billingDestination;
   const periodLabel = summary?.period.label ?? selectedPeriod.label;
   const periodControlLabel = selectedPeriod.label;
@@ -170,6 +151,7 @@ export function UsageInsightsPage() {
         activeView="usage"
         onNavigateChat={openChatMode}
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateCredits={() => navigate("/credits")}
         onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
@@ -280,6 +262,7 @@ export function UsageInsightsPage() {
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onUsageInsights={() => navigate("/usage")}
+                onCredits={() => navigate("/credits")}
               />
             </div>
           </div>
@@ -289,12 +272,6 @@ export function UsageInsightsPage() {
           onManageBilling={() => navigate("/account/billing")}
         />
         <section className={styles.body} aria-label="Usage dashboard content">
-          {subscriptionState.entitlements ? (
-            <UsageAllowance entitlements={subscriptionState.entitlements} />
-          ) : null}
-          {creditTransactions !== null ? (
-            <RecentCreditActivity transactions={creditTransactions} />
-          ) : null}
           {usageLoading ? (
             <UsageLoadingState />
           ) : usageError ? (
@@ -328,73 +305,6 @@ export function UsageInsightsPage() {
       </main>
     </div>
   );
-}
-
-function RecentCreditActivity({ transactions }: { transactions: CreditTransaction[] }) {
-  return (
-    <section className={styles.creditPanel} aria-labelledby="recent-credit-activity-title">
-      <div className={styles.panelHeader}>
-        <div>
-          <h2 id="recent-credit-activity-title">Recent credit activity</h2>
-          <p>Itemized model, search, and feature charges</p>
-        </div>
-      </div>
-      {transactions.length === 0 ? (
-        <p className={styles.creditEmpty}>No credit activity yet for this billing period.</p>
-      ) : (
-        <div className={styles.creditList}>
-          {transactions.map((transaction) => (
-            <article className={styles.creditRow} key={transaction.id}>
-              <div className={styles.creditIdentity}>
-                <strong>{creditTransactionLabel(transaction)}</strong>
-                <span>
-                  {creditTransactionBreakdown(transaction)}
-                  {transaction.usage_estimated ? " · estimated" : ""}
-                </span>
-              </div>
-              <div className={styles.creditAmount}>
-                <strong>{formatInteger(transaction.total_credits)} credits</strong>
-                <span>{formatCreditTimestamp(transaction.created_at)}</span>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function creditTransactionLabel(transaction: CreditTransaction): string {
-  if (transaction.item_type === "research") return "Advanced Web Search";
-  const modelName = transaction.model
-    ? getModelPresentation(transaction.provider ?? "", transaction.model).label
-    : "AI";
-  if (transaction.operation_type === "optimize") return `${modelName} Improve Prompt`;
-  if (transaction.operation_type === "cortex_analysis") return `${modelName} Cortex Analysis`;
-  if (transaction.operation_type === "compare") return `${modelName} Compare response`;
-  if (transaction.operation_type === "regenerate") return `${modelName} regeneration`;
-  if (transaction.metadata.file_context === true) return `${modelName} file-context response`;
-  return `${modelName} response`;
-}
-
-function creditTransactionBreakdown(transaction: CreditTransaction): string {
-  if (transaction.fixed_credits > 0) {
-    return `${formatInteger(transaction.fixed_credits)} fixed retrieval credits`;
-  }
-  return `${formatInteger(transaction.input_credits)} input + ${formatInteger(
-    transaction.output_credits,
-  )} output`;
-}
-
-function formatCreditTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function UsageDashboard({

@@ -109,6 +109,31 @@ async function installResponsiveRoutes(page, state) {
                 timestamp: "2026-06-12T12:00:00Z",
             });
         }
+        if (url.pathname === "/v1/billing/plans" && method === "GET") {
+            return json(route, {
+                currency: "USD",
+                billing_period: "monthly",
+                billing_enabled: true,
+                plans: [],
+            });
+        }
+        if (url.pathname === "/v1/billing/subscription" && method === "GET") {
+            return json(route, {
+                plan_code: "free",
+                status: "free",
+                provider: null,
+                current_period_start: "2026-07-01T00:00:00Z",
+                current_period_end: "2026-08-01T00:00:00Z",
+                cancel_at_period_end: false,
+                can_manage: false,
+            });
+        }
+        if (url.pathname === "/v1/entitlements" && method === "GET") {
+            return json(route, entitlements());
+        }
+        if (url.pathname === "/v1/credits/transactions" && method === "GET") {
+            return json(route, creditTransactions());
+        }
         if (url.pathname === "/v1/usage/summary" && method === "GET") {
             return json(route, usageSummary());
         }
@@ -461,6 +486,145 @@ function whoAmI() {
             cooldown_seconds: 120,
             scope: "provider_model",
         },
+    };
+}
+
+function entitlements() {
+    return {
+        plan: {
+            code: "free",
+            display_name: "Free",
+            status: "free",
+            source: "default",
+            renews_at: "2026-08-01T00:00:00Z",
+            cancel_at_period_end: false,
+            grace_until: null,
+        },
+        features: {
+            compare_enabled: true,
+            max_compare_models: 2,
+            research_enabled: true,
+            prompt_improvement_enabled: true,
+            file_analysis_enabled: true,
+            usage_export_enabled: false,
+            saved_history_enabled: true,
+            models_catalog_enabled: true,
+        },
+        model_access: {
+            allowed_billing_classes: ["economical", "standard"],
+        },
+        limits: {
+            max_files_per_request: 1,
+            max_file_bytes: 10000000,
+        },
+        allowances: {
+            ai_credits: {
+                used: 10000,
+                reserved: 0,
+                limit: 100000,
+                remaining: 90000,
+            },
+        },
+        period: {
+            starts_at: "2026-07-01T00:00:00Z",
+            ends_at: "2026-08-01T00:00:00Z",
+        },
+    };
+}
+
+function creditTransactions() {
+    return {
+        items: [
+            {
+                id: "credit-1",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "model",
+                provider: "openai",
+                model: "gpt-5.4-mini",
+                input_tokens: 600,
+                output_tokens: 200,
+                input_credits: 1200,
+                output_credits: 800,
+                fixed_credits: 0,
+                total_credits: 2000,
+                provider_cost_usd: 0.002,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {},
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-2",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "research",
+                provider: "tavily",
+                model: null,
+                input_tokens: 0,
+                output_tokens: 0,
+                input_credits: 0,
+                output_credits: 0,
+                fixed_credits: 10000,
+                total_credits: 10000,
+                provider_cost_usd: 0.002,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {
+                    provider_credits_used: 2,
+                    cortex_credits_per_provider_credit: 5000,
+                },
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-3",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "adjustment",
+                provider: null,
+                model: null,
+                input_tokens: 0,
+                output_tokens: 0,
+                input_credits: 0,
+                output_credits: 0,
+                fixed_credits: 0,
+                total_credits: 0,
+                provider_cost_usd: 0,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: { unbilled_credits: 200 },
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-4",
+                request_id: "optimizer-request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "optimize",
+                item_type: "model",
+                provider: "openai",
+                model: "gpt-5.4-mini",
+                input_tokens: 150,
+                output_tokens: 100,
+                input_credits: 300,
+                output_credits: 700,
+                fixed_credits: 0,
+                total_credits: 1000,
+                provider_cost_usd: 0.001,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {},
+                created_at: "2026-07-31T14:29:58Z",
+            },
+        ],
+        limit: 20,
+        offset: 0,
     };
 }
 

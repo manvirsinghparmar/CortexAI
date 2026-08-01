@@ -1139,13 +1139,18 @@ def test_optimize_reserves_and_settles_every_billable_attempt(
 
     response = client.post(
         "/v1/optimize",
-        json={"prompt": "make this prompt better"},
+        json={
+            "prompt": "make this prompt better",
+            "credit_activity_id": "activity-optimize",
+        },
         cookies={"cortex_session": "test-session-cookie"},
     )
 
     assert response.status_code == 200
     assert reserve_calls[0]["model_attempt_count"] == attempt_count
     assert reserve_calls[0]["max_output_tokens"] == 1800
+    assert reserve_calls[0]["initial_query"] == "make this prompt better"
+    assert reserve_calls[0]["credit_activity_id"] == "activity-optimize"
     assert len(finalize_calls) == 1
     assert len(finalize_calls[0]["model_usages"]) == attempt_count
 
@@ -2322,7 +2327,9 @@ def test_chat_uses_same_clamped_limit_for_billing_and_provider(
     response = client.post(
         "/v1/chat",
         json={
-            "prompt": "Give me a summary",
+            "prompt": "Give me a concise, structured summary",
+            "initial_query": "Give me a summary",
+            "credit_activity_id": "activity-chat",
             "provider": "openai",
             "model": "gpt-4o-mini",
             "max_tokens": 100_000_000,
@@ -2332,6 +2339,8 @@ def test_chat_uses_same_clamped_limit_for_billing_and_provider(
 
     assert response.status_code == 200
     assert reservations[0]["max_output_tokens"] == 2048
+    assert reservations[0]["initial_query"] == "Give me a summary"
+    assert reservations[0]["credit_activity_id"] == "activity-chat"
     assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 2048
 
 
@@ -2356,7 +2365,9 @@ def test_compare_uses_same_clamped_limit_for_billing_and_provider(
     response = client.post(
         "/v1/compare",
         json={
-            "prompt": "Compare these",
+            "prompt": "Compare these options in a table",
+            "initial_query": "Compare these",
+            "credit_activity_id": "activity-compare",
             "max_tokens": 100_000_000,
             "targets": [
                 {"provider": "openai", "model": "gpt-4o-mini"},
@@ -2368,6 +2379,8 @@ def test_compare_uses_same_clamped_limit_for_billing_and_provider(
 
     assert response.status_code == 200
     assert reservations[0]["max_output_tokens"] == 2048
+    assert reservations[0]["initial_query"] == "Compare these"
+    assert reservations[0]["credit_activity_id"] == "activity-compare"
     assert app.state.fake_orchestrator.last_compare_kwargs["max_tokens"] == 2048
 
 

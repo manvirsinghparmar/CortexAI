@@ -462,6 +462,8 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
         model_targets=(ModelTargetIntent("openai", "gpt-4.1-mini", "standard"),),
         research_enabled=False,
         input_text="Explain atomic reservations.",
+        initial_query="How do atomic credit reservations work?",
+        credit_activity_id="activity-model-research",
         max_output_tokens=500,
     )
     reserved = reservation.requested_quantities["ai_credits"]
@@ -494,6 +496,8 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
     assert item["usage_estimated"] is False
     assert item["metadata"] == {
         "file_context": True,
+        "credit_activity_id": "activity-model-research",
+        "initial_query": "How do atomic credit reservations work?",
         "prompt_optimization": False,
     }
 
@@ -532,6 +536,8 @@ def test_under_reserved_provider_result_keeps_answer_billable_and_records_adjust
         model_targets=(ModelTargetIntent("openai", "gpt-4.1-mini", "standard"),),
         research_enabled=False,
         input_text="Short request",
+        initial_query="Why did this request exceed its reservation?",
+        credit_activity_id="activity-under-reserved",
         max_output_tokens=10,
     )
     reserved = reservation.requested_quantities["ai_credits"]
@@ -573,11 +579,19 @@ def test_under_reserved_provider_result_keeps_answer_billable_and_records_adjust
     )
     assert sum(item["total_credits"] for item in items) == reserved
     assert items[0]["metadata"]["under_reserved"] is True
+    assert items[0]["metadata"]["initial_query"] == (
+        "Why did this request exceed its reservation?"
+    )
+    assert items[0]["metadata"]["credit_activity_id"] == "activity-under-reserved"
     assert items[0]["metadata"]["billed_total_credits"] == reserved
     assert items[1]["item_type"] == "adjustment"
     assert items[1]["total_credits"] == 0
     assert items[1]["metadata"]["unbilled_credits"] > 0
     assert items[1]["metadata"]["unbilled_provider_cost_usd"] > 0
+    assert items[1]["metadata"]["initial_query"] == (
+        "Why did this request exceed its reservation?"
+    )
+    assert items[1]["metadata"]["credit_activity_id"] == "activity-under-reserved"
 
 
 def test_compare_partial_success_charges_only_delivered_model(metering_db):

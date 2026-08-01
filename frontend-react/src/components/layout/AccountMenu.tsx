@@ -15,11 +15,19 @@ interface AccountMenuProps {
   onBilling?: () => void;
   onModels?: () => void;
   onUsageInsights?: () => void;
+  onCredits?: () => void;
   theme?: AppTheme;
   onToggleTheme?: () => void;
 }
 
-type AccountMenuActionKey = "billing" | "login" | "logout" | "models" | "theme" | "usage";
+type AccountMenuActionKey =
+  | "billing"
+  | "credits"
+  | "login"
+  | "logout"
+  | "models"
+  | "theme"
+  | "usage";
 
 interface AccountMenuAction {
   key: AccountMenuActionKey;
@@ -42,6 +50,7 @@ export function AccountMenu({
   onBilling,
   onModels,
   onUsageInsights,
+  onCredits,
   theme,
   onToggleTheme,
 }: AccountMenuProps) {
@@ -53,6 +62,7 @@ export function AccountMenu({
   const canOpenBilling = !!planLabel && !!billingActionLabel && !!onBilling;
   const canOpenModels = !!onModels;
   const canOpenUsage = !!onUsageInsights;
+  const canOpenCredits = !!onCredits;
   const canToggleTheme = !!theme && !!onToggleTheme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const menuActions: AccountMenuAction[] = [];
@@ -85,6 +95,13 @@ export function AccountMenu({
       key: "usage",
       label: "Usage & insights",
       icon: "usage",
+    });
+  }
+  if (canOpenCredits) {
+    menuActions.push({
+      key: "credits",
+      label: "AI credits",
+      icon: "cost",
     });
   }
   if (canOpenModels && canOpenBilling) {
@@ -174,6 +191,8 @@ export function AccountMenu({
       onToggleTheme?.();
     } else if (action === "usage") {
       onUsageInsights?.();
+    } else if (action === "credits") {
+      onCredits?.();
     } else {
       onLogin?.();
     }

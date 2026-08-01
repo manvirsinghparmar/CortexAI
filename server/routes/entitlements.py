@@ -167,6 +167,13 @@ async def credit_transactions(
             CreditTransactionDTO(
                 id=str(row["id"]),
                 request_id=str(row["request_id"]),
+                activity_id=str(
+                    (row.get("metadata") or {}).get("credit_activity_id")
+                    or row["request_id"]
+                ),
+                query=(
+                    str((row.get("metadata") or {}).get("initial_query") or "").strip() or None
+                ),
                 operation_type=str(row["operation_type"]),
                 item_type=str(row["item_type"]),
                 provider=str(row["provider"]) if row.get("provider") else None,

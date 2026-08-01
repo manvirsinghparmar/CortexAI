@@ -138,7 +138,7 @@ describe("UsageInsightsPage states", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the server-resolved subscription allowance panel above usage analytics", () => {
+  it("keeps credit balance and activity out of the usage analytics page", () => {
     hookMocks.subscriptionState.current = { entitlements: entitlementFixture() };
     hookMocks.usageState.current = {
       summary: usageSummary(),
@@ -149,10 +149,10 @@ describe("UsageInsightsPage states", () => {
 
     renderPage();
 
-    expect(screen.getByRole("heading", { name: "Plan allowances" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI credit balance" })).not.toBeInTheDocument();
     expect(
-      screen.getByRole("progressbar", { name: "AI credits: 90,000 left of 100,000" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { name: "Recent credit activity" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Models that replied" })).toBeInTheDocument();
   });
 

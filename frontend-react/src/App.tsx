@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ChatPage } from "./pages/ChatPage";
 import { BillingPage } from "./pages/BillingPage";
+import { CreditsPage } from "./pages/CreditsPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { PricingPage } from "./pages/PricingPage";
 import { UsageInsightsPage } from "./pages/UsageInsightsPage";
@@ -11,6 +12,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<ChatPage />} />
         <Route path="/usage" element={<UsageInsightsPage />} />
+        <Route path="/credits" element={<CreditsPage />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/account/billing" element={<BillingPage />} />

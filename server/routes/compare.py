@@ -225,6 +225,8 @@ def _reserve_compare_usage(
     research_enabled: bool,
     orchestrator: CortexOrchestrator,
     resolved_attachments: list[attachments_service.ResolvedAttachment],
+    initial_query: str,
+    credit_activity_id: str | None,
     max_output_tokens: int,
 ) -> ReservedRequestUsage:
     try:
@@ -247,6 +249,8 @@ def _reserve_compare_usage(
             total_attachment_bytes=sum(item.size_bytes for item in resolved_attachments),
             attachment_sizes=tuple(item.size_bytes for item in resolved_attachments),
             input_text=_billing_input_text(request),
+            initial_query=initial_query,
+            credit_activity_id=credit_activity_id,
             max_output_tokens=max_output_tokens,
         )
     except HTTPException:
@@ -496,6 +500,8 @@ async def compare(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            initial_query=request.initial_query or effective_prompt,
+            credit_activity_id=request.credit_activity_id,
             max_output_tokens=effective_max_tokens,
         )
 
@@ -664,6 +670,8 @@ async def compare_stream(
             research_enabled=research_mode,
             orchestrator=orchestrator,
             resolved_attachments=resolved_attachments,
+            initial_query=request.initial_query or effective_prompt,
+            credit_activity_id=request.credit_activity_id,
             max_output_tokens=effective_max_tokens,
         )
 

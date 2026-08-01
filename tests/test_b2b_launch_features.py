@@ -1582,11 +1582,17 @@ def test_storage_policy_metadata_only_avoids_raw_prompt_and_response(monkeypatch
     try:
         messages = get_table("messages")
         llm_responses = get_table("llm_responses")
+        credit_transactions = get_table("credit_transactions")
         latest_messages = db.execute(
             select(messages.c.content).order_by(messages.c.created_at.desc()).limit(2)
         ).fetchall()
         latest_response_text = db.execute(
             select(llm_responses.c.text).order_by(llm_responses.c.created_at.desc()).limit(1)
+        ).scalar_one()
+        latest_credit_metadata = db.execute(
+            select(credit_transactions.c.metadata)
+            .order_by(credit_transactions.c.created_at.desc())
+            .limit(1)
         ).scalar_one()
     finally:
         db.close()
@@ -1595,6 +1601,7 @@ def test_storage_policy_metadata_only_avoids_raw_prompt_and_response(monkeypatch
     assert "metadata-only" in joined_messages
     assert "user@example.com" not in joined_messages
     assert latest_response_text in ("", None)
+    assert "initial_query" not in (latest_credit_metadata or {})
 
 
 @pytest.mark.integration
@@ -1622,16 +1629,28 @@ def test_redaction_masks_email_phone_and_card_in_stored_content(monkeypatch, b2b
     try:
         messages = get_table("messages")
         llm_responses = get_table("llm_responses")
+        credit_transactions = get_table("credit_transactions")
         rows = db.execute(
             select(messages.c.content).order_by(messages.c.created_at.desc()).limit(2)
         ).fetchall()
         response_text = db.execute(
             select(llm_responses.c.text).order_by(llm_responses.c.created_at.desc()).limit(1)
         ).scalar_one()
+        credit_metadata = db.execute(
+            select(credit_transactions.c.metadata)
+            .order_by(credit_transactions.c.created_at.desc())
+            .limit(1)
+        ).scalar_one()
     finally:
         db.close()
 
-    combined = " ".join(row[0] for row in rows if row[0]) + " " + str(response_text or "")
+    combined = (
+        " ".join(row[0] for row in rows if row[0])
+        + " "
+        + str(response_text or "")
+        + " "
+        + str(credit_metadata or {})
+    )
     assert "[REDACTED_EMAIL]" in combined
     assert "[REDACTED_PHONE]" in combined
     assert "[REDACTED_CARD]" in combined

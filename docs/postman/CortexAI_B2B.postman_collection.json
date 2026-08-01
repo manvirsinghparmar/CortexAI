@@ -242,7 +242,7 @@
               }
             ],
             "url": "{{base_url}}/v1/credits/transactions?limit=20&offset=0",
-            "description": "Returns newest immutable, itemized AI-credit reconciliation rows for the authenticated billing account."
+            "description": "Returns newest immutable, itemized AI-credit reconciliation rows for the authenticated billing account. Each row includes display-only activity_id grouping and nullable query context for the original user question after storage-policy sanitization."
           },
           "event": [
             {
@@ -258,6 +258,8 @@
                   "  pm.expect(body.offset).to.eql(0);",
                   "  if (body.items.length > 0) {",
                   "    pm.expect(body.items[0].total_credits).to.be.at.least(0);",
+                  "    pm.expect(body.items[0]).to.have.property('activity_id');",
+                  "    pm.expect(body.items[0]).to.have.property('query');",
                   "    pm.expect(body.items[0]).to.have.property('pricing_version');",
                   "    pm.expect(body.items[0]).to.have.property('usage_estimated');",
                   "  }",
@@ -713,10 +715,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"credit_activity_id\": \"postman-chat-activity\",\n  \"initial_query\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
             },
             "url": "{{base_url}}/v1/chat",
-            "description": "DB-mode Ask resolves the effective plan and server-owned model billing class, then reserves model/research units before provider execution. Entitlement denial is 403, exhausted monthly allowance is 429, and unsafe billing configuration is 500."
+            "description": "DB-mode Ask resolves the effective plan and server-owned model billing class, then reserves model/research units before provider execution. Optional credit_activity_id and initial_query are display-only ledger context. Entitlement denial is 403, exhausted monthly allowance is 429, and unsafe billing configuration is 500."
           },
           "event": [
             {
@@ -762,7 +764,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"credit_activity_id\": \"postman-chat-stream-activity\",\n  \"initial_query\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
             },
             "url": "{{base_url}}/v1/chat/stream",
             "description": "Reserves Ask subscription usage before returning the NDJSON stream. Provider failure releases response units; successful model/research usage is finalized before terminal response events."
@@ -811,10 +813,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"credit_activity_id\": \"postman-compare-activity\",\n  \"initial_query\": \"Postman B2B compare probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
             "url": "{{base_url}}/v1/compare",
-            "description": "Accepts 2-3 explicit targets. Free/Plus allow 2 and Pro allows 3. All target classes and research are reserved before providers start; settlement charges only successful targets and performed research."
+            "description": "Accepts 2-3 explicit targets. Optional credit_activity_id and initial_query are display-only ledger context. Free/Plus allow 2 and Pro allows 3. All target classes and research are reserved before providers start; settlement charges only successful targets and performed research."
           },
           "event": [
             {
@@ -862,7 +864,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"credit_activity_id\": \"postman-compare-stream-activity\",\n  \"initial_query\": \"Postman B2B compare stream probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
             "url": "{{base_url}}/v1/compare/stream",
             "description": "Reserves all Compare targets before returning NDJSON. Aggregate settlement finalizes successful targets before done and also handles completed partial targets on disconnect/error."
@@ -1470,7 +1472,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"credit_activity_id\": \"postman-optimize-activity\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
             },
             "url": "{{base_url}}/v1/optimize"
           },

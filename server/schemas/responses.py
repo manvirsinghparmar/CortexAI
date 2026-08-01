@@ -477,6 +477,8 @@ class EntitlementsResponseDTO(BaseModel):
 class CreditTransactionDTO(BaseModel):
     id: str
     request_id: str
+    activity_id: str
+    query: Optional[str] = None
     operation_type: str
     item_type: str
     provider: Optional[str] = None

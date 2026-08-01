@@ -427,6 +427,7 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     assert created["combined_response_count"] == 2
     assert reserved["operation_type"] == "cortex_analysis"
     assert reserved["research_enabled"] is False
+    assert reserved["initial_query"] == "Choose an approach"
     assert reserved["max_output_tokens"] == 1800
     assert "Choose an approach" in reserved["input_text"]
     assert "\nA\nB" in reserved["input_text"]

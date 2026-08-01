@@ -21,7 +21,10 @@ export type ModelPickerAlignment = "left" | "center" | "right";
 const MENU_GAP = 7;
 const MENU_MAX_HEIGHT = 340;
 const MENU_MAX_WIDTH = 380;
+const CASCADE_MENU_MAX_WIDTH = 680;
 const VIEWPORT_MARGIN = 20;
+const HOVER_PREVIEW_CLOSE_DELAY_MS = 140;
+const HOVER_PREVIEW_QUERY = "(hover: hover) and (pointer: fine) and (min-width: 761px)";
 const EMPTY_MODELS: ModelCatalogItem[] = [];
 
 interface ProviderGroup {
@@ -74,11 +77,18 @@ export function ModelPicker({
   const [isOpen, setIsOpen] = useState(false);
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const [cascadeDirection, setCascadeDirection] = useState<"left" | "right">("right");
+  const supportsHoverPreview = useMediaQuery(HOVER_PREVIEW_QUERY);
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const providerPanelRef = useRef<HTMLDivElement>(null);
+  const modelPanelRef = useRef<HTMLDivElement>(null);
   const providerOptionRefs = useRef(new Map<string, HTMLButtonElement>());
   const modelOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const focusTargetRef = useRef<"provider" | "model" | null>(null);
+  const lastActiveProviderRef = useRef<string | null>(null);
   const selectedModel = models.find((model) => modelKey(model) === value) ?? modelFromKey(value);
   const selectedMeta = getModelPresentation(selectedModel.provider, selectedModel.model);
   const selectedCreditLabel =
@@ -91,13 +101,53 @@ export function ModelPicker({
   const activeProviderGroup = providerGroups.find((group) => group.key === activeProvider) ?? null;
   const activeModels = activeProviderGroup?.models ?? EMPTY_MODELS;
 
-  const closeMenu = useCallback((restoreFocus = false) => {
-    setIsOpen(false);
-    setActiveProvider(null);
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => buttonRef.current?.focus());
-    }
+  const cancelHoverClose = useCallback(() => {
+    if (hoverCloseTimerRef.current === null) return;
+    window.clearTimeout(hoverCloseTimerRef.current);
+    hoverCloseTimerRef.current = null;
   }, []);
+
+  const closeMenu = useCallback(
+    (restoreFocus = false) => {
+      cancelHoverClose();
+      setIsOpen(false);
+      setActiveProvider(null);
+      focusTargetRef.current = null;
+      if (restoreFocus) {
+        window.requestAnimationFrame(() => buttonRef.current?.focus());
+      }
+    },
+    [cancelHoverClose],
+  );
+
+  const showProviderModels = useCallback(
+    (providerKey: string, moveFocus: boolean) => {
+      cancelHoverClose();
+      lastActiveProviderRef.current = providerKey;
+      focusTargetRef.current = moveFocus ? "model" : null;
+      setActiveProvider(providerKey);
+    },
+    [cancelHoverClose],
+  );
+
+  const showProviders = useCallback(
+    (moveFocus: boolean) => {
+      cancelHoverClose();
+      focusTargetRef.current = moveFocus ? "provider" : null;
+      setActiveProvider(null);
+    },
+    [cancelHoverClose],
+  );
+
+  const scheduleHoverPreviewClose = useCallback(() => {
+    if (!supportsHoverPreview || !activeProvider) return;
+    cancelHoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      focusTargetRef.current = null;
+      setActiveProvider(null);
+      hoverCloseTimerRef.current = null;
+    }, HOVER_PREVIEW_CLOSE_DELAY_MS);
+  }, [activeProvider, cancelHoverClose, supportsHoverPreview]);
 
   const updateMenuPosition = useCallback(() => {
     const button = buttonRef.current;
@@ -106,13 +156,21 @@ export function ModelPicker({
     const triggerRect = button.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const width = Math.min(MENU_MAX_WIDTH, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2));
-    const naturalHeight =
-      menuRef.current?.scrollHeight ??
-      Math.min(
-        MENU_MAX_HEIGHT,
-        activeProvider ? activeModels.length * 52 + 58 : providerGroups.length * 56 + 46,
-      );
+    const isCascadeOpen = supportsHoverPreview && Boolean(activeProvider);
+    const width = Math.min(
+      isCascadeOpen ? CASCADE_MENU_MAX_WIDTH : MENU_MAX_WIDTH,
+      Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2),
+    );
+    const providerHeight = providerGroups.length * 56 + 46;
+    const modelHeight = activeModels.length * 52 + 58;
+    const naturalHeight = Math.min(
+      MENU_MAX_HEIGHT,
+      isCascadeOpen
+        ? Math.max(providerHeight, modelHeight)
+        : activeProvider
+          ? modelHeight
+          : providerHeight,
+    );
     const availableAbove = Math.max(0, triggerRect.top - MENU_GAP - VIEWPORT_MARGIN);
     const availableBelow = Math.max(
       0,
@@ -130,16 +188,37 @@ export function ModelPicker({
     const maxHeight = Math.min(MENU_MAX_HEIGHT, availableHeight);
     const renderedHeight = Math.min(naturalHeight, maxHeight);
 
-    let left =
-      align === "right"
-        ? triggerRect.right - width
-        : align === "center"
-          ? triggerRect.left + triggerRect.width / 2 - width / 2
-          : triggerRect.left;
-    left = Math.min(
-      Math.max(VIEWPORT_MARGIN, left),
-      Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
+    const providerWidth = Math.min(
+      MENU_MAX_WIDTH,
+      Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2),
     );
+    let providerLeft =
+      align === "right"
+        ? triggerRect.right - providerWidth
+        : align === "center"
+          ? triggerRect.left + triggerRect.width / 2 - providerWidth / 2
+          : triggerRect.left;
+    providerLeft = Math.min(
+      Math.max(VIEWPORT_MARGIN, providerLeft),
+      Math.max(VIEWPORT_MARGIN, viewportWidth - providerWidth - VIEWPORT_MARGIN),
+    );
+
+    let left = providerLeft;
+    if (isCascadeOpen) {
+      const modelPanelWidth = width - providerWidth;
+      const availableOnRight = viewportWidth - VIEWPORT_MARGIN - (providerLeft + providerWidth);
+      const availableOnLeft = providerLeft - VIEWPORT_MARGIN;
+      const nextDirection =
+        availableOnRight >= modelPanelWidth || availableOnRight >= availableOnLeft
+          ? "right"
+          : "left";
+      setCascadeDirection(nextDirection);
+      left = nextDirection === "right" ? providerLeft : providerLeft - modelPanelWidth;
+      left = Math.min(
+        Math.max(VIEWPORT_MARGIN, left),
+        Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN),
+      );
+    }
 
     const top = openUp
       ? triggerRect.top - MENU_GAP - renderedHeight
@@ -151,7 +230,14 @@ export function ModelPicker({
       width,
       maxHeight,
     });
-  }, [activeModels.length, activeProvider, align, placement, providerGroups.length]);
+  }, [
+    activeModels.length,
+    activeProvider,
+    align,
+    placement,
+    providerGroups.length,
+    supportsHoverPreview,
+  ]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -170,19 +256,26 @@ export function ModelPicker({
   useLayoutEffect(() => {
     if (!isOpen) return;
 
-    if (activeProvider) {
+    if (activeProvider && focusTargetRef.current === "model") {
       const preferredKey = selectedModel.provider === activeProvider ? value : "";
       const preferredOption = preferredKey ? modelOptionRefs.current.get(preferredKey) : undefined;
       const firstAvailable = activeModels
         .map((model) => modelOptionRefs.current.get(modelKey(model)))
         .find((option) => option && !option.disabled);
       (preferredOption ?? firstAvailable)?.focus();
+      focusTargetRef.current = null;
       return;
     }
 
-    const currentProviderOption = providerOptionRefs.current.get(selectedModel.provider);
-    (currentProviderOption ?? providerOptionRefs.current.values().next().value)?.focus();
+    if (!activeProvider && focusTargetRef.current === "provider") {
+      const preferredProvider = lastActiveProviderRef.current ?? selectedModel.provider;
+      const currentProviderOption = providerOptionRefs.current.get(preferredProvider);
+      (currentProviderOption ?? providerOptionRefs.current.values().next().value)?.focus();
+      focusTargetRef.current = null;
+    }
   }, [activeModels, activeProvider, isOpen, selectedModel.provider, value]);
+
+  useEffect(() => cancelHoverClose, [cancelHoverClose]);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
@@ -205,7 +298,18 @@ export function ModelPicker({
     };
   }, [closeMenu, isOpen]);
 
-  const menuClasses = [styles.menu, menuClassName ?? ""].filter(Boolean).join(" ");
+  const menuClasses = [
+    styles.menu,
+    activeProvider ? styles.menuHasModels : "",
+    activeProvider
+      ? cascadeDirection === "left"
+        ? styles.menuCascadeLeft
+        : styles.menuCascadeRight
+      : "",
+    menuClassName ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <span ref={rootRef} className={`${styles.root} ${className ?? ""}`}>
@@ -256,12 +360,16 @@ export function ModelPicker({
             closeMenu();
             return;
           }
+          focusTargetRef.current = "provider";
+          lastActiveProviderRef.current = selectedModel.provider;
           setActiveProvider(null);
           setIsOpen(true);
         }}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown") {
             event.preventDefault();
+            focusTargetRef.current = "provider";
+            lastActiveProviderRef.current = selectedModel.provider;
             setActiveProvider(null);
             setIsOpen(true);
           }
@@ -296,10 +404,22 @@ export function ModelPicker({
             role="listbox"
             aria-label={listboxLabel}
             data-picker-view={activeProvider ? "models" : "providers"}
+            data-picker-interaction={supportsHoverPreview ? "hover" : "drilldown"}
+            onPointerEnter={cancelHoverClose}
+            onPointerLeave={scheduleHoverPreviewClose}
             onKeyDown={(event) => {
               if (activeProvider && event.key === "ArrowLeft") {
                 event.preventDefault();
-                setActiveProvider(null);
+                showProviders(true);
+                return;
+              }
+              if (!activeProvider && event.key === "ArrowRight") {
+                const providerKey = (event.target as HTMLElement).closest<HTMLElement>(
+                  "[data-provider-key]",
+                )?.dataset.providerKey;
+                if (!providerKey) return;
+                event.preventDefault();
+                showProviderModels(providerKey, true);
                 return;
               }
               if (
@@ -311,8 +431,17 @@ export function ModelPicker({
                 return;
               }
 
+              const focusedPanel = (document.activeElement as HTMLElement | null)?.closest(
+                "[data-picker-panel]",
+              );
+              const activePanel =
+                supportsHoverPreview && activeProvider
+                  ? (focusedPanel ?? providerPanelRef.current)
+                  : activeProvider
+                    ? modelPanelRef.current
+                    : providerPanelRef.current;
               const options = Array.from(
-                menuRef.current?.querySelectorAll<HTMLButtonElement>(
+                activePanel?.querySelectorAll<HTMLButtonElement>(
                   'button[role="option"]:not(:disabled)',
                 ) ?? [],
               );
@@ -334,15 +463,89 @@ export function ModelPicker({
               options[nextIndex]?.focus();
             }}
           >
+            <div
+              ref={providerPanelRef}
+              className={styles.providerPanel}
+              data-picker-panel="providers"
+              role="group"
+              aria-label="Providers"
+            >
+              <div className={styles.menuHeader} role="presentation">
+                <strong>Choose a provider</strong>
+                <span>
+                  {providerGroups.length} provider
+                  {providerGroups.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {providerGroups.map((group) => {
+                const isCurrentProvider = group.key === selectedModel.provider;
+                const isPreviewed = group.key === activeProvider;
+                return (
+                  <button
+                    ref={(node) => {
+                      if (node) providerOptionRefs.current.set(group.key, node);
+                      else providerOptionRefs.current.delete(group.key);
+                    }}
+                    key={group.key}
+                    type="button"
+                    className={`${styles.option} ${styles.providerOption} ${
+                      isCurrentProvider ? styles.providerOptionCurrent : ""
+                    } ${isPreviewed ? styles.providerOptionPreview : ""}`}
+                    role="option"
+                    aria-selected={isCurrentProvider}
+                    data-provider-key={group.key}
+                    aria-label={`${group.label}, ${group.models.length} ${
+                      group.models.length === 1 ? "model" : "models"
+                    }${
+                      isCurrentProvider ? `, current provider, selected ${selectedMeta.label}` : ""
+                    }`}
+                    title={`View ${group.label} models`}
+                    onPointerEnter={(event) => {
+                      if (supportsHoverPreview && event.pointerType !== "touch") {
+                        showProviderModels(group.key, false);
+                      }
+                    }}
+                    onClick={() => showProviderModels(group.key, true)}
+                  >
+                    <ProviderLogo
+                      provider={group.key}
+                      logoUrl={group.logoUrl}
+                      color={group.color}
+                      size={20}
+                    />
+                    <span className={styles.optionText}>
+                      <strong>{group.label}</strong>
+                      <small>
+                        {group.models.length} {group.models.length === 1 ? "model" : "models"}
+                        {isCurrentProvider ? ` \u00b7 ${selectedMeta.label} selected` : ""}
+                      </small>
+                    </span>
+                    <span className={styles.providerActions} aria-hidden="true">
+                      {isCurrentProvider ? (
+                        <CortexIcon name="check" className={styles.checkIcon} />
+                      ) : null}
+                      <CortexIcon name="chevron-right" className={styles.providerChevron} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
             {activeProviderGroup ? (
-              <>
+              <div
+                ref={modelPanelRef}
+                className={styles.modelPanel}
+                data-picker-panel="models"
+                role="group"
+                aria-label={`${activeProviderGroup.label} models`}
+              >
                 <button
                   type="button"
                   className={styles.backOption}
                   role="option"
                   aria-selected="false"
                   aria-label="Back to providers"
-                  onClick={() => setActiveProvider(null)}
+                  onClick={() => showProviders(true)}
                 >
                   <CortexIcon name="chevron-left" />
                   <span className={styles.backText}>
@@ -350,6 +553,20 @@ export function ModelPicker({
                     <strong>{activeProviderGroup.label} models</strong>
                   </span>
                 </button>
+                <div className={styles.modelPanelHeader} role="presentation">
+                  <ProviderLogo
+                    provider={activeProviderGroup.key}
+                    logoUrl={activeProviderGroup.logoUrl}
+                    color={activeProviderGroup.color}
+                    size={20}
+                  />
+                  <span>
+                    <strong>{activeProviderGroup.label}</strong>
+                    <small>
+                      {activeModels.length} {activeModels.length === 1 ? "model" : "models"}
+                    </small>
+                  </span>
+                </div>
                 {activeModels.map((model) => {
                   const key = modelKey(model);
                   const meta = getModelPresentation(model.provider, model.model);
@@ -405,71 +622,30 @@ export function ModelPicker({
                     </button>
                   );
                 })}
-              </>
-            ) : (
-              <>
-                <div className={styles.menuHeader} role="presentation">
-                  <strong>Choose a provider</strong>
-                  <span>
-                    {providerGroups.length} provider
-                    {providerGroups.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                {providerGroups.map((group) => {
-                  const isCurrentProvider = group.key === selectedModel.provider;
-                  return (
-                    <button
-                      ref={(node) => {
-                        if (node) providerOptionRefs.current.set(group.key, node);
-                        else providerOptionRefs.current.delete(group.key);
-                      }}
-                      key={group.key}
-                      type="button"
-                      className={`${styles.option} ${styles.providerOption} ${
-                        isCurrentProvider ? styles.providerOptionCurrent : ""
-                      }`}
-                      role="option"
-                      aria-selected={isCurrentProvider}
-                      data-provider-key={group.key}
-                      aria-label={`${group.label}, ${group.models.length} ${
-                        group.models.length === 1 ? "model" : "models"
-                      }${
-                        isCurrentProvider
-                          ? `, current provider, selected ${selectedMeta.label}`
-                          : ""
-                      }`}
-                      title={`View ${group.label} models`}
-                      onClick={() => setActiveProvider(group.key)}
-                    >
-                      <ProviderLogo
-                        provider={group.key}
-                        logoUrl={group.logoUrl}
-                        color={group.color}
-                        size={20}
-                      />
-                      <span className={styles.optionText}>
-                        <strong>{group.label}</strong>
-                        <small>
-                          {group.models.length} {group.models.length === 1 ? "model" : "models"}
-                          {isCurrentProvider ? ` \u00b7 ${selectedMeta.label} selected` : ""}
-                        </small>
-                      </span>
-                      <span className={styles.providerActions} aria-hidden="true">
-                        {isCurrentProvider ? (
-                          <CortexIcon name="check" className={styles.checkIcon} />
-                        ) : null}
-                        <CortexIcon name="chevron-right" className={styles.providerChevron} />
-                      </span>
-                    </button>
-                  );
-                })}
-              </>
-            )}
+              </div>
+            ) : null}
           </div>,
           document.body,
         )}
     </span>
   );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(
+    () => typeof window !== "undefined" && Boolean(window.matchMedia?.(query).matches),
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.(query);
+    if (!mediaQuery) return;
+    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
+    setMatches(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [query]);
+
+  return matches;
 }
 
 function modelKey(model: ModelCatalogItem): string {

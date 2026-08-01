@@ -96,15 +96,26 @@
 .menu {
   position: fixed;
   z-index: 80;
-  display: grid;
-  gap: 2px;
-  overflow: auto;
-  overscroll-behavior: contain;
+  display: block;
+  overflow: hidden;
   border: 1px solid var(--cx-hairline);
   border-radius: var(--cx-r-lg);
   background: var(--cx-surface);
   box-shadow: var(--cx-shadow-pop);
   padding: 6px;
+}
+
+.providerPanel,
+.modelPanel {
+  display: grid;
+  gap: 2px;
+  max-height: inherit;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.menuHasModels .providerPanel {
+  display: none;
 }
 
 .menuHeader {
@@ -150,6 +161,11 @@
 
 .providerOptionCurrent {
   background: var(--cx-accent-soft);
+}
+
+.providerOptionPreview {
+  background: var(--cx-surface-2);
+  box-shadow: inset 3px 0 0 var(--cx-accent);
 }
 
 .providerActions {
@@ -218,6 +234,10 @@
   white-space: nowrap;
 }
 
+.modelPanelHeader {
+  display: none;
+}
+
 .option:disabled {
   cursor: not-allowed;
   opacity: 0.42;
@@ -265,5 +285,95 @@
     min-width: 0;
     max-width: 100%;
     flex: 1 1 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .menuHasModels {
+    display: grid;
+    gap: 0;
+    padding: 0;
+  }
+
+  .menuCascadeRight {
+    grid-template-columns: 380px minmax(0, 1fr);
+  }
+
+  .menuCascadeLeft {
+    grid-template-columns: minmax(0, 1fr) 380px;
+  }
+
+  .menuHasModels .providerPanel {
+    display: grid;
+    border-right: 1px solid var(--cx-hairline);
+    padding: 6px;
+  }
+
+  .menuHasModels .modelPanel {
+    padding: 6px;
+    animation: modelPanelIn 120ms ease-out;
+  }
+
+  .menuCascadeLeft .providerPanel {
+    grid-column: 2;
+    grid-row: 1;
+    border-right: 0;
+    border-left: 1px solid var(--cx-hairline);
+  }
+
+  .menuCascadeLeft .modelPanel {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .menuHasModels .backOption {
+    display: none;
+  }
+
+  .modelPanelHeader {
+    position: sticky;
+    z-index: 2;
+    top: -6px;
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    gap: 9px;
+    border-bottom: 1px solid var(--cx-hairline);
+    background: color-mix(in srgb, var(--cx-surface) 94%, transparent);
+    padding: 6px 9px;
+    backdrop-filter: blur(12px);
+  }
+
+  .modelPanelHeader > span {
+    display: grid;
+    min-width: 0;
+  }
+
+  .modelPanelHeader strong {
+    color: var(--cx-ink-800);
+    font: 800 13px/17px var(--font-sans);
+  }
+
+  .modelPanelHeader small {
+    color: var(--cx-ink-400);
+    font: 600 10px/13px var(--font-mono);
+  }
+}
+
+@keyframes modelPanelIn {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menuHasModels .modelPanel {
+    animation: none;
   }
 }

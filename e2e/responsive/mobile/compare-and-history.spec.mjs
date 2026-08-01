@@ -39,6 +39,7 @@ test("mobile Compare opens the visible model picker and updates its selection", 
     await expect(listbox).toBeVisible();
     expect(await listbox.evaluate(element => element.parentElement === document.body)).toBe(true);
     await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+    await expect(listbox).toHaveAttribute("data-picker-interaction", "drilldown");
     await listbox.locator(`[data-provider-key="${target.provider}"]`).click();
     await expect(listbox).toHaveAttribute("data-picker-view", "models");
 

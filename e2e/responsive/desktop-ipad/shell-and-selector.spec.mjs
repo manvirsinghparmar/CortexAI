@@ -403,7 +403,17 @@ test("desktop Compare picker remains visible and selectable", async ({ responsiv
     const listbox = page.getByRole("listbox", { name: "Compare model 2 options" });
     await expect(listbox).toBeVisible();
     await expect(listbox).toHaveAttribute("data-picker-view", "providers");
-    await listbox.locator(`[data-provider-key="${target.provider}"]`).click();
+    await expect(listbox).toHaveAttribute("data-picker-interaction", "hover");
+    const providerOption = listbox.locator(`[data-provider-key="${target.provider}"]`);
+    await providerOption.hover();
+    await expect(listbox).toHaveAttribute("data-picker-view", "models");
+    await expect(listbox.getByRole("group", { name: "Providers" })).toBeVisible();
+    await expect(listbox.locator(`[data-model-key="${target.value}"]`)).toBeVisible();
+
+    await page.mouse.move(2, 2);
+    await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+
+    await providerOption.hover();
     await expect(listbox).toHaveAttribute("data-picker-view", "models");
     await listbox.locator(`[data-model-key="${target.value}"]`).click();
     await expect(select).toHaveValue(target.value);

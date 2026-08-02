@@ -185,7 +185,7 @@ def _successful_billing_targets(
     return tuple(
         resolve_model_target(
             provider=response.provider,
-            model=response.model,
+            model=response.requested_model or response.model,
             orchestrator=orchestrator,
         )
         for response in responses
@@ -206,7 +206,7 @@ def _billable_model_usages(
     return tuple(
         BillableModelUsage(
             provider=response.provider,
-            model=response.model,
+            model=response.requested_model or response.model,
             input_tokens=max(0, int(response.token_usage.prompt_tokens or 0)),
             output_tokens=max(0, int(response.token_usage.completion_tokens or 0)),
             output_text=response.text,
@@ -289,6 +289,10 @@ def _finalize_compare_usage(
         )
     except Exception as exc:
         logger.exception("Compare subscription usage finalization failed")
+        _release_compare_usage_safely(
+            reservation,
+            reason="billing_finalization_failed",
+        )
         raise enforcement_http_exception(exc) from exc
 
 

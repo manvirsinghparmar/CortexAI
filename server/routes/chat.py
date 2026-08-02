@@ -493,7 +493,11 @@ def _successful_billing_targets(
     return (
         resolve_model_target(
             provider=str(getattr(response, "provider", "") or ""),
-            model=str(getattr(response, "model", "") or ""),
+            model=str(
+                getattr(response, "requested_model", None)
+                or getattr(response, "model", "")
+                or ""
+            ),
             orchestrator=orchestrator,
         ),
     )
@@ -534,7 +538,11 @@ def _billable_model_usages(response: object) -> tuple[BillableModelUsage, ...]:
     return (
         BillableModelUsage(
             provider=str(getattr(response, "provider", "") or ""),
-            model=str(getattr(response, "model", "") or ""),
+            model=str(
+                getattr(response, "requested_model", None)
+                or getattr(response, "model", "")
+                or ""
+            ),
             input_tokens=max(0, int(getattr(usage, "prompt_tokens", 0) or 0)),
             output_tokens=max(0, int(getattr(usage, "completion_tokens", 0) or 0)),
             output_text=str(getattr(response, "text", "") or ""),
@@ -629,6 +637,10 @@ def _finalize_chat_usage(
         )
     except Exception as exc:
         logger.exception("Chat subscription usage finalization failed")
+        _release_chat_usage_safely(
+            reservation,
+            reason="billing_finalization_failed",
+        )
         raise enforcement_http_exception(exc) from exc
 
 

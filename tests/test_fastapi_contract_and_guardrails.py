@@ -3097,6 +3097,156 @@ def test_compare_stream_partial_success_uses_aggregate_settlement(client, app, m
     ]
 
 
+def test_compare_stream_settles_versioned_served_model_with_requested_identity(
+    client,
+    app,
+    monkeypatch,
+):
+    _, compare_route = _enable_subscription_route_test_mode(monkeypatch)
+    reservation = _test_reservation("compare")
+    settled: list[dict[str, Any]] = []
+    released: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_subscription_usage",
+        lambda **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+
+    original_ask = app.state.fake_orchestrator.ask
+
+    def versioned_openai_ask(prompt, model_type=None, context=None, **kwargs):
+        response = original_ask(prompt, model_type=model_type, context=context, **kwargs)
+        if model_type != "openai":
+            return response
+        requested_model = kwargs.get("model_name") or "gpt-5.4-mini"
+        return replace(
+            response,
+            model="gpt-5.4-mini-2026-03-17",
+            requested_model=requested_model,
+            served_model="gpt-5.4-mini-2026-03-17",
+            pricing_model="gpt-5.4-mini-2026-03-17",
+        )
+
+    app.state.fake_orchestrator.ask = versioned_openai_ask
+    response = client.post(
+        "/v1/compare/stream",
+        json={
+            "prompt": "Compare Selenium reliability practices",
+            "targets": [
+                {"provider": "openai", "model": "gpt-5.4-mini"},
+                {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
+                {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            ],
+        },
+        cookies={"cortex_session": "test-session-cookie"},
+    )
+
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    assert response.status_code == 200
+    assert events[-1]["type"] == "done"
+    assert len(settled) == 1
+    assert released == []
+    assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
+        ("openai", "gpt-5.4-mini"),
+        ("gemini", "gemini-3.5-flash-lite"),
+        ("deepseek", "deepseek-v4-flash"),
+    ]
+    assert [(item.provider, item.model) for item in settled[0]["model_usages"]] == [
+        ("openai", "gpt-5.4-mini"),
+        ("gemini", "gemini-3.5-flash-lite"),
+        ("deepseek", "deepseek-v4-flash"),
+    ]
+
+
+def test_compare_finalization_failure_releases_reservation(monkeypatch):
+    from server.routes import compare as compare_route
+
+    reservation = _test_reservation("compare")
+    released: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        compare_route,
+        "_finalize_subscription_usage",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("settlement unavailable")),
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_release_subscription_usage",
+        lambda **kwargs: released.append(kwargs),
+    )
+    response = UnifiedResponse(
+        request_id="compare-settlement-failure",
+        text="visible answer",
+        provider="openai",
+        model="gpt-5.4-mini",
+        latency_ms=1,
+        token_usage=TokenUsage(3, 2, 5),
+        estimated_cost=0.0,
+        finish_reason="stop",
+    )
+
+    with pytest.raises(HTTPException):
+        compare_route._finalize_compare_usage(
+            reservation=reservation,
+            responses=[response],
+            orchestrator=object(),
+        )
+
+    assert released == [
+        {
+            "reservation": reservation,
+            "reason": "billing_finalization_failed",
+        }
+    ]
+
+
+def test_chat_settlement_uses_requested_model_for_versioned_served_identity(monkeypatch):
+    from server.routes import chat as chat_route
+
+    reservation = _test_reservation("ask")
+    settled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        chat_route,
+        "_finalize_subscription_usage",
+        lambda **kwargs: settled.append(kwargs),
+    )
+    response = UnifiedResponse(
+        request_id="chat-versioned-model",
+        text="answer",
+        provider="openai",
+        model="gpt-5.4-mini-2026-03-17",
+        requested_model="gpt-5.4-mini",
+        served_model="gpt-5.4-mini-2026-03-17",
+        pricing_model="gpt-5.4-mini-2026-03-17",
+        latency_ms=1,
+        token_usage=TokenUsage(3, 2, 5),
+        estimated_cost=0.0,
+        finish_reason="stop",
+    )
+
+    chat_route._finalize_chat_usage(
+        reservation=reservation,
+        response=response,
+        orchestrator=object(),
+    )
+
+    assert [(item.provider, item.model) for item in settled[0]["successful_targets"]] == [
+        ("openai", "gpt-5.4-mini")
+    ]
+    assert [(item.provider, item.model) for item in settled[0]["model_usages"]] == [
+        ("openai", "gpt-5.4-mini")
+    ]
+
+
 def test_compare_stream_partial_settlement_uses_only_emitted_successes():
     from server.routes import compare as compare_route
 

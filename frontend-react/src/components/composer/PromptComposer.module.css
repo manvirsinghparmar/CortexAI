@@ -79,25 +79,6 @@
   grid-column: 2;
 }
 
-.creditWarning {
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: flex-start;
-  gap: 7px;
-  border: 1px solid color-mix(in srgb, var(--cx-warning, #b7791f) 32%, var(--cx-hairline));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--cx-warning, #b7791f) 8%, var(--cx-surface));
-  color: var(--cx-ink-600);
-  font: 600 11px/16px var(--font-sans);
-  padding: 7px 9px;
-}
-
-.creditWarning svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--cx-warning, #b7791f);
-}
-
 .actions {
   display: flex;
   grid-column: 3;

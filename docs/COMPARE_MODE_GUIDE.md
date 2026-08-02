@@ -21,9 +21,11 @@ This guide covers both:
 - The analysis runs only when requested. `gpt-5.4-mini` is the default analysis model and can be changed with `CORTEX_ANALYSIS_MODEL`.
 - The analysis model sees shuffled `Response A/B/C` content without provider or
   model identities. After generation, the server translates those internal
-  labels back to provider display names throughout the recommended answer,
-  agreements, differences, unique insights, confidence explanation, and
-  verification items.
+  labels back to canonical provider-and-model names, such as
+  `Claude (Sonnet 4.6)`, throughout the recommended answer, agreements,
+  differences, unique insights, confidence explanation, and verification
+  items. Selecting multiple models from one provider therefore does not collapse
+  their attribution into a shared provider label.
 - Results separate the recommended answer, agreements, differences, unique insights, confidence, and items to verify. High-stakes financial, medical, legal, or safety results keep verification guidance expanded.
 - Every successful analysis is retained. Reloading or reopening a History thread restores all prior runs and selects the newest by default.
 - Regenerating one source response appends a new response revision. Earlier analyses remain readable but are marked stale until the user explicitly runs an updated analysis.

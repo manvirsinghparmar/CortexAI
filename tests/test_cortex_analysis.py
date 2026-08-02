@@ -127,7 +127,9 @@ def test_analysis_shuffles_anonymous_labels_and_restores_attribution(
     assert _FakeOpenAIClient.captured_kwargs["response_format"]["type"] == "json_schema"
 
     provider_by_label = {
-        item["label"]: ("ChatGPT" if item["content"].startswith("First") else "Claude")
+        item["label"]: (
+            "ChatGPT (GPT-5.1)" if item["content"].startswith("First") else "Claude (Sonnet 4.5)"
+        )
         for item in sent_payload["responses"]
     }
     expected_name = provider_by_label[sent_payload["responses"][0]["label"]]
@@ -278,9 +280,46 @@ def test_anonymous_response_references_are_restored_for_three_providers():
     )
 
     assert restored == (
-        "Claude and Gemini emphasize specific outcomes more strongly than ChatGPT. "
-        "ChatGPT, Claude, and Gemini use different evidence."
+        "Claude (Sonnet 4.5) and Gemini (2.5 Pro) emphasize specific outcomes more "
+        "strongly than ChatGPT (GPT-5.4). ChatGPT (GPT-5.4), Claude (Sonnet 4.5), "
+        "and Gemini (2.5 Pro) use different evidence."
     )
+
+
+@pytest.mark.unit
+def test_anonymous_response_references_distinguish_models_from_same_provider():
+    label_map = {
+        "Response A": analysis_service.AnalysisSource(
+            request_id="sonnet-response",
+            response_version=1,
+            provider="claude",
+            model="claude-sonnet-4-5",
+            content="A",
+        ),
+        "Response B": analysis_service.AnalysisSource(
+            request_id="opus-response",
+            response_version=1,
+            provider="claude",
+            model="claude-opus-4-6",
+            content="B",
+        ),
+    }
+
+    restored = analysis_service._restore_response_labels(
+        "Response A emphasizes speed; Response B emphasizes depth. Responses A and B agree.",
+        label_map,
+    )
+
+    assert restored == (
+        "Claude (Sonnet 4.5) emphasizes speed; Claude (Opus 4.6) emphasizes depth. "
+        "Claude (Sonnet 4.5) and Claude (Opus 4.6) agree."
+    )
+    assert [
+        item["responseName"] for item in analysis_service.source_snapshot(list(label_map.values()))
+    ] == [
+        "Claude (Sonnet 4.5)",
+        "Claude (Opus 4.6)",
+    ]
 
 
 @pytest.mark.unit
@@ -337,12 +376,12 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
             {
                 "requestId": "response-a",
                 "responseVersion": 1,
-                "responseName": "ChatGPT",
+                "responseName": "ChatGPT (GPT-5.1)",
             },
             {
                 "requestId": "response-b",
                 "responseVersion": 1,
-                "responseName": "Claude",
+                "responseName": "Claude (Sonnet 4.5)",
             },
         ],
         "recommended_answer": generated.recommended_answer,

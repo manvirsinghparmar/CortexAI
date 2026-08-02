@@ -12,16 +12,24 @@ import os
 import random
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from api.openai_client import OpenAIClient
+from config.provider_catalog import get_provider_catalog
+from orchestrator.model_registry import ModelRegistry
 
 DEFAULT_CORTEX_ANALYSIS_MODEL = "gpt-5.4-mini"
 CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS = 1800
 SUPPORTED_HIGH_STAKES_DOMAINS = {"financial", "medical", "legal", "safety"}
+_PROVIDER_ALIASES = {
+    "anthropic": "claude",
+    "google": "gemini",
+    "google_gemini": "gemini",
+}
 _BANNED_COPY_REPLACEMENTS = (
     (
         re.compile(r"\bindependently verified\b", re.IGNORECASE),
@@ -147,7 +155,7 @@ def source_snapshot(sources: list[AnalysisSource]) -> list[dict[str, Any]]:
         {
             "requestId": source.request_id,
             "responseVersion": source.response_version,
-            "responseName": response_display_name(source.provider),
+            "responseName": response_display_name(source.provider, source.model),
             "provider": source.provider,
             "model": source.model,
             "contentSha256": hashlib.sha256(source.content.encode("utf-8")).hexdigest(),
@@ -156,18 +164,37 @@ def source_snapshot(sources: list[AnalysisSource]) -> list[dict[str, Any]]:
     ]
 
 
-def response_display_name(provider: str) -> str:
-    normalized = str(provider or "").strip().lower()
-    return {
-        "openai": "ChatGPT",
-        "claude": "Claude",
-        "gemini": "Gemini",
-        "google": "Gemini",
-        "google_gemini": "Gemini",
-        "deepseek": "DeepSeek",
-        "grok": "Grok",
-        "anthropic": "Claude",
-    }.get(normalized, normalized.replace("_", " ").title() or "One response")
+@lru_cache(maxsize=1)
+def _model_registry() -> ModelRegistry:
+    return ModelRegistry.from_yaml()
+
+
+def response_display_name(provider: str, model: str | None = None) -> str:
+    """Return a user-facing identity that distinguishes models within a provider."""
+    normalized_provider = str(provider or "").strip().lower()
+    canonical_provider = _PROVIDER_ALIASES.get(normalized_provider, normalized_provider)
+    provider_spec = get_provider_catalog().get_provider(canonical_provider)
+    provider_name = (
+        str(provider_spec.ui.get("display_name") or provider_spec.label).strip()
+        if provider_spec is not None
+        else normalized_provider.replace("_", " ").title() or "One response"
+    )
+
+    normalized_model = str(model or "").strip()
+    if not normalized_model or normalized_model.lower() == "unknown":
+        return provider_name
+
+    candidate = _model_registry().find_model(canonical_provider, normalized_model)
+    model_name = str(candidate.display_name if candidate is not None else normalized_model).strip()
+    provider_prefix = f"{provider_name} "
+    model_detail = (
+        model_name[len(provider_prefix) :].strip()
+        if model_name.lower().startswith(provider_prefix.lower())
+        else model_name
+    )
+    if not model_detail or model_detail.lower() == provider_name.lower():
+        return provider_name
+    return f"{provider_name} ({model_detail})"
 
 
 def analyze_responses(
@@ -253,7 +280,7 @@ def analyze_responses(
             continue
         unique_insights.append(
             {
-                "responseName": response_display_name(source.provider),
+                "responseName": response_display_name(source.provider, source.model),
                 "text": text,
             }
         )
@@ -316,9 +343,9 @@ def _restore_response_labels(
     value: str,
     label_map: dict[str, AnalysisSource],
 ) -> str:
-    """Translate anonymous analysis labels to provider names after generation."""
+    """Translate anonymous labels to provider-and-model names after generation."""
     display_names = {
-        label[-1].upper(): response_display_name(source.provider)
+        label[-1].upper(): response_display_name(source.provider, source.model)
         for label, source in label_map.items()
     }
 
@@ -342,7 +369,7 @@ def _restore_response_labels(
     for label, source in label_map.items():
         restored = re.sub(
             rf"\b{re.escape(label)}\b",
-            response_display_name(source.provider),
+            response_display_name(source.provider, source.model),
             restored,
             flags=re.IGNORECASE,
         )
@@ -452,7 +479,7 @@ Rules:
 - Attribute unique insights only with the supplied Response A/B/C label.
 - When referring to a response in any field, spell out its complete supplied
   label (for example, "Response A", not only "A"). The server will restore the
-  provider display name after generation.
+  provider-and-model display name after generation.
 - If disagreement is strong, set confidence.level to "limited" and state in the
   recommended answer that Cortex cannot choose for the user.
 - Classify financial, medical, legal, or safety questions in highStakesDomain

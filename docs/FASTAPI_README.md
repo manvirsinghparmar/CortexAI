@@ -597,7 +597,8 @@ Notes:
 - Sends shuffled `Response A/B/C` content without provider/model metadata and
   requests strict JSON-schema Structured Outputs. Before persistence, anonymous
   response references in every user-visible field are restored to their real
-  provider display names.
+  provider-and-model display names, such as `Claude (Sonnet 4.6)`, so multiple
+  models from the same provider remain distinguishable.
 - Persists a run only after the provider result passes local schema validation.
 - Returns the saved run with `201`; provider/validation failures return `502` and do not add history.
 - Verifies the Cortex persistence schema before provider work. Missing or

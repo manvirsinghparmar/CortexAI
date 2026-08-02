@@ -210,7 +210,7 @@ describe("subscription feature gating", () => {
     expect(research).toHaveAttribute("aria-checked", "false");
   });
 
-  it("warns before unusually expensive premium, three-model, web-enabled requests", () => {
+  it("does not show an estimated credit warning for expensive Compare requests", () => {
     const premium = model("premium-model", "premium");
     const models = [...DEFAULT_MODELS, premium];
     const entitlements = entitlementFixture({ code: "pro", display_name: "Pro" });
@@ -238,14 +238,8 @@ describe("subscription feature gating", () => {
       />,
     );
 
-    expect(
-      screen.getByLabelText("Estimated credit usage warning"),
-    ).toHaveTextContent(
-      "Higher credit use expected for premium model, three-model Compare, web-enabled Compare",
-    );
-    expect(screen.getByLabelText("Estimated credit usage warning")).toHaveTextContent(
-      "final credits depend on processed context and output length",
-    );
+    expect(screen.queryByLabelText("Estimated credit usage warning")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Higher credit use expected/i)).not.toBeInTheDocument();
   });
 
   it("blocks over-limit files before upload and keeps existing attachments", async () => {

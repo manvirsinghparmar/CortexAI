@@ -714,8 +714,10 @@ Cortex Analysis is an on-demand synthesized model call below completed browser C
 - Before invoking the model, the route resolves the effective plan, verifies model access, and reserves for the Compare question, source responses, and a clamped 1,800-token output ceiling. Successful actual input/output usage settles the reservation; generation failure releases it. Each re-run is a new billable model call.
 - Provider/model identities are removed before the analysis model receives
   shuffled `Response A/B/C` content. After generation, the server replaces
-  those anonymous labels with the real provider display names in every
-  user-visible result section before saving the run.
+  those anonymous labels with canonical provider-and-model display names (for
+  example, `Claude (Sonnet 4.6)`) in every user-visible result section before
+  saving the run. Responses from different models of one provider therefore
+  remain distinct in insights, differences, confidence, and verification copy.
 - The model uses strict Structured Outputs, and the API validates the result before persistence. Provider failure or invalid output returns `502`; a failed generation does not create a run.
 - Successful runs are append-only in `cortex_analysis_runs`. Re-running never overwrites an earlier result.
 - While a re-run is processing, the result area temporarily replaces the

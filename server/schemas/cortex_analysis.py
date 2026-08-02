@@ -20,6 +20,11 @@ class CortexAnalysisUniqueInsightDTO(BaseModel):
     text: str
 
 
+class CortexAnalysisDisagreementDTO(BaseModel):
+    who: str
+    text: str
+
+
 class CortexAnalysisConfidenceDTO(BaseModel):
     level: Literal["limited", "moderate", "high"]
     reason: str
@@ -34,7 +39,8 @@ class CortexAnalysisRunDTO(BaseModel):
     model: str
     recommended_answer: str = Field(alias="recommendedAnswer")
     agreements: list[str] = Field(default_factory=list)
-    disagreements: list[str] = Field(default_factory=list)
+    disagreements: list[CortexAnalysisDisagreementDTO] = Field(default_factory=list)
+    disagreement_note: str | None = Field(default=None, alias="disagreementNote")
     unique_insights: list[CortexAnalysisUniqueInsightDTO] = Field(
         default_factory=list,
         alias="uniqueInsights",

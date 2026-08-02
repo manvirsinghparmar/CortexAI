@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 import type { ChatResponse, ChatTurn, CortexAnalysisRun } from "../../types";
 import {
   currentSuccessfulResponses,
@@ -194,70 +194,29 @@ function AnalysisResult({
 }) {
   const [explanationOpen, setExplanationOpen] = useState(false);
   const stale = run.isStale || isCortexAnalysisRunStale(run, responses);
-  const strongDisagreement = run.disagreements.length > 0 && run.confidence.level === "limited";
-  const sectionOrder = strongDisagreement
-    ? (["disagreements", "agreements"] as const)
-    : (["agreements", "disagreements"] as const);
+  const modelsConflict = run.disagreements.length > 0 && run.confidence.level === "limited";
+  const headingId = `cx-analysis-title-${run.analysisId}`;
+  const evidenceOrder = modelsConflict
+    ? (["differ", "agree", "insights"] as const)
+    : (["agree", "differ", "insights"] as const);
+  const visibleEvidence = evidenceOrder.filter((section) => {
+    if (section === "agree") return run.agreements.length > 0;
+    if (section === "differ") return run.disagreements.length > 0;
+    return run.uniqueInsights.length > 0;
+  });
+  const evidencePosition = (section: (typeof evidenceOrder)[number]) => {
+    const index = visibleEvidence.indexOf(section);
+    if (index === 0) return styles.evidenceFirst;
+    if (index === 1) return styles.evidenceSecond;
+    return styles.evidenceThird;
+  };
+  const openExplanation = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    setExplanationOpen(true);
+  };
 
   return (
-    <section className={`${styles.zoneCard} ${styles.resultCard}`}>
-      {announceReady && (
-        <span className={styles.screenReaderStatus} role="status">
-          Combined answer ready
-        </span>
-      )}
-      <TriColourSeam />
-      {stale && (
-        <div className={styles.staleBanner}>
-          <span className={styles.staleIcon} aria-hidden="true">
-            !
-          </span>
-          <p>
-            <strong>One answer changed after this analysis</strong>
-            <span> — the combined answer below may be out of date.</span>
-          </p>
-          <button type="button" onClick={onAnalyze}>
-            Update combined answer
-          </button>
-        </div>
-      )}
-
-      <header className={styles.resultHeader}>
-        <ConvergenceMark compact />
-        <div className={styles.resultTitleGroup}>
-          <div className={styles.resultTitleLine}>
-            <h3 ref={headingRef} tabIndex={-1}>
-              Cortex Analysis
-            </h3>
-            <span className={styles.resultBadge}>Better-informed answer</span>
-          </div>
-          <p>Combined from your {run.combinedResponseCount} answers</p>
-          {run.failedResponseCount > 0 && (
-            <p className={styles.partialNote}>
-              Combined the successful answers; {run.failedResponseCount} response was unavailable.
-            </p>
-          )}
-        </div>
-        <div className={styles.resultActions}>
-          <button
-            type="button"
-            className={styles.explanationButton}
-            onClick={() => setExplanationOpen(true)}
-          >
-            How Cortex made this
-          </button>
-          <button
-            type="button"
-            className={styles.regenerateButton}
-            aria-label="Run Cortex Analysis again"
-            title="Run Cortex Analysis again"
-            onClick={onAnalyze}
-          >
-            ↻
-          </button>
-        </div>
-      </header>
-
+    <>
       {runs.length > 1 && (
         <div className={styles.runHistory}>
           <label htmlFor={`analysis-history-${run.requestGroupId}`}>Analysis history</label>
@@ -276,156 +235,374 @@ function AnalysisResult({
           </select>
         </div>
       )}
+      <section
+        className={`${styles.zoneCard} ${styles.resultCard} ${
+          modelsConflict ? styles.resultCardDivergent : ""
+        }`}
+        aria-labelledby={headingId}
+      >
+        {announceReady && (
+          <span className={styles.screenReaderStatus} role="status" aria-live="polite">
+            Combined answer ready
+          </span>
+        )}
+        {stale && (
+          <span className={styles.screenReaderStatus} role="status" aria-live="polite">
+            This combined answer may be out of date
+          </span>
+        )}
+        <TriColourSeam />
+        <span className={styles.resultGlow} aria-hidden="true" />
+        {stale && (
+          <div className={styles.staleBanner}>
+            <StaleWarningIcon />
+            <p>
+              <strong>One answer changed after this analysis</strong>
+              <span> — the combined answer below may be out of date.</span>
+              <span className={styles.staleMessageMobile}>
+                An answer changed — may be out of date
+              </span>
+            </p>
+            <button type="button" aria-label="Update combined answer" onClick={onAnalyze}>
+              <UpdateArrowIcon />
+              <span className={styles.updateLabelDesktop}>Update combined answer</span>
+              <span className={styles.updateLabelMobile}>Update</span>
+            </button>
+          </div>
+        )}
 
-      <div className={styles.resultBody}>
-        <div className={styles.recommendedColumn}>
-          <span className={styles.microLabel}>Recommended answer</span>
+        <header className={styles.resultHeader}>
+          <div className={styles.resultIdentity}>
+            <CortexResultMark />
+            <div className={styles.resultTitleGroup}>
+              <h3 id={headingId} ref={headingRef} tabIndex={-1}>
+                Cortex Analysis
+              </h3>
+              <p>Combined from your {run.combinedResponseCount} answers · not a fourth model</p>
+            </div>
+          </div>
+          <div className={styles.resultActions}>
+            <a href="#cortex-analysis-explanation" onClick={openExplanation}>
+              How Cortex made this
+            </a>
+            <button
+              type="button"
+              className={styles.regenerateButton}
+              aria-label="Regenerate analysis"
+              title="Regenerate analysis"
+              onClick={onAnalyze}
+            >
+              <RegenerateIcon />
+            </button>
+          </div>
+        </header>
+
+        <div className={styles.answerBlock} data-cx-stagger>
+          <div className={`${styles.microLabel} ${styles.answerLabel}`}>The combined answer</div>
           <p className={styles.recommendedAnswer}>{run.recommendedAnswer}</p>
-          {run.uniqueInsights.length > 0 && (
-            <Collapsible storageKey="cortex-analysis-unique-insights" title="Unique insights">
-              <ul className={styles.uniqueInsightList}>
-                {run.uniqueInsights.map((insight, index) => (
-                  <li key={`${insight.responseName}-${index}`}>
-                    <span>{insight.responseName}</span>
-                    <p>{insight.text}</p>
-                  </li>
-                ))}
-              </ul>
-            </Collapsible>
-          )}
+          <ConfidenceLine run={run} />
         </div>
 
-        <div className={styles.comparisonColumn}>
-          {sectionOrder.map((section) => {
-            const items = section === "agreements" ? run.agreements : run.disagreements;
-            if (items.length === 0) return null;
-            return (
-              <Collapsible
-                key={section}
-                storageKey={`cortex-analysis-${section}`}
-                title={section === "agreements" ? "What the models agree on" : "Where they differ"}
-                tone={section}
+        {visibleEvidence.length > 0 && (
+          <div className={styles.evidenceRow} data-cx-stagger>
+            {run.agreements.length > 0 && (
+              <section
+                className={`${styles.evidenceColumn} ${evidencePosition("agree")}`}
+                aria-labelledby={`${headingId}-agree`}
+                data-cx-order={visibleEvidence.indexOf("agree")}
               >
-                <BulletList items={items} tone={section} />
-              </Collapsible>
-            );
-          })}
+                <div className={styles.evidenceHeading}>
+                  <AgreeIcon />
+                  <h4 id={`${headingId}-agree`} className={styles.microLabel}>
+                    What they agree on
+                  </h4>
+                </div>
+                <div className={styles.agreementItems}>
+                  {run.agreements.map((agreement, index) => (
+                    <p key={`${index}-${agreement}`}>{agreement}</p>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {run.disagreements.length > 0 && (
+              <section
+                className={`${styles.evidenceColumn} ${styles.differColumn} ${evidencePosition("differ")}`}
+                aria-labelledby={`${headingId}-differ`}
+                data-cx-order={visibleEvidence.indexOf("differ")}
+              >
+                <div className={styles.evidenceHeading}>
+                  <DifferIcon />
+                  <h4 id={`${headingId}-differ`} className={styles.microLabel}>
+                    Where they differ
+                  </h4>
+                </div>
+                <div className={styles.attributedItems}>
+                  {run.disagreements.map((disagreement, index) => (
+                    <AttributedItem
+                      key={`${disagreement.who}-${index}`}
+                      who={disagreement.who}
+                      text={disagreement.text}
+                    />
+                  ))}
+                  {run.disagreementNote && (
+                    <p className={styles.disagreementNote}>{run.disagreementNote}</p>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {run.uniqueInsights.length > 0 && (
+              <section
+                className={`${styles.evidenceColumn} ${evidencePosition("insights")}`}
+                aria-labelledby={`${headingId}-insights`}
+                data-cx-order={visibleEvidence.indexOf("insights")}
+              >
+                <div className={styles.evidenceHeading}>
+                  <InsightIcon />
+                  <h4 id={`${headingId}-insights`} className={styles.microLabel}>
+                    Only one model raised
+                  </h4>
+                </div>
+                <div className={styles.attributedItems}>
+                  {run.uniqueInsights.map((insight, index) => (
+                    <AttributedItem
+                      key={`${insight.responseName}-${index}`}
+                      who={insight.responseName}
+                      text={insight.text}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+
+        {run.verify.length > 0 && <VerifyBand run={run} />}
+
+        <div className={styles.mobileExplanationFooter}>
+          <a href="#cortex-analysis-explanation" onClick={openExplanation}>
+            How Cortex made this
+          </a>
         </div>
-      </div>
-
-      <footer className={styles.resultFooter}>
-        <ConfidenceBlock run={run} />
-        {run.verify.length > 0 && <VerifyBlock run={run} />}
-      </footer>
-
+      </section>
       {explanationOpen && <ExplanationDialog onClose={() => setExplanationOpen(false)} />}
-    </section>
+    </>
   );
 }
 
-function ConfidenceBlock({ run }: { run: CortexAnalysisRun }) {
+function ConfidenceLine({ run }: { run: CortexAnalysisRun }) {
   const filledBars =
     run.confidence.level === "high" ? 3 : run.confidence.level === "moderate" ? 2 : 1;
   return (
-    <section className={styles.confidenceBlock}>
-      <span className={styles.microLabel}>Confidence</span>
-      <div className={styles.confidenceHeading}>
-        <strong>{capitalize(run.confidence.level)}</strong>
+    <div className={styles.confidenceLine}>
+      <span className={styles.confidenceLead}>
         <span className={styles.confidenceBars} aria-hidden="true">
           {[0, 1, 2].map((index) => (
             <i key={index} className={index < filledBars ? styles.barFilled : ""} />
           ))}
         </span>
-      </div>
+        <strong>{capitalize(run.confidence.level)} confidence</strong>
+      </span>
       <p>{run.confidence.reason}</p>
-    </section>
+    </div>
   );
 }
 
-function VerifyBlock({ run }: { run: CortexAnalysisRun }) {
-  const domain = run.highStakesDomain?.toUpperCase();
-  return (
-    <Collapsible
-      storageKey="cortex-analysis-verify"
-      title={`Worth verifying${domain ? ` · ${domain}` : ""}`}
-      defaultOpen={!!run.highStakesDomain}
-      tone="verify"
-      footer
-    >
-      <BulletList items={run.verify} tone="verify" />
-    </Collapsible>
-  );
-}
-
-function Collapsible({
-  storageKey,
-  title,
-  children,
-  defaultOpen = false,
-  tone = "neutral",
-  footer = false,
-}: {
-  storageKey: string;
-  title: string;
-  children: ReactNode;
-  defaultOpen?: boolean;
-  tone?: "neutral" | "agreements" | "disagreements" | "verify";
-  footer?: boolean;
-}) {
-  const [open, setOpen] = usePersistentBoolean(storageKey, defaultOpen);
-  const reactId = useId().replace(/:/g, "");
-  const panelId = `${storageKey}-${reactId}-panel`;
+function VerifyBand({ run }: { run: CortexAnalysisRun }) {
+  const label = `Worth verifying${run.highStakesDomain ? ` · ${run.highStakesDomain}` : ""}`;
   return (
     <section
-      className={`${styles.collapsible} ${styles[`tone${capitalize(tone)}`]} ${
-        footer ? styles.footerCollapsible : ""
-      }`}
+      className={styles.verifyBand}
+      aria-labelledby={`verify-${run.analysisId}`}
+      data-cx-stagger
     >
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={styles.sectionIcon} aria-hidden="true">
-          {tone === "agreements"
-            ? "✓"
-            : tone === "disagreements"
-              ? "↔"
-              : tone === "verify"
-                ? "◇"
-                : "＋"}
-        </span>
-        <span>{title}</span>
-        <span className={`${styles.chevron} ${open ? styles.chevronOpen : ""}`}>⌄</span>
-      </button>
-      {open && (
-        <div id={panelId} className={styles.collapsiblePanel}>
-          {children}
+      <ShieldIcon />
+      <div>
+        <h4 id={`verify-${run.analysisId}`} className={styles.microLabel}>
+          {label}
+        </h4>
+        <div className={styles.verifyItems}>
+          {run.verify.map((item, index) => (
+            <div key={`${index}-${item}`}>
+              <span aria-hidden="true" />
+              <p>{item}</p>
+            </div>
+          ))}
         </div>
-      )}
+      </div>
     </section>
   );
 }
 
-function BulletList({
-  items,
-  tone,
-}: {
-  items: string[];
-  tone: "agreements" | "disagreements" | "verify";
-}) {
+function AttributedItem({ who, text }: { who: string; text: string }) {
   return (
-    <ul className={`${styles.bulletList} ${styles[`bullet${capitalize(tone)}`]}`}>
-      {items.map((item, index) => (
-        <li key={`${index}-${item}`}>
-          <span aria-hidden="true">
-            {tone === "agreements" ? "✓" : tone === "disagreements" ? "•" : "◇"}
-          </span>
-          <p>{item}</p>
-        </li>
-      ))}
-    </ul>
+    <div className={styles.attributedItem}>
+      <div className={`${styles.attributionName} ${attributionTone(who)}`}>{who}</div>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function attributionTone(name: string) {
+  const normalized = name.trim().toLowerCase();
+  if (normalized.startsWith("chatgpt") || normalized.startsWith("openai")) {
+    return styles.attributionChatgpt;
+  }
+  if (normalized.startsWith("claude") || normalized.startsWith("anthropic")) {
+    return styles.attributionClaude;
+  }
+  if (normalized.startsWith("gemini") || normalized.startsWith("google")) {
+    return styles.attributionGemini;
+  }
+  return styles.attributionFallback;
+}
+
+function CortexResultMark() {
+  return (
+    <span className={styles.resultMark} aria-hidden="true">
+      <svg width="21" height="21" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <line x1="10" y1="8" x2="10" y2="24" stroke="var(--cx-indigo-bright)" strokeWidth="1.7" />
+        <line x1="10" y1="8" x2="22" y2="16" stroke="var(--cx-indigo-bright)" strokeWidth="1.7" />
+        <line x1="10" y1="16" x2="22" y2="16" stroke="var(--cx-indigo-bright)" strokeWidth="1.7" />
+        <line x1="10" y1="24" x2="22" y2="16" stroke="var(--cx-indigo-bright)" strokeWidth="1.7" />
+        <circle cx="10" cy="8" r="2.6" fill="var(--cx-indigo-bright)" />
+        <circle cx="10" cy="16" r="2.6" fill="var(--cx-indigo-bright)" />
+        <circle cx="10" cy="24" r="2.6" fill="var(--cx-indigo-bright)" />
+        <circle cx="22" cy="16" r="3" fill="var(--cx-mark-core)" />
+      </svg>
+    </span>
+  );
+}
+
+function AgreeIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--cx-agree)"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function DifferIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--cx-differ)"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18 8l4 4-4 4M6 8l-4 4 4 4M2 12h20" />
+    </svg>
+  );
+}
+
+function InsightIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--cx-insight)"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg
+      className={styles.shieldIcon}
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--cx-amber)"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
+function RegenerateIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M23 4v6h-6M1 20v-6h6" />
+      <path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />
+    </svg>
+  );
+}
+
+function StaleWarningIcon() {
+  return (
+    <svg
+      className={styles.staleWarningIcon}
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--cx-amber)"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 9v4M12 17h.01" />
+      <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z" />
+    </svg>
+  );
+}
+
+function UpdateArrowIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M23 4v6h-6" />
+      <path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10" />
+    </svg>
   );
 }
 
@@ -464,12 +641,9 @@ function ExplanationDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ConvergenceMark({ compact = false }: { compact?: boolean }) {
+function ConvergenceMark() {
   return (
-    <span
-      className={`${styles.convergenceMark} ${compact ? styles.convergenceMarkCompact : ""}`}
-      aria-hidden="true"
-    >
+    <span className={styles.convergenceMark} aria-hidden="true">
       <svg viewBox="0 0 32 32">
         <path d="M7 7h5l8 9M7 16h13M7 25h5l8-9" />
         <circle cx="6" cy="7" r="2" />
@@ -483,26 +657,6 @@ function ConvergenceMark({ compact = false }: { compact?: boolean }) {
 
 function TriColourSeam() {
   return <span className={styles.triColourSeam} aria-hidden="true" />;
-}
-
-function usePersistentBoolean(key: string, defaultValue: boolean) {
-  const [value, setValue] = useState(() => {
-    try {
-      const stored = window.localStorage.getItem(key);
-      return stored === null ? defaultValue : stored === "true";
-    } catch {
-      return defaultValue;
-    }
-  });
-  const update = (next: boolean) => {
-    setValue(next);
-    try {
-      window.localStorage.setItem(key, String(next));
-    } catch {
-      // Local storage can be unavailable in privacy-restricted contexts.
-    }
-  };
-  return [value, update] as const;
 }
 
 function formatRunDate(value: string) {

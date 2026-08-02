@@ -111,7 +111,9 @@ export function ChatPage() {
       setMobilePanel("chat");
       setComposerCollapsed(true);
     } catch (historyError) {
-      setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");
+      setError(
+        historyError instanceof Error ? historyError.message : "Failed to load chat history",
+      );
     }
   };
 
@@ -164,7 +166,7 @@ export function ChatPage() {
   };
 
   return (
-    <div className={styles.layout}>
+    <div className={styles.layout} data-theme={theme}>
       <Sidebar
         onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
         activeView="chat"
@@ -313,10 +315,7 @@ export function ChatPage() {
             />
 
             {/* Composer: inline on desktop, fixed sheet overlay on mobile */}
-            <div
-              className={styles.composerWrap}
-              data-collapsed={composerCollapsed}
-            >
+            <div className={styles.composerWrap} data-collapsed={composerCollapsed}>
               {/* Handle + collapse chevron — mobile sheet header */}
               <div className={styles.composerSheetHeader} aria-hidden="true">
                 <div className={styles.composerSheetHandle} />
@@ -334,10 +333,7 @@ export function ChatPage() {
 
             {/* Docked mobile composer pill, shown when the sheet is collapsed */}
             {composerCollapsed && (
-              <MobileComposerDock
-                models={models}
-                onOpen={handleOpenMobileComposer}
-              />
+              <MobileComposerDock models={models} onOpen={handleOpenMobileComposer} />
             )}
           </>
         )}
@@ -464,13 +460,7 @@ function MobileComposerDock({
   );
 }
 
-function ModelDockChip({
-  modelKey,
-  models,
-}: {
-  modelKey: string;
-  models: ModelCatalogItem[];
-}) {
+function ModelDockChip({ modelKey, models }: { modelKey: string; models: ModelCatalogItem[] }) {
   const model = resolveDockModel(modelKey, models, 0);
   const meta = getModelPresentation(model.provider, model.model);
 
@@ -511,10 +501,7 @@ function CompareDockChip({
         {stackModels.map((model, index) => {
           const meta = getModelPresentation(model.provider, model.model);
           return (
-            <span
-              key={`${model.provider}:${model.model}:${index}`}
-              className={styles.dockAvatar}
-            >
+            <span key={`${model.provider}:${model.model}:${index}`} className={styles.dockAvatar}>
               <ProviderLogo
                 provider={model.provider}
                 logoUrl={meta.logoUrl}
@@ -668,10 +655,7 @@ function MobileHistory({
                         onClick={() => onSelectThread(thread)}
                       >
                         <span className={styles.mobileHistoryTop}>
-                          <span
-                            className={styles.mobileHistoryMode}
-                            data-mode={thread.mode}
-                          >
+                          <span className={styles.mobileHistoryMode} data-mode={thread.mode}>
                             {formatHistoryMode(thread.mode)}
                           </span>
                           <time dateTime={thread.latestTimestamp}>
@@ -701,8 +685,7 @@ function MobileHistory({
                         </span>
                         <small className={styles.mobileHistoryMeta}>
                           <span>
-                            {thread.turnCount}{" "}
-                            {thread.turnCount === 1 ? "turn" : "turns"}
+                            {thread.turnCount} {thread.turnCount === 1 ? "turn" : "turns"}
                           </span>
                           <span aria-hidden="true">·</span>
                           <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>

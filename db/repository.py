@@ -2458,6 +2458,7 @@ def require_cortex_analysis_schema() -> None:
         "source_fingerprint",
         "source_snapshot",
         "recommended_answer",
+        "disagreement_note",
         "created_at",
     }
     run_columns = {column.name for column in analysis_runs.columns}
@@ -2469,7 +2470,7 @@ def require_cortex_analysis_schema() -> None:
     if missing_run_columns or missing_request_columns:
         missing = ", ".join(missing_run_columns + missing_request_columns)
         raise CortexAnalysisSchemaUnavailable(
-            f"Cortex Analysis schema is incomplete ({missing}); apply the migration "
+            f"Cortex Analysis schema is incomplete ({missing}); apply the Cortex migrations "
             "and restart the API"
         )
 
@@ -2648,7 +2649,8 @@ def create_cortex_analysis_run(
     source_snapshot: list[dict[str, Any]],
     recommended_answer: str,
     agreements: list[str],
-    disagreements: list[str],
+    disagreements: list[dict[str, Any]],
+    disagreement_note: str | None,
     unique_insights: list[dict[str, Any]],
     confidence_level: str,
     confidence_reason: str,
@@ -2678,6 +2680,7 @@ def create_cortex_analysis_run(
             recommended_answer=recommended_answer,
             agreements=agreements,
             disagreements=disagreements,
+            disagreement_note=disagreement_note,
             unique_insights=unique_insights,
             confidence_level=confidence_level,
             confidence_reason=confidence_reason,
@@ -2744,6 +2747,11 @@ def list_cortex_analysis_runs(
                 "recommended_answer": str(payload.get("recommended_answer") or ""),
                 "agreements": _decode_json_value(payload.get("agreements"), []),
                 "disagreements": _decode_json_value(payload.get("disagreements"), []),
+                "disagreement_note": (
+                    str(payload["disagreement_note"])
+                    if payload.get("disagreement_note") is not None
+                    else None
+                ),
                 "unique_insights": _decode_json_value(
                     payload.get("unique_insights"),
                     [],

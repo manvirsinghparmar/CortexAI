@@ -67,6 +67,11 @@ class _GeneratedUniqueInsight(BaseModel):
     text: str = Field(min_length=1)
 
 
+class _GeneratedDisagreement(BaseModel):
+    who: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class _GeneratedConfidence(BaseModel):
     level: Literal["limited", "moderate", "high"]
     reason: str = Field(min_length=1)
@@ -77,7 +82,8 @@ class _GeneratedAnalysis(BaseModel):
 
     recommended_answer: str = Field(alias="recommendedAnswer", min_length=1)
     agreements: list[str] = Field(default_factory=list)
-    disagreements: list[str] = Field(default_factory=list)
+    disagreements: list[_GeneratedDisagreement] = Field(default_factory=list)
+    disagreement_note: str | None = Field(default=None, alias="disagreementNote")
     unique_insights: list[_GeneratedUniqueInsight] = Field(
         default_factory=list,
         alias="uniqueInsights",
@@ -102,7 +108,8 @@ class AnalysisSource:
 class AnalysisResult:
     recommended_answer: str
     agreements: list[str]
-    disagreements: list[str]
+    disagreements: list[dict[str, str]]
+    disagreement_note: str | None
     unique_insights: list[dict[str, str]]
     confidence_level: str
     confidence_reason: str
@@ -272,6 +279,25 @@ def analyze_responses(
             "The responses differ too much for Cortex to choose for you. " f"{recommended_answer}"
         )
 
+    disagreements: list[dict[str, str]] = []
+    for disagreement in generated.disagreements:
+        source = label_map.get(disagreement.who)
+        text = _safe_attributed_copy(disagreement.text, label_map)
+        if source is None or not text:
+            continue
+        disagreements.append(
+            {
+                "who": response_display_name(source.provider, source.model),
+                "text": text,
+            }
+        )
+
+    disagreement_note = (
+        (_safe_attributed_copy(generated.disagreement_note, label_map) or None)
+        if generated.disagreement_note
+        else None
+    )
+
     unique_insights: list[dict[str, str]] = []
     for insight in generated.unique_insights:
         source = label_map.get(insight.response_label)
@@ -288,7 +314,8 @@ def analyze_responses(
     return AnalysisResult(
         recommended_answer=recommended_answer,
         agreements=_safe_attributed_copy_list(generated.agreements, label_map),
-        disagreements=_safe_attributed_copy_list(generated.disagreements, label_map),
+        disagreements=disagreements,
+        disagreement_note=disagreement_note,
         unique_insights=unique_insights,
         confidence_level=generated.confidence.level,
         confidence_reason=confidence_reason,
@@ -378,6 +405,21 @@ def _restore_response_labels(
 
 def _analysis_response_format() -> dict[str, Any]:
     string_array = {"type": "array", "items": {"type": "string"}}
+    attributed_array = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "who": {
+                    "type": "string",
+                    "enum": ["Response A", "Response B", "Response C"],
+                },
+                "text": {"type": "string"},
+            },
+            "required": ["who", "text"],
+            "additionalProperties": False,
+        },
+    }
     return {
         "type": "json_schema",
         "json_schema": {
@@ -388,7 +430,8 @@ def _analysis_response_format() -> dict[str, Any]:
                 "properties": {
                     "recommendedAnswer": {"type": "string"},
                     "agreements": string_array,
-                    "disagreements": string_array,
+                    "disagreements": attributed_array,
+                    "disagreementNote": {"type": ["string", "null"]},
                     "uniqueInsights": {
                         "type": "array",
                         "items": {
@@ -436,6 +479,7 @@ def _analysis_response_format() -> dict[str, Any]:
                     "recommendedAnswer",
                     "agreements",
                     "disagreements",
+                    "disagreementNote",
                     "uniqueInsights",
                     "confidence",
                     "verify",
@@ -457,7 +501,8 @@ Return one JSON object with exactly these fields:
 {
   "recommendedAnswer": "2-5 concise sentences",
   "agreements": ["plain-language point"],
-  "disagreements": ["plain-language point"],
+  "disagreements": [{"who": "Response A", "text": "plain-language position"}],
+  "disagreementNote": "what the disagreement means without choosing a winner|null",
   "uniqueInsights": [{"responseLabel": "Response A", "text": "point"}],
   "confidence": {
     "level": "limited|moderate|high",
@@ -476,6 +521,9 @@ Rules:
 - Use calm language such as "based on the responses", "models generally agree",
   "better-informed answer", and "may require verification".
 - Omit empty ideas by returning an empty array. Do not invent disagreement.
+- Attribute every disagreement position with the supplied Response A/B/C label.
+- Use disagreementNote only for a short explanation of what the disagreement
+  means. It must not choose a winner. Return null when no note is needed.
 - Attribute unique insights only with the supplied Response A/B/C label.
 - When referring to a response in any field, spell out its complete supplied
   label (for example, "Response A", not only "A"). The server will restore the

@@ -719,6 +719,8 @@ Cortex Analysis is an on-demand synthesized model call below completed browser C
   saving the run. Responses from different models of one provider therefore
   remain distinct in insights, differences, confidence, and verification copy.
 - The model uses strict Structured Outputs, and the API validates the result before persistence. Provider failure or invalid output returns `502`; a failed generation does not create a run.
+- Each disagreement is returned as `{ "who": <display name>, "text": <position> }`; optional `disagreementNote` explains the nature of the difference without choosing a winner. Unique insights retain their model attribution.
+- The finished React result is one continuous document: combined answer and inline qualitative confidence first, then always-visible agreement/difference/unique-insight evidence, followed by one verification band. There are no per-section disclosures or saved open/closed preferences. When confidence is `limited` and disagreements exist, the difference column leads visually without changing model ranking or hiding original responses.
 - Successful runs are append-only in `cortex_analysis_runs`. Re-running never overwrites an earlier result.
 - While a re-run is processing, the result area temporarily replaces the
   previous combined answer with the analysis progress state. If the re-run
@@ -729,8 +731,10 @@ Cortex Analysis is an on-demand synthesized model call below completed browser C
 - Analysis starts only after a user action and only when at least two Compare responses succeeded. Existing Compare research context is reused without another research charge. Saved runs stay readable after downgrade; a new run can still be denied if its configured model is no longer allowed or the unified wallet has insufficient credits. There is no automatic synthesis, separate Cortex quota, or Cortex-only mobile tab.
 
 Apply `db/migrations/20260727_add_cortex_analysis_runs.sql` with a database role
-that owns `llm_requests` before deploying this behavior, then restart the API so
-reflected table metadata includes the new columns. Until that schema is ready,
+that owns `llm_requests`, then apply
+`db/migrations/20260802_add_cortex_analysis_attribution.sql` before deploying
+this behavior. Restart the API so reflected table metadata includes the new
+column. Until that schema is ready,
 both Cortex Analysis endpoints return
 `503 cortex_analysis_schema_unavailable`; the create endpoint performs this
 check before calling the analysis model.
@@ -1014,9 +1018,10 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 ```
 
-- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs and therefore needs a role that owns `llm_requests`; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` counter contract; `20260730` adds reservation heartbeats used by automatic stale cleanup; `20260731` adds requested/served/pricing model identity, detailed usage, and price-rule evidence to historical LLM rows and needs a role that owns `llm_requests`/`llm_responses`. The scripts are additive/idempotent. Restart the API after apply. PostgreSQL startup validates every required billing and pricing-audit column and exits before provider traffic when the schema is incomplete.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs and therefore needs a role that owns `llm_requests`; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` counter contract; `20260730` adds reservation heartbeats used by automatic stale cleanup; `20260731` adds requested/served/pricing model identity, detailed usage, and price-rule evidence to historical LLM rows and needs a role that owns `llm_requests`/`llm_responses`; `20260802` adds the optional Cortex disagreement-note column used by the attributed result contract. The scripts are additive/idempotent. Restart the API after apply. PostgreSQL startup validates every required billing, pricing-audit, and Cortex column and exits before provider traffic when the schema is incomplete.
 
 ## Release Gate
 
@@ -1216,6 +1221,8 @@ OpenAIProject/
       20260727_add_cortex_analysis_runs.sql
       20260729_add_unified_ai_credits.sql
       20260730_add_usage_reservation_activity.sql
+      20260731_add_model_pricing_audit.sql
+      20260802_add_cortex_analysis_attribution.sql
     repository.py
     session.py
     tables.py

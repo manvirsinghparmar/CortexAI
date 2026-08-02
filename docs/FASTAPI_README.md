@@ -600,6 +600,7 @@ Notes:
   provider-and-model display names, such as `Claude (Sonnet 4.6)`, so multiple
   models from the same provider remain distinguishable.
 - Persists a run only after the provider result passes local schema validation.
+- Returns attributed disagreement positions as `disagreements: [{"who": "ChatGPT (…)", "text": "…"}]` plus nullable `disagreementNote`. The analysis model supplies only anonymous `Response A/B/C` labels; the server resolves `who` before persistence and response serialization.
 - Returns the saved run with `201`; provider/validation failures return `502` and do not add history.
 - Verifies the Cortex persistence schema before provider work. Missing or
   incomplete migration state returns
@@ -609,6 +610,7 @@ Notes:
 
 - Requires one of the two filters and returns every owned run newest-first.
 - Each run includes `analysisId`, `requestGroupId`, `sessionId`, `model`, the structured result sections, `sourceResponses`, `createdAt`, and `isStale`.
+- The structured result includes attributed `disagreements`, nullable `disagreementNote`, attributed `uniqueInsights`, qualitative confidence, and verification items. Legacy flat-string disagreement rows are restored as readable `One response` entries.
 - `sourceResponses` records the exact `requestId` and `responseVersion` inputs. A later Compare response regeneration changes the current source fingerprint, so earlier runs remain available with `isStale=true`.
 
 The browser hydrates these runs with session history after reload or History
@@ -631,17 +633,20 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_ana
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 ```
 
-The Cortex Analysis migration adds Compare response revision metadata and the
-append-only `cortex_analysis_runs` table. Run it with a role that owns
+The first Cortex Analysis migration adds Compare response revision metadata and
+the append-only `cortex_analysis_runs` table; the `20260802` attribution
+migration adds nullable `disagreement_note` for the attributed result contract. Run them with a role that owns
 `llm_requests`; the normal application role may have read/write access without
 permission to alter that table. Restart the API after applying the migration so
 SQLAlchemy reflects the new columns. Shared Ask/Compare session continuity
 itself remains implemented in persistence/session resolution logic.
 
 The billing foundation, Cortex revision table, unified-credit ledger,
-reservation-activity migration, and model-pricing audit migration are all required. They are additive and
+reservation-activity migration, model-pricing audit migration, and Cortex
+attribution migration are all required. They are additive and
 idempotent under the repository migration convention. PostgreSQL startup checks
 the required tables and columns and fails before serving provider routes when a
 migration is missing. See `docs/runbooks/db-migrations.md` for verification and

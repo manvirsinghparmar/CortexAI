@@ -34,8 +34,12 @@ class _FakeOpenAIClient:
                     "recommendedAnswer": ("Use Response A's recommendation as a starting point."),
                     "agreements": ["Responses A and B emphasize the same constraint."],
                     "disagreements": [
-                        "Response B emphasizes outcomes more strongly than Response A."
+                        {
+                            "who": "Response B",
+                            "text": "Emphasizes outcomes more strongly than Response A.",
+                        }
                     ],
+                    "disagreementNote": "These are different priorities, not a verdict.",
                     "uniqueInsights": [
                         {
                             "responseLabel": first_label,
@@ -76,7 +80,13 @@ class _StrongDisagreementClient(_FakeOpenAIClient):
                 {
                     "recommendedAnswer": "The verified winner scored 9/10, so use the first path.",
                     "agreements": [],
-                    "disagreements": ["The responses recommend incompatible paths."],
+                    "disagreements": [
+                        {
+                            "who": "Response A",
+                            "text": "Recommends a path incompatible with Response B.",
+                        }
+                    ],
+                    "disagreementNote": None,
                     "uniqueInsights": [],
                     "confidence": {
                         "level": "limited",
@@ -125,6 +135,12 @@ def test_analysis_shuffles_anonymous_labels_and_restores_attribution(
     assert "claude" not in _FakeOpenAIClient.captured_messages[1]["content"].lower()
     assert _FakeOpenAIClient.captured_kwargs["model"] == "gpt-5.4-mini"
     assert _FakeOpenAIClient.captured_kwargs["response_format"]["type"] == "json_schema"
+    response_schema = _FakeOpenAIClient.captured_kwargs["response_format"]["json_schema"]["schema"]
+    assert response_schema["properties"]["disagreements"]["items"]["required"] == [
+        "who",
+        "text",
+    ]
+    assert "disagreementNote" in response_schema["required"]
 
     provider_by_label = {
         item["label"]: (
@@ -149,11 +165,15 @@ def test_analysis_shuffles_anonymous_labels_and_restores_attribution(
         )
     ]
     assert result.disagreements == [
-        (
-            f"{provider_by_label['Response B']} emphasizes outcomes more strongly "
-            f"than {provider_by_label['Response A']}."
-        )
+        {
+            "who": provider_by_label["Response B"],
+            "text": (
+                "Emphasizes outcomes more strongly than "
+                f"{provider_by_label['Response A']}."
+            ),
+        }
     ]
+    assert result.disagreement_note == "These are different priorities, not a verdict."
     assert result.confidence_reason.startswith(
         f"{provider_by_label['Response A']} and {provider_by_label['Response B']} align"
     )
@@ -164,7 +184,9 @@ def test_analysis_shuffles_anonymous_labels_and_restores_attribution(
         [
             result.recommended_answer,
             *result.agreements,
-            *result.disagreements,
+            *(item["who"] for item in result.disagreements),
+            *(item["text"] for item in result.disagreements),
+            result.disagreement_note or "",
             *(item["text"] for item in result.unique_insights),
             result.confidence_reason,
             *result.verify_items,
@@ -353,7 +375,13 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     generated = analysis_service.AnalysisResult(
         recommended_answer="Use the lower-risk approach.",
         agreements=["Both responses prefer a staged rollout."],
-        disagreements=[],
+        disagreements=[
+            {
+                "who": "ChatGPT (GPT-5.1)",
+                "text": "Leans toward the lower-risk approach.",
+            }
+        ],
+        disagreement_note="These are different risk preferences.",
         unique_insights=[],
         confidence_level="moderate",
         confidence_reason="The responses align on the main tradeoff.",
@@ -386,7 +414,8 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
         ],
         "recommended_answer": generated.recommended_answer,
         "agreements": generated.agreements,
-        "disagreements": [],
+        "disagreements": generated.disagreements,
+        "disagreement_note": generated.disagreement_note,
         "unique_insights": [],
         "confidence_level": "moderate",
         "confidence_reason": generated.confidence_reason,
@@ -463,6 +492,10 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     assert result.analysis_id == saved_run["analysis_id"]
     assert result.is_stale is False
     assert created["recommended_answer"] == generated.recommended_answer
+    assert created["disagreements"] == generated.disagreements
+    assert created["disagreement_note"] == generated.disagreement_note
+    assert result.disagreements[0].who == "ChatGPT (GPT-5.1)"
+    assert result.disagreement_note == "These are different risk preferences."
     assert created["combined_response_count"] == 2
     assert reserved["operation_type"] == "cortex_analysis"
     assert reserved["research_enabled"] is False
@@ -474,6 +507,36 @@ def test_create_analysis_route_appends_and_returns_saved_run(monkeypatch):
     assert finalized["research_provider_credits_used"] == 0
     assert finalized["model_usages"][0].input_tokens == 10
     assert finalized["model_usages"][0].output_tokens == 20
+
+
+@pytest.mark.unit
+def test_run_dto_keeps_legacy_flat_disagreements_readable():
+    dto = analysis_route._run_to_dto(
+        {
+            "analysis_id": "44444444-4444-4444-4444-444444444444",
+            "request_group_id": "33333333-3333-3333-3333-333333333333",
+            "session_id": "22222222-2222-2222-2222-222222222222",
+            "model": "gpt-5.4-mini",
+            "recommended_answer": "Use a staged approach.",
+            "agreements": [],
+            "disagreements": ["A legacy saved position."],
+            "disagreement_note": None,
+            "unique_insights": [],
+            "confidence_level": "limited",
+            "confidence_reason": "The saved responses differ.",
+            "verify_items": [],
+            "high_stakes_domain": None,
+            "source_fingerprint": "fingerprint",
+            "source_snapshot": [],
+            "combined_response_count": 2,
+            "failed_response_count": 0,
+            "created_at": "2026-07-27T12:00:00Z",
+        },
+        current_fingerprint="fingerprint",
+    )
+
+    assert dto.disagreements[0].who == "One response"
+    assert dto.disagreements[0].text == "A legacy saved position."
 
 
 @pytest.mark.unit

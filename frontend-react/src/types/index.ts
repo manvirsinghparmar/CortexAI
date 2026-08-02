@@ -526,6 +526,11 @@ export interface CortexAnalysisUniqueInsight {
   text: string;
 }
 
+export interface CortexAnalysisDisagreement {
+  who: string;
+  text: string;
+}
+
 export interface CortexAnalysisRun {
   analysisId: string;
   requestGroupId: string;
@@ -533,7 +538,8 @@ export interface CortexAnalysisRun {
   model: string;
   recommendedAnswer: string;
   agreements: string[];
-  disagreements: string[];
+  disagreements: CortexAnalysisDisagreement[];
+  disagreementNote: string | null;
   uniqueInsights: CortexAnalysisUniqueInsight[];
   confidence: {
     level: "limited" | "moderate" | "high";

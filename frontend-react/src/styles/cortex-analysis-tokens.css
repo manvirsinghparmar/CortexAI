@@ -1,0 +1,123 @@
+/* CortexAI — Cortex Analysis result card tokens
+ * Put data-theme="dark" or data-theme="light" on the Compare app shell root.
+ * These are the ONLY colours the redesigned result card may use.
+ * Brand constants are identical in both themes — do not theme them.
+ */
+
+:root {
+  --cx-indigo: #5b5bd6; /* primary action, ChatGPT rail, filled confidence bar */
+  --cx-indigo-bright: #8b8bf0; /* Cortex mark strokes, "The combined answer" label, links */
+  --cx-claude: #e07a4d; /* Claude rail + Claude attribution name */
+  --cx-gemini: #3d7ff0; /* Gemini rail + Gemini attribution name */
+  --cx-insight: #e0c05a; /* "Only one model raised" bulb icon */
+}
+
+[data-theme="dark"] {
+  --cx-card-bg: #13141f;
+  --cx-card-border: #24283c;
+  --cx-card-border-diverge: #3a2a1c;
+  --cx-rule: #1c2030;
+  --cx-mark-bg: #1a1b33;
+  --cx-mark-core: #11151b;
+  --cx-title: #f1f3f6;
+  --cx-answer: #dfe3e9;
+  --cx-body: #c2c9d2;
+  --cx-label: #5b6573;
+  --cx-meta: #6b7488;
+  --cx-reason: #8a94a3;
+  --cx-verify-text: #b7bfca;
+  --cx-bar-empty: #2a323d;
+  --cx-agree: #86efac;
+  --cx-differ: #f0a87d;
+  --cx-amber: #e0a35a;
+  --cx-amber-bg: #241a10;
+  --cx-amber-border: #3a2a14;
+  --cx-stale-strong: #f0d3a3;
+  --cx-stale-soft: #b89a6a;
+  --cx-btn-border: #232a33;
+  --cx-btn-bg: #11151b;
+  --cx-btn-icon: #8a94a3;
+  --cx-glow: rgba(91, 91, 214, 0.1);
+  --cx-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 34px 74px -44px rgba(91, 91, 214, 0.55);
+}
+
+[data-theme="light"] {
+  --cx-card-bg: #ffffff;
+  --cx-card-border: #e6e6f2;
+  --cx-card-border-diverge: #f0dcc0;
+  --cx-rule: #eef0f2;
+  --cx-mark-bg: #eef0fb;
+  --cx-mark-core: #ffffff;
+  --cx-title: #0b1220;
+  --cx-answer: #1a212c;
+  --cx-body: #3d4552;
+  --cx-label: #9aa2ad;
+  --cx-meta: #9aa2ad;
+  --cx-reason: #7a8494;
+  --cx-verify-text: #5b6573;
+  --cx-bar-empty: #e2e5ea;
+  --cx-agree: #178048;
+  --cx-differ: #b45a25;
+  --cx-amber: #a4711f;
+  --cx-amber-bg: #fdf6ea;
+  --cx-amber-border: #f0dcc0;
+  --cx-stale-strong: #8a6d3b;
+  --cx-stale-soft: #a07f4a;
+  --cx-btn-border: #e2e5ea;
+  --cx-btn-bg: #ffffff;
+  --cx-btn-icon: #7a8494;
+  --cx-glow: rgba(91, 91, 214, 0.1);
+  --cx-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 34px 74px -44px rgba(91, 91, 214, 0.28);
+}
+
+/* Required keyframes */
+@keyframes cxFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cxSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cxPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(139, 139, 240, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(139, 139, 240, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-cx-stagger] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------
+ * Cross-reference: prototype variable -> semantic name above.
+ * The prototype (prototype/Cortex Analysis.dc.html) uses generic --tN
+ * names. Use this table when reading it.
+ *
+ *  --t6  -> --cx-card-bg          --t46 -> --cx-meta
+ *  --t23 -> --cx-rule             --t45 -> --cx-reason
+ *  --t24 -> --cx-mark-bg          --t43 -> --cx-verify-text
+ *  --t2  -> --cx-mark-core        --t51 -> --cx-agree
+ *  --t36 -> --cx-title            --t52 -> --cx-differ
+ *  --t37 -> --cx-answer           --t54 -> --cx-amber
+ *  --t40 -> --cx-body             --t10 -> --cx-amber-bg
+ *  --t47 -> --cx-label            --t21 -> --cx-amber-border
+ *  --t49 -> --cx-stale-strong     --t50 -> --cx-stale-soft
+ *  --t14 -> --cx-btn-border       --barempty -> --cx-bar-empty
+ *  --cardbd -> --cx-card-border   --divbd -> --cx-card-border-diverge
+ * --------------------------------------------------------------- */

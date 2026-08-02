@@ -933,6 +933,9 @@
                   "  pm.expect(body.requestGroupId).to.eql(pm.collectionVariables.get('request_group_id'));",
                   "  pm.expect(body.model).to.be.a('string');",
                   "  pm.expect(body.recommendedAnswer).to.be.a('string');",
+                  "  pm.expect(body.disagreements).to.be.an('array');",
+                  "  body.disagreements.forEach(function (item) { pm.expect(item).to.have.all.keys('who', 'text'); });",
+                  "  pm.expect(body.disagreementNote === null || typeof body.disagreementNote === 'string').to.eql(true);",
                   "  pm.expect(body.sourceResponses).to.be.an('array');",
                   "  pm.expect(body.isStale).to.eql(false);",
                   "});"
@@ -966,6 +969,7 @@
                   "var body = pm.response.json();",
                   "pm.test('all saved runs are returned newest-first', function () {",
                   "  pm.expect(body).to.be.an('array');",
+                  "  body.forEach(function (run) { pm.expect(run.disagreements).to.be.an('array'); pm.expect(run).to.have.property('disagreementNote'); });",
                   "  if (body.length > 1) {",
                   "    pm.expect(Date.parse(body[0].createdAt)).to.be.at.least(Date.parse(body[1].createdAt));",
                   "  }",

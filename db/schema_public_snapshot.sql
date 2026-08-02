@@ -221,6 +221,7 @@ CREATE TABLE public.cortex_analysis_runs (
 	recommended_answer TEXT NOT NULL,
 	agreements JSONB DEFAULT '[]'::jsonb NOT NULL,
 	disagreements JSONB DEFAULT '[]'::jsonb NOT NULL,
+	disagreement_note TEXT,
 	unique_insights JSONB DEFAULT '[]'::jsonb NOT NULL,
 	confidence_level TEXT NOT NULL,
 	confidence_reason TEXT NOT NULL,

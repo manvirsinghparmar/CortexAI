@@ -26,7 +26,7 @@ This guide covers both:
   differences, unique insights, confidence explanation, and verification
   items. Selecting multiple models from one provider therefore does not collapse
   their attribution into a shared provider label.
-- Results separate the recommended answer, agreements, differences, unique insights, confidence, and items to verify. High-stakes financial, medical, legal, or safety results keep verification guidance expanded.
+- Finished results render as one always-visible reading document: combined answer, inline qualitative confidence, attributed evidence columns, and a single verification band. No section requires a click. Strong disagreement leads visually and lowers confidence to `Limited`; attribution identifies who holds each position without naming a winner.
 - Every successful analysis is retained. Reloading or reopening a History thread restores all prior runs and selects the newest by default.
 - Regenerating one source response appends a new response revision. Earlier analyses remain readable but are marked stale until the user explicitly runs an updated analysis.
 - Re-running Cortex Analysis temporarily hides the previous combined result and
@@ -41,7 +41,9 @@ This guide covers both:
   `20260718_add_b2c_billing_foundation.sql`,
   `20260727_add_cortex_analysis_runs.sql`,
   `20260729_add_unified_ai_credits.sql`, and
-  `20260730_add_usage_reservation_activity.sql`, applied in that order.
+  `20260730_add_usage_reservation_activity.sql`, followed by
+  `20260731_add_model_pricing_audit.sql` and
+  `20260802_add_cortex_analysis_attribution.sql`, applied in that order.
 
 The API accepts two or three explicit targets. Subscription enforcement may reduce the effective maximum: Free and Plus allow two targets, while Pro allows three. The four-provider examples below describe the legacy CLI `COMPARE_MODE=true` flow, not the FastAPI request limit.
 

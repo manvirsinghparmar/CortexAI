@@ -75,6 +75,8 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260718_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai_credits.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
@@ -130,6 +132,11 @@ FROM cortex_analysis_runs
 ORDER BY created_at DESC
 LIMIT 20;
 
+SELECT id, disagreements, disagreement_note
+FROM cortex_analysis_runs
+ORDER BY created_at DESC
+LIMIT 20;
+
 SELECT id, request_id, state, last_activity_at
 FROM usage_reservations
 ORDER BY last_activity_at DESC
@@ -145,17 +152,22 @@ LIMIT 20;
 
 Migration:
 
-`db/migrations/20260727_add_cortex_analysis_runs.sql`
+`db/migrations/20260727_add_cortex_analysis_runs.sql` and
+`db/migrations/20260802_add_cortex_analysis_attribution.sql`
 
 Apply it with an owner/admin connection before deploying the Cortex Analysis
 routes:
 
 ```powershell
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260727_add_cortex_analysis_runs.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 ```
 
-The migration adds append-only response revision metadata to `llm_requests` and
-creates `cortex_analysis_runs`. The migration role must own `llm_requests` and
+The first migration adds append-only response revision metadata to `llm_requests`
+and creates `cortex_analysis_runs`. The attribution migration adds nullable
+`disagreement_note`; the existing JSONB `disagreements` column stores the new
+`{who,text}` objects without a destructive rewrite, so legacy string rows remain
+available for compatibility reads. The migration role must own `llm_requests` and
 have `CREATE` permission on the target schema. Restart the API after applying
 it so reflected SQLAlchemy metadata sees the new columns and table. Until then,
 both analysis endpoints return `503 cortex_analysis_schema_unavailable` before

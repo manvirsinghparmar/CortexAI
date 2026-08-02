@@ -40,7 +40,7 @@ describe("CortexAnalysisZone", () => {
     };
     const { rerender } = render(<CortexAnalysisZone turn={turn} onAnalyze={onAnalyze} />);
 
-    await user.click(screen.getByRole("button", { name: "Run Cortex Analysis again" }));
+    await user.click(screen.getByRole("button", { name: "Regenerate analysis" }));
     expect(onAnalyze).toHaveBeenCalledWith(turn.id);
 
     rerender(
@@ -111,9 +111,15 @@ describe("CortexAnalysisZone", () => {
     expect(screen.getByText(run.recommendedAnswer)).toBeInTheDocument();
   });
 
-  it("puts strong disagreement first and expands high-stakes verification", () => {
+  it("renders the complete document without disclosures and leads with strong disagreement", () => {
     const run = analysisRun({
-      disagreements: ["The responses recommend incompatible paths."],
+      disagreements: [
+        {
+          who: "ChatGPT (GPT-5.1)",
+          text: "Recommends a path incompatible with Claude (Sonnet 4.5).",
+        },
+      ],
+      disagreementNote: "These are different risk judgments, not conflicting facts.",
       agreements: ["Both identify the same constraint."],
       confidence: {
         level: "limited",
@@ -126,15 +132,19 @@ describe("CortexAnalysisZone", () => {
 
     render(<CortexAnalysisZone turn={turn} onAnalyze={vi.fn()} />);
 
-    const differ = screen.getByRole("button", { name: /Where they differ/ });
-    const agree = screen.getByRole("button", {
-      name: /What the models agree on/,
-    });
-    expect(differ.compareDocumentPosition(agree) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Worth verifying · FINANCIAL/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    const card = screen.getByRole("region", { name: "Cortex Analysis" });
+    const differ = screen.getByRole("heading", { name: "Where they differ" });
+    const agree = screen.getByRole("heading", { name: "What they agree on" });
+    expect(differ.closest("section")).toHaveAttribute("data-cx-order", "0");
+    expect(agree.closest("section")).toHaveAttribute("data-cx-order", "1");
+    expect(card.querySelector("[aria-expanded]")).toBeNull();
+    expect(
+      screen.getByText("Recommends a path incompatible with Claude (Sonnet 4.5)."),
+    ).toBeVisible();
+    expect(
+      screen.getByText("These are different risk judgments, not conflicting facts."),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Worth verifying · financial" })).toBeVisible();
     expect(screen.getByText("Confirm current mortgage terms.")).toBeInTheDocument();
   });
 });
@@ -208,5 +218,6 @@ function analysisRun(overrides: Partial<CortexAnalysisRun> = {}): CortexAnalysis
     createdAt: "2026-07-27T12:00:00Z",
     isStale: false,
     ...overrides,
+    disagreementNote: overrides.disagreementNote ?? null,
   };
 }

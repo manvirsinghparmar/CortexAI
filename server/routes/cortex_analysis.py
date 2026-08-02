@@ -27,6 +27,7 @@ from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.cortex_analysis import (
     CortexAnalysisConfidenceDTO,
+    CortexAnalysisDisagreementDTO,
     CortexAnalysisRunDTO,
     CortexAnalysisSourceDTO,
     CortexAnalysisUniqueInsightDTO,
@@ -76,7 +77,10 @@ def _require_analysis_schema(*, request_id: str) -> None:
             extra={
                 "extra_fields": {
                     "request_id": request_id,
-                    "migration": "20260727_add_cortex_analysis_runs.sql",
+                    "migrations": [
+                        "20260727_add_cortex_analysis_runs.sql",
+                        "20260802_add_cortex_analysis_attribution.sql",
+                    ],
                 }
             },
         )
@@ -309,6 +313,7 @@ async def create_analysis_run(
             recommended_answer=generated.recommended_answer,
             agreements=generated.agreements,
             disagreements=generated.disagreements,
+            disagreement_note=generated.disagreement_note,
             unique_insights=generated.unique_insights,
             confidence_level=generated.confidence_level,
             confidence_reason=generated.confidence_reason,
@@ -373,6 +378,9 @@ def _run_to_dto(
     insights = run.get("unique_insights")
     if not isinstance(insights, list):
         insights = []
+    disagreements = run.get("disagreements")
+    if not isinstance(disagreements, list):
+        disagreements = []
     source_fingerprint = str(run.get("source_fingerprint") or "")
     return CortexAnalysisRunDTO(
         analysisId=str(run.get("analysis_id") or ""),
@@ -381,7 +389,21 @@ def _run_to_dto(
         model=str(run.get("model") or analysis_service.configured_analysis_model()),
         recommendedAnswer=str(run.get("recommended_answer") or ""),
         agreements=[str(item) for item in run.get("agreements") or [] if str(item)],
-        disagreements=[str(item) for item in run.get("disagreements") or [] if str(item)],
+        disagreements=[
+            CortexAnalysisDisagreementDTO(
+                who=str(item.get("who") or "One response"),
+                text=str(item.get("text") or ""),
+            )
+            if isinstance(item, dict)
+            else CortexAnalysisDisagreementDTO(who="One response", text=str(item))
+            for item in disagreements
+            if (
+                isinstance(item, dict)
+                and str(item.get("text") or "").strip()
+            )
+            or (not isinstance(item, dict) and str(item).strip())
+        ],
+        disagreementNote=(str(run.get("disagreement_note") or "").strip() or None),
         uniqueInsights=[
             CortexAnalysisUniqueInsightDTO(
                 responseName=str(item.get("responseName") or "One response"),

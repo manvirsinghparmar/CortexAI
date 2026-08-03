@@ -1566,6 +1566,96 @@ def test_compare_dto_mapping_smoke():
     assert dto is not None
 
 
+def test_chat_dto_uses_requested_model_for_versioned_served_model_credits():
+    response = UnifiedResponse(
+        request_id="versioned-openai-chat-response",
+        text="OpenAI answer",
+        provider="openai",
+        model="gpt-4o-mini-2024-07-18",
+        requested_model="gpt-4o-mini",
+        served_model="gpt-4o-mini-2024-07-18",
+        pricing_model="gpt-4o-mini-2024-07-18",
+        latency_ms=10,
+        token_usage=TokenUsage(
+            prompt_tokens=144,
+            completion_tokens=422,
+            total_tokens=566,
+        ),
+        estimated_cost=0.0,
+        finish_reason="stop",
+        error=None,
+        metadata={},
+    )
+
+    dto = ChatResponseDTO.from_unified_response(response)
+
+    assert dto.requested_model == "gpt-4o-mini"
+    assert dto.served_model == "gpt-4o-mini-2024-07-18"
+    assert dto.pricing_model == "gpt-4o-mini-2024-07-18"
+    assert dto.ai_credits == 916
+    assert dto.credit_usage_estimated is False
+
+
+def test_compare_dto_uses_requested_model_for_versioned_served_model_credits():
+    responses = [
+        UnifiedResponse(
+            request_id="versioned-openai-response",
+            text="OpenAI answer",
+            provider="openai",
+            model="gpt-4o-mini-2024-07-18",
+            requested_model="gpt-4o-mini",
+            served_model="gpt-4o-mini-2024-07-18",
+            pricing_model="gpt-4o-mini-2024-07-18",
+            latency_ms=10,
+            token_usage=TokenUsage(
+                prompt_tokens=144,
+                completion_tokens=422,
+                total_tokens=566,
+            ),
+            estimated_cost=0.0,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        ),
+        UnifiedResponse(
+            request_id="deepseek-response",
+            text="DeepSeek answer",
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            requested_model="deepseek-v4-flash",
+            served_model="deepseek-v4-flash",
+            pricing_model="deepseek-v4-flash",
+            latency_ms=11,
+            token_usage=TokenUsage(
+                prompt_tokens=222,
+                completion_tokens=757,
+                total_tokens=979,
+            ),
+            estimated_cost=0.0,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        ),
+    ]
+    mur = FakeMultiUnifiedResponse(
+        request_id="versioned-compare",
+        request_group_id="versioned-compare-group",
+        prompt="Compare these answers",
+        responses=responses,
+        success_count=2,
+        failure_count=0,
+        error_count=0,
+        total_tokens=1545,
+        total_cost=0.0,
+    )
+
+    dto = CompareResponseDTO.from_multi_unified_response(mur)
+
+    assert [item.ai_credits for item in dto.responses] == [916, 868]
+    assert [item.credit_usage_estimated for item in dto.responses] == [False, False]
+    assert dto.total_ai_credits == 1784
+
+
 def test_chat_dto_adds_formula_based_research_credits():
     base = UnifiedResponse(
         request_id="research-chat",

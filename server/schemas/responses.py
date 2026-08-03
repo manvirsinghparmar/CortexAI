@@ -20,7 +20,15 @@ def _credit_registry() -> ModelRegistry:
 def _response_credit_usage(response) -> tuple[int, bool]:
     if getattr(response, "is_error", False):
         return 0, False
-    candidate = _credit_registry().find_model(response.provider, response.model)
+    provider = str(getattr(response, "provider", "") or "")
+    response_model = str(getattr(response, "model", "") or "")
+    requested_model = str(getattr(response, "requested_model", "") or "")
+    candidate = _credit_registry().find_model(
+        provider,
+        requested_model or response_model,
+    )
+    if candidate is None and requested_model and requested_model != response_model:
+        candidate = _credit_registry().find_model(provider, response_model)
     if candidate is None:
         return 0, True
     input_tokens = max(0, int(response.token_usage.prompt_tokens or 0))

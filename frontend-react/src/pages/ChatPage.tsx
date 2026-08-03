@@ -49,7 +49,7 @@ export function ChatPage() {
     subscriptionState.entitlements,
   );
   const accountBillingDestination = accountSubscription.billingDestination;
-  const { models } = useModels(workspaceReady);
+  const { models, loading: modelsLoading } = useModels(workspaceReady);
   const { load: loadHistory, removeThread } = useHistory();
   const { submit, regenerate, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
@@ -328,7 +328,11 @@ export function ChatPage() {
                   <CortexIcon name="chevron-down" size={18} />
                 </button>
               </div>
-              <PromptComposer models={models} subscription={subscriptionState} />
+              <PromptComposer
+                models={models}
+                modelsLoading={modelsLoading}
+                subscription={subscriptionState}
+              />
             </div>
 
             {/* Docked mobile composer pill, shown when the sheet is collapsed */}

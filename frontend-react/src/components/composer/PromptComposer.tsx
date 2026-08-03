@@ -9,6 +9,7 @@ import { isModelDropdownVisible } from "../../hooks/useSmartRouting";
 import type { ModelCatalogItem } from "../../types";
 import type { UseSubscriptionResult } from "../../hooks/useSubscription";
 import { DEFAULT_MODELS } from "../../config/defaultModels";
+import { resolveAskModelKey } from "../../config/askDefaults";
 import { resolveCompareModelKeys } from "../../config/compareDefaults";
 import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./PromptComposer.module.css";
@@ -24,11 +25,16 @@ import { detailString } from "../../subscription/subscriptionErrors";
 
 interface PromptComposerProps {
   models: ModelCatalogItem[];
+  modelsLoading?: boolean;
   subscription?: Pick<UseSubscriptionResult, "plans" | "entitlements"> &
     Partial<Pick<UseSubscriptionResult, "loading">>;
 }
 
-export function PromptComposer({ models, subscription }: PromptComposerProps) {
+export function PromptComposer({
+  models,
+  modelsLoading = false,
+  subscription,
+}: PromptComposerProps) {
   const availableModels = models.length > 0 ? models : DEFAULT_MODELS;
   const entitlements = subscription?.entitlements ?? null;
   const plans = subscription?.plans ?? null;
@@ -123,7 +129,9 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
   }, [prompt, resize]);
 
   useEffect(() => {
-    if (!subscriptionLoading && availableModels.length >= 2) {
+    if (subscriptionLoading || modelsLoading || availableModels.length === 0) return;
+
+    if (availableModels.length >= 2) {
       const defaultModels = entitlements
         ? availableModels.filter((model) =>
             entitlements.model_access.allowed_billing_classes.includes(model.billing_class),
@@ -139,14 +147,22 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
           setCompareModelKey(index, resolvedCompareKeys[index]);
         }
       }
-      if (!selectedModelKey) {
-        setSelectedModelKey(`${availableModels[0]!.provider}:${availableModels[0]!.model}`);
-      }
+    }
+
+    const resolvedAskModelKey = resolveAskModelKey(
+      availableModels,
+      selectedModelKey,
+      entitlements?.plan.code ?? null,
+      entitlements?.model_access.allowed_billing_classes ?? null,
+    );
+    if (resolvedAskModelKey !== selectedModelKey) {
+      setSelectedModelKey(resolvedAskModelKey);
     }
   }, [
     availableModels,
     compareModelKeys,
     entitlements,
+    modelsLoading,
     selectedModelKey,
     setCompareModelKey,
     setSelectedModelKey,

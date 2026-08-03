@@ -18,6 +18,7 @@ import type {
   EntitlementsResponse,
   ModelBillingClass,
   ModelCatalogItem,
+  SubscriptionPlanCode,
 } from "../types";
 
 vi.mock("../api/files", () => ({
@@ -176,6 +177,62 @@ describe("subscription feature gating", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["free", "Free", ["economical", "standard"], "openai:gpt-5.6-luna"],
+    [
+      "plus",
+      "Plus",
+      ["economical", "standard", "advanced"],
+      "claude:claude-sonnet-4-6",
+    ],
+    [
+      "pro",
+      "Pro",
+      ["economical", "standard", "advanced", "premium"],
+      "openai:gpt-5.6-terra",
+    ],
+  ] as Array<[SubscriptionPlanCode, string, ModelBillingClass[], string]>)(
+    "shows the %s plan default when Smart routing is turned off",
+    async (planCode, displayName, allowedBillingClasses, expectedKey) => {
+      const user = userEvent.setup();
+      const entitlements = entitlementFixture({
+        code: planCode,
+        display_name: displayName,
+        status: planCode === "free" ? "free" : "active",
+      });
+      entitlements.model_access.allowed_billing_classes = allowedBillingClasses;
+      useChatStore.setState({
+        mode: "single",
+        smartMode: true,
+        selectedModelKey: "",
+      });
+
+      render(
+        <PromptComposer
+          models={DEFAULT_MODELS}
+          modelsLoading={false}
+          subscription={{ plans: plansFixture(), entitlements, loading: false }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(useChatStore.getState().selectedModelKey).toBe(expectedKey);
+      });
+      await user.click(screen.getByRole("switch", { name: "Smart routing" }));
+
+      expect(screen.getByRole("switch", { name: "Smart routing" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      expect(document.querySelector<HTMLSelectElement>("#singleModel")).toHaveValue(
+        expectedKey,
+      );
+      expect(document.querySelectorAll("#singleModel option")).toHaveLength(
+        DEFAULT_MODELS.length,
+      );
+    },
+  );
+
   it("waits for Free entitlements and initializes Compare with allowed defaults only", async () => {
     useChatStore.setState({
       mode: "compare",
@@ -217,7 +274,10 @@ describe("subscription feature gating", () => {
 
   it("skips a premium fallback for Plus without removing it from the offering", async () => {
     const premium = model("premium-fallback", "premium");
-    const models = [DEFAULT_MODELS[0]!, premium, DEFAULT_MODELS[2]!];
+    const economicalFallback = DEFAULT_MODELS.find(
+      (candidate) => candidate.model === "deepseek-v4-flash",
+    )!;
+    const models = [DEFAULT_MODELS[0]!, premium, economicalFallback];
     const entitlements = entitlementFixture({ code: "plus", display_name: "Plus" });
     entitlements.model_access.allowed_billing_classes = [
       "economical",

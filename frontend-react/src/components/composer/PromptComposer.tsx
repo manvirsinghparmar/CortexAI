@@ -24,13 +24,15 @@ import { detailString } from "../../subscription/subscriptionErrors";
 
 interface PromptComposerProps {
   models: ModelCatalogItem[];
-  subscription?: Pick<UseSubscriptionResult, "plans" | "entitlements">;
+  subscription?: Pick<UseSubscriptionResult, "plans" | "entitlements"> &
+    Partial<Pick<UseSubscriptionResult, "loading">>;
 }
 
 export function PromptComposer({ models, subscription }: PromptComposerProps) {
   const availableModels = models.length > 0 ? models : DEFAULT_MODELS;
   const entitlements = subscription?.entitlements ?? null;
   const plans = subscription?.plans ?? null;
+  const subscriptionLoading = subscription?.loading ?? false;
   const mode = useChatStore((s) => s.mode);
   const smartMode = useChatStore((s) => s.smartMode);
   const setSmartMode = useChatStore((s) => s.setSmartMode);
@@ -121,8 +123,17 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
   }, [prompt, resize]);
 
   useEffect(() => {
-    if (availableModels.length >= 2) {
-      const resolvedCompareKeys = resolveCompareModelKeys(availableModels, compareModelKeys);
+    if (!subscriptionLoading && availableModels.length >= 2) {
+      const defaultModels = entitlements
+        ? availableModels.filter((model) =>
+            entitlements.model_access.allowed_billing_classes.includes(model.billing_class),
+          )
+        : availableModels;
+      const resolvedCompareKeys = resolveCompareModelKeys(
+        availableModels,
+        compareModelKeys,
+        defaultModels,
+      );
       for (const index of [0, 1, 2] as const) {
         if (resolvedCompareKeys[index] !== compareModelKeys[index]) {
           setCompareModelKey(index, resolvedCompareKeys[index]);
@@ -132,7 +143,15 @@ export function PromptComposer({ models, subscription }: PromptComposerProps) {
         setSelectedModelKey(`${availableModels[0]!.provider}:${availableModels[0]!.model}`);
       }
     }
-  }, [availableModels, compareModelKeys, selectedModelKey, setCompareModelKey, setSelectedModelKey]);
+  }, [
+    availableModels,
+    compareModelKeys,
+    entitlements,
+    selectedModelKey,
+    setCompareModelKey,
+    setSelectedModelKey,
+    subscriptionLoading,
+  ]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {

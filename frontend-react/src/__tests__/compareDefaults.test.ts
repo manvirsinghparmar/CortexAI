@@ -42,6 +42,47 @@ describe("compare model defaults", () => {
     ]);
   });
 
+  it("uses only plan-eligible models when filling empty default slots", () => {
+    const models = [
+      model("openai", "gpt-5.6-luna", "economical"),
+      model("claude", "claude-sonnet-5", "advanced"),
+      model("deepseek", "deepseek-v4-flash", "economical"),
+    ];
+    const eligibleDefaults = models.filter((candidate) =>
+      ["economical", "standard"].includes(candidate.billing_class),
+    );
+
+    expect(resolveCompareModelKeys(models, ["", "", ""], eligibleDefaults)).toEqual([
+      "openai:gpt-5.6-luna",
+      "deepseek:deepseek-v4-flash",
+      "",
+    ]);
+    expect(models).toHaveLength(3);
+  });
+
+  it("does not rewrite a valid manual selection when defaults are plan-filtered", () => {
+    const models = [
+      model("openai", "gpt-5.6-luna", "economical"),
+      model("claude", "claude-sonnet-5", "advanced"),
+      model("deepseek", "deepseek-v4-flash", "economical"),
+    ];
+    const eligibleDefaults = models.filter((candidate) =>
+      ["economical", "standard"].includes(candidate.billing_class),
+    );
+
+    expect(
+      resolveCompareModelKeys(
+        models,
+        ["claude:claude-sonnet-5", "", ""],
+        eligibleDefaults,
+      ),
+    ).toEqual([
+      "claude:claude-sonnet-5",
+      "openai:gpt-5.6-luna",
+      "",
+    ]);
+  });
+
   it("uses DeepSeek V4 Flash when a third model is added", () => {
     const models = [
       model("openai", "gpt-5.6-luna"),
@@ -97,12 +138,16 @@ describe("compare model defaults", () => {
   });
 });
 
-function model(provider: string, name: string): ModelCatalogItem {
+function model(
+  provider: string,
+  name: string,
+  billingClass: ModelCatalogItem["billing_class"] = "advanced",
+): ModelCatalogItem {
   return {
     provider,
     model: name,
     tier: "frontier",
-    billing_class: "advanced",
+    billing_class: billingClass,
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128000,

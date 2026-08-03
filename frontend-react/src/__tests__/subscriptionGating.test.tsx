@@ -176,6 +176,81 @@ describe("subscription feature gating", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("waits for Free entitlements and initializes Compare with allowed defaults only", async () => {
+    useChatStore.setState({
+      mode: "compare",
+      compareModelKeys: ["", "", ""],
+    });
+    const plans = plansFixture();
+    const { rerender } = render(
+      <PromptComposer
+        models={DEFAULT_MODELS}
+        subscription={{ plans, entitlements: null, loading: true }}
+      />,
+    );
+
+    expect(useChatStore.getState().compareModelKeys).toEqual(["", "", ""]);
+
+    rerender(
+      <PromptComposer
+        models={DEFAULT_MODELS}
+        subscription={{ plans, entitlements: entitlementFixture(), loading: false }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useChatStore.getState().compareModelKeys).toEqual([
+        "openai:gpt-5.6-luna",
+        "deepseek:deepseek-v4-flash",
+        "",
+      ]);
+    });
+    expect(document.querySelectorAll("#compareModel1 option")).toHaveLength(
+      DEFAULT_MODELS.length,
+    );
+    expect(
+      document.querySelector<HTMLOptionElement>(
+        '#compareModel1 option[value="claude:claude-sonnet-5"]',
+      ),
+    ).toBeDisabled();
+  });
+
+  it("skips a premium fallback for Plus without removing it from the offering", async () => {
+    const premium = model("premium-fallback", "premium");
+    const models = [DEFAULT_MODELS[0]!, premium, DEFAULT_MODELS[2]!];
+    const entitlements = entitlementFixture({ code: "plus", display_name: "Plus" });
+    entitlements.model_access.allowed_billing_classes = [
+      "economical",
+      "standard",
+      "advanced",
+    ];
+    useChatStore.setState({
+      mode: "compare",
+      compareModelKeys: ["", "", ""],
+    });
+
+    render(
+      <PromptComposer
+        models={models}
+        subscription={{ plans: plansFixture(), entitlements, loading: false }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useChatStore.getState().compareModelKeys).toEqual([
+        "openai:gpt-5.6-luna",
+        "deepseek:deepseek-v4-flash",
+        "",
+      ]);
+    });
+    expect(document.querySelectorAll("#compareModel1 option")).toHaveLength(models.length);
+    expect(
+      document.querySelector<HTMLOptionElement>(
+        '#compareModel1 option[value="openai:premium-fallback"]',
+      ),
+    ).toBeDisabled();
+  });
+
   it("explains exhausted Web access without changing or clearing the draft", async () => {
     const user = userEvent.setup();
     const entitlements = entitlementFixture();

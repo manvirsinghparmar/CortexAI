@@ -17,11 +17,11 @@ const TABLE_RESPONSE = [
 ].join("\n");
 
 const MODELS = [
-    model("openai", "gpt-5.1", true),
-    model("claude", "claude-sonnet-4-5", true),
-    model("deepseek", "deepseek-chat", false),
-    model("gemini", "gemini-2.5-flash", true),
-    model("grok", "grok-4", true),
+    model("openai", "gpt-5.1", true, "standard"),
+    model("claude", "claude-sonnet-4-5", true, "advanced"),
+    model("deepseek", "deepseek-chat", false, "economical"),
+    model("gemini", "gemini-2.5-flash", true, "standard"),
+    model("grok", "grok-4", true, "premium"),
 ];
 
 export const test = base.extend({
@@ -30,6 +30,8 @@ export const test = base.extend({
             history: responsiveHistoryEntries(),
             analysisRuns: responsiveAnalysisRuns(),
             uploadedFiles: new Map(),
+            models: [...MODELS],
+            subscriptionPlan: "free",
         };
         const pageErrors = [];
         page.on("pageerror", error => pageErrors.push(error));
@@ -104,8 +106,8 @@ async function installResponsiveRoutes(page, state) {
         if (url.pathname === "/v1/models") {
             return json(route, {
                 enabled_only: true,
-                models: MODELS,
-                total: MODELS.length,
+                models: state.models,
+                total: state.models.length,
                 timestamp: "2026-06-12T12:00:00Z",
             });
         }
@@ -118,18 +120,19 @@ async function installResponsiveRoutes(page, state) {
             });
         }
         if (url.pathname === "/v1/billing/subscription" && method === "GET") {
+            const paid = state.subscriptionPlan !== "free";
             return json(route, {
-                plan_code: "free",
-                status: "free",
-                provider: null,
+                plan_code: state.subscriptionPlan,
+                status: paid ? "active" : "free",
+                provider: paid ? "stripe" : null,
                 current_period_start: "2026-07-01T00:00:00Z",
                 current_period_end: "2026-08-01T00:00:00Z",
                 cancel_at_period_end: false,
-                can_manage: false,
+                can_manage: paid,
             });
         }
         if (url.pathname === "/v1/entitlements" && method === "GET") {
-            return json(route, entitlements());
+            return json(route, entitlements(state.subscriptionPlan));
         }
         if (url.pathname === "/v1/credits/transactions" && method === "GET") {
             return json(route, creditTransactions());
@@ -449,13 +452,13 @@ function historyEntry({
     };
 }
 
-function model(provider, modelName, supportsImageInput) {
+function model(provider, modelName, supportsImageInput, billingClass) {
     return {
         provider,
         model: modelName,
         tier: "frontier",
-        billing_class: "standard",
-        access_category: "standard",
+        billing_class: billingClass,
+        access_category: billingClass,
         input_credit_multiplier: 1,
         output_credit_multiplier: 4,
         credit_usage_label: "Standard",
@@ -495,20 +498,45 @@ function whoAmI() {
     };
 }
 
-function entitlements() {
+function entitlements(planCode = "free") {
+    const plan = {
+        free: {
+            displayName: "Free",
+            allowedBillingClasses: ["economical", "standard"],
+            maxCompareModels: 2,
+            allowance: 100000,
+        },
+        plus: {
+            displayName: "Plus",
+            allowedBillingClasses: ["economical", "standard", "advanced"],
+            maxCompareModels: 2,
+            allowance: 1000000,
+        },
+        pro: {
+            displayName: "Pro",
+            allowedBillingClasses: ["economical", "standard", "advanced", "premium"],
+            maxCompareModels: 3,
+            allowance: 3000000,
+        },
+    }[planCode] ?? {
+        displayName: "Free",
+        allowedBillingClasses: ["economical", "standard"],
+        maxCompareModels: 2,
+        allowance: 100000,
+    };
     return {
         plan: {
-            code: "free",
-            display_name: "Free",
-            status: "free",
-            source: "default",
+            code: planCode,
+            display_name: plan.displayName,
+            status: planCode === "free" ? "free" : "active",
+            source: planCode === "free" ? "default" : "stripe",
             renews_at: "2026-08-01T00:00:00Z",
             cancel_at_period_end: false,
             grace_until: null,
         },
         features: {
             compare_enabled: true,
-            max_compare_models: 2,
+            max_compare_models: plan.maxCompareModels,
             research_enabled: true,
             prompt_improvement_enabled: true,
             file_analysis_enabled: true,
@@ -517,7 +545,7 @@ function entitlements() {
             models_catalog_enabled: true,
         },
         model_access: {
-            allowed_billing_classes: ["economical", "standard"],
+            allowed_billing_classes: plan.allowedBillingClasses,
         },
         limits: {
             max_files_per_request: 1,
@@ -527,8 +555,8 @@ function entitlements() {
             ai_credits: {
                 used: 10000,
                 reserved: 0,
-                limit: 100000,
-                remaining: 90000,
+                limit: plan.allowance,
+                remaining: plan.allowance - 10000,
             },
         },
         period: {

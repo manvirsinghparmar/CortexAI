@@ -72,7 +72,9 @@ test("mobile Compare opens the visible model picker and updates its selection", 
 });
 
 test("mobile Compare adds and removes a third model without page overflow", async ({ responsiveApp }) => {
-    const { page } = responsiveApp;
+    const { page, state, reload } = responsiveApp;
+    state.subscriptionPlan = "pro";
+    await reload();
     await openMobilePanel(page, "Compare");
 
     await page.getByRole("button", { name: "Add model to comparison" }).click();

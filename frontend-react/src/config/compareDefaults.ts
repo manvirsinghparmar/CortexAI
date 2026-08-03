@@ -10,8 +10,12 @@ export const DEFAULT_ADDED_COMPARE_MODEL_KEY = "deepseek:deepseek-v4-flash";
 export function resolveCompareModelKeys(
   models: ModelCatalogItem[],
   currentKeys: [string, string, string],
+  defaultModels: ModelCatalogItem[] = models,
 ): [string, string, string] {
   const availableKeys = models.map(modelKey);
+  const defaultKeys = defaultModels
+    .map(modelKey)
+    .filter((key) => availableKeys.includes(key));
   const selected = new Set<string>();
   const resolved = currentKeys.map((currentKey, index) => {
     if (currentKey && availableKeys.includes(currentKey) && !selected.has(currentKey)) {
@@ -23,8 +27,8 @@ export function resolveCompareModelKeys(
 
     const preferredKey = DEFAULT_COMPARE_MODEL_KEYS[index];
     const nextKey =
-      availableKeys.find((key) => key === preferredKey && !selected.has(key)) ??
-      availableKeys.find((key) => !selected.has(key)) ??
+      defaultKeys.find((key) => key === preferredKey && !selected.has(key)) ??
+      defaultKeys.find((key) => !selected.has(key)) ??
       "";
     if (nextKey) selected.add(nextKey);
     return nextKey;

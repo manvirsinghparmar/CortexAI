@@ -12,7 +12,7 @@ Compare Mode allows you to send every query to multiple LLM providers simultaneo
 This guide covers both:
 - API compare mode (`POST /v1/compare`, `POST /v1/compare/stream`)
 - CLI compare mode (`COMPARE_MODE=true`)
-- Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
+- Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually. Empty initial model slots are filled only after effective entitlements load and only from models allowed by the current plan; higher-plan models remain visible for discovery.
 - Browser Cortex Analysis, an on-demand synthesis of two or three completed Compare responses.
 
 ## Cortex Analysis
@@ -286,6 +286,7 @@ COMPARE_TARGETS = [
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 - **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
+- **Plan-Aware Model Defaults**: The frontend fills empty initial Compare slots from the current `/v1/entitlements` billing-class allowlist. It does not remove locked models from the picker and does not rewrite valid existing/manual selections.
 - **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript, and desktop/tablet comparisons keep tall visible cards with internal response-body scrolling. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and turns the stuck switcher into a frosted provider-tinted reading cue without shifting model pills horizontally.
 - **Shared Prompt Presentation**: Compare prompts use the same right-aligned `You` bubble as Ask mode, including attachment and prompt-optimization states. While Improve is pending, the prompt and optimization status remain visible but model tabs, response cards, and aggregate totals stay hidden; they appear only after optimization resolves and model generation begins. Aggregate Compare totals render separately.
 - **New-Turn Reveal**: Submitting a Compare follow-up always smoothly reveals that new question once, even when the user was viewing an older turn. Streaming response growth does not continuously move the transcript, and the UI no longer renders a floating down-arrow jump control.
@@ -299,5 +300,5 @@ COMPARE_TARGETS = [
 
 ---
 
-**Last Updated:** 2026-07-27
+**Last Updated:** 2026-08-02
 **Applies To:** OpenAI Project v2.0+

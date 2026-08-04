@@ -2,51 +2,8 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Literal
-from functools import lru_cache
-
-from orchestrator.model_registry import ModelRegistry
-from server.billing.credit_calculator import (
-    calculate_credit_charge,
-    research_credit_usage_from_metadata,
-)
-from server.billing.credit_estimator import fallback_actual_tokens
-
-
-@lru_cache(maxsize=1)
-def _credit_registry() -> ModelRegistry:
-    return ModelRegistry.from_yaml()
-
-
-def _response_credit_usage(response) -> tuple[int, bool]:
-    if getattr(response, "is_error", False):
-        return 0, False
-    provider = str(getattr(response, "provider", "") or "")
-    response_model = str(getattr(response, "model", "") or "")
-    requested_model = str(getattr(response, "requested_model", "") or "")
-    candidate = _credit_registry().find_model(
-        provider,
-        requested_model or response_model,
-    )
-    if candidate is None and requested_model and requested_model != response_model:
-        candidate = _credit_registry().find_model(provider, response_model)
-    if candidate is None:
-        return 0, True
-    input_tokens = max(0, int(response.token_usage.prompt_tokens or 0))
-    output_tokens = max(0, int(response.token_usage.completion_tokens or 0))
-    estimated = input_tokens == 0 and output_tokens == 0
-    if estimated:
-        input_tokens, output_tokens = fallback_actual_tokens(
-            input_text="",
-            output_text=response.text,
-        )
-    charge = calculate_credit_charge(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        input_multiplier=candidate.input_credit_multiplier,
-        output_multiplier=candidate.output_credit_multiplier,
-        estimated=estimated,
-    )
-    return charge.total_credits, charge.estimated
+from server.billing.credit_calculator import research_credit_usage_from_metadata
+from server.billing.response_credit_service import resolve_response_credit_usage
 
 
 class TokenUsageDTO(BaseModel):
@@ -129,9 +86,10 @@ class ChatResponseDTO(BaseModel):
                 if len(normalized_sources) >= 8:
                     break
 
-        ai_credits, credit_usage_estimated = _response_credit_usage(ur)
-        if include_research_charge:
-            ai_credits += research_credit_usage_from_metadata(metadata).cortex_credits
+        credit_usage = resolve_response_credit_usage(
+            ur,
+            include_research_charge=include_research_charge,
+        )
         return cls(
             request_id=ur.request_id,
             response_version=max(1, int(response_version)),
@@ -164,8 +122,8 @@ class ChatResponseDTO(BaseModel):
             pricing_rule_applied=getattr(ur, "pricing_rule_applied", None),
             pricing_unknown=bool(getattr(ur, "pricing_unknown", False)),
             pricing_snapshot=dict(getattr(ur, "pricing_snapshot", {}) or {}),
-            ai_credits=ai_credits,
-            credit_usage_estimated=credit_usage_estimated,
+            ai_credits=credit_usage.ai_credits,
+            credit_usage_estimated=credit_usage.credit_usage_estimated,
             finish_reason=ur.finish_reason,
             error=(
                 ErrorDTO(

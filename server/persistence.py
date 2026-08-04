@@ -55,6 +55,7 @@ from server.billing.enforcement_service import (
 )
 from server.billing.metering_service import supplement_usage_reservation
 from server.billing.plan_catalog import get_plan_catalog
+from server.billing.response_credit_service import resolve_response_credit_usage
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.subscription_service import resolve_effective_subscription
 from utils.logger import get_logger
@@ -992,20 +993,30 @@ def persist_routing_telemetry(
     llm_request_id: UUID,
     response: UnifiedResponse,
     research_mode: str,
+    *,
+    include_research_charge: bool = True,
 ) -> None:
-    """Persist routing decision + attempts when metadata is present."""
+    """Persist routing telemetry and the exact response-card credit snapshot."""
     routing_metadata, attempt_rows, features = extract_routing_payload(response)
     web_source_items = extract_web_source_items(response)
+    credit_usage = resolve_response_credit_usage(
+        response,
+        include_research_charge=include_research_charge,
+    )
+    base_routing = dict(routing_metadata or {})
+    base_routing.setdefault("mode", "explicit")
+    base_routing.setdefault("attempt_count", max(len(attempt_rows), 1))
+    base_routing.setdefault("fallback_used", False)
+    base_routing["ai_credits"] = credit_usage.ai_credits
+    base_routing["credit_usage_estimated"] = credit_usage.credit_usage_estimated
+    base_routing["research_ai_credits"] = credit_usage.research_ai_credits
+    base_routing["research_credit_usage_estimated"] = (
+        credit_usage.research_credit_usage_estimated
+    )
     if web_source_items:
-        base_routing = dict(routing_metadata or {})
-        base_routing.setdefault("mode", "explicit")
-        base_routing.setdefault("attempt_count", max(len(attempt_rows), 1))
-        base_routing.setdefault("fallback_used", False)
         base_routing["web_source_items"] = web_source_items
         base_routing["web_sources"] = len(web_source_items)
-        routing_metadata = base_routing
-    if not routing_metadata:
-        return
+    routing_metadata = base_routing
 
     (
         routing_metadata,
@@ -1289,6 +1300,7 @@ def persist_compare_interaction(
                 llm_request_id,
                 response,
                 research_mode="on" if research_mode else "off",
+                include_research_charge=False,
             )
             try:
                 savings_service.persist_request_savings(

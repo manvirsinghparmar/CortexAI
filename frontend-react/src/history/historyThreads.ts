@@ -102,6 +102,10 @@ function buildTurn(key: string, entries: HistoryEntry[]): ChatTurn {
   const mode = normalizeMode(first.mode);
   const responses = sorted.map(toChatResponse);
   const requestGroupId = normalizeId(first.request_group_id);
+  const researchAiCredits = sorted.reduce(
+    (highest, entry) => Math.max(highest, finiteNumber(entry.research_ai_credits)),
+    0,
+  );
 
   return {
     id: `history:${key}`,
@@ -115,7 +119,13 @@ function buildTurn(key: string, entries: HistoryEntry[]): ChatTurn {
     requestGroupId,
     compareSummary:
       mode === "compare"
-        ? buildCompareSummary(requestGroupId ?? key, first.session_id, responses, first.timestamp)
+        ? buildCompareSummary(
+            requestGroupId ?? key,
+            first.session_id,
+            responses,
+            first.timestamp,
+            researchAiCredits,
+          )
         : undefined,
   };
 }
@@ -125,6 +135,7 @@ function buildCompareSummary(
   sessionId: string | undefined,
   responses: ChatResponse[],
   timestamp: string,
+  researchAiCredits: number,
 ): CompareResponse {
   const errorCount = responses.filter((response) => response.error).length;
   return {
@@ -138,6 +149,9 @@ function buildCompareSummary(
       0,
     ),
     total_cost: responses.reduce((sum, response) => sum + response.estimated_cost, 0),
+    total_ai_credits:
+      responses.reduce((sum, response) => sum + finiteNumber(response.ai_credits), 0) +
+      researchAiCredits,
     timestamp,
   };
 }
@@ -156,12 +170,14 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
       finiteNumberOrNull(entry.tokens) === null
         ? null
         : {
-            prompt_tokens: 0,
-            completion_tokens: 0,
+            prompt_tokens: finiteNumber(entry.prompt_tokens),
+            completion_tokens: finiteNumber(entry.completion_tokens),
             total_tokens: Number(entry.tokens),
           },
     estimated_cost: entry.cost ?? 0,
     cost_currency: "USD",
+    ai_credits: entry.ai_credits,
+    credit_usage_estimated: entry.credit_usage_estimated,
     error: isError
       ? {
           code: "persisted_error",

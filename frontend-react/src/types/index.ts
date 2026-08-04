@@ -368,8 +368,14 @@ export interface HistoryEntry {
   response_version?: number;
   response: string;
   latency_ms?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
   tokens?: number;
   cost?: number;
+  ai_credits?: number;
+  credit_usage_estimated?: boolean;
+  research_ai_credits?: number;
+  research_credit_usage_estimated?: boolean;
   web_source_items: WebSourceItem[];
 }
 

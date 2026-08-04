@@ -2367,20 +2367,23 @@ def _normalize_history_web_source_items(raw_items: Any) -> list[dict[str, str]]:
     return items
 
 
-def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]]:
-    trace_payload: dict[str, Any] | None = None
-
+def _history_routing_trace_payload(routing_trace: Any) -> dict[str, Any]:
     if isinstance(routing_trace, dict):
-        trace_payload = routing_trace
-    elif isinstance(routing_trace, str):
+        return routing_trace
+    if isinstance(routing_trace, str):
         text = routing_trace.strip()
         if text:
             try:
                 decoded = json.loads(text)
                 if isinstance(decoded, dict):
-                    trace_payload = decoded
+                    return decoded
             except Exception:
-                trace_payload = None
+                pass
+    return {}
+
+
+def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]]:
+    trace_payload = _history_routing_trace_payload(routing_trace)
 
     if not trace_payload:
         return []
@@ -2389,6 +2392,34 @@ def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]
     if not isinstance(raw_items, list):
         raw_items = trace_payload.get("sources")
     return _normalize_history_web_source_items(raw_items)
+
+
+def _history_optional_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _extract_history_credit_snapshot(routing_trace: Any) -> dict[str, Any]:
+    trace_payload = _history_routing_trace_payload(routing_trace)
+    ai_credits = _history_optional_nonnegative_int(trace_payload.get("ai_credits"))
+    research_ai_credits = _history_optional_nonnegative_int(
+        trace_payload.get("research_ai_credits")
+    )
+    return {
+        "ai_credits": ai_credits,
+        "credit_usage_estimated": bool(
+            trace_payload.get("credit_usage_estimated", False)
+        ),
+        "research_ai_credits": research_ai_credits,
+        "research_credit_usage_estimated": bool(
+            trace_payload.get("research_credit_usage_estimated", False)
+        ),
+    }
 
 
 def _to_history_timestamp(raw_value: Any) -> str:
@@ -2821,6 +2852,12 @@ def get_llm_history_entries(
 
     resp_text_col = llm_responses.c.text if "text" in resp_cols else None
     resp_latency_col = llm_responses.c.latency_ms if "latency_ms" in resp_cols else None
+    resp_prompt_tokens_col = (
+        llm_responses.c.prompt_tokens if "prompt_tokens" in resp_cols else None
+    )
+    resp_completion_tokens_col = (
+        llm_responses.c.completion_tokens if "completion_tokens" in resp_cols else None
+    )
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
@@ -2859,6 +2896,12 @@ def get_llm_history_entries(
     timestamp_expr = req_created_col if req_created_col is not None else literal(None)
     response_text_expr = resp_text_col if resp_text_col is not None else literal("")
     latency_expr = resp_latency_col if resp_latency_col is not None else literal(None)
+    prompt_tokens_expr = (
+        resp_prompt_tokens_col if resp_prompt_tokens_col is not None else literal(None)
+    )
+    completion_tokens_expr = (
+        resp_completion_tokens_col if resp_completion_tokens_col is not None else literal(None)
+    )
     tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
     error_expr = resp_error_col if resp_error_col is not None else literal(None)
@@ -2940,6 +2983,8 @@ def get_llm_history_entries(
             timestamp_expr.label("created_at"),
             response_text_expr.label("response_text"),
             latency_expr.label("latency_ms"),
+            prompt_tokens_expr.label("prompt_tokens"),
+            completion_tokens_expr.label("completion_tokens"),
             tokens_expr.label("tokens"),
             cost_expr.label("cost"),
             error_expr.label("error_message"),
@@ -2990,6 +3035,7 @@ def get_llm_history_entries(
         if not response_text and payload.get("error_message"):
             response_text = f"[error] {payload['error_message']}"
         web_source_items = _extract_history_web_source_items(payload.get("routing_trace"))
+        credit_snapshot = _extract_history_credit_snapshot(payload.get("routing_trace"))
 
         entries.append(
             {
@@ -3033,9 +3079,12 @@ def get_llm_history_entries(
                 "response_version": int(payload.get("response_revision") or 1),
                 "response": str(response_text),
                 "latency_ms": payload.get("latency_ms"),
+                "prompt_tokens": payload.get("prompt_tokens"),
+                "completion_tokens": payload.get("completion_tokens"),
                 "tokens": payload.get("tokens"),
                 "cost": float(payload["cost"]) if payload.get("cost") is not None else None,
                 "web_source_items": web_source_items,
+                **credit_snapshot,
             }
         )
         if len(entries) >= max(1, int(limit)):

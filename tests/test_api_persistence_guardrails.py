@@ -1716,10 +1716,12 @@ def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fas
             "prompt": "Stream a shared thread",
             "provider": "openai",
             "model": "gpt-4o-mini",
+            "routing": {"research_mode": True},
         },
     )
     assert chat_response.status_code == 200
     chat_events = [json.loads(line) for line in chat_response.text.splitlines() if line.strip()]
+    chat_card = next(event["response"] for event in chat_events if event.get("type") == "response_done")
     chat_done = next(event for event in chat_events if event.get("type") == "done")
     session_id = chat_done.get("session_id")
     assert session_id
@@ -1739,8 +1741,32 @@ def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fas
     compare_events = [
         json.loads(line) for line in compare_response.text.splitlines() if line.strip()
     ]
+    compare_cards = [
+        event["response"] for event in compare_events if event.get("type") == "response_done"
+    ]
     compare_done = next(event for event in compare_events if event.get("type") == "done")
     assert compare_done["compare"]["session_id"] == session_id
+
+    history_response = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_id, "limit": 20},
+    )
+    assert history_response.status_code == 200
+    history_by_request_id = {item["request_id"]: item for item in history_response.json()}
+
+    restored_chat = history_by_request_id[chat_card["request_id"]]
+    assert restored_chat["ai_credits"] == chat_card["ai_credits"]
+    assert restored_chat["credit_usage_estimated"] == chat_card["credit_usage_estimated"]
+    assert restored_chat["research_ai_credits"] == 10_000
+    assert restored_chat["prompt_tokens"] == 2
+    assert restored_chat["completion_tokens"] == 3
+
+    for card in compare_cards:
+        restored_card = history_by_request_id[card["request_id"]]
+        assert restored_card["ai_credits"] == card["ai_credits"]
+        assert restored_card["credit_usage_estimated"] == card["credit_usage_estimated"]
+        assert restored_card["research_ai_credits"] == 0
 
 
 @pytest.mark.integration

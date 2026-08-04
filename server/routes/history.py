@@ -13,6 +13,7 @@ from db import (
     rename_history_session,
 )
 from server import persistence as persistence_service
+from server.billing.response_credit_service import calculate_response_credit_usage
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from utils.logger import get_logger
@@ -64,8 +65,14 @@ class HistoryEntry(BaseModel):
     response_version: int = 1
     response: str
     latency_ms: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
     tokens: Optional[int] = None
     cost: Optional[float] = None
+    ai_credits: Optional[int] = None
+    credit_usage_estimated: bool = False
+    research_ai_credits: Optional[int] = None
+    research_credit_usage_estimated: bool = False
     web_source_items: List[dict[str, str]] = Field(default_factory=list)
 
 
@@ -95,12 +102,28 @@ async def list_history(
             request_id=req_id,
             db_session=db_session,
         )
-        return get_llm_history_entries(
+        entries = get_llm_history_entries(
             db_session,
             resolution.user_id,
             limit=limit,
             session_id=session_id,
         )
+    for entry in entries:
+        if entry.get("ai_credits") is not None:
+            continue
+        credit_usage = calculate_response_credit_usage(
+            provider=str(entry.get("provider") or ""),
+            model=str(entry.get("model") or ""),
+            requested_model=str(entry.get("requested_model") or ""),
+            input_tokens=max(0, int(entry.get("prompt_tokens") or 0)),
+            output_tokens=max(0, int(entry.get("completion_tokens") or 0)),
+            output_text=str(entry.get("response") or ""),
+            is_error=str(entry.get("response") or "").lower().startswith("[error]"),
+            include_research_charge=False,
+        )
+        entry["ai_credits"] = credit_usage.ai_credits
+        entry["credit_usage_estimated"] = credit_usage.credit_usage_estimated
+    return entries
 
 
 @router.delete("/history/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)

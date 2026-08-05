@@ -121,6 +121,14 @@ CREATE TABLE public.llm_requests (
 	request_group_id UUID, 
 	response_revision_root_id UUID,
 	response_revision INTEGER DEFAULT 1 NOT NULL,
+	generation_profile TEXT,
+	requested_max_output_tokens INTEGER,
+	effective_max_output_tokens INTEGER,
+	requested_reasoning_mode TEXT,
+	effective_reasoning_mode TEXT,
+	requested_reasoning_effort TEXT,
+	effective_reasoning_effort TEXT,
+	generation_policy_version TEXT,
 	CONSTRAINT llm_requests_pkey PRIMARY KEY (id), 
 	CONSTRAINT llm_requests_api_key_id_fkey FOREIGN KEY(api_key_id) REFERENCES public.api_keys (id) ON DELETE SET NULL, 
 	CONSTRAINT llm_requests_response_revision_root_id_fkey FOREIGN KEY(response_revision_root_id) REFERENCES public.llm_requests (id) ON DELETE CASCADE,
@@ -128,7 +136,9 @@ CREATE TABLE public.llm_requests (
 	CONSTRAINT llm_requests_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE, 
 	CONSTRAINT llm_requests_request_id_key UNIQUE NULLS DISTINCT (request_id), 
 	CONSTRAINT llm_requests_route_mode_check CHECK (route_mode = ANY (ARRAY['ask'::text, 'compare'::text, 'eval'::text, 'research'::text])),
-	CONSTRAINT llm_requests_response_revision_check CHECK (response_revision >= 1)
+	CONSTRAINT llm_requests_response_revision_check CHECK (response_revision >= 1),
+	CONSTRAINT llm_requests_requested_max_output_tokens_check CHECK (requested_max_output_tokens IS NULL OR requested_max_output_tokens > 0),
+	CONSTRAINT llm_requests_effective_max_output_tokens_check CHECK (effective_max_output_tokens IS NULL OR effective_max_output_tokens > 0)
 );
 
 
@@ -201,12 +211,16 @@ CREATE TABLE public.llm_responses (
 	pricing_version TEXT,
 	pricing_unknown BOOLEAN DEFAULT false NOT NULL,
 	pricing_snapshot JSONB DEFAULT '{}'::jsonb NOT NULL,
+	completion_status TEXT DEFAULT 'complete'::text NOT NULL,
+	stop_cause TEXT DEFAULT 'unknown'::text NOT NULL,
 	error_type TEXT, 
 	error_message TEXT, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	CONSTRAINT llm_responses_pkey PRIMARY KEY (id), 
 	CONSTRAINT llm_responses_llm_request_id_fkey FOREIGN KEY(llm_request_id) REFERENCES public.llm_requests (id) ON DELETE CASCADE, 
-	CONSTRAINT llm_responses_llm_request_id_key UNIQUE NULLS DISTINCT (llm_request_id)
+	CONSTRAINT llm_responses_llm_request_id_key UNIQUE NULLS DISTINCT (llm_request_id),
+	CONSTRAINT llm_responses_completion_status_check CHECK (completion_status = ANY (ARRAY['complete'::text, 'incomplete'::text, 'failed'::text])),
+	CONSTRAINT llm_responses_stop_cause_check CHECK (stop_cause = ANY (ARRAY['natural'::text, 'token_limit'::text, 'context_limit'::text, 'content_filter'::text, 'error'::text, 'unknown'::text]))
 );
 
 

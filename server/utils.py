@@ -9,6 +9,8 @@ from utils.logger import get_logger
 
 MAX_CONTEXT_MESSAGES = 10
 MAX_CONTEXT_CHARS = 20000
+# Compatibility-only ceiling for legacy helpers. Ask/Compare generation is
+# resolved by orchestrator.generation_policy and no longer uses this constant.
 MAX_OUTPUT_TOKENS = 2048
 SENSITIVE_HEADERS = {"x-api-key", "authorization", "cookie", "set-cookie"}
 logger = get_logger(__name__)
@@ -286,6 +288,14 @@ def normalize_empty_success_response(response: UnifiedResponse) -> UnifiedRespon
         return response
 
     finish_reason = str(response.finish_reason or "").strip().lower()
+    if finish_reason == "length":
+        metadata = dict(response.metadata or {})
+        metadata.setdefault("completion_status", "incomplete")
+        metadata.setdefault("stop_cause", "token_limit")
+        if int(response.token_usage.reasoning_tokens or 0) > 0:
+            metadata["reasoning_budget_exhausted"] = True
+        return replace(response, metadata=metadata)
+
     blocked_by_filter = finish_reason == "content_filter"
     message = (
         "Provider returned no text because content was filtered."

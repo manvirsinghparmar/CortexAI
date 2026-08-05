@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -222,6 +222,7 @@ def authorize_and_reserve_usage(
     initial_query: str | None = None,
     credit_activity_id: str | None = None,
     max_output_tokens: int | None = None,
+    max_output_tokens_by_target: Mapping[str, int] | None = None,
     model_attempt_count: int = 1,
 ) -> ReservedRequestUsage:
     """Resolve access, estimate the maximum likely charge, and reserve it atomically."""
@@ -245,6 +246,15 @@ def authorize_and_reserve_usage(
     smart_candidate_estimates: list[SmartCandidateEstimate] = []
     allowances = load_allowance_usage(db_session, effective)
 
+    def target_output_limit(candidate: ModelCandidate) -> int | None:
+        if max_output_tokens_by_target:
+            value = max_output_tokens_by_target.get(
+                f"{candidate.provider}:{candidate.model_name}"
+            )
+            if value is not None:
+                return int(value)
+        return max_output_tokens
+
     candidates: tuple[ModelCandidate, ...]
     if smart_routing:
         if not normalized_targets:
@@ -261,7 +271,7 @@ def authorize_and_reserve_usage(
             estimate = estimate_model_credits(
                 candidate,
                 input_text=estimated_text,
-                max_output_tokens=max_output_tokens,
+                max_output_tokens=target_output_limit(candidate),
             )
             reservation_credits = estimate.charge.total_credits + (
                 ADVANCED_WEB_SEARCH_CREDITS if research_enabled else 0
@@ -335,7 +345,7 @@ def authorize_and_reserve_usage(
             estimate = estimate_model_credits(
                 candidate,
                 input_text=estimated_text,
-                max_output_tokens=max_output_tokens,
+                max_output_tokens=target_output_limit(candidate),
             )
             estimated_credits += estimate.charge.total_credits * model_attempt_count
             for _attempt in range(model_attempt_count):

@@ -85,6 +85,9 @@ class ModelCandidate:
     aliases: list[str] = field(default_factory=list)
     reasoning_modes: list[str] = field(default_factory=list)
     default_reasoning_mode: str | None = None
+    reasoning_efforts: list[str] = field(default_factory=list)
+    reasoning_disable_supported: bool = True
+    reasoning_counts_against_output: bool = True
     pricing_source_url: str | None = None
     lifecycle_source_url: str | None = None
     source_verified_at: str | None = None

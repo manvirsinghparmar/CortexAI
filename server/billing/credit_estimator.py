@@ -11,8 +11,7 @@ from server.billing.credit_calculator import (
     CreditCharge,
     calculate_credit_charge,
 )
-
-DEFAULT_MAX_OUTPUT_TOKENS = 2_048
+from orchestrator.generation_policy import LEGACY_PROFILE, load_generation_policy
 
 
 @dataclass(frozen=True)
@@ -35,7 +34,11 @@ def estimate_model_credits(
     max_output_tokens: int | None,
     include_research: bool = False,
 ) -> CreditEstimate:
-    output_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+    output_tokens = max_output_tokens
+    if output_tokens is None:
+        output_tokens = int(
+            load_generation_policy()["profiles"][LEGACY_PROFILE]["max_output_tokens"]
+        )
     if isinstance(output_tokens, bool) or output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
     input_tokens = estimate_text_tokens(input_text)

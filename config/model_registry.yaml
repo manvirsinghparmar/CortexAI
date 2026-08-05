@@ -194,6 +194,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1050000
         max_output_tokens: 128000
+        reasoning_modes: ["none", "standard", "pro"]
+        default_reasoning_mode: "standard"
+        reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["flagship", "reasoning", "coding", "agentic", "accurate", "long_context"]
         enabled: true
         selectable: true
@@ -389,6 +394,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1048576
         max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["fast", "reasoning", "multimodal", "general", "long_context"]
         enabled: true
         selectable: true
@@ -413,6 +423,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1048576
         max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["preview", "flagship", "reasoning", "coding", "long_context"]
         enabled: true
         selectable: true
@@ -496,6 +511,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1048576
         max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["legacy", "reasoning", "coding"]
         enabled: true
         selectable: false
@@ -542,6 +562,9 @@ providers:
         tags: ["fast", "reasoning", "coding", "cheap", "long_context"]
         reasoning_modes: ["none", "thinking"]
         default_reasoning_mode: "thinking"
+        reasoning_efforts: ["high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         enabled: true
         selectable: true
         release_status: "generally_available"
@@ -568,6 +591,9 @@ providers:
         tags: ["strong", "reasoning", "coding", "cheap", "long_context"]
         reasoning_modes: ["none", "thinking"]
         default_reasoning_mode: "thinking"
+        reasoning_efforts: ["high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         enabled: true
         selectable: true
         release_status: "generally_available"
@@ -797,6 +823,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1000000
         max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["strong", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
         selectable: true
@@ -832,6 +863,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1000000
         max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "xhigh", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["flagship", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
         selectable: true
@@ -858,6 +894,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1000000
         max_output_tokens: 128000
+        reasoning_modes: ["adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: false
+        reasoning_counts_against_output: true
         tags: ["flagship", "reasoning", "coding", "agentic", "accurate", "long_context"]
         enabled: true
         selectable: true

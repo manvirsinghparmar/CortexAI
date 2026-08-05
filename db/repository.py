@@ -12,7 +12,7 @@ import hashlib
 import json
 import zlib
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -1166,6 +1166,7 @@ def create_llm_request(
     response_revision_root_id: UUID | None = None,
     response_revision: int = 1,
     requested_model: str | None = None,
+    generation_budget: Mapping[str, Any] | None = None,
 ) -> UUID:
     """
     Insert a row into llm_requests table.
@@ -1229,6 +1230,20 @@ def create_llm_request(
         values["response_revision_root_id"] = response_revision_root_id
     if "response_revision" in column_names:
         values["response_revision"] = max(1, int(response_revision))
+    budget = dict(generation_budget or {})
+    budget_values = {
+        "generation_profile": budget.get("profile"),
+        "requested_max_output_tokens": budget.get("requested_max_output_tokens"),
+        "effective_max_output_tokens": budget.get("effective_max_output_tokens"),
+        "requested_reasoning_mode": budget.get("requested_reasoning_mode"),
+        "effective_reasoning_mode": budget.get("effective_reasoning_mode"),
+        "requested_reasoning_effort": budget.get("requested_reasoning_effort"),
+        "effective_reasoning_effort": budget.get("effective_reasoning_effort"),
+        "generation_policy_version": budget.get("policy_version"),
+    }
+    values.update(
+        {key: value for key, value in budget_values.items() if key in column_names}
+    )
 
     stmt = insert(llm_requests).values(**values).returning(llm_requests.c.id)
 
@@ -1293,6 +1308,8 @@ def create_llm_response(db: Session, llm_request_id: UUID, response: UnifiedResp
         "pricing_version": response.pricing_version,
         "pricing_unknown": response.pricing_unknown,
         "pricing_snapshot": dict(response.pricing_snapshot or {}),
+        "completion_status": (response.metadata or {}).get("completion_status", "complete"),
+        "stop_cause": (response.metadata or {}).get("stop_cause", "unknown"),
     }
     values.update({key: value for key, value in audit_values.items() if key in column_names})
 
@@ -2849,6 +2866,29 @@ def get_llm_history_entries(
         else None
     )
     req_revision_col = llm_requests.c.response_revision if "response_revision" in req_cols else None
+    req_generation_profile_col = (
+        llm_requests.c.generation_profile if "generation_profile" in req_cols else None
+    )
+    req_effective_max_col = (
+        llm_requests.c.effective_max_output_tokens
+        if "effective_max_output_tokens" in req_cols
+        else None
+    )
+    req_effective_reasoning_mode_col = (
+        llm_requests.c.effective_reasoning_mode
+        if "effective_reasoning_mode" in req_cols
+        else None
+    )
+    req_effective_reasoning_effort_col = (
+        llm_requests.c.effective_reasoning_effort
+        if "effective_reasoning_effort" in req_cols
+        else None
+    )
+    req_generation_policy_version_col = (
+        llm_requests.c.generation_policy_version
+        if "generation_policy_version" in req_cols
+        else None
+    )
 
     resp_text_col = llm_responses.c.text if "text" in resp_cols else None
     resp_latency_col = llm_responses.c.latency_ms if "latency_ms" in resp_cols else None
@@ -2861,6 +2901,10 @@ def get_llm_history_entries(
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
+    resp_completion_status_col = (
+        llm_responses.c.completion_status if "completion_status" in resp_cols else None
+    )
+    resp_stop_cause_col = llm_responses.c.stop_cause if "stop_cause" in resp_cols else None
     resp_served_model_col = (
         llm_responses.c.served_model if "served_model" in resp_cols else None
     )
@@ -2942,6 +2986,29 @@ def get_llm_history_entries(
         req_revision_root_col if req_revision_root_col is not None else literal(None)
     )
     response_revision_expr = req_revision_col if req_revision_col is not None else literal(1)
+    generation_profile_expr = (
+        req_generation_profile_col if req_generation_profile_col is not None else literal(None)
+    )
+    effective_max_expr = req_effective_max_col if req_effective_max_col is not None else literal(None)
+    effective_reasoning_mode_expr = (
+        req_effective_reasoning_mode_col
+        if req_effective_reasoning_mode_col is not None
+        else literal(None)
+    )
+    effective_reasoning_effort_expr = (
+        req_effective_reasoning_effort_col
+        if req_effective_reasoning_effort_col is not None
+        else literal(None)
+    )
+    generation_policy_version_expr = (
+        req_generation_policy_version_col
+        if req_generation_policy_version_col is not None
+        else literal(None)
+    )
+    completion_status_expr = (
+        resp_completion_status_col if resp_completion_status_col is not None else literal("complete")
+    )
+    stop_cause_expr = resp_stop_cause_col if resp_stop_cause_col is not None else literal("unknown")
 
     order_col = req_created_col if req_created_col is not None else llm_requests.c.id
     from_clause = llm_requests.outerjoin(
@@ -2980,6 +3047,13 @@ def get_llm_history_entries(
             pricing_unknown_expr.label("pricing_unknown"),
             response_revision_root_expr.label("response_revision_root_id"),
             response_revision_expr.label("response_revision"),
+            generation_profile_expr.label("generation_profile"),
+            effective_max_expr.label("effective_max_output_tokens"),
+            effective_reasoning_mode_expr.label("effective_reasoning_mode"),
+            effective_reasoning_effort_expr.label("effective_reasoning_effort"),
+            generation_policy_version_expr.label("generation_policy_version"),
+            completion_status_expr.label("completion_status"),
+            stop_cause_expr.label("stop_cause"),
             timestamp_expr.label("created_at"),
             response_text_expr.label("response_text"),
             latency_expr.label("latency_ms"),
@@ -3077,6 +3151,13 @@ def get_llm_history_entries(
                 "pricing_version": payload.get("pricing_version"),
                 "pricing_unknown": bool(payload.get("pricing_unknown", False)),
                 "response_version": int(payload.get("response_revision") or 1),
+                "generation_profile": payload.get("generation_profile"),
+                "effective_max_output_tokens": payload.get("effective_max_output_tokens"),
+                "effective_reasoning_mode": payload.get("effective_reasoning_mode"),
+                "effective_reasoning_effort": payload.get("effective_reasoning_effort"),
+                "generation_policy_version": payload.get("generation_policy_version"),
+                "completion_status": str(payload.get("completion_status") or "complete"),
+                "stop_cause": str(payload.get("stop_cause") or "unknown"),
                 "response": str(response_text),
                 "latency_ms": payload.get("latency_ms"),
                 "prompt_tokens": payload.get("prompt_tokens"),

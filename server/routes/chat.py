@@ -19,6 +19,7 @@ from config.provider_catalog import (
 )
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
+from orchestrator.model_registry import ModelRegistry
 from server import attachments as attachments_service
 from server.billing.enforcement_service import (
     BillableModelUsage,
@@ -29,13 +30,13 @@ from server.billing.credit_calculator import research_credit_usage_from_metadata
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
+from server.generation_service import annotate_response, resolve_request_budget
 from server import persistence as persistence_service
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 from server.stream_observability import StreamLogContext
 from server.utils import (
-    effective_output_token_limit,
     get_client_safe_error_display_text,
     normalize_empty_success_response,
     sanitize_provider_error_response,
@@ -775,11 +776,19 @@ async def chat(
             inference_attachments=inference_attachments,
         )
 
-    effective_max_tokens = effective_output_token_limit(request.max_tokens)
+    generation_budget = resolve_request_budget(
+        provider=execution_plan.preview_provider,
+        model=execution_plan.preview_model,
+        generation=request.generation,
+        legacy_max_tokens=request.max_tokens,
+        input_text=_billing_materialized_input_text(request, inference_attachments),
+        registry=ModelRegistry.from_yaml(),
+    )
+    effective_max_tokens = generation_budget.effective_max_output_tokens
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    kwargs["max_tokens"] = effective_max_tokens
+    kwargs.update(generation_budget.provider_kwargs())
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -867,6 +876,7 @@ async def chat(
         )
         provider_completed = True
         response = sanitize_provider_error_response(normalize_empty_success_response(response))
+        response = annotate_response(response, generation_budget)
         if billing_reservation is not None:
             _finalize_chat_usage(
                 reservation=billing_reservation,
@@ -1029,11 +1039,19 @@ async def chat_stream(
     target_provider = execution_plan.preview_provider
     target_model = execution_plan.preview_model
 
-    effective_max_tokens = effective_output_token_limit(request.max_tokens)
+    generation_budget = resolve_request_budget(
+        provider=execution_plan.preview_provider,
+        model=execution_plan.preview_model,
+        generation=request.generation,
+        legacy_max_tokens=request.max_tokens,
+        input_text=_billing_materialized_input_text(request, inference_attachments),
+        registry=ModelRegistry.from_yaml(),
+    )
+    effective_max_tokens = generation_budget.effective_max_output_tokens
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    kwargs["max_tokens"] = effective_max_tokens
+    kwargs.update(generation_budget.provider_kwargs())
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -1176,6 +1194,7 @@ async def chat_stream(
                     stream_log.log("heartbeat_sent", elapsed_ms=elapsed_ms)
             response = await provider_task
             response = sanitize_provider_error_response(normalize_empty_success_response(response))
+            response = annotate_response(response, generation_budget)
             stream_log.log(
                 "provider_call_completed",
                 response_provider=getattr(response, "provider", ""),

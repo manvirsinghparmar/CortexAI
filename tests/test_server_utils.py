@@ -70,20 +70,18 @@ def test_normalize_empty_success_keeps_existing_error_unchanged():
     assert normalized == original
 
 
-def test_normalize_empty_success_converts_empty_length_to_provider_error():
+def test_normalize_empty_success_preserves_billable_incomplete_length_response():
     original = _build_response(
         text="",
         finish_reason="length",
         metadata={"endpoint": "chat.completions"},
     )
     normalized = normalize_empty_success_response(original)
-    assert normalized.is_error
-    assert normalized.error is not None
-    assert normalized.error.code == "provider_error"
-    assert normalized.error.retryable is True
-    assert normalized.error.details["finish_reason"] == "length"
-    assert normalized.error.details["endpoint"] == "chat.completions"
-    assert normalized.finish_reason == "error"
+    assert normalized.is_success
+    assert normalized.error is None
+    assert normalized.finish_reason == "length"
+    assert normalized.metadata["completion_status"] == "incomplete"
+    assert normalized.metadata["stop_cause"] == "token_limit"
 
 
 def test_normalize_empty_success_content_filter_is_non_retryable():

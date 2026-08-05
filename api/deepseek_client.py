@@ -67,6 +67,8 @@ class DeepSeekClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "thinking").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "high").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -97,9 +99,18 @@ class DeepSeekClient(BaseAIClient):
             request_payload = {
                 "model": model,
                 "messages": normalized_messages,
-                "temperature": temperature,
                 "max_tokens": max_tokens,
             }
+            thinking_enabled = reasoning_mode not in {"none", "off", "disabled"}
+            request_payload["extra_body"] = {
+                "thinking": {"type": "enabled" if thinking_enabled else "disabled"}
+            }
+            if thinking_enabled:
+                request_payload["reasoning_effort"] = (
+                    "max" if reasoning_effort in {"xhigh", "max"} else "high"
+                )
+            else:
+                request_payload["temperature"] = temperature
             adaptive_retry = None
 
             try:
@@ -237,10 +248,7 @@ class DeepSeekClient(BaseAIClient):
                 **self._response_audit_fields(
                     served_model=served_model,
                     cost=cost,
-                    reasoning_mode=str(
-                        self.model_identity.get("default_reasoning_mode") or ""
-                    )
-                    or None,
+                    reasoning_mode="thinking" if thinking_enabled else "none",
                 ),
             )
 

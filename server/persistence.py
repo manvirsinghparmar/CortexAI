@@ -8,7 +8,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Generator, Iterable, Sequence
+from typing import Generator, Iterable, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -706,6 +706,7 @@ def reserve_subscription_usage(
     initial_query: str = "",
     credit_activity_id: str | None = None,
     max_output_tokens: int | None = None,
+    max_output_tokens_by_target: Mapping[str, int] | None = None,
     model_attempt_count: int = 1,
 ) -> ReservedRequestUsage:
     """Authorize and atomically reserve subscription usage before provider work."""
@@ -730,6 +731,7 @@ def reserve_subscription_usage(
             ),
             credit_activity_id=credit_activity_id,
             max_output_tokens=max_output_tokens,
+            max_output_tokens_by_target=max_output_tokens_by_target,
             model_attempt_count=model_attempt_count,
         )
     from server.billing.reservation_cleanup import register_active_reservation
@@ -1190,6 +1192,7 @@ def persist_chat_interaction(
                 regeneration.response_revision_root_id if regeneration is not None else None
             ),
             response_revision=(regeneration.response_revision if regeneration is not None else 1),
+            generation_budget=dict((response.metadata or {}).get("generation_budget") or {}),
         )
         _persist_request_attachments(
             db_session,
@@ -1286,6 +1289,7 @@ def persist_compare_interaction(
                 api_key_id=resolution.api_key_id,
                 store_prompt=True,
                 prompt_text_override=stored_user_message,
+                generation_budget=dict((response.metadata or {}).get("generation_budget") or {}),
             )
             _persist_request_attachments(
                 db_session,

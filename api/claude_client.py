@@ -150,6 +150,8 @@ class ClaudeClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -171,6 +173,12 @@ class ClaudeClient(BaseAIClient):
             }
             if system_instruction:
                 request_payload["system"] = system_instruction
+            if reasoning_mode == "adaptive":
+                request_payload["thinking"] = {"type": "adaptive"}
+            elif reasoning_mode == "disabled":
+                request_payload["thinking"] = {"type": "disabled"}
+            if reasoning_effort and reasoning_mode != "disabled":
+                request_payload["output_config"] = {"effort": reasoning_effort}
 
             adaptive_retry = None
             try:
@@ -291,7 +299,11 @@ class ClaudeClient(BaseAIClient):
                     }
                 ),
                 raw=raw,
-                **self._response_audit_fields(served_model=served_model, cost=cost),
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:

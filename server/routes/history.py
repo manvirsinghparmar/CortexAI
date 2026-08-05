@@ -63,6 +63,13 @@ class HistoryEntry(BaseModel):
     pricing_version: Optional[str] = None
     pricing_unknown: bool = False
     response_version: int = 1
+    generation_profile: Optional[str] = None
+    effective_max_output_tokens: Optional[int] = None
+    effective_reasoning_mode: Optional[str] = None
+    effective_reasoning_effort: Optional[str] = None
+    generation_policy_version: Optional[str] = None
+    completion_status: str = "complete"
+    stop_cause: str = "unknown"
     response: str
     latency_ms: Optional[int] = None
     prompt_tokens: Optional[int] = None

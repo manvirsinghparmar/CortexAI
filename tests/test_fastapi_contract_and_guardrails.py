@@ -1825,7 +1825,7 @@ def test_chat_stream_soft_trims_oversized_context_instead_of_rejecting(client, a
     assert any("long-context-message-11-" in content for content in retained_content)
 
 
-def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
+def test_chat_preserves_empty_length_response_as_incomplete(client, app):
     def _empty_success(*_args, **_kwargs):
         return UnifiedResponse(
             request_id="req_empty_success_chat",
@@ -1857,11 +1857,11 @@ def test_chat_normalizes_empty_success_payload_to_provider_error(client, app):
 
     body = r.json()
     assert body["text"] == ""
-    assert body["finish_reason"] == "error"
-    assert body["error"] is not None
-    assert body["error"]["code"] == "provider_error"
-    assert body["error"]["details"]["finish_reason"] == "length"
-    assert body["error"]["details"]["endpoint"] == "chat.completions"
+    assert body["finish_reason"] == "length"
+    assert body["error"] is None
+    assert body["completion_status"] == "incomplete"
+    assert body["stop_cause"] == "token_limit"
+    assert body["retry_with_more_room"]["available"] is True
 
 
 def test_chat_sanitizes_raw_transient_provider_error(client, app):
@@ -1908,7 +1908,7 @@ def test_chat_sanitizes_raw_transient_provider_error(client, app):
     assert "UNAVAILABLE" not in body["error"]["message"]
 
 
-def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, app):
+def test_chat_stream_preserves_empty_length_response_as_incomplete(client, app):
     def _empty_success(*_args, **_kwargs):
         return UnifiedResponse(
             request_id="req_empty_success_chat_stream",
@@ -1940,18 +1940,16 @@ def test_chat_stream_normalizes_empty_success_payload_to_provider_error(client, 
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
 
     line_events = [event for event in events if event.get("type") == "line"]
-    assert any(
-        "Error: Provider returned an empty response." in str(event.get("text", ""))
-        for event in line_events
-    )
+    assert line_events == []
 
     done = next((event for event in events if event.get("type") == "response_done"), None)
     assert done is not None
     payload_json = done["response"]
     assert payload_json["text"] == ""
-    assert payload_json["finish_reason"] == "error"
-    assert payload_json["error"]["code"] == "provider_error"
-    assert payload_json["error"]["details"]["finish_reason"] == "length"
+    assert payload_json["finish_reason"] == "length"
+    assert payload_json["error"] is None
+    assert payload_json["completion_status"] == "incomplete"
+    assert payload_json["stop_cause"] == "token_limit"
 
 
 def test_chat_stream_sanitizes_raw_transient_provider_error(client, app):
@@ -2000,7 +1998,7 @@ def test_chat_stream_sanitizes_raw_transient_provider_error(client, app):
     assert "high demand" not in rendered_text
 
 
-def test_compare_normalizes_empty_success_payload_to_provider_error(client, app):
+def test_compare_preserves_empty_length_response_as_incomplete(client, app):
     def _compare_with_blank_success(
         prompt: str, models_list: List[Dict[str, Any]], context: Any = None, **kwargs
     ):
@@ -2058,13 +2056,14 @@ def test_compare_normalizes_empty_success_payload_to_provider_error(client, app)
     assert r.status_code == 200
 
     body = r.json()
-    assert body["success_count"] == 1
-    assert body["error_count"] == 1
+    assert body["success_count"] == 2
+    assert body["error_count"] == 0
     first = body["responses"][0]
     assert first["text"] == ""
-    assert first["finish_reason"] == "error"
-    assert first["error"]["code"] == "provider_error"
-    assert first["error"]["details"]["finish_reason"] == "length"
+    assert first["finish_reason"] == "length"
+    assert first["error"] is None
+    assert first["completion_status"] == "incomplete"
+    assert first["stop_cause"] == "token_limit"
 
 
 def test_compare_sanitizes_raw_transient_provider_error(client, app):
@@ -2180,7 +2179,7 @@ def test_compare_stream_returns_ndjson_events(client, caplog):
     assert "compare.stream.done_sent" in log_events
 
 
-def test_compare_stream_normalizes_empty_success_payload_to_provider_error(client, app):
+def test_compare_stream_preserves_empty_length_response_as_incomplete(client, app):
     def _ask_with_one_blank(
         prompt: str, model_type: Optional[str] = None, context: Any = None, **kwargs
     ):
@@ -2244,12 +2243,13 @@ def test_compare_stream_normalizes_empty_success_payload_to_provider_error(clien
     assert openai_done is not None
     openai_resp = openai_done["response"]
     assert openai_resp["text"] == ""
-    assert openai_resp["finish_reason"] == "error"
-    assert openai_resp["error"]["code"] == "provider_error"
-    assert openai_resp["error"]["details"]["finish_reason"] == "length"
+    assert openai_resp["finish_reason"] == "length"
+    assert openai_resp["error"] is None
+    assert openai_resp["completion_status"] == "incomplete"
+    assert openai_resp["stop_cause"] == "token_limit"
 
 
-def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(client, app):
+def test_compare_stream_done_payload_counts_incomplete_successes_and_uses_profile(client, app):
     observed_kwargs: dict[str, Any] = {}
 
     def _ask_with_one_blank(
@@ -2290,7 +2290,7 @@ def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(cl
 
     payload = {
         "prompt": "compare stream aggregate",
-        "max_tokens": 99999,
+        "generation": {"profile": "balanced"},
         "targets": [
             {"provider": "openai", "model": "gpt-5.1"},
             {"provider": "gemini", "model": "gemini-2.5-flash"},
@@ -2303,14 +2303,14 @@ def test_compare_stream_done_payload_counts_normalized_errors_and_caps_tokens(cl
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
-    assert observed_kwargs.get("max_tokens") == 2048
+    assert observed_kwargs.get("max_tokens") == 8192
 
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
     done = next((event for event in events if event.get("type") == "done"), None)
     assert done is not None
     compare_payload = done.get("compare", {})
-    assert compare_payload.get("success_count") == 1
-    assert compare_payload.get("error_count") == 1
+    assert compare_payload.get("success_count") == 2
+    assert compare_payload.get("error_count") == 0
 
 
 def test_compare_stream_allows_context_with_three_targets(client):
@@ -2378,7 +2378,7 @@ def test_chat_rejects_model_without_provider(client):
     assert r.status_code == 422
 
 
-def test_chat_clamps_max_tokens_to_server_cap(client, app):
+def test_chat_rejects_explicit_limit_above_model_cap(client, app):
     payload = {
         "prompt": "Give me a summary",
         "provider": "openai",
@@ -2391,11 +2391,11 @@ def test_chat_clamps_max_tokens_to_server_cap(client, app):
         headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
-    assert r.status_code == 200
-    assert app.state.fake_orchestrator.last_ask_kwargs.get("max_tokens") == 2048
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "invalid_generation_budget"
 
 
-def test_compare_clamps_max_tokens_to_server_cap(client, app):
+def test_compare_rejects_explicit_limit_above_model_cap(client, app):
     payload = {
         "prompt": "compare",
         "max_tokens": 77777,
@@ -2410,11 +2410,11 @@ def test_compare_clamps_max_tokens_to_server_cap(client, app):
         headers={"X-API-Key": "dev-key-1"},
         cookies={"cortex_session": "test-session-cookie"},
     )
-    assert r.status_code == 200
-    assert app.state.fake_orchestrator.last_compare_kwargs.get("max_tokens") == 2048
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "invalid_generation_budget"
 
 
-def test_chat_uses_same_clamped_limit_for_billing_and_provider(
+def test_chat_uses_same_profile_limit_for_billing_and_provider(
     client,
     app,
     monkeypatch,
@@ -2440,19 +2440,19 @@ def test_chat_uses_same_clamped_limit_for_billing_and_provider(
             "credit_activity_id": "activity-chat",
             "provider": "openai",
             "model": "gpt-4o-mini",
-            "max_tokens": 100_000_000,
+            "generation": {"profile": "balanced"},
         },
         cookies={"cortex_session": "test-session-cookie"},
     )
 
     assert response.status_code == 200
-    assert reservations[0]["max_output_tokens"] == 2048
+    assert reservations[0]["max_output_tokens"] == 8192
     assert reservations[0]["initial_query"] == "Give me a summary"
     assert reservations[0]["credit_activity_id"] == "activity-chat"
-    assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 2048
+    assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 8192
 
 
-def test_compare_uses_same_clamped_limit_for_billing_and_provider(
+def test_compare_uses_same_profile_limit_for_billing_and_provider(
     client,
     app,
     monkeypatch,
@@ -2476,7 +2476,7 @@ def test_compare_uses_same_clamped_limit_for_billing_and_provider(
             "prompt": "Compare these options in a table",
             "initial_query": "Compare these",
             "credit_activity_id": "activity-compare",
-            "max_tokens": 100_000_000,
+            "generation": {"profile": "balanced"},
             "targets": [
                 {"provider": "openai", "model": "gpt-4o-mini"},
                 {"provider": "gemini", "model": "gemini-2.5-flash"},
@@ -2486,10 +2486,24 @@ def test_compare_uses_same_clamped_limit_for_billing_and_provider(
     )
 
     assert response.status_code == 200
-    assert reservations[0]["max_output_tokens"] == 2048
+    assert reservations[0]["max_output_tokens_by_target"] == {
+        "openai:gpt-4o-mini": 8192,
+        "gemini:gemini-2.5-flash": 8192,
+    }
     assert reservations[0]["initial_query"] == "Compare these"
     assert reservations[0]["credit_activity_id"] == "activity-compare"
-    assert app.state.fake_orchestrator.last_compare_kwargs["max_tokens"] == 2048
+    assert app.state.fake_orchestrator.last_compare_kwargs["_per_client_generation"] == {
+        "openai:gpt-4o-mini": {
+            "max_tokens": 8192,
+            "reasoning_mode": "off",
+            "reasoning_effort": "none",
+        },
+        "gemini:gemini-2.5-flash": {
+            "max_tokens": 8192,
+            "reasoning_mode": "off",
+            "reasoning_effort": "none",
+        },
+    }
 
 
 def test_chat_stream_auto_routing_includes_selected_target(client, app):

@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from api.claude_client import ClaudeClient
 from api.deepseek_client import DeepSeekClient
 from api.google_gemini_client import GeminiClient
 from api.grok_client import GrokClient
@@ -139,6 +140,28 @@ class TestProviderContractCompliance:
         assert response.finish_reason == "stop"
         assert response.error is None
         assert response.is_success
+
+    @patch("openai.OpenAI")
+    def test_openai_gpt56_receives_resolved_budget_and_reasoning(self, mock_openai):
+        mock_response = Mock()
+        mock_response.output_text = "Reasoned answer"
+        mock_response.usage = Mock(input_tokens=7, output_tokens=11, total_tokens=18)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=8192,
+            reasoning_mode="standard",
+            reasoning_effort="medium",
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assert payload["max_output_tokens"] == 8192
+        assert payload["reasoning"] == {"effort": "medium"}
 
     @patch("openai.OpenAI")
     def test_openai_defaults_to_2048_max_tokens_when_not_provided(self, mock_openai):
@@ -422,6 +445,56 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("openai.OpenAI")
+    def test_deepseek_receives_thinking_budget_parameters(self, mock_openai):
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Deep answer"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = DeepSeekClient(api_key="test-key", model_name="deepseek-v4-flash")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="thinking",
+            reasoning_effort="xhigh",
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["max_tokens"] == 32768
+        assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert payload["reasoning_effort"] == "max"
+        assert "temperature" not in payload
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_receives_adaptive_thinking_and_effort(self, mock_anthropic):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-opus-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        client = ClaudeClient(api_key="test-key", model_name="claude-opus-5")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="adaptive",
+            reasoning_effort="xhigh",
+        )
+
+        assert response.is_success
+        payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+        assert payload["max_tokens"] == 32768
+        assert payload["thinking"] == {"type": "adaptive"}
+        assert payload["output_config"] == {"effort": "xhigh"}
+
+    @patch("openai.OpenAI")
     def test_deepseek_retries_without_unsupported_parameter(self, mock_openai):
         """DeepSeek should retry once when provider rejects an optional parameter."""
         unsupported_temp = Exception(
@@ -434,7 +507,12 @@ class TestProviderContractCompliance:
         mock_openai.return_value.chat.completions.create.side_effect = [unsupported_temp, mock_success]
 
         client = DeepSeekClient(api_key="test-key", model_name="deepseek-chat")
-        response = client.get_completion("Test prompt", temperature=0.5, max_tokens=200)
+        response = client.get_completion(
+            "Test prompt",
+            temperature=0.5,
+            max_tokens=200,
+            reasoning_mode="none",
+        )
 
         assert response.is_success
         assert response.text == "Recovered"
@@ -552,6 +630,29 @@ class TestProviderContractCompliance:
         assert response.provider == "gemini"
         assert response.text == "Test response"
         assert response.is_success
+
+    @patch("google.genai.Client")
+    def test_gemini_receives_thinking_level_and_budget(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Gemini answer"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=10, candidates_token_count=20, total_token_count=30
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-3.6-pro")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="thinking",
+            reasoning_effort="high",
+        )
+
+        assert response.is_success
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 32768
+        assert config["thinking_config"] == {"thinking_level": "high"}
 
     @patch("google.genai.Client")
     def test_gemini_retries_without_unsupported_parameter(self, mock_genai):

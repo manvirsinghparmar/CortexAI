@@ -59,6 +59,13 @@ class FallbackManager:
                         reason=validation.reason,
                     )
 
+        if validation.reason == "truncated" and remaining_same_tier_candidates > 0:
+            return FallbackDecision(
+                action=NextAction.RETRY_SAME_TIER,
+                next_tier=None,
+                reason=validation.reason,
+            )
+
         if validation.reason in {"too_short", "format_violation", "truncated"}:
             if policy.allow_escalation:
                 next_tier = next_tier_fn(current_tier)

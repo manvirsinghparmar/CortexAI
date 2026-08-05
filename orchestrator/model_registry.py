@@ -122,6 +122,9 @@ class ModelRegistry:
                 reasoning_modes = model.get("reasoning_modes", [])
                 if not isinstance(reasoning_modes, list):
                     reasoning_modes = []
+                reasoning_efforts = model.get("reasoning_efforts", [])
+                if not isinstance(reasoning_efforts, list):
+                    reasoning_efforts = []
                 pricing_source_url = str(
                     model.get("pricing_source_url")
                     or provider_defaults.get("pricing_source_url")
@@ -229,6 +232,17 @@ class ModelRegistry:
                         ],
                         default_reasoning_mode=(
                             str(model.get("default_reasoning_mode") or "").strip() or None
+                        ),
+                        reasoning_efforts=[
+                            str(effort).strip()
+                            for effort in reasoning_efforts
+                            if str(effort).strip()
+                        ],
+                        reasoning_disable_supported=bool(
+                            model.get("reasoning_disable_supported", True)
+                        ),
+                        reasoning_counts_against_output=bool(
+                            model.get("reasoning_counts_against_output", True)
                         ),
                         pricing_source_url=pricing_source_url or None,
                         lifecycle_source_url=lifecycle_source_url or None,

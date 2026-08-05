@@ -186,7 +186,7 @@ def test_direct_ask_normalizes_empty_output_to_provider_error(monkeypatch):
     assert "empty response" in resp.error.message.lower()
 
 
-def test_direct_ask_normalizes_empty_length_output_to_provider_error(monkeypatch):
+def test_direct_ask_preserves_empty_length_output_as_incomplete(monkeypatch):
     orchestrator = CortexOrchestrator()
     fake = EmptyLengthResponseClient("openai", "gpt-5.1")
     monkeypatch.setattr(orchestrator, "_get_client", lambda *_args, **_kwargs: fake)
@@ -197,11 +197,11 @@ def test_direct_ask_normalizes_empty_length_output_to_provider_error(monkeypatch
         model_name="gpt-5.1",
         routing_mode="legacy",
     )
-    assert resp.is_error is True
-    assert resp.error is not None
-    assert resp.error.code == "provider_error"
-    assert resp.error.details.get("finish_reason") == "length"
-    assert resp.error.details.get("endpoint") == "chat.completions"
+    assert resp.is_success is True
+    assert resp.error is None
+    assert resp.finish_reason == "length"
+    assert resp.metadata["completion_status"] == "incomplete"
+    assert resp.metadata["stop_cause"] == "token_limit"
 
 
 def test_research_metadata_attached(monkeypatch):
@@ -585,7 +585,7 @@ def test_smart_retry_on_empty_length_output_then_success(monkeypatch):
     assert routing.get("attempt_count") == 2
     assert routing.get("fallback_used") is True
     attempts = routing.get("attempts", [])
-    assert attempts[0]["validation"] == "provider_error"
+    assert attempts[0]["validation"] == "truncated"
     assert attempts[1]["validation"] == "ok"
 
 

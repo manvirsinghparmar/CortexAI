@@ -53,6 +53,24 @@ class AttachmentRequestItem(BaseModel):
 class CompareResponseRegenerationRequest(BaseModel):
     source_request_id: str = Field(..., min_length=1, max_length=160)
     refresh_research: bool = False
+    retry_reason: Optional[Literal["output_limit"]] = None
+
+
+class GenerationReasoningRequest(BaseModel):
+    mode: Literal["auto", "off", "on"] = "auto"
+    effort: Literal["auto", "minimal", "low", "medium", "high", "xhigh", "max"] = "auto"
+
+
+class GenerationRequest(BaseModel):
+    profile: Optional[Literal["quick", "balanced", "deep", "extended"]] = None
+    max_output_tokens: Optional[int] = Field(None, gt=0)
+    reasoning: GenerationReasoningRequest = Field(default_factory=GenerationReasoningRequest)
+
+    @model_validator(mode="after")
+    def validate_profile_or_explicit_limit(self):
+        if self.profile is not None and self.max_output_tokens is not None:
+            raise ValueError("profile and max_output_tokens are mutually exclusive")
+        return self
 
 
 class ChatRequest(BaseModel):
@@ -65,6 +83,7 @@ class ChatRequest(BaseModel):
     routing: Optional[ChatRoutingRequest] = None
     attachments: Optional[List[AttachmentRequestItem]] = None
     regeneration: Optional[CompareResponseRegenerationRequest] = None
+    generation: Optional[GenerationRequest] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
 
@@ -83,12 +102,15 @@ class ChatRequest(BaseModel):
         has_attachments = bool(self.attachments)
         if not has_prompt and not has_attachments:
             raise ValueError("prompt is required when attachments are not provided")
+        if self.generation is not None and self.max_tokens is not None:
+            raise ValueError("generation and max_tokens cannot be supplied together")
         return self
 
 
 class CompareTargetRequest(BaseModel):
     provider: str
     model: Optional[str] = None
+    generation: Optional[GenerationRequest] = None
 
     @field_validator("provider")
     @classmethod
@@ -104,6 +126,7 @@ class CompareRequest(BaseModel):
     routing: Optional[ChatRoutingRequest] = None
     context: Optional[UserContextRequest] = None
     attachments: Optional[List[AttachmentRequestItem]] = None
+    generation: Optional[GenerationRequest] = None
     timeout_s: Optional[float] = Field(None, gt=0, le=300)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
@@ -114,7 +137,27 @@ class CompareRequest(BaseModel):
         has_attachments = bool(self.attachments)
         if not has_prompt and not has_attachments:
             raise ValueError("prompt is required when attachments are not provided")
+        if self.generation is not None and self.max_tokens is not None:
+            raise ValueError("generation and max_tokens cannot be supplied together")
         return self
+
+
+class GenerationEstimateTargetRequest(BaseModel):
+    provider: str
+    model: str = Field(..., min_length=1)
+    generation: Optional[GenerationRequest] = None
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value: str) -> str:
+        return _validate_provider(value, field_name="provider")
+
+
+class GenerationEstimateRequest(BaseModel):
+    prompt: str = ""
+    targets: List[GenerationEstimateTargetRequest] = Field(..., min_length=1, max_length=3)
+    generation: Optional[GenerationRequest] = None
+    research_enabled: bool = False
 
 
 class ClientDiagnosticEvent(BaseModel):

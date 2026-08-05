@@ -65,7 +65,12 @@ class GrokClient(BaseAIClient):
         model = kwargs.get("model", self.model_name)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
-        reasoning_mode = str(kwargs.get("reasoning_effort") or "").strip() or None
+        reasoning_setting = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_mode = (
+            str(kwargs.get("reasoning_effort") or "").strip()
+            if reasoning_setting not in {"none", "off", "disabled"}
+            else None
+        ) or None
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:

@@ -1149,7 +1149,7 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
-def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
+def test_chat_persists_incomplete_when_orchestrator_returns_blank_length_success(
     fastapi_client, monkeypatch
 ):
     client, fake_orch = fastapi_client
@@ -1226,16 +1226,17 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
     assert response.status_code == 200
     body = response.json()
     assert body["text"] == ""
-    assert body["finish_reason"] == "error"
-    assert body["error"] is not None
-    assert body["error"]["code"] == "provider_error"
-    assert body["error"]["details"]["finish_reason"] == "length"
+    assert body["finish_reason"] == "length"
+    assert body["error"] is None
+    assert body["completion_status"] == "incomplete"
+    assert body["stop_cause"] == "token_limit"
 
     assert len(persisted_responses) == 1
     persisted = persisted_responses[0]
-    assert persisted.error is not None
-    assert persisted.error.code == "provider_error"
-    assert persisted.finish_reason == "error"
+    assert persisted.error is None
+    assert persisted.finish_reason == "length"
+    assert persisted.metadata["completion_status"] == "incomplete"
+    assert persisted.metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration
@@ -1511,7 +1512,7 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
-def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client, monkeypatch):
+def test_chat_stream_persists_incomplete_for_blank_length_success(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
     def _blank_success(
@@ -1557,13 +1558,14 @@ def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client,
     )
     assert response.status_code == 200
     assert len(persisted) == 1
-    assert persisted[0].error is not None
-    assert persisted[0].error.code == "provider_error"
-    assert persisted[0].finish_reason == "error"
+    assert persisted[0].error is None
+    assert persisted[0].finish_reason == "length"
+    assert persisted[0].metadata["completion_status"] == "incomplete"
+    assert persisted[0].metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration
-def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_client, monkeypatch):
+def test_compare_stream_persists_incomplete_for_blank_length_target(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
     def _ask_with_one_blank(
@@ -1632,7 +1634,10 @@ def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_clie
     assert len(persisted_batches) == 1
     persisted = persisted_batches[0]
     assert len(persisted) == 2
-    assert any(item.error is not None and item.error.code == "provider_error" for item in persisted)
+    incomplete = next(item for item in persisted if item.finish_reason == "length")
+    assert incomplete.error is None
+    assert incomplete.metadata["completion_status"] == "incomplete"
+    assert incomplete.metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration

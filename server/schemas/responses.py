@@ -23,6 +23,40 @@ class ErrorDTO(BaseModel):
     details: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GenerationBudgetDTO(BaseModel):
+    profile: str
+    requested_max_output_tokens: int
+    effective_max_output_tokens: int
+    requested_reasoning_mode: str
+    effective_reasoning_mode: str
+    requested_reasoning_effort: str
+    effective_reasoning_effort: str
+    reasoning_disable_supported: bool = True
+    reasoning_counts_against_output: bool = True
+    policy_version: str
+
+
+class RetryWithMoreRoomDTO(BaseModel):
+    available: bool = False
+    recommended_profile: Optional[str] = None
+
+
+class GenerationEstimateTargetDTO(BaseModel):
+    provider: str
+    model: str
+    profile: str
+    effective_max_output_tokens: int
+    estimated_max_ai_credits: int
+
+
+class GenerationEstimateResponseDTO(BaseModel):
+    targets: List[GenerationEstimateTargetDTO]
+    estimated_max_ai_credits: int
+    remaining_ai_credits: int
+    can_authorize: bool
+    temporary_hold_released_after_settlement: bool = True
+
+
 class ChatResponseDTO(BaseModel):
     request_id: str
     response_version: int = 1
@@ -49,6 +83,10 @@ class ChatResponseDTO(BaseModel):
     ai_credits: int = 0
     credit_usage_estimated: bool = False
     finish_reason: Optional[str] = None
+    completion_status: Literal["complete", "incomplete", "failed"] = "complete"
+    stop_cause: str = "unknown"
+    generation_budget: Optional[GenerationBudgetDTO] = None
+    retry_with_more_room: RetryWithMoreRoomDTO = Field(default_factory=RetryWithMoreRoomDTO)
     error: Optional[ErrorDTO] = None
     web_source_items: List[Dict[str, str]] = Field(default_factory=list)
     timestamp: str
@@ -90,6 +128,29 @@ class ChatResponseDTO(BaseModel):
             ur,
             include_research_charge=include_research_charge,
         )
+        generation_budget_raw = metadata.get("generation_budget")
+        generation_budget = (
+            GenerationBudgetDTO(**generation_budget_raw)
+            if isinstance(generation_budget_raw, dict)
+            else None
+        )
+        completion_status = str(metadata.get("completion_status") or "")
+        stop_cause = str(metadata.get("stop_cause") or "")
+        if completion_status not in {"complete", "incomplete", "failed"}:
+            if ur.error:
+                completion_status = "failed"
+                stop_cause = "error"
+            elif ur.finish_reason == "length":
+                completion_status = "incomplete"
+                stop_cause = "token_limit"
+            else:
+                completion_status = "complete"
+                stop_cause = stop_cause or "unknown"
+        retry_profile = (
+            str(generation_budget_raw.get("retry_profile") or "").strip() or None
+            if isinstance(generation_budget_raw, dict)
+            else None
+        )
         return cls(
             request_id=ur.request_id,
             response_version=max(1, int(response_version)),
@@ -125,6 +186,13 @@ class ChatResponseDTO(BaseModel):
             ai_credits=credit_usage.ai_credits,
             credit_usage_estimated=credit_usage.credit_usage_estimated,
             finish_reason=ur.finish_reason,
+            completion_status=completion_status,
+            stop_cause=stop_cause or "unknown",
+            generation_budget=generation_budget,
+            retry_with_more_room=RetryWithMoreRoomDTO(
+                available=completion_status == "incomplete" and bool(retry_profile),
+                recommended_profile=retry_profile,
+            ),
             error=(
                 ErrorDTO(
                     code=ur.error.code,
@@ -228,6 +296,9 @@ class ModelCatalogItemDTO(BaseModel):
     aliases: List[str] = Field(default_factory=list)
     reasoning_modes: List[str] = Field(default_factory=list)
     default_reasoning_mode: Optional[str] = None
+    reasoning_efforts: List[str] = Field(default_factory=list)
+    reasoning_disable_supported: bool = True
+    reasoning_counts_against_output: bool = True
     pricing_source_url: Optional[str] = None
     lifecycle_source_url: Optional[str] = None
     source_verified_at: Optional[str] = None

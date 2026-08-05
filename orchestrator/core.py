@@ -186,11 +186,12 @@ class CortexOrchestrator:
 
     def _normalize_empty_success_response(self, response: UnifiedResponse) -> UnifiedResponse:
         """
-        Convert blank non-error responses into explicit provider errors.
+        Preserve billable length stops; convert other blank successes to errors.
 
         Some providers can return successful envelopes with no assistant text
         (e.g., content filtering, tool-only payloads, or schema edge cases).
-        Treating these as success causes blank UI cards and poor UX.
+        A length stop can mean reasoning exhausted the output allowance, so it
+        remains an incomplete response for the route/UI retry contract.
         """
         if response.is_error:
             return response
@@ -200,6 +201,14 @@ class CortexOrchestrator:
             return response
 
         finish_reason = str(response.finish_reason or "").strip().lower()
+        if finish_reason == "length":
+            metadata = dict(response.metadata or {})
+            metadata.setdefault("completion_status", "incomplete")
+            metadata.setdefault("stop_cause", "token_limit")
+            if int(response.token_usage.reasoning_tokens or 0) > 0:
+                metadata["reasoning_budget_exhausted"] = True
+            return replace(response, metadata=metadata)
+
         blocked_by_filter = finish_reason == "content_filter"
         message = (
             "Provider returned no text because content was filtered."
@@ -1719,6 +1728,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
         if not isinstance(provider_api_keys, dict):
             provider_api_keys = {}
+        per_client_generation = kwargs.pop("_per_client_generation", {}) or {}
+        if not isinstance(per_client_generation, dict):
+            per_client_generation = {}
 
         def with_turn_metadata(response: UnifiedResponse) -> UnifiedResponse:
             normalized = self._normalize_empty_success_response(response)
@@ -1820,6 +1832,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 timeout_s=timeout_s,
                 request_group_id=request_group_id,
                 messages=messages,  # Pass research-injected messages to all models
+                _per_client_generation=per_client_generation,
                 **kwargs,
             )
 

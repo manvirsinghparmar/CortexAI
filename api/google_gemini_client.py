@@ -135,6 +135,8 @@ class GeminiClient(BaseAIClient):
         temperature = kwargs.get("temperature", 0.7)
         # Keep route-level max_tokens clamp compatible with Gemini's max_output_tokens naming.
         max_output_tokens = kwargs.get("max_output_tokens", kwargs.get("max_tokens", 2048))
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -158,6 +160,10 @@ class GeminiClient(BaseAIClient):
             }
             if system_instruction:
                 config["system_instruction"] = system_instruction
+            if reasoning_mode == "none":
+                config["thinking_config"] = {"thinking_budget": 0}
+            elif reasoning_effort and reasoning_effort != "none":
+                config["thinking_config"] = {"thinking_level": reasoning_effort}
 
             adaptive_retry = None
             try:
@@ -312,7 +318,11 @@ class GeminiClient(BaseAIClient):
                     }
                 ),
                 raw=raw,
-                **self._response_audit_fields(served_model=served_model, cost=cost),
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:

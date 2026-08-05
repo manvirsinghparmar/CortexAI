@@ -66,6 +66,8 @@ class OpenAIClient(BaseAIClient):
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         response_format = kwargs.get("response_format")
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
@@ -85,6 +87,8 @@ class OpenAIClient(BaseAIClient):
                 max_completion_tokens=max_completion_tokens,
                 response_format=response_format,
                 attachments=binary_attachments,
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
             )
 
             latency_ms = self._measure_latency(start_time)
@@ -190,7 +194,11 @@ class OpenAIClient(BaseAIClient):
                 error=None,
                 metadata=metadata,
                 raw=raw,
-                **self._response_audit_fields(served_model=served_model, cost=cost),
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:
@@ -225,6 +233,8 @@ class OpenAIClient(BaseAIClient):
         max_completion_tokens: int | None,
         response_format: dict[str, Any] | None,
         attachments: list[dict[str, Any]],
+        reasoning_mode: str,
+        reasoning_effort: str,
     ) -> tuple[Any, str, dict[str, Any] | None]:
         if self._should_use_responses_api_for_model(model, attachments=attachments):
             payload = self._build_responses_payload(
@@ -234,6 +244,8 @@ class OpenAIClient(BaseAIClient):
                 max_tokens=max_tokens,
                 max_completion_tokens=max_completion_tokens,
                 attachments=attachments,
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
             )
             return self._create_openai_response_with_compat_retries(
                 request_id=request_id,
@@ -251,6 +263,8 @@ class OpenAIClient(BaseAIClient):
             request_payload["temperature"] = temperature
         if response_format is not None:
             request_payload["response_format"] = response_format
+        if reasoning_effort and reasoning_effort != "none":
+            request_payload["reasoning_effort"] = reasoning_effort
         if max_completion_tokens is not None:
             request_payload["max_completion_tokens"] = max_completion_tokens
         else:
@@ -291,6 +305,8 @@ class OpenAIClient(BaseAIClient):
                     max_tokens=max_tokens,
                     max_completion_tokens=max_completion_tokens,
                     attachments=attachments,
+                    reasoning_mode=reasoning_mode,
+                    reasoning_effort=reasoning_effort,
                 )
                 logger.warning(
                     "Retrying OpenAI request with responses API",
@@ -319,6 +335,7 @@ class OpenAIClient(BaseAIClient):
                     "max_tokens",
                     "max_completion_tokens",
                     "response_format",
+                    "reasoning_effort",
                 },
             )
             if retry_payload is not None and dropped_param is not None:
@@ -350,7 +367,7 @@ class OpenAIClient(BaseAIClient):
         if attachments:
             return True
         model_norm = (model or "").strip().lower()
-        return "codex" in model_norm
+        return "codex" in model_norm or model_norm.startswith("gpt-5.6")
 
     @staticmethod
     def _should_retry_with_responses_api(exc: Exception) -> bool:
@@ -374,6 +391,8 @@ class OpenAIClient(BaseAIClient):
         max_tokens: int,
         max_completion_tokens: int | None,
         attachments: list[dict[str, Any]],
+        reasoning_mode: str,
+        reasoning_effort: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
@@ -391,6 +410,13 @@ class OpenAIClient(BaseAIClient):
             payload["max_output_tokens"] = max_completion_tokens
         else:
             payload["max_output_tokens"] = max_tokens
+        reasoning: dict[str, Any] = {}
+        if reasoning_effort:
+            reasoning["effort"] = reasoning_effort
+        if reasoning_mode == "pro":
+            reasoning["mode"] = "pro"
+        if reasoning:
+            payload["reasoning"] = reasoning
         return payload
 
     @staticmethod
@@ -498,6 +524,7 @@ class OpenAIClient(BaseAIClient):
                     "max_output_tokens",
                     "max_completion_tokens",
                     "reasoning_effort",
+                    "reasoning",
                 },
             )
             if retry_payload is not None and dropped_param is not None:

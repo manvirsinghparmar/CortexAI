@@ -1,0 +1,16 @@
+version: generation-budget-v1
+operational_max_output_tokens: 65536
+context_safety_margin_tokens: 1024
+profiles:
+  quick:
+    max_output_tokens: 2048
+    default_reasoning_effort: low
+  balanced:
+    max_output_tokens: 8192
+    default_reasoning_effort: medium
+  deep:
+    max_output_tokens: 32768
+    default_reasoning_effort: high
+  extended:
+    max_output_tokens: 65536
+    default_reasoning_effort: max

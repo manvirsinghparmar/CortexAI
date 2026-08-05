@@ -27,7 +27,21 @@ class BillingSchemaPreflightError(RuntimeError):
 
 
 REQUIRED_BILLING_SCHEMA: Mapping[str, frozenset[str]] = {
-    "llm_requests": frozenset({"id", "model", "requested_model"}),
+    "llm_requests": frozenset(
+        {
+            "id",
+            "model",
+            "requested_model",
+            "generation_profile",
+            "requested_max_output_tokens",
+            "effective_max_output_tokens",
+            "requested_reasoning_mode",
+            "effective_reasoning_mode",
+            "requested_reasoning_effort",
+            "effective_reasoning_effort",
+            "generation_policy_version",
+        }
+    ),
     "llm_responses": frozenset(
         {
             "id",
@@ -43,6 +57,8 @@ REQUIRED_BILLING_SCHEMA: Mapping[str, frozenset[str]] = {
             "pricing_version",
             "pricing_unknown",
             "pricing_snapshot",
+            "completion_status",
+            "stop_cause",
         }
     ),
     "billing_accounts": frozenset({"id", "owner_type", "owner_id"}),

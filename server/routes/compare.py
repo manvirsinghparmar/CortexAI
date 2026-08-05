@@ -20,6 +20,8 @@ from models.unified_response import (
 )
 from models.user_context import UserContext
 from orchestrator.core import CortexOrchestrator
+from orchestrator.generation_policy import GenerationBudgetResolution
+from orchestrator.model_registry import ModelRegistry
 from server import attachments as attachments_service
 from server import persistence as persistence_service
 from server.billing.enforcement_service import (
@@ -34,12 +36,12 @@ from server.billing.credit_calculator import (
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
+from server.generation_service import annotate_response, resolve_request_budget
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
 from server.stream_observability import StreamLogContext
 from server.utils import (
-    effective_output_token_limit,
     get_client_safe_error_display_text,
     normalize_empty_success_response,
     sanitize_provider_error_response,
@@ -88,6 +90,46 @@ def _resolve_compare_research_mode(request: CompareRequest) -> bool:
             pass
 
     return bool(routing.research_mode)
+
+
+def _resolve_compare_generation_budgets(
+    request: CompareRequest,
+    *,
+    input_text: str,
+) -> list[GenerationBudgetResolution]:
+    registry = ModelRegistry.from_yaml()
+    return [
+        resolve_request_budget(
+            provider=target.provider,
+            model=target.model or "",
+            generation=target.generation or request.generation,
+            legacy_max_tokens=request.max_tokens,
+            input_text=input_text,
+            registry=registry,
+        )
+        for target in request.targets
+    ]
+
+
+def _budget_for_response(
+    response: UnifiedResponse,
+    budgets: list[GenerationBudgetResolution],
+    index: int,
+) -> GenerationBudgetResolution:
+    if index < len(budgets):
+        expected = budgets[index]
+        if expected.provider == response.provider and expected.model in {
+            response.model,
+            response.requested_model,
+        }:
+            return expected
+    for budget in budgets:
+        if budget.provider == response.provider and budget.model in {
+            response.model,
+            response.requested_model,
+        }:
+            return budget
+    return budgets[min(index, len(budgets) - 1)]
 
 
 def _build_user_context(context_req):
@@ -227,7 +269,7 @@ def _reserve_compare_usage(
     resolved_attachments: list[attachments_service.ResolvedAttachment],
     initial_query: str,
     credit_activity_id: str | None,
-    max_output_tokens: int,
+    generation_budgets: list[GenerationBudgetResolution],
 ) -> ReservedRequestUsage:
     try:
         targets = tuple(
@@ -251,7 +293,10 @@ def _reserve_compare_usage(
             input_text=_billing_input_text(request),
             initial_query=initial_query,
             credit_activity_id=credit_activity_id,
-            max_output_tokens=max_output_tokens,
+            max_output_tokens_by_target={
+                f"{item.provider}:{item.model}": item.effective_max_output_tokens
+                for item in generation_budgets
+            },
         )
     except HTTPException:
         raise
@@ -484,11 +529,16 @@ async def compare(
 
     models_list = [{"provider": t.provider, "model": t.model or ""} for t in request.targets]
 
-    effective_max_tokens = effective_output_token_limit(request.max_tokens)
+    generation_budgets = _resolve_compare_generation_budgets(
+        request,
+        input_text=_billing_input_text(request),
+    )
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    kwargs["max_tokens"] = effective_max_tokens
+    kwargs["_per_client_generation"] = {
+        f"{item.provider}:{item.model}": item.provider_kwargs() for item in generation_budgets
+    }
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -506,7 +556,7 @@ async def compare(
             resolved_attachments=resolved_attachments,
             initial_query=request.initial_query or effective_prompt,
             credit_activity_id=request.credit_activity_id,
-            max_output_tokens=effective_max_tokens,
+            generation_budgets=generation_budgets,
         )
 
     provider_completed = False
@@ -524,11 +574,16 @@ async def compare(
         provider_completed = True
         normalized_responses = [
             (
-                sanitize_provider_error_response(normalize_empty_success_response(item))
+                annotate_response(
+                    sanitize_provider_error_response(
+                        normalize_empty_success_response(item)
+                    ),
+                    _budget_for_response(item, generation_budgets, index),
+                )
                 if item is not None
                 else None
             )
-            for item in response.responses
+            for index, item in enumerate(response.responses)
         ]
         response = MultiUnifiedResponse.from_responses(
             request_group_id=response.request_group_id,
@@ -653,11 +708,13 @@ async def compare_stream(
         has_attachments=bool(resolved_attachments),
     )
 
-    effective_max_tokens = effective_output_token_limit(request.max_tokens)
+    generation_budgets = _resolve_compare_generation_budgets(
+        request,
+        input_text=_billing_input_text(request),
+    )
     kwargs: dict[str, Any] = {}
     if request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    kwargs["max_tokens"] = effective_max_tokens
     if provider_api_keys:
         kwargs["provider_api_keys"] = provider_api_keys
     if inference_attachments:
@@ -676,7 +733,7 @@ async def compare_stream(
             resolved_attachments=resolved_attachments,
             initial_query=request.initial_query or effective_prompt,
             credit_activity_id=request.credit_activity_id,
-            max_output_tokens=effective_max_tokens,
+            generation_budgets=generation_budgets,
         )
 
     async def event_stream():
@@ -803,7 +860,7 @@ async def compare_stream(
                             timeout_s=request.timeout_s,
                             research_mode=orchestrator_research_mode,
                             request_id=req_id,
-                            kwargs=kwargs,
+                            kwargs={**kwargs, **generation_budgets[i].provider_kwargs()},
                             prepared_turn=prepared_turn,
                         )
                     )
@@ -829,6 +886,7 @@ async def compare_stream(
                     response = sanitize_provider_error_response(
                         normalize_empty_success_response(response)
                     )
+                    response = annotate_response(response, generation_budgets[idx])
                     ordered_responses[idx] = response
                     stream_log.log(
                         "provider_call_completed",

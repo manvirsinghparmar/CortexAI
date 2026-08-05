@@ -451,6 +451,53 @@ def test_public_plans_returns_display_safe_server_catalogue(
 
 
 @pytest.mark.integration
+def test_generation_estimate_uses_resolved_profile_without_reserving(
+    billing_route_harness,
+    monkeypatch,
+):
+    client, _, _, _, _, _ = billing_route_harness
+    monkeypatch.setattr(
+        billing_route,
+        "resolve_effective_subscription",
+        lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace(code="plus")),
+    )
+    monkeypatch.setattr(
+        billing_route,
+        "load_allowance_usage",
+        lambda *_args, **_kwargs: {
+            "ai_credits": SimpleNamespace(remaining=1_000_000),
+        },
+    )
+
+    response = client.post(
+        "/v1/billing/estimate-generation",
+        json={
+            "prompt": "Explain the rollout plan",
+            "generation": {"profile": "balanced"},
+            "targets": [{"provider": "openai", "model": "gpt-4o-mini"}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["targets"] == [
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "profile": "balanced",
+            "effective_max_output_tokens": 8192,
+            "estimated_max_ai_credits": payload["targets"][0][
+                "estimated_max_ai_credits"
+            ],
+        }
+    ]
+    assert payload["estimated_max_ai_credits"] > 0
+    assert payload["remaining_ai_credits"] == 1_000_000
+    assert payload["can_authorize"] is True
+    assert payload["temporary_hold_released_after_settlement"] is True
+
+
+@pytest.mark.integration
 def test_current_subscription_returns_effective_provider_safe_state(
     billing_route_harness,
     monkeypatch,

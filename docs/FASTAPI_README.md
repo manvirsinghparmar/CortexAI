@@ -170,6 +170,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `DELETE /v1/history?session_id=<optional>`
 - `GET /v1/whoami`
 - `GET /v1/entitlements`
+- `POST /v1/billing/estimate-generation`
 - `POST /v1/billing/checkout-session`
 - `POST /v1/billing/portal-session`
 - `POST /v1/billing/webhook`
@@ -245,6 +246,8 @@ The hosted Checkout and Portal routes require signed-session or Cognito bearer i
 `GET /v1/billing/plans` is public and returns only display-safe catalogue fields: USD monthly price, Plus recommendation state, model billing classes, feature availability, core allowances, and boolean `billing_enabled`. The availability flag supports a truthful disabled Checkout state without exposing or probing configuration. Price IDs, configured environment-variable names, Customers, secrets, and provider objects are omitted.
 
 `GET /v1/billing/subscription` requires signed-session or Cognito identity and database mode. It returns the effective plan code/status, provider label, current period, cancellation state, and `can_manage` without exposing a provider subscription ID. Its effective state comes from `subscription_service.py`, so disabled billing and unsafe lifecycle states still resolve conservatively.
+
+`POST /v1/billing/estimate-generation` requires signed-session or Cognito identity and database mode. It accepts the prompt, one to three explicit targets, a shared optional `generation` value, optional target-level overrides, and `research_enabled`. It uses the same generation resolver and model-credit arithmetic as Ask/Compare but creates no reservation. The response includes each target's effective ceiling, maximum temporary AI-credit hold, current remaining credits, and `can_authorize`.
 
 `POST /v1/billing/checkout-session` accepts the strict body `{"plan_code":"plus","billing_period":"monthly"}`. The server validates that the plan exists and is paid, resolves its Price ID from `config/subscription_plans.yaml` plus environment, creates/reuses the account Customer, and returns:
 
@@ -382,8 +385,11 @@ Common request fields used by Ask and Compare:
     "smart_mode": true,
     "research_mode": false
   },
-  "temperature": 0.7,
-  "max_tokens": 1000
+  "generation": {
+    "profile": "balanced",
+    "reasoning": {"mode": "auto", "effort": "auto"}
+  },
+  "temperature": 0.7
 }
 ```
 
@@ -391,6 +397,8 @@ Notes:
 - `routing.smart_mode` defaults to `true`.
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
+- `generation.profile` is `quick|balanced|deep|extended` (2K/8K/32K/64K before model/context limits). `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
+- Omitted legacy requests use Quick/2K. React sends Balanced explicitly. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
 - The browser UI avoids that fallback on explicit fresh login by marking `cortex_fresh_login_pending`, consuming the backend `fresh_login=1` callback marker, clearing the stored active thread id, and sending `new_session=true` for the first turn after sign-in.
 
@@ -432,8 +440,11 @@ Prompt optimization:
     ],
     "new_session": false
   },
-  "temperature": 0.7,
-  "max_tokens": 1000
+  "generation": {
+    "profile": "balanced",
+    "reasoning": {"mode": "auto", "effort": "auto"}
+  },
+  "temperature": 0.7
 }
 ```
 
@@ -442,6 +453,7 @@ Rules:
 - In manual Ask mode, `provider` + `model` gives deterministic targeting.
 - With `routing.smart_mode=true`, Ask uses the smart orchestration path.
 - With `routing.research_mode=true`, Ask uses orchestrator-managed web research with fresh sources for the current turn.
+- The resolved effective generation ceiling is used unchanged for provider execution and credit authorization.
 
 ### Response shape
 
@@ -461,6 +473,21 @@ Rules:
   "estimated_cost": 0.00123,
   "cost_currency": "USD",
   "finish_reason": "stop|length|tool|content_filter|error|null",
+  "completion_status": "complete|incomplete|failed",
+  "stop_cause": "natural|token_limit|context_limit|content_filter|error|unknown",
+  "generation_budget": {
+    "profile": "balanced",
+    "requested_max_output_tokens": 8192,
+    "effective_max_output_tokens": 8192,
+    "requested_reasoning_mode": "auto",
+    "effective_reasoning_mode": "standard",
+    "requested_reasoning_effort": "auto",
+    "effective_reasoning_effort": "medium",
+    "reasoning_disable_supported": true,
+    "reasoning_counts_against_output": true,
+    "policy_version": "generation-budget-v1"
+  },
+  "retry_with_more_room": {"available": false, "recommended_profile": null},
   "error": null,
   "web_source_items": [
     {"title": "Source title", "url": "https://example.com"}
@@ -510,9 +537,12 @@ Notes:
     ],
     "new_session": false
   },
+  "generation": {
+    "profile": "balanced",
+    "reasoning": {"mode": "auto", "effort": "auto"}
+  },
   "timeout_s": 30,
-  "temperature": 0.7,
-  "max_tokens": 1000
+  "temperature": 0.7
 }
 ```
 
@@ -522,12 +552,14 @@ Rules:
 - `routing.smart_mode` is ignored in compare mode by design.
 - With `routing.research_mode=true`, research runs once per compare turn and is shared across all selected targets for fairness.
 - Browser Ask sends `routing.research_mode=true` by default because the `Web` toggle starts on, and Browser Compare does the same because `With sources` starts on; users can turn either off for the current page session.
+- A target may provide its own `generation` object; it overrides the shared Compare generation value for that target only.
 
 Subscription enforcement:
 - The effective plan, model billing classes, feature access, and meter quantities are resolved server-side; client-supplied billing identifiers are ignored.
 - Entitlement/model denials return structured `403` responses before provider execution. Insufficient monthly AI credits return `402 insufficient_credits`; unsafe billing configuration returns a provider-safe `500`.
 - Smart Ask resolves and ranks only enabled models allowed by the effective plan, estimates every appropriate candidate from materialized input, bounded research context, model-specific multipliers, the exact clamped output ceiling, and any fixed retrieval charge, then removes unaffordable candidates. It reserves the first appropriate affordable candidate without an arbitrary percentage. A more expensive fallback must atomically supplement the same reservation before invocation; if that fails, the router skips it and continues with an affordable candidate.
 - Streaming reservations are created before the `StreamingResponse` is returned. Ask settles a successful model after its first meaningful output is emitted, releases model units on a pre-output disconnect, and still settles performed research once. Compare finalizes aggregate successful targets before `done`, or settles only partial targets whose output started on disconnect/error.
+- `POST /v1/billing/estimate-generation` runs the same per-target resolver and credit estimate without reserving credits. It returns the maximum temporary hold, remaining credits, and `can_authorize`; actual settlement releases unused held credits.
 
 Persistence:
 - One `llm_requests` + `llm_responses` row per compare target response.
@@ -637,6 +669,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 ```
 
 The first Cortex Analysis migration adds Compare response revision metadata and
@@ -648,8 +681,8 @@ SQLAlchemy reflects the new columns. Shared Ask/Compare session continuity
 itself remains implemented in persistence/session resolution logic.
 
 The billing foundation, Cortex revision table, unified-credit ledger,
-reservation-activity migration, model-pricing audit migration, and Cortex
-attribution migration are all required. They are additive and
+reservation-activity migration, model-pricing audit migration, Cortex
+attribution migration, and generation-budget audit migration are all required. They are additive and
 idempotent under the repository migration convention. PostgreSQL startup checks
 the required tables and columns and fails before serving provider routes when a
 migration is missing. See `docs/runbooks/db-migrations.md` for verification and
@@ -657,7 +690,7 @@ rollback guidance.
 
 ## OpenAI Compatibility Note
 
-For newer OpenAI models (example: `gpt-5.6-sol`) that reject `max_tokens`, the client retries with `max_completion_tokens`.
+GPT-5.6 and Codex-family models use the Responses API with `max_output_tokens` and resolved reasoning effort. Compatible Chat Completions models retain the adaptive `max_tokens` to `max_completion_tokens` retry when the provider rejects the legacy parameter.
 
 ## Research Behavior
 
@@ -677,8 +710,8 @@ For newer OpenAI models (example: `gpt-5.6-sol`) that reject `max_tokens`, the c
 Applied in `server/utils.py`:
 - Conversation history trimmed to last 10 messages.
 - Oversized conversation-history payloads are soft-trimmed server-side instead of rejected; the newest context is retained first and older or oversized message content is trimmed before provider calls.
-- `max_tokens` clamped to 2048.
-- Empty-success payloads (`finish_reason=length` with blank text) are normalized to provider errors for retry/fallback safety.
+- Ask/Compare generation profiles are resolved centrally against model, context, and operational limits. Explicit unsafe ceilings return `422`; omitted legacy calls retain Quick/2K.
+- Empty length-limited responses remain successful-but-incomplete billable work, even when reasoning consumed the allowance before visible output. Unexplained empty successes still normalize to provider errors.
 - Provider-native availability failures are sanitized before DTO/stream output. Upstream 503/high-demand/overloaded errors are tagged as `error.details.kind="transient_capacity"` and rendered as `This model is temporarily busy. Try again shortly or switch to another model.` instead of raw provider JSON.
 - Smart Ask keeps the existing automatic fallback loop for retryable provider failures. Manual Ask and Compare keep the user-selected model targets and return safe per-model errors when those explicit targets are unavailable.
 

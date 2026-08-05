@@ -77,13 +77,44 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
 own that table. The later unified-credit and activity scripts depend on the
 `20260718` billing foundation. PostgreSQL startup validates the complete table
-and column contract and exits before serving provider traffic if any script is
+and column contract, including generation-budget audit fields, and exits before serving provider traffic if any script is
 missing.
+
+### Generation budget audit migration
+
+`20260804_add_generation_budget_audit.sql` is additive and idempotent. It adds
+the resolved profile, requested/effective output ceilings, reasoning mode/effort,
+and policy version to `llm_requests`; it adds normalized `completion_status` and
+`stop_cause` to `llm_responses` and backfills existing rows. Apply it before the
+API version that requires provider-aware generation budgets, then restart every
+API process so reflected metadata is refreshed.
+
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'llm_requests'
+  AND column_name IN (
+    'generation_profile',
+    'requested_max_output_tokens',
+    'effective_max_output_tokens',
+    'generation_policy_version'
+  )
+ORDER BY column_name;
+
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'llm_responses'
+  AND column_name IN ('completion_status', 'stop_cause')
+ORDER BY column_name;
+```
 
 For breaking/large migrations:
 

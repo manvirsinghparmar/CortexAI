@@ -445,6 +445,7 @@ Response includes:
 - `GET /v1/whoami`
 - `GET /v1/entitlements`
 - `GET /v1/credits/transactions`
+- `POST /v1/billing/estimate-generation`
 - `POST /v1/billing/checkout-session`
 - `POST /v1/billing/portal-session`
 - `POST /v1/billing/webhook`
@@ -650,6 +651,17 @@ Prompt optimization (`/v1/optimize`):
 - responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) plus `fallback_reason`
 - if optimization is disabled, times out, fails, is rejected, or keeps the original, the API returns the original prompt with `was_optimized=false`
 - when the frontend Improve toggle is enabled, the user bubble always shows the prompt being sent in normal case. Optimization state renders as a right-aligned pill below the bubble: pending shows `Improving your prompt`, optimized shows `Prompt optimized` with `View original`, and kept-original shows `Already clear — sent as-is`. Ask response cards and Compare response tabs, cards, and summary remain hidden while optimization is pending, then appear when optimization resolves and model generation begins; cancelling during optimization leaves the placeholder response UI hidden
+
+## Generation Budgets
+
+- Ask and Compare accept `generation.profile` (`quick`, `balanced`, `deep`, or `extended`) or an explicit `generation.max_output_tokens`. Profile ceilings are 2,048, 8,192, 32,768, and 65,536 output tokens, then safely reduced to the selected model, context, and operational limits.
+- `generation.reasoning` accepts provider-neutral `mode` (`auto|off|on`) and effort (`auto|minimal|low|medium|high|xhigh|max`). The resolver validates the selected model and translates these values for provider adapters.
+- The React Answer depth control explicitly defaults to `balanced`. Legacy API callers that omit both `generation` and `max_tokens` remain on `quick`/2K. Supplying `generation` together with legacy `max_tokens`, or asking for an unsafe explicit custom ceiling, returns `422 invalid_generation_budget`.
+- The same resolved per-model ceiling drives provider execution and the maximum temporary AI-credit hold. `POST /v1/billing/estimate-generation` returns that hold without reserving it; successful settlement charges actual usage and releases the unused amount.
+- Responses expose `completion_status`, `stop_cause`, `generation_budget`, and `retry_with_more_room`. Length-limited responses preserve partial text as `incomplete`; Retry with more room is a new model call at the next profile and may use more credits.
+- `config/generation_profiles.yaml` is the budget source of truth. `GENERATION_BUDGET_POLICY_ENABLED=false` is the operational rollback switch to Quick/2K execution.
+
+See `docs/GENERATION_BUDGETS.md` for the full contract and `docs/runbooks/generation-budget-rollout.md` for deployment checks.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
@@ -873,6 +885,7 @@ Common `detail.code` values:
 - `paid_subscription_plan_required`
 - `stripe_customer_required`
 - `billing_provider_unavailable`
+- `invalid_generation_budget`
 
 Provider-model failures that originate from upstream APIs are normalized before
 they reach API/stream/frontend surfaces. `error.details.kind` carries the stable
@@ -881,11 +894,10 @@ failure class when available, such as `transient_capacity`, `rate_limited`,
 
 ## Output Guardrails (Current)
 
-- Route-level `max_tokens` is clamped to `2048` (`server/utils.py`).
-- OpenAI client defaults to `max_tokens=2048` when caller omits output cap.
-- If a provider returns an apparent success with empty text, routes normalize it to `provider_error` before DTO/stream output.
-- Content-filtered empty responses are marked non-retryable; other empty-success responses are retryable provider errors.
-- This prevents blank-success payloads from surfacing as empty assistant messages in UI/API responses.
+- Ask/Compare output ceilings are resolved centrally from `config/generation_profiles.yaml` and `config/model_registry.yaml`; there is no global 2,048 clamp for explicit profiles.
+- Legacy omitted requests and direct adapter calls retain the 2,048 Quick default for compatibility.
+- Explicit limits above the model/context/operational maximum are rejected with `422` rather than silently clipped.
+- Empty length-limited responses remain billable incomplete work, including cases where reasoning consumed the output allowance before visible text. Other unexplained empty successes continue through provider-error normalization.
 - Raw provider availability payloads (for example 503/high-demand/overloaded errors) are converted to client-safe messages before chat, compare, stream, and history rendering. Smart Ask still uses its existing fallback loop; manual Ask and Compare preserve explicit model choices and show `This model is temporarily busy. Try again shortly or switch to another model.` when the selected model is unavailable.
 
 ## Minimal Python SDK Snippet
@@ -1020,9 +1032,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260729_add_unified_ai
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_reservation_activity.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 ```
 
-- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs and therefore needs a role that owns `llm_requests`; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` counter contract; `20260730` adds reservation heartbeats used by automatic stale cleanup; `20260731` adds requested/served/pricing model identity, detailed usage, and price-rule evidence to historical LLM rows and needs a role that owns `llm_requests`/`llm_responses`; `20260802` adds the optional Cortex disagreement-note column used by the attributed result contract. The scripts are additive/idempotent. Restart the API after apply. PostgreSQL startup validates every required billing, pricing-audit, and Cortex column and exits before provider traffic when the schema is incomplete.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; and `20260804` adds generation-budget/reasoning audit fields plus normalized completion status. The scripts are additive/idempotent. Alteration scripts require ownership of `llm_requests`/`llm_responses`. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, and generation-budget columns before provider traffic.
 
 ## Release Gate
 
@@ -1224,6 +1237,7 @@ OpenAIProject/
       20260730_add_usage_reservation_activity.sql
       20260731_add_model_pricing_audit.sql
       20260802_add_cortex_analysis_attribution.sql
+      20260804_add_generation_budget_audit.sql
     repository.py
     session.py
     tables.py

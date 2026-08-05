@@ -40,6 +40,7 @@ interface ResponseCardProps {
   suggestedFollowUps?: string[];
   onSuggestedFollowUp?: (suggestion: string) => void | Promise<void>;
   onRegenerate?: () => void;
+  onRetryWithMoreRoom?: () => void;
   compareHighlights?: {
     fastest?: boolean;
     cheapest?: boolean;
@@ -57,6 +58,7 @@ export function ResponseCard({
   suggestedFollowUps = [],
   onSuggestedFollowUp,
   onRegenerate,
+  onRetryWithMoreRoom,
   compareHighlights,
 }: ResponseCardProps) {
   const [copied, setCopied] = useState(false);
@@ -85,6 +87,9 @@ export function ResponseCard({
   const metaPinned = !!loadingStatus || isFailed;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
+  const isIncomplete = response.completion_status === "incomplete";
+  const canRetryWithMoreRoom =
+    isIncomplete && response.retry_with_more_room?.available && !!onRetryWithMoreRoom;
   const showSuggestedFollowUps =
     suggestedFollowUps.length > 0 && !!onSuggestedFollowUp && !hasError && !showLoading;
   const responseId = String(response.request_id || `response-${slotIndex}`);
@@ -235,6 +240,24 @@ export function ResponseCard({
         )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
+
+      {isIncomplete && (
+        <div className={styles.incompleteNotice} role="status">
+          <div>
+            <strong>Response stopped at its token limit.</strong>
+            <span>The partial answer was preserved.</span>
+          </div>
+          {canRetryWithMoreRoom && (
+            <button
+              type="button"
+              onClick={onRetryWithMoreRoom}
+              title="Starts a new model call and uses additional AI credits"
+            >
+              Retry with more room
+            </button>
+          )}
+        </div>
+      )}
 
       {showSuggestedFollowUps && (
         <SuggestedFollowUps

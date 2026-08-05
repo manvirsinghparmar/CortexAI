@@ -4,6 +4,8 @@ import type {
   BillingSubscriptionResponse,
   CheckoutSessionResponse,
   PortalSessionResponse,
+  GenerationEstimateResponse,
+  GenerationProfile,
   SubscriptionPlanCode,
 } from "../types";
 
@@ -28,4 +30,20 @@ export function createCheckoutSession(
 
 export function createPortalSession(signal?: AbortSignal): Promise<PortalSessionResponse> {
   return post<PortalSessionResponse>("/v1/billing/portal-session", {}, signal);
+}
+
+export function estimateGeneration(
+  payload: {
+    prompt: string;
+    targets: Array<{ provider: string; model: string }>;
+    generation: { profile: GenerationProfile };
+    research_enabled: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<GenerationEstimateResponse> {
+  return post<GenerationEstimateResponse>(
+    "/v1/billing/estimate-generation",
+    payload,
+    signal,
+  );
 }

@@ -5,6 +5,10 @@ import {
     test,
 } from "../fixtures/responsive-e2e.mjs";
 
+function toNdjson(events) {
+    return events.map(event => `${JSON.stringify(event)}\n`).join("");
+}
+
 test("desktop uses the sidebar and top mode navigation", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -357,6 +361,102 @@ test("Improve keeps response cards hidden until optimization resolves", async ({
 
     await expect(pendingTurn.locator("article")).toHaveCount(1);
     await expect(pendingTurn).toContainText("Optimized browser answer.");
+});
+
+test("Answer depth sends one budget and preserves incomplete output for retry", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const requestBodies = [];
+    await page.route("**/v1/billing/estimate-generation", async route => {
+        const body = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                targets: (body.targets || []).map(target => ({
+                    ...target,
+                    profile: body.generation?.profile || "quick",
+                    effective_max_output_tokens: 8192,
+                    estimated_max_ai_credits: 4100,
+                })),
+                estimated_max_ai_credits: 4100,
+                remaining_ai_credits: 100000,
+                can_authorize: true,
+                temporary_hold_released_after_settlement: true,
+            }),
+        });
+    });
+    await page.route("**/v1/chat/stream", async route => {
+        const body = JSON.parse(route.request().postData() || "{}");
+        requestBodies.push(body);
+        const retry = requestBodies.length > 1;
+        const text = retry ? "Completed answer with more room." : "Partial answer kept for the user.";
+        const profile = retry ? "deep" : "balanced";
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: toNdjson([
+                { type: "start", mode: "single", provider: "openai", model: "gpt-5.1" },
+                { type: "line", text },
+                {
+                    type: "response_done",
+                    response: {
+                        request_id: retry ? "retry-budget-request" : "initial-budget-request",
+                        provider: "openai",
+                        model: "gpt-5.1",
+                        text,
+                        finish_reason: retry ? "stop" : "length",
+                        completion_status: retry ? "complete" : "incomplete",
+                        stop_cause: retry ? "natural" : "token_limit",
+                        generation_budget: {
+                            profile,
+                            requested_max_output_tokens: retry ? 32768 : 8192,
+                            effective_max_output_tokens: retry ? 32768 : 8192,
+                            requested_reasoning_mode: "auto",
+                            effective_reasoning_mode: "standard",
+                            requested_reasoning_effort: "auto",
+                            effective_reasoning_effort: retry ? "high" : "medium",
+                            reasoning_disable_supported: true,
+                            reasoning_counts_against_output: true,
+                            policy_version: "generation-budget-v1",
+                        },
+                        retry_with_more_room: {
+                            available: !retry,
+                            recommended_profile: retry ? null : "deep",
+                        },
+                        latency_ms: 300,
+                        estimated_cost: 0.001,
+                        token_usage: {
+                            prompt_tokens: 10,
+                            completion_tokens: retry ? 20 : 8192,
+                            total_tokens: retry ? 30 : 8202,
+                        },
+                        web_source_items: [],
+                    },
+                },
+                { type: "done", session_id: "generation-budget-session" },
+            ]),
+        });
+    });
+
+    const smart = page.getByRole("switch", { name: "Smart routing" });
+    if ((await smart.getAttribute("aria-checked")) === "true") await smart.click();
+    const depth = page.getByRole("combobox", { name: "Answer depth" });
+    await expect(depth).toHaveValue("balanced");
+
+    await page.locator("#promptInput").fill("Explain the provider budget contract");
+    await expect(page.getByText(/Up to 4,100 credits held/)).toBeVisible();
+    await page.locator("#submitBtn").click();
+
+    await expect(page.getByText("Partial answer kept for the user.")).toBeVisible();
+    await expect(page.getByText("Response stopped at its token limit.")).toBeVisible();
+    expect(requestBodies[0].generation).toEqual({ profile: "balanced" });
+
+    await page.getByRole("button", { name: "Retry with more room" }).click();
+    await expect.poll(() => requestBodies.length).toBe(2);
+    expect(requestBodies[1].generation).toEqual({ profile: "deep" });
+    await expect(page.getByText("Completed answer with more room.")).toBeVisible();
 });
 
 test("desktop Compare picker remains visible and selectable", async ({ responsiveApp }) => {

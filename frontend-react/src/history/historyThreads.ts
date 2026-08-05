@@ -158,6 +158,7 @@ function buildCompareSummary(
 
 function toChatResponse(entry: HistoryEntry): ChatResponse {
   const isError = /^\[error\]/i.test(entry.response);
+  const retryProfile = nextGenerationProfile(entry.generation_profile);
   return {
     request_id: entry.request_id || String(entry.id),
     response_version: entry.response_version ?? 1,
@@ -178,6 +179,27 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
     cost_currency: "USD",
     ai_credits: entry.ai_credits,
     credit_usage_estimated: entry.credit_usage_estimated,
+    completion_status: entry.completion_status ?? (isError ? "failed" : "complete"),
+    stop_cause: entry.stop_cause ?? (isError ? "error" : "unknown"),
+    generation_budget:
+      entry.generation_profile && entry.effective_max_output_tokens
+        ? {
+            profile: entry.generation_profile,
+            requested_max_output_tokens: entry.effective_max_output_tokens,
+            effective_max_output_tokens: entry.effective_max_output_tokens,
+            requested_reasoning_mode: "auto",
+            effective_reasoning_mode: entry.effective_reasoning_mode ?? "none",
+            requested_reasoning_effort: "auto",
+            effective_reasoning_effort: entry.effective_reasoning_effort ?? "none",
+            reasoning_disable_supported: true,
+            reasoning_counts_against_output: true,
+            policy_version: entry.generation_policy_version ?? "legacy-unrecorded",
+          }
+        : undefined,
+    retry_with_more_room: {
+      available: entry.completion_status === "incomplete" && Boolean(retryProfile),
+      recommended_profile: retryProfile,
+    },
     error: isError
       ? {
           code: "persisted_error",
@@ -189,8 +211,26 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
       : undefined,
     web_source_items: entry.web_source_items ?? [],
     timestamp: entry.timestamp,
-    ui_status: isError ? "failed" : "complete",
+    ui_status: isError
+      ? "failed"
+      : entry.completion_status === "incomplete"
+        ? "incomplete"
+        : "complete",
   };
+}
+
+function nextGenerationProfile(
+  profile: HistoryEntry["generation_profile"],
+): HistoryEntry["generation_profile"] | undefined {
+  const order: NonNullable<HistoryEntry["generation_profile"]>[] = [
+    "quick",
+    "balanced",
+    "deep",
+    "extended",
+  ];
+  if (!profile) return undefined;
+  const index = order.indexOf(profile);
+  return index >= 0 && index + 1 < order.length ? order[index + 1] : undefined;
 }
 
 function compareTurnKey(entry: HistoryEntry): string {

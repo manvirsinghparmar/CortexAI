@@ -79,6 +79,36 @@
   grid-column: 2;
 }
 
+.depthControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.depthControl select {
+  max-width: 190px;
+  min-height: 30px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 9px;
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+  padding: 4px 26px 4px 8px;
+  font: inherit;
+}
+
+.depthControl select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.depthControl small {
+  color: var(--cx-ink-400);
+  font: 500 10px/1.2 var(--font-mono);
+}
+
 .actions {
   display: flex;
   grid-column: 3;
@@ -172,6 +202,21 @@
     font-size: 16px;
     line-height: 24px;
     padding: 2px 4px 3px;
+  }
+
+  .depthControl > span,
+  .depthControl small {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .depthControl select {
+    width: min(100%, 172px);
+    max-width: 172px;
   }
 
   .submitButton {

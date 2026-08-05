@@ -286,6 +286,45 @@
   color: var(--cx-accent);
 }
 
+.incompleteNotice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--cx-warn-text) 24%, var(--cx-hairline));
+  border-bottom: 1px solid color-mix(in srgb, var(--cx-warn-text) 24%, var(--cx-hairline));
+  background: var(--cx-warn-soft);
+  color: var(--cx-warn-text);
+  padding: 12px 24px;
+  font: 500 12px/1.4 var(--font-sans);
+}
+
+.incompleteNotice div {
+  display: grid;
+  gap: 2px;
+}
+
+.incompleteNotice strong {
+  color: inherit;
+}
+
+.incompleteNotice button {
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: var(--cx-r-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 7px 10px;
+  font: 650 12px/1 var(--font-sans);
+}
+
+.incompleteNotice button:hover,
+.incompleteNotice button:focus-visible {
+  background: color-mix(in srgb, var(--cx-warn-text) 10%, transparent);
+}
+
 .citationRoot {
   position: relative;
   display: inline-flex;

@@ -24,7 +24,7 @@ import styles from "./ResultsSection.module.css";
 export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
   const mode = useChatStore((s) => s.mode);
-  const { regenerate, submitFollowUp } = useChat();
+  const { regenerate, retryWithMoreRoom, submitFollowUp } = useChat();
   const { run: runCortexAnalysis } = useCortexAnalysis();
   const sectionRef = useRef<HTMLElement | null>(null);
   const turnRefs = useRef(new Map<string, HTMLElement>());
@@ -103,6 +103,7 @@ export function ResultsSection() {
               responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onRetryWithMoreRoom={retryWithMoreRoom}
               onAnalyze={runCortexAnalysis}
               onSuggestedFollowUp={submitFollowUp}
             />
@@ -114,6 +115,7 @@ export function ResultsSection() {
               responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onRetryWithMoreRoom={retryWithMoreRoom}
               onSuggestedFollowUp={submitFollowUp}
               showSuggestedFollowUps={mode === "single" && turn.id === latestTurnId}
             />
@@ -130,6 +132,7 @@ interface TurnProps {
   responseStartIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
+  onRetryWithMoreRoom: (turnId: string, responseIndex: number) => Promise<void>;
   onSuggestedFollowUp: (suggestion: string) => Promise<void>;
   onAnalyze?: (turnId: string) => Promise<void>;
   showSuggestedFollowUps?: boolean;
@@ -143,6 +146,7 @@ const SingleTurn = memo(function SingleTurn({
   responseStartIndex,
   registerTurn,
   onRegenerate,
+  onRetryWithMoreRoom,
   onSuggestedFollowUp,
   showSuggestedFollowUps = false,
 }: TurnProps) {
@@ -170,6 +174,7 @@ const SingleTurn = memo(function SingleTurn({
             }
             onSuggestedFollowUp={onSuggestedFollowUp}
             onRegenerate={() => void onRegenerate(turn.id, responseIndex)}
+            onRetryWithMoreRoom={() => void onRetryWithMoreRoom(turn.id, responseIndex)}
           />
         ))}
     </article>
@@ -182,6 +187,7 @@ const CompareTurn = memo(function CompareTurn({
   responseStartIndex,
   registerTurn,
   onRegenerate,
+  onRetryWithMoreRoom,
   onAnalyze,
 }: TurnProps) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
@@ -389,6 +395,7 @@ const CompareTurn = memo(function CompareTurn({
                     researchEnabled={turn.researchEnabled}
                     optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
                     onRegenerate={() => void onRegenerate(turn.id, index)}
+                    onRetryWithMoreRoom={() => void onRetryWithMoreRoom(turn.id, index)}
                     compareHighlights={metricHighlights[index]}
                   />
                 </div>

@@ -32,6 +32,7 @@ describe("response regeneration", () => {
       researchMode: false,
       compareResearchMode: true,
       optimizeMode: false,
+      generationProfile: "balanced",
       selectedModelKey: "openai:gpt-5.1",
       compareModelKeys: [
         "openai:gpt-5.1",
@@ -169,6 +170,49 @@ describe("response regeneration", () => {
     expect(regeneratedTurn?.compareSummary?.total_tokens).toBe(150);
     expect(regeneratedTurn?.compareSummary?.total_cost).toBeCloseTo(0.004);
     expect(state.activeTurnId).toBe(source.id);
+  });
+
+  it("retries a clipped Compare card with the recommended larger profile", async () => {
+    const source = compareTurn("compare-clipped", "Explain this deeply");
+    source.responses[1] = {
+      ...source.responses[1],
+      text: "Partial answer",
+      completion_status: "incomplete",
+      stop_cause: "token_limit",
+      retry_with_more_room: { available: true, recommended_profile: "deep" },
+    };
+    useChatStore.setState({
+      mode: "compare",
+      turns: [source],
+      activeTurnId: source.id,
+      responses: source.responses,
+    });
+    vi.mocked(streamChat).mockReturnValue(
+      chatRegenerationStream(
+        response("compare-retry-deep", "claude", "claude-sonnet-4-5", {
+          text: "Complete deep answer",
+          completion_status: "complete",
+        }),
+      ),
+    );
+    const { result } = renderHook(() => useChat());
+
+    await act(async () => {
+      await result.current.retryWithMoreRoom(source.id, 1);
+    });
+
+    expect(vi.mocked(streamChat).mock.calls[0]?.[0]).toMatchObject({
+      provider: "claude",
+      model: "claude-sonnet-4-5",
+      generation: { profile: "deep" },
+      regeneration: {
+        source_request_id: source.responses[1].request_id,
+        retry_reason: "output_limit",
+      },
+    });
+    expect(useChatStore.getState().turns[0]?.responses[1]?.text).toBe(
+      "Complete deep answer",
+    );
   });
 
   it("targets only the clicked model and leaves other Compare cards unchanged", async () => {

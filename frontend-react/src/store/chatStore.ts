@@ -10,6 +10,7 @@ import type {
   HistoryEntry,
   HistoryThread,
   PromptOptimizationState,
+  GenerationProfile,
   ResponseRunStatus,
   TurnStatus,
 } from "../types";
@@ -54,6 +55,8 @@ interface ChatStoreState {
   setResearchMode: (v: boolean) => void;
   setCompareResearchMode: (v: boolean) => void;
   setOptimizeMode: (v: boolean) => void;
+  generationProfile: GenerationProfile;
+  setGenerationProfile: (profile: GenerationProfile) => void;
 
   selectedModelKey: string;
   setSelectedModelKey: (key: string) => void;
@@ -143,6 +146,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
   setResearchMode: (v) => set({ researchMode: v }),
   setCompareResearchMode: (v) => set({ compareResearchMode: v }),
   setOptimizeMode: (v) => set({ optimizeMode: v }),
+  generationProfile: "balanced",
+  setGenerationProfile: (profile) => set({ generationProfile: profile }),
 
   selectedModelKey: "",
   setSelectedModelKey: (key) => set({ selectedModelKey: key }),

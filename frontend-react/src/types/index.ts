@@ -20,6 +20,25 @@ export interface ChatRoutingRequest {
 
 export type AttachmentUsageRole = "primary" | "reference";
 export type AttachmentTransformMode = "auto" | "text_only" | "vision_pages" | "table_summary";
+export type GenerationProfile = "quick" | "balanced" | "deep" | "extended";
+export type ReasoningMode = "auto" | "off" | "on";
+export type ReasoningEffort =
+  | "auto"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export interface GenerationRequest {
+  profile?: GenerationProfile;
+  max_output_tokens?: number;
+  reasoning?: {
+    mode?: ReasoningMode;
+    effort?: ReasoningEffort;
+  };
+}
 
 export interface AttachmentRequestItem {
   file_id: string;
@@ -39,7 +58,9 @@ export interface ChatRequest {
   regeneration?: {
     source_request_id: string;
     refresh_research?: boolean;
+    retry_reason?: "output_limit";
   };
+  generation?: GenerationRequest;
   temperature?: number;
   max_tokens?: number;
 }
@@ -47,6 +68,7 @@ export interface ChatRequest {
 export interface CompareTargetRequest {
   provider: string;
   model?: string;
+  generation?: GenerationRequest;
 }
 
 export interface CompareRequest {
@@ -57,6 +79,7 @@ export interface CompareRequest {
   routing?: ChatRoutingRequest;
   context?: UserContextRequest;
   attachments?: AttachmentRequestItem[];
+  generation?: GenerationRequest;
   timeout_s?: number;
   temperature?: number;
   max_tokens?: number;
@@ -78,6 +101,7 @@ export type ResponseRunStatus =
   | "streaming"
   | "finalizing"
   | "complete"
+  | "incomplete"
   | "failed";
 
 export interface ApiError {
@@ -119,6 +143,24 @@ export interface ChatResponse {
   ai_credits?: number;
   credit_usage_estimated?: boolean;
   finish_reason?: string;
+  completion_status?: "complete" | "incomplete" | "failed";
+  stop_cause?: string;
+  generation_budget?: {
+    profile: string;
+    requested_max_output_tokens: number;
+    effective_max_output_tokens: number;
+    requested_reasoning_mode: string;
+    effective_reasoning_mode: string;
+    requested_reasoning_effort: string;
+    effective_reasoning_effort: string;
+    reasoning_disable_supported: boolean;
+    reasoning_counts_against_output: boolean;
+    policy_version: string;
+  };
+  retry_with_more_room?: {
+    available: boolean;
+    recommended_profile?: GenerationProfile;
+  };
   error?: ApiError;
   web_source_items: WebSourceItem[];
   timestamp: string;
@@ -191,6 +233,20 @@ export interface BillingPlansResponse {
   billing_period: "monthly";
   billing_enabled: boolean;
   plans: PublicBillingPlan[];
+}
+
+export interface GenerationEstimateResponse {
+  targets: Array<{
+    provider: string;
+    model: string;
+    profile: string;
+    effective_max_output_tokens: number;
+    estimated_max_ai_credits: number;
+  }>;
+  estimated_max_ai_credits: number;
+  remaining_ai_credits: number;
+  can_authorize: boolean;
+  temporary_hold_released_after_settlement: boolean;
 }
 
 export interface BillingSubscriptionResponse {
@@ -308,6 +364,9 @@ export interface ModelCatalogItem {
   aliases?: string[];
   reasoning_modes?: string[];
   default_reasoning_mode?: string;
+  reasoning_efforts?: string[];
+  reasoning_disable_supported?: boolean;
+  reasoning_counts_against_output?: boolean;
   pricing_source_url?: string;
   lifecycle_source_url?: string;
   source_verified_at?: string;
@@ -366,6 +425,13 @@ export interface HistoryEntry {
   pricing_version?: string;
   pricing_unknown?: boolean;
   response_version?: number;
+  generation_profile?: GenerationProfile;
+  effective_max_output_tokens?: number;
+  effective_reasoning_mode?: string;
+  effective_reasoning_effort?: string;
+  generation_policy_version?: string;
+  completion_status?: "complete" | "incomplete" | "failed";
+  stop_cause?: string;
   response: string;
   latency_ms?: number;
   prompt_tokens?: number;

@@ -116,6 +116,29 @@ describe("ResponseCard", () => {
     expect(stats?.querySelectorAll("svg")).toHaveLength(4);
   });
 
+  it("preserves a token-limited partial answer and offers a larger retry", () => {
+    const onRetry = vi.fn();
+    render(
+      <ResponseCard
+        response={{
+          ...response(false, "Partial but useful answer"),
+          completion_status: "incomplete",
+          stop_cause: "token_limit",
+          retry_with_more_room: {
+            available: true,
+            recommended_profile: "deep",
+          },
+        }}
+        onRetryWithMoreRoom={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("Partial but useful answer")).toBeInTheDocument();
+    expect(screen.getByText("Response stopped at its token limit.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry with more room" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it("shows live elapsed loading meta without placeholder zero metrics", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-09T00:00:08.000Z"));

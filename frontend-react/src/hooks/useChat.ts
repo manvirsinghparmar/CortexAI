@@ -28,6 +28,7 @@ import type {
   CompareRequest,
   ConversationHistoryItem,
   FileUploadResponse,
+  GenerationProfile,
   PromptOptimizationState,
   ResponseRunStatus,
   UserContextRequest,
@@ -190,7 +191,11 @@ export function useChat() {
     [submit],
   );
 
-  const regenerate = useCallback(async (turnId: string, responseIndex = 0) => {
+  const regenerate = useCallback(async (
+    turnId: string,
+    responseIndex = 0,
+    generationProfileOverride?: GenerationProfile,
+  ) => {
     const state = useChatStore.getState();
     const sourceTurn = state.turns.find((turn) => turn.id === turnId);
     const sourceResponse = sourceTurn?.responses[responseIndex];
@@ -227,10 +232,15 @@ export function useChat() {
         researchEnabledOverride: !!sourceTurn.researchEnabled,
         regenerationSourceRequestId:
           sourceTurn.mode === "compare" ? sourceResponse.request_id : undefined,
+        generationProfileOverride,
       });
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const latest = useChatStore.getState();
+      if (generationProfileOverride) {
+        latest.updateTurnResponse(turnId, responseIndex, sourceResponse);
+        latest.setTurnStatus(turnId, "complete");
+      }
       if (isSubscriptionDenial(err)) {
         latest.setSubscriptionError(toSubscriptionError(err));
         latest.setError(null);
@@ -238,6 +248,11 @@ export function useChat() {
         return;
       }
       const message = toFriendlyError(err);
+      if (generationProfileOverride) {
+        latest.setError(`Retry failed. The partial answer was kept. ${message}`);
+        latest.setStreaming(false);
+        return;
+      }
       if (latest.activeTurnId) {
         markTurnResponsesFailed(latest.activeTurnId, message);
         latest.setTurnStatus(latest.activeTurnId, "error");
@@ -248,6 +263,17 @@ export function useChat() {
       clearRequestController(controller);
     }
   }, []);
+
+  const retryWithMoreRoom = useCallback(
+    async (turnId: string, responseIndex = 0) => {
+      const state = useChatStore.getState();
+      const response = state.turns.find((turn) => turn.id === turnId)?.responses[responseIndex];
+      const profile = response?.retry_with_more_room?.recommended_profile;
+      if (!profile) return;
+      await regenerate(turnId, responseIndex, profile);
+    },
+    [regenerate],
+  );
 
   const cancel = useCallback(() => {
     activeAbortController?.abort();
@@ -266,7 +292,7 @@ export function useChat() {
     state.setStreaming(false);
   }, []);
 
-  return { submit, submitFollowUp, regenerate, cancel };
+  return { submit, submitFollowUp, regenerate, retryWithMoreRoom, cancel };
 }
 
 async function runAskTurn({
@@ -313,6 +339,7 @@ async function runAskTurn({
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    generation: { profile: state.generationProfile },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -420,7 +447,11 @@ async function runAskTurn({
       started_at: current.started_at ?? startedAt,
       completed_at: finalResponse.error ? current.completed_at : completedAt,
       failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
-      ui_status: finalResponse.error ? "failed" : "complete",
+      ui_status: finalResponse.error
+        ? "failed"
+        : finalResponse.completion_status === "incomplete"
+          ? "incomplete"
+          : "complete",
     } as ChatResponse;
     latest.updateTurnResponse(activeTurnId, 0, completedResponse);
     const resolvedSession = completedResponse.session_id;
@@ -482,6 +513,7 @@ async function runCompareTurn({
     initial_query: initialQuery,
     targets,
     routing: { smart_mode: false, research_mode: researchEnabled },
+    generation: { profile: state.generationProfile },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -537,7 +569,11 @@ async function runCompareTurn({
           started_at: current.started_at ?? startedAt,
           completed_at: failed ? current.completed_at : completedAt,
           failed_at: failed ? current.failed_at ?? completedAt : current.failed_at,
-          ui_status: failed ? "failed" : "complete",
+          ui_status: failed
+            ? "failed"
+            : chunk.response.completion_status === "incomplete"
+              ? "incomplete"
+              : "complete",
         });
       } else if (chunk.type === "done") {
         if (chunk.compare) latest.setTurnCompareSummary(activeTurnId, chunk.compare);
@@ -574,6 +610,7 @@ async function runRegenerateResponse({
   targetOverride,
   researchEnabledOverride,
   regenerationSourceRequestId,
+  generationProfileOverride,
 }: {
   turnId: string;
   responseIndex: number;
@@ -585,6 +622,7 @@ async function runRegenerateResponse({
   targetOverride?: Partial<CompareTargetRequest>;
   researchEnabledOverride?: boolean;
   regenerationSourceRequestId?: string;
+  generationProfileOverride?: GenerationProfile;
 }) {
   const state = useChatStore.getState();
   const selected = parseModelKey(state.selectedModelKey);
@@ -599,10 +637,14 @@ async function runRegenerateResponse({
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    generation: { profile: generationProfileOverride ?? state.generationProfile },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
     regeneration: regenerationSourceRequestId
-      ? { source_request_id: regenerationSourceRequestId }
+      ? {
+          source_request_id: regenerationSourceRequestId,
+          retry_reason: generationProfileOverride ? "output_limit" : undefined,
+        }
       : undefined,
   };
 
@@ -686,7 +728,11 @@ async function runRegenerateResponse({
       started_at: current.started_at ?? startedAt,
       completed_at: finalResponse.error ? current.completed_at : completedAt,
       failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
-      ui_status: finalResponse.error ? "failed" : "complete",
+      ui_status: finalResponse.error
+        ? "failed"
+        : finalResponse.completion_status === "incomplete"
+          ? "incomplete"
+          : "complete",
     } as ChatResponse;
     latest.updateTurnResponse(turnId, responseIndex, completedResponse);
     const resolvedSession = completedResponse.session_id;

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from db import (
     check_usage_limit,
     create_api_key,
+    create_context_snapshot,
     create_llm_request,
     create_llm_response,
     create_request_attachment,
@@ -32,6 +33,7 @@ from db import (
     get_or_create_service_user,
     get_or_create_user_by_cognito,
     get_user_by_api_key,
+    record_cache_reuse_event,
     save_compare_summary,
     save_message,
     update_api_key_last_used,
@@ -43,6 +45,7 @@ from db.session import SessionLocal
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server import byok_service
 from server.dependencies import AuthResult
+from server.utils import context_summary_payload
 from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
@@ -117,6 +120,43 @@ def env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def persist_context_summary(
+    *,
+    context_request: object | None,
+    user_id: UUID,
+) -> None:
+    """Best-effort persistence for deterministic reusable context summaries."""
+
+    payload = context_summary_payload(context_request)
+    session_id = coerce_uuid(str(getattr(context_request, "session_id", "") or ""))
+    if payload is None or session_id is None:
+        return
+    try:
+        with db_uow() as db_session:
+            create_context_snapshot(
+                db_session,
+                user_id=user_id,
+                session_id=session_id,
+                context_text=payload["context_text"],
+                source_message_range=payload["source_message_range"],
+                source_hash=payload["source_hash"],
+                summary_policy_version=payload["summary_policy_version"],
+            )
+    except Exception:
+        # Context compaction is an optimization and must never block inference.
+        logger.warning(
+            "Context summary persistence unavailable; continuing with compacted context",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "event": "context.summary.persistence_unavailable",
+                    "session_id": str(session_id),
+                    "source_hash_prefix": payload["source_hash"][:12],
+                }
+            },
+        )
 
 
 def coerce_uuid(value: str | None) -> UUID | None:
@@ -1053,6 +1093,29 @@ def persist_routing_telemetry(
         create_routing_attempts(db_session, routing_decision_id, attempt_rows)
 
 
+def _record_research_reuse_event(
+    db_session: Session,
+    *,
+    user_id: UUID,
+    request_id: str,
+    responses: Sequence[UnifiedResponse],
+) -> None:
+    """Persist one research decision per Ask/Compare operation."""
+
+    for response in responses:
+        metadata = response.metadata if isinstance(response.metadata, dict) else {}
+        if not bool(metadata.get("research_used")):
+            continue
+        record_cache_reuse_event(
+            db_session,
+            user_id=user_id,
+            request_id=request_id,
+            operation_type="research",
+            reused=bool(metadata.get("research_reused")),
+        )
+        return
+
+
 def build_error_response(
     *,
     provider: str,
@@ -1208,6 +1271,12 @@ def persist_chat_interaction(
             response,
             research_mode="on" if research_mode else "off",
         )
+        _record_research_reuse_event(
+            db_session,
+            user_id=resolution.user_id,
+            request_id=response.request_id,
+            responses=(response,),
+        )
 
         if regeneration is None and not response.is_error and response.text:
             assistant_text = privacy_service.sanitize_assistant_message_for_storage(response.text)
@@ -1316,6 +1385,13 @@ def persist_compare_interaction(
                 )
             except Exception:
                 logger.exception("Savings persistence failed for compare request")
+
+        _record_research_reuse_event(
+            db_session,
+            user_id=resolution.user_id,
+            request_id=str(request_group_id),
+            responses=responses,
+        )
 
         if responses and any(not r.is_error for r in responses):
             save_compare_summary(

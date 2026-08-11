@@ -82,6 +82,10 @@ class ChatResponseDTO(BaseModel):
     pricing_snapshot: Dict[str, Any] = Field(default_factory=dict)
     ai_credits: int = 0
     credit_usage_estimated: bool = False
+    cache_hit: bool = False
+    cache_hit_ratio: float = 0.0
+    cache_savings_ai_credits: int = 0
+    uncached_equivalent_ai_credits: int = 0
     finish_reason: Optional[str] = None
     completion_status: Literal["complete", "incomplete", "failed"] = "complete"
     stop_cause: str = "unknown"
@@ -185,6 +189,10 @@ class ChatResponseDTO(BaseModel):
             pricing_snapshot=dict(getattr(ur, "pricing_snapshot", {}) or {}),
             ai_credits=credit_usage.ai_credits,
             credit_usage_estimated=credit_usage.credit_usage_estimated,
+            cache_hit=credit_usage.cache_hit,
+            cache_hit_ratio=credit_usage.cache_hit_ratio,
+            cache_savings_ai_credits=credit_usage.cache_savings_ai_credits,
+            uncached_equivalent_ai_credits=credit_usage.uncached_equivalent_ai_credits,
             finish_reason=ur.finish_reason,
             completion_status=completion_status,
             stop_cause=stop_cause or "unknown",
@@ -218,6 +226,7 @@ class CompareResponseDTO(BaseModel):
     total_tokens: int
     total_cost: float
     total_ai_credits: int = 0
+    total_cache_savings_ai_credits: int = 0
     timestamp: str
 
     @classmethod
@@ -251,6 +260,9 @@ class CompareResponseDTO(BaseModel):
             total_ai_credits=(
                 sum(item.ai_credits for item in response_dtos)
                 + research_credits
+            ),
+            total_cache_savings_ai_credits=sum(
+                item.cache_savings_ai_credits for item in response_dtos
             ),
             timestamp=mur.timestamp,
         )
@@ -420,6 +432,23 @@ class UsageSummaryDTO(BaseModel):
     sessionModes: UsageSummarySessionModesDTO
     switchedMidSession: int
     activityDaily: List[UsageSummaryActivityDayDTO] = Field(default_factory=list)
+    totalAiCredits: int = 0
+    averageAiCreditsPerRequest: float = 0.0
+    normalInputTokens: int = 0
+    cachedInputTokens: int = 0
+    cacheWriteTokens: int = 0
+    cacheHitRatio: float = 0.0
+    cacheSavingsAiCredits: int = 0
+    providerCostCacheSavings: float = 0.0
+    reservationCredits: int = 0
+    settledCredits: int = 0
+    reservationReleaseRatio: float = 0.0
+    outputTokenUtilization: float = 0.0
+    reasoningTokens: int = 0
+    researchRequests: int = 0
+    researchReuseRate: float = 0.0
+    promptOptimizationReuseRate: float = 0.0
+    cortexAnalysisReuseRate: float = 0.0
 
 
 class SavingsTotalsDTO(BaseModel):
@@ -575,11 +604,20 @@ class CreditTransactionDTO(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     input_tokens: int
+    normal_input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
     output_tokens: int
     input_credits: int
+    normal_input_credits: int = 0
+    cached_input_credits: int = 0
+    cache_write_credits: int = 0
     output_credits: int
     fixed_credits: int
     total_credits: int
+    uncached_equivalent_credits: int = 0
+    cache_savings_credits: int = 0
     provider_cost_usd: float
     usage_estimated: bool
     pricing_version: str

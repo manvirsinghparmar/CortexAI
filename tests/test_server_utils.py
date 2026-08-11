@@ -5,7 +5,10 @@ from server.utils import (
     normalize_empty_success_response,
     redact_sensitive_headers,
     sanitize_provider_error_response,
+    context_summary_payload,
+    validate_and_trim_context,
 )
+from server.schemas.requests import ConversationHistoryItem, UserContextRequest
 
 
 def _build_response(
@@ -155,3 +158,30 @@ def test_sanitize_provider_error_response_preserves_explicit_bad_request_message
     )
 
     assert sanitize_provider_error_response(original) == original
+
+
+def test_context_compaction_is_deterministic_and_preserves_latest_turn(monkeypatch):
+    monkeypatch.setenv("CONTEXT_COMPACTION_ENABLED", "true")
+    monkeypatch.setenv("CONTEXT_COMPACTION_USABLE_WINDOW_TOKENS", "1000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD_RATIO", "0.5")
+    older = "Older discussion sentence. " * 250
+    history = [
+        ConversationHistoryItem(role="user", content=older),
+        ConversationHistoryItem(role="assistant", content="Keep URL https://example.com and ID 42 exactly."),
+        ConversationHistoryItem(role="user", content="Immediately preceding question"),
+        ConversationHistoryItem(role="assistant", content="Immediately preceding answer"),
+    ]
+    first = UserContextRequest(session_id="00000000-0000-0000-0000-000000000001", conversation_history=history)
+    second = UserContextRequest(session_id=first.session_id, conversation_history=history)
+
+    validate_and_trim_context(first)
+    validate_and_trim_context(second)
+
+    assert len(first.conversation_history or []) == 3
+    assert first.conversation_history == second.conversation_history
+    assert first.conversation_history[-2].content == "Immediately preceding question"
+    assert first.conversation_history[-1].content == "Immediately preceding answer"
+    payload = context_summary_payload(first)
+    assert payload is not None
+    assert payload["summary_policy_version"] == "context-summary-v1"
+    assert len(payload["source_hash"]) == 64

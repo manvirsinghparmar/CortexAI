@@ -246,15 +246,6 @@ def resolve_generation_budget(
         tags=[str(tag).lower() for tag in candidate.tags],
     )
 
-    minimum_by_effort = {"high": 8192, "xhigh": 32768, "max": 32768}
-    minimum = minimum_by_effort.get(effective_effort, 0)
-    if explicit_max not in (None, "") or legacy_max_tokens is not None:
-        if minimum and effective_max < min(minimum, allowed_max):
-            raise GenerationPolicyError(
-                f"Reasoning effort '{effective_effort}' requires at least "
-                f"{min(minimum, allowed_max)} output tokens for {provider}:{model}"
-            )
-
     return GenerationBudgetResolution(
         profile=profile,
         requested_max_output_tokens=requested_max,

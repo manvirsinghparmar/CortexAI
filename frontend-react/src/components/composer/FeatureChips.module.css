@@ -203,6 +203,34 @@
   .tooltip {
     max-width: min(180px, calc(100vw - 24px));
   }
+
+  .tooltipStart {
+    right: 0;
+    left: auto;
+  }
+
+  .tooltipStart::after {
+    right: 14px;
+    left: auto;
+  }
+
+  .tooltipCenter {
+    right: 0;
+    left: auto;
+    transform: translateY(3px);
+  }
+
+  .chip:focus-visible + .tooltipCenter,
+  .tooltipVisible.tooltipCenter {
+    transform: translateY(0);
+  }
+
+}
+
+@media (max-width: 760px) and (hover: hover) {
+  .chipWrap:hover .tooltipCenter {
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 430px) {

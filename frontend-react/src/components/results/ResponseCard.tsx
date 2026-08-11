@@ -43,7 +43,6 @@ interface ResponseCardProps {
   onRetryWithMoreRoom?: () => void;
   compareHighlights?: {
     fastest?: boolean;
-    cheapest?: boolean;
   };
 }
 
@@ -78,12 +77,12 @@ export function ResponseCard({
   const durationMs = resolveDisplayDurationMs(response);
   const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
   const isFailed = hasError || response.ui_status === "failed";
-  const hasCost = !loadingStatus && !isFailed && response.estimated_cost > 0;
   const aiCredits = response.ai_credits ?? 0;
   const hasCredits = !loadingStatus && !isFailed && aiCredits > 0;
+  const cacheSavings = Math.max(0, response.cache_savings_ai_credits ?? 0);
   const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
   const hasMetaContent =
-    !!loadingStatus || isFailed || hasCompletedMetrics || hasCost || hasCredits;
+    !!loadingStatus || isFailed || hasCompletedMetrics || hasCredits;
   const metaPinned = !!loadingStatus || isFailed;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
@@ -199,21 +198,6 @@ export function ResponseCard({
                     {response.credit_usage_estimated ? " estimated" : ""}
                   </span>
                 )}
-                {hasCost && (
-                  <span
-                    className={`${styles.metricPill} ${
-                      compareHighlights?.cheapest ? styles.metricHighlight : ""
-                    }`}
-                  >
-                    <CortexIcon name="cost" />${formatCost(response.estimated_cost)}
-                    {compareHighlights?.cheapest && (
-                      <span className={`${styles.winnerLabel} winner-label`}>
-                        {" "}
-                        &middot; Cheapest
-                      </span>
-                    )}
-                  </span>
-                )}
               </>
             )}
           </div>
@@ -237,6 +221,11 @@ export function ResponseCard({
           />
         ) : (
           <ResponseMarkdown text={responseText} sources={response.web_source_items} />
+        )}
+        {cacheSavings > 0 && !hasError && !showLoading && (
+          <div className={styles.cacheSavings} role="status">
+            Saved ~{cacheSavings.toLocaleString()} credits through context reuse
+          </div>
         )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
@@ -713,10 +702,6 @@ function formatMetricDurationSeconds(durationMs: number) {
 
 function formatDurationSeconds(durationMs: number) {
   return `${(Math.max(0, durationMs) / 1000).toFixed(1)} sec`;
-}
-
-function formatCost(cost: number) {
-  return cost.toFixed(4);
 }
 
 function formatElapsedClock(durationMs: number) {

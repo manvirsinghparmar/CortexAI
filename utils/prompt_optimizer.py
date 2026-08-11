@@ -1,11 +1,13 @@
 """Prompt optimizer helpers used by orchestrator and API routes."""
 
 import json
+import hashlib
 import os
 import re
 import time
 from typing import Any, Tuple
 
+from config.cache_optimization import OPTIMIZER_PROMPT_VERSION
 from config.provider_catalog import (
     get_provider_api_key_envs,
     get_provider_default_model_envs,
@@ -16,6 +18,30 @@ from models.user_context import UserContext
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def prompt_optimization_cache_key(
+    *,
+    original_prompt: str,
+    relevant_context: str,
+    optimizer_provider: str,
+    optimizer_model: str,
+    prompt_version: str = OPTIMIZER_PROMPT_VERSION,
+) -> str:
+    normalized_prompt = re.sub(r"\s+", " ", str(original_prompt or "").strip())
+    context_hash = hashlib.sha256(
+        str(relevant_context or "").encode("utf-8")
+    ).hexdigest()
+    material = "\n".join(
+        (
+            normalized_prompt,
+            context_hash,
+            str(optimizer_provider or "").strip().lower(),
+            str(optimizer_model or "").strip(),
+            prompt_version,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 _PLAIN_SYSTEM_INSTRUCTION = (
     "You are a prompt optimization expert. "
@@ -606,6 +632,16 @@ class PromptOptimizer:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_output_tokens,
+            "_cache_scope": {
+                "scope_id": hashlib.sha256(
+                    (original_prompt.strip() + "\n" + str(context_hint or "")).encode("utf-8")
+                ).hexdigest(),
+                "mode": "optimize",
+                "stable_context_hash": hashlib.sha256(
+                    _JSON_SYSTEM_INSTRUCTION.encode("utf-8")
+                ).hexdigest(),
+                "retention_policy": "ephemeral",
+            },
         }
         if self.provider == "openai":
             completion_kwargs["response_format"] = {"type": "json_object"}
@@ -646,11 +682,20 @@ class PromptOptimizer:
             billable_usages.append(
                 {
                     "provider": response.provider,
-                    "model": response.model,
-                    "input_tokens": max(0, int(response.token_usage.prompt_tokens)),
+                    "model": response.requested_model or response.model,
+                    "prompt_tokens": max(0, int(response.token_usage.prompt_tokens)),
+                    "cached_input_tokens": max(
+                        0, int(response.token_usage.cached_input_tokens)
+                    ),
+                    "cache_write_tokens": max(
+                        0, int(response.token_usage.cache_write_tokens)
+                    ),
                     "output_tokens": max(0, int(response.token_usage.completion_tokens)),
+                    "reasoning_tokens": max(0, int(response.token_usage.reasoning_tokens)),
                     "output_text": response.text,
                     "provider_cost_usd": max(0.0, float(response.estimated_cost)),
+                    "pricing_snapshot": dict(response.pricing_snapshot or {}),
+                    "pricing_version": response.pricing_version,
                 }
             )
 

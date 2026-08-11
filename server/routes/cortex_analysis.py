@@ -8,11 +8,16 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from config.cache_optimization import (
+    CORTEX_ANALYSIS_POLICY_VERSION,
+    cortex_analysis_reuse_enabled,
+)
 from db import (
     CortexAnalysisSchemaUnavailable,
     create_cortex_analysis_run,
     get_compare_analysis_sources,
     list_cortex_analysis_runs,
+    record_cache_reuse_event,
     require_cortex_analysis_schema,
 )
 from server import cortex_analysis as analysis_service
@@ -45,6 +50,30 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _db_uow = persistence_service.db_uow
 _resolve_identity = persistence_service.resolve_identity
+
+
+def _record_analysis_reuse_decision(
+    *,
+    user_id: UUID,
+    request_id: str,
+    reused: bool,
+) -> None:
+    """Best-effort audit recording must never block Cortex Analysis."""
+
+    try:
+        with _db_uow() as db_session:
+            record_cache_reuse_event(
+                db_session,
+                user_id=user_id,
+                request_id=request_id,
+                operation_type="cortex_analysis",
+                reused=reused,
+            )
+    except Exception:
+        logger.warning(
+            "Cortex Analysis reuse telemetry unavailable",
+            exc_info=True,
+        )
 
 
 def _confidence_level(value: object) -> Literal["limited", "moderate", "high"]:
@@ -164,6 +193,7 @@ async def list_analysis_runs(
 async def create_analysis_run(
     request_group_id: UUID,
     request: Request,
+    regenerate: bool = Query(default=False),
     auth: AuthResult = Depends(get_auth),
 ):
     """Analyze the latest successful revisions in one owned Compare run."""
@@ -210,6 +240,48 @@ async def create_analysis_run(
                 "message": "Cortex Analysis supports two or three responses.",
             },
         )
+
+    fingerprint = analysis_service.source_fingerprint(sources)
+    reusable = None
+    if cortex_analysis_reuse_enabled() and not regenerate:
+        with _db_uow(commit_on_success=False) as db_session:
+            prior_runs = list_cortex_analysis_runs(
+                db_session,
+                resolution.user_id,
+                request_group_id=request_group_id,
+            )
+        reusable = next(
+            (
+                run
+                for run in prior_runs
+                if run.get("source_fingerprint") == fingerprint
+                and run.get("model") == analysis_service.configured_analysis_model()
+                and run.get("analysis_policy_version")
+                == CORTEX_ANALYSIS_POLICY_VERSION
+            ),
+            None,
+        )
+    _record_analysis_reuse_decision(
+        user_id=resolution.user_id,
+        request_id=req_id,
+        reused=reusable is not None,
+    )
+    if reusable is not None:
+        logger.info(
+            "Reused an existing Cortex Analysis run",
+            extra={
+                "extra_fields": {
+                    "event": "cortex_analysis.reused",
+                    "request_id": req_id,
+                    "operation_type": "cortex_analysis",
+                    "provider": "openai",
+                    "model": analysis_service.configured_analysis_model(),
+                    "credits": 0,
+                    "cache_policy_version": CORTEX_ANALYSIS_POLICY_VERSION,
+                }
+            },
+        )
+        return _run_to_dto(reusable, current_fingerprint=fingerprint)
 
     billing_reservation: ReservedRequestUsage | None = None
     try:
@@ -278,10 +350,15 @@ async def create_analysis_run(
                     BillableModelUsage(
                         provider="openai",
                         model=analysis_service.configured_analysis_model(),
-                        input_tokens=generated.prompt_tokens,
+                        prompt_tokens=generated.prompt_tokens,
+                        cached_input_tokens=generated.cached_input_tokens,
+                        cache_write_tokens=generated.cache_write_tokens,
                         output_tokens=generated.completion_tokens,
+                        reasoning_tokens=generated.reasoning_tokens,
                         output_text=generated.recommended_answer,
                         provider_cost_usd=generated.estimated_cost,
+                        pricing_snapshot=generated.pricing_snapshot,
+                        pricing_version=generated.pricing_version,
                     ),
                 ),
                 research_provider_credits_used=0,
@@ -299,7 +376,6 @@ async def create_analysis_run(
             },
         )
 
-    fingerprint = analysis_service.source_fingerprint(sources)
     snapshot = analysis_service.source_snapshot(sources)
     with _db_uow() as db_session:
         analysis_id = create_cortex_analysis_run(
@@ -325,6 +401,12 @@ async def create_analysis_run(
             completion_tokens=generated.completion_tokens,
             total_tokens=generated.total_tokens,
             estimated_cost=generated.estimated_cost,
+            analysis_policy_version=CORTEX_ANALYSIS_POLICY_VERSION,
+            cached_input_tokens=generated.cached_input_tokens,
+            cache_write_tokens=generated.cache_write_tokens,
+            reasoning_tokens=generated.reasoning_tokens,
+            pricing_snapshot=generated.pricing_snapshot,
+            pricing_version=generated.pricing_version,
         )
 
     with _db_uow(commit_on_success=False) as db_session:

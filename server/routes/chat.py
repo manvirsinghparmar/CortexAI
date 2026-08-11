@@ -31,6 +31,7 @@ from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
 from server.generation_service import annotate_response, resolve_request_budget
+from server.generation_service import constrain_budget_to_reservation
 from server import persistence as persistence_service
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import ChatRequest
@@ -544,10 +545,26 @@ def _billable_model_usages(response: object) -> tuple[BillableModelUsage, ...]:
                 or getattr(response, "model", "")
                 or ""
             ),
-            input_tokens=max(0, int(getattr(usage, "prompt_tokens", 0) or 0)),
+            prompt_tokens=max(0, int(getattr(usage, "prompt_tokens", 0) or 0)),
+            cached_input_tokens=max(
+                0, int(getattr(usage, "cached_input_tokens", 0) or 0)
+            ),
+            cache_write_tokens=max(0, int(getattr(usage, "cache_write_tokens", 0) or 0)),
             output_tokens=max(0, int(getattr(usage, "completion_tokens", 0) or 0)),
+            reasoning_tokens=max(0, int(getattr(usage, "reasoning_tokens", 0) or 0)),
             output_text=str(getattr(response, "text", "") or ""),
             provider_cost_usd=max(0.0, float(getattr(response, "estimated_cost", 0.0) or 0.0)),
+            pricing_snapshot=(
+                dict(getattr(response, "pricing_snapshot", {}) or {})
+                if isinstance(getattr(response, "pricing_snapshot", None), dict)
+                else None
+            ),
+            pricing_version=str(getattr(response, "pricing_version", "") or "") or None,
+            provider_cost_owner=str(
+                (getattr(response, "metadata", {}) or {}).get(
+                    "provider_cost_owner", "cortex"
+                )
+            ),
         ),
     )
 
@@ -696,6 +713,10 @@ async def chat(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        persistence_service.persist_context_summary(
+            context_request=request.context,
+            user_id=persistence_resolution.user_id,
+        )
         if request.regeneration is not None:
             regeneration_context = persistence_service.resolve_compare_regeneration_context(
                 user_id=persistence_resolution.user_id,
@@ -860,6 +881,14 @@ async def chat(
                 )
                 raise
 
+        generation_budget = constrain_budget_to_reservation(
+            generation_budget,
+            billing_reservation,
+            provider=execution_plan.preview_provider,
+            model=execution_plan.preview_model,
+        )
+        kwargs.update(generation_budget.provider_kwargs())
+
     provider_completed = False
     try:
         response = await asyncio.to_thread(
@@ -957,6 +986,10 @@ async def chat_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        persistence_service.persist_context_summary(
+            context_request=request.context,
+            user_id=persistence_resolution.user_id,
+        )
         if request.regeneration is not None:
             regeneration_context = persistence_service.resolve_compare_regeneration_context(
                 user_id=persistence_resolution.user_id,
@@ -1122,6 +1155,14 @@ async def chat_stream(
                     reason="smart_routing_preflight_failed",
                 )
                 raise
+
+        generation_budget = constrain_budget_to_reservation(
+            generation_budget,
+            billing_reservation,
+            provider=execution_plan.preview_provider,
+            model=execution_plan.preview_model,
+        )
+        kwargs.update(generation_budget.provider_kwargs())
         target_provider = execution_plan.preview_provider
         target_model = execution_plan.preview_model
 

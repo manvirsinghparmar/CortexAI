@@ -2,9 +2,16 @@
 
 from dataclasses import replace
 from collections.abc import Mapping
+import hashlib
+import os
 import re
 
+from config.cache_optimization import (
+    CONTEXT_SUMMARY_POLICY_VERSION,
+    context_compaction_enabled,
+)
 from models.unified_response import NormalizedError, UnifiedResponse
+from utils.token_estimation import estimate_tokens
 from utils.logger import get_logger
 
 MAX_CONTEXT_MESSAGES = 10
@@ -14,6 +21,7 @@ MAX_CONTEXT_CHARS = 20000
 MAX_OUTPUT_TOKENS = 2048
 SENSITIVE_HEADERS = {"x-api-key", "authorization", "cookie", "set-cookie"}
 logger = get_logger(__name__)
+CONTEXT_SUMMARY_PREFIX = "[Cortex conversation summary]"
 CLIENT_SAFE_PROVIDER_ERROR_MESSAGES = {
     "timeout": "The provider request timed out. Please retry in a moment.",
     "auth": "Provider authentication failed. Check the configured API key.",
@@ -31,8 +39,11 @@ def validate_and_trim_context(context_req):
     if not context_req or not context_req.conversation_history:
         return context_req
 
-    history = context_req.conversation_history
+    history = list(context_req.conversation_history)
     original_message_count = len(history)
+
+    if context_compaction_enabled():
+        history = _compact_history_if_needed(history)
 
     # Trim to last N messages
     if len(history) > MAX_CONTEXT_MESSAGES:
@@ -59,6 +70,144 @@ def validate_and_trim_context(context_req):
 
     context_req.conversation_history = history
     return context_req
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.getenv(name, default)).strip())
+    except Exception:
+        return default
+    return value if value > 0 else default
+
+
+def _compaction_threshold_tokens() -> int:
+    usable_window = _positive_int_env(
+        "CONTEXT_COMPACTION_USABLE_WINDOW_TOKENS", 40_000
+    )
+    try:
+        ratio = float(os.getenv("CONTEXT_COMPACTION_THRESHOLD_RATIO", "0.5"))
+    except Exception:
+        ratio = 0.5
+    ratio = min(0.9, max(0.1, ratio))
+    return max(1, int(usable_window * ratio))
+
+
+def _history_content(item) -> str:
+    return str(getattr(item, "content", "") or "")
+
+
+def _history_role(item) -> str:
+    return str(getattr(item, "role", "user") or "user").strip().lower()
+
+
+def _copy_history_item(item, *, role: str, content: str):
+    model_copy = getattr(item, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"role": role, "content": content})
+    copy = replace(item)
+    copy.role = role
+    copy.content = content
+    return copy
+
+
+def _compact_history_if_needed(history):
+    """Create a deterministic, reusable extractive summary for old turns.
+
+    This initial policy is intentionally model-free: summary generation is
+    platform overhead with zero provider usage. Exact high-risk content (code,
+    URLs, identifiers, numbers, and explicit constraints) is kept verbatim.
+    """
+
+    if len(history) <= 2:
+        return history
+    token_count = estimate_tokens("\n".join(_history_content(item) for item in history))
+    threshold = _compaction_threshold_tokens()
+    if token_count <= threshold:
+        return history
+
+    older = history[:-2]
+    recent = history[-2:]
+    source_material = "\n\x1e\n".join(
+        f"{_history_role(item)}\n{_history_content(item)}" for item in older
+    )
+    source_hash = hashlib.sha256(source_material.encode("utf-8")).hexdigest()
+    summary_budget = _positive_int_env("CONTEXT_COMPACTION_SUMMARY_CHARS", 8_000)
+    sensitive = re.compile(
+        r"```|https?://|\b\d+(?:[.,:/_-]\d+)*\b|\b(?:must|never|do not|don't|required|constraint|id|url)\b",
+        re.IGNORECASE,
+    )
+    blocks: list[str] = []
+    used = 0
+    for item in older:
+        role = _history_role(item).upper()
+        content = _history_content(item).strip()
+        if not content:
+            continue
+        if sensitive.search(content):
+            excerpt = content
+        elif len(content) > 720:
+            excerpt = f"{content[:480].rstrip()}\n[...extractively compacted...]\n{content[-200:].lstrip()}"
+        else:
+            excerpt = content
+        block = f"{role}: {excerpt}"
+        remaining = summary_budget - used
+        if remaining <= 0:
+            break
+        if len(block) > remaining:
+            block = block[:remaining].rstrip()
+        if block:
+            blocks.append(block)
+            used += len(block)
+
+    source_range = f"0-{len(older) - 1}"
+    summary = (
+        f"{CONTEXT_SUMMARY_PREFIX}\n"
+        f"policy={CONTEXT_SUMMARY_POLICY_VERSION}; source_range={source_range}; "
+        f"source_hash={source_hash}\n"
+        "The following are exact excerpts from older turns; preserve their constraints:\n\n"
+        + "\n\n".join(blocks)
+    )
+    logger.info(
+        "Conversation context compacted",
+        extra={
+            "event": "context.compacted",
+            "original_message_count": len(history),
+            "retained_message_count": 3,
+            "original_tokens_estimated": token_count,
+            "threshold_tokens": threshold,
+            "summary_policy_version": CONTEXT_SUMMARY_POLICY_VERSION,
+            "source_hash_prefix": source_hash[:12],
+        },
+    )
+    return [_copy_history_item(older[0], role="system", content=summary), *recent]
+
+
+def context_summary_payload(context_req) -> dict[str, str] | None:
+    """Return persistence metadata for a compacted context, without prompt logging."""
+
+    history = getattr(context_req, "conversation_history", None) or []
+    if not history:
+        return None
+    content = _history_content(history[0])
+    if not content.startswith(CONTEXT_SUMMARY_PREFIX):
+        return None
+    header = content.splitlines()[1] if len(content.splitlines()) > 1 else ""
+    values: dict[str, str] = {}
+    for item in header.split(";"):
+        key, separator, value = item.strip().partition("=")
+        if separator and key and value:
+            values[key] = value
+    source_hash = values.get("source_hash", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        return None
+    return {
+        "context_text": content,
+        "source_hash": source_hash,
+        "source_message_range": values.get("source_range", "unknown"),
+        "summary_policy_version": values.get(
+            "policy", CONTEXT_SUMMARY_POLICY_VERSION
+        ),
+    }
 
 
 def _copy_history_item_with_content(item, content: str):

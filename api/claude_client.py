@@ -1,7 +1,13 @@
 import importlib
+import importlib
 import sys
 import time
 from typing import Any
+
+from config.cache_optimization import (
+    cache_friendly_prompt_ordering_enabled,
+    claude_prompt_cache_enabled,
+)
 
 try:
     import anthropic
@@ -85,7 +91,7 @@ class ClaudeClient(BaseAIClient):
                 role = "user"
 
             content_blocks: list[dict[str, Any]] = []
-            if content:
+            if content and not cache_friendly_prompt_ordering_enabled():
                 content_blocks.append({"type": "text", "text": content})
 
             if attachments and last_user_index is not None and idx == last_user_index:
@@ -102,6 +108,7 @@ class ClaudeClient(BaseAIClient):
                                 },
                             }
                         )
+
                     elif mime_type == "application/pdf":
                         content_blocks.append(
                             {
@@ -114,6 +121,9 @@ class ClaudeClient(BaseAIClient):
                                 },
                             }
                         )
+
+            if content and cache_friendly_prompt_ordering_enabled():
+                content_blocks.append({"type": "text", "text": content})
 
             claude_messages.append(
                 {
@@ -148,6 +158,9 @@ class ClaudeClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        cache_context = self._resolve_cache_context(
+            kwargs, provider="claude", model=model
+        )
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
         reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
@@ -173,6 +186,8 @@ class ClaudeClient(BaseAIClient):
             }
             if system_instruction:
                 request_payload["system"] = system_instruction
+            if cache_context.enabled and claude_prompt_cache_enabled():
+                request_payload["cache_control"] = {"type": "ephemeral"}
             if reasoning_mode == "adaptive":
                 request_payload["thinking"] = {"type": "adaptive"}
             elif reasoning_mode == "disabled":
@@ -187,7 +202,12 @@ class ClaudeClient(BaseAIClient):
                 dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
                     request_payload,
                     request_exc,
-                    safe_parameters={"temperature", "top_p", "max_tokens"},
+                    safe_parameters={
+                        "temperature",
+                        "top_p",
+                        "max_tokens",
+                        "cache_control",
+                    },
                 )
                 if retry_payload is not None and dropped_param is not None:
                     logger.warning(

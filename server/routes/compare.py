@@ -36,7 +36,11 @@ from server.billing.credit_calculator import (
 from server.billing.entitlement_service import ModelTargetIntent
 from server.billing.errors import enforcement_http_exception
 from server.dependencies import AuthResult, get_auth, get_orchestrator
-from server.generation_service import annotate_response, resolve_request_budget
+from server.generation_service import (
+    annotate_response,
+    constrain_budget_to_reservation,
+    resolve_request_budget,
+)
 from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import CompareRequest
 from server.schemas.responses import ChatResponseDTO, CompareResponseDTO
@@ -249,10 +253,24 @@ def _billable_model_usages(
         BillableModelUsage(
             provider=response.provider,
             model=response.requested_model or response.model,
-            input_tokens=max(0, int(response.token_usage.prompt_tokens or 0)),
+            prompt_tokens=max(0, int(response.token_usage.prompt_tokens or 0)),
+            cached_input_tokens=max(
+                0, int(getattr(response.token_usage, "cached_input_tokens", 0) or 0)
+            ),
+            cache_write_tokens=max(
+                0, int(getattr(response.token_usage, "cache_write_tokens", 0) or 0)
+            ),
             output_tokens=max(0, int(response.token_usage.completion_tokens or 0)),
+            reasoning_tokens=max(
+                0, int(getattr(response.token_usage, "reasoning_tokens", 0) or 0)
+            ),
             output_text=response.text,
             provider_cost_usd=max(0.0, float(response.estimated_cost or 0.0)),
+            pricing_snapshot=dict(response.pricing_snapshot or {}),
+            pricing_version=str(response.pricing_version or "") or None,
+            provider_cost_owner=str(
+                (response.metadata or {}).get("provider_cost_owner", "cortex")
+            ),
         )
         for response in responses
         if not response.is_error
@@ -473,6 +491,10 @@ async def compare(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        persistence_service.persist_context_summary(
+            context_request=request.context,
+            user_id=persistence_resolution.user_id,
+        )
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -558,6 +580,19 @@ async def compare(
             credit_activity_id=request.credit_activity_id,
             generation_budgets=generation_budgets,
         )
+        generation_budgets = [
+            constrain_budget_to_reservation(
+                budget,
+                billing_reservation,
+                provider=target.provider,
+                model=target.model or "",
+            )
+            for target, budget in zip(request.targets, generation_budgets)
+        ]
+        kwargs["_per_client_generation"] = {
+            f"{item.provider}:{item.model}": item.provider_kwargs()
+            for item in generation_budgets
+        }
 
     provider_completed = False
     try:
@@ -654,6 +689,10 @@ async def compare_stream(
     provider_api_keys: dict[str, str] = {}
     if API_DB_ENABLED:
         persistence_resolution = _resolve_and_enforce_caps(auth=auth, request_id=req_id)
+        persistence_service.persist_context_summary(
+            context_request=request.context,
+            user_id=persistence_resolution.user_id,
+        )
         providers = [(target.provider or "").strip().lower() for target in request.targets]
         provider_api_keys = _resolve_runtime_byok_provider_keys(
             resolution=persistence_resolution,
@@ -735,6 +774,15 @@ async def compare_stream(
             credit_activity_id=request.credit_activity_id,
             generation_budgets=generation_budgets,
         )
+        generation_budgets = [
+            constrain_budget_to_reservation(
+                budget,
+                billing_reservation,
+                provider=target.provider,
+                model=target.model or "",
+            )
+            for target, budget in zip(request.targets, generation_budgets)
+        ]
 
     async def event_stream():
         stream_started_at = time.monotonic()

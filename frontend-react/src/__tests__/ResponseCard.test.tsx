@@ -112,8 +112,8 @@ describe("ResponseCard", () => {
     expect(stats).toHaveTextContent("20.0s");
     expect(stats).toHaveTextContent("60 tok");
     expect(stats).toHaveTextContent("1,234 credits");
-    expect(stats).toHaveTextContent("$0.0010");
-    expect(stats?.querySelectorAll("svg")).toHaveLength(4);
+    expect(stats).not.toHaveTextContent("$0.0010");
+    expect(stats?.querySelectorAll("svg")).toHaveLength(3);
   });
 
   it("preserves a token-limited partial answer and offers a larger retry", () => {

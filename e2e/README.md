@@ -17,7 +17,7 @@ Nothing in this folder is used by the API image or the frontend deployment artif
 - `global-teardown.mjs`: replays cleanup and shuts down the shared server process.
 - `fixtures/live-e2e.mjs`: creates the `liveApp` fixture every spec uses.
 - `helpers/api.mjs`: HTTP polling and history-cleanup requests.
-- `helpers/db.mjs`: direct Postgres assertions and cleanup backstop.
+- `helpers/db.mjs`: direct Postgres assertions and cleanup backstop; case snapshots match both prompt markers and E2E request IDs so optimizer rewrites remain discoverable and removable.
 - `helpers/network.mjs`: request-id injection plus optional fault headers.
 - `helpers/ui.mjs`: browser actions and stream-observation helpers.
 - `server/run_e2e_server.py`: E2E-only FastAPI bootstrap.
@@ -32,10 +32,11 @@ Nothing in this folder is used by the API image or the frontend deployment artif
 
 1. Copy [e2e/.env.example](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/e2e/.env.example) to `e2e/.env` or export the same variables in your shell.
 2. Point `E2E_DATABASE_URL` at the PostgreSQL instance you want the suite to verify.
-3. Set a dedicated `E2E_API_KEY`.
-4. Optionally override `E2E_DEV_SESSION_LOGIN_TOKEN`; the harness uses it only to mint a local session cookie for browser-scoped routes.
-5. Keep provider secrets in the repo root `.env` or export them in your shell.
-6. Install the React dependencies with `npm ci --prefix frontend-react`.
+3. Apply every `db/migrations/*.sql` file to that database in filename order. The E2E server runs the same startup schema preflight as production and will stop before browser tests if required generation, billing, or cache-accounting columns are missing.
+4. Set a dedicated `E2E_API_KEY`.
+5. Optionally override `E2E_DEV_SESSION_LOGIN_TOKEN`; the harness uses it only to mint a local session cookie for browser-scoped routes.
+6. Keep provider secrets in the repo root `.env` or export them in your shell.
+7. Install the React dependencies with `npm ci --prefix frontend-react`.
 
 ## Commands
 

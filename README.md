@@ -654,14 +654,23 @@ Prompt optimization (`/v1/optimize`):
 
 ## Generation Budgets
 
-- Ask and Compare accept `generation.profile` (`quick`, `balanced`, `deep`, or `extended`) or an explicit `generation.max_output_tokens`. Profile ceilings are 2,048, 8,192, 32,768, and 65,536 output tokens, then safely reduced to the selected model, context, and operational limits.
+- Ask and Compare accept `generation.profile` (`quick`, `balanced`, `deep`, or `extended`) or an explicit `generation.max_output_tokens`. The v2 profile ceilings are 1,024, 4,096, 12,288, and 32,768 output tokens, then safely reduced to selected-model, context, affordability, and operational limits.
 - `generation.reasoning` accepts provider-neutral `mode` (`auto|off|on`) and effort (`auto|minimal|low|medium|high|xhigh|max`). The resolver validates the selected model and translates these values for provider adapters.
-- The React Answer depth control explicitly defaults to `balanced`. Legacy API callers that omit both `generation` and `max_tokens` remain on `quick`/2K. Supplying `generation` together with legacy `max_tokens`, or asking for an unsafe explicit custom ceiling, returns `422 invalid_generation_budget`.
+- The React Answer depth control explicitly defaults to `balanced`. API callers that omit both `generation` and `max_tokens` use `quick`/1K. Supplying `generation` together with legacy `max_tokens`, or asking for an unsafe explicit custom ceiling, returns `422 invalid_generation_budget`.
 - The same resolved per-model ceiling drives provider execution and the maximum temporary AI-credit hold. `POST /v1/billing/estimate-generation` returns that hold without reserving it; successful settlement charges actual usage and releases the unused amount.
 - Responses expose `completion_status`, `stop_cause`, `generation_budget`, and `retry_with_more_room`. Length-limited responses preserve partial text as `incomplete`; Retry with more room is a new model call at the next profile and may use more credits.
 - `config/generation_profiles.yaml` is the budget source of truth. `GENERATION_BUDGET_POLICY_ENABLED=false` is the operational rollback switch to Quick/2K execution.
 
 See `docs/GENERATION_BUDGETS.md` for the full contract and `docs/runbooks/generation-budget-rollout.md` for deployment checks.
+
+## Cache-aware credits and reuse
+
+- `server/billing/credit_calculator.py` is the shared authority for settlement, response cards, history, and cache-savings information. Provider-reported prompt tokens are partitioned into normal input, cache reads, and cache writes; effective provider-price ratios scale the existing model input-credit multiplier. Missing pricing evidence receives no discount, quantities are clamped to the prompt total, and every component rounds up independently.
+- Reservations remain conservative: they assume no cache hit and cover a more expensive cache-write ratio when applicable. `CACHE_AWARE_CREDIT_CALCULATION_ENABLED=true` computes and records shadow totals; `CACHE_AWARE_CREDIT_SETTLEMENT_ENABLED=false` keeps legacy totals authoritative until provider invoices and shadow telemetry are validated.
+- Chat responses expose `cache_hit`, `cache_hit_ratio`, `cache_savings_ai_credits`, and `uncached_equivalent_ai_credits`; Compare adds `total_cache_savings_ai_credits`. The normal response card keeps one AI-credit total and only adds a context-reuse savings line when settlement makes the savings real. Provider dollar cost is not shown on that card.
+- Provider cache behavior is independently gated. `CACHE_KEY_SECRET` produces opaque HMAC-SHA256 affinity keys; OpenAI supports `prompt_cache_key`, Claude supports top-level ephemeral `cache_control`, Grok supports `x-grok-conv-id`, and Gemini/DeepSeek use stable-prefix ordering plus reported cache usage. Extended OpenAI retention is a separate opt-in.
+- Persistent research reuse, prompt-optimization reuse, identical Cortex Analysis reuse, credit-aware generation ceilings, and deterministic context compaction each have independent flags. File extraction is already SHA-256 deduplicated; repeated narrow questions reuse the persisted extraction and select query-relevant chunks without rebuilding duplicate content.
+- Generation v2 profile ceilings are Quick 1,024, Balanced 4,096, Deep 12,288, and Extended 32,768. Credit-aware ceilings use a safety margin and the shared Compare reservation before provider execution.
 
 For Compare (`/v1/compare`, `/v1/compare/stream`) requests:
 - auth must be session-based (`cortex_session` cookie or `Authorization: Bearer`)
@@ -844,7 +853,7 @@ curl -H "X-API-Key: dev-key-1" \
   "http://127.0.0.1:8000/v1/usage/summary?from=2026-02-01&to=2026-02-22"
 ```
 
-`GET /v1/usage/summary` defaults to the last 30 inclusive calendar days when no range is provided. It returns the screen contract: period label, total tokens/requests/sessions, average/p95/min latency, average cost/request, total spend, token delta versus the previous equal-length period, Smart-routed totals, per-provider/model reply rows, Ask/Compare/Mixed session counts, and a zero-padded 14-day token activity series ending at `period.to`.
+`GET /v1/usage/summary` defaults to the last 30 inclusive calendar days when no range is provided. It returns the screen contract: period label, total tokens/requests/sessions, average/p95/min latency, average cost/request, total spend, token delta versus the previous equal-length period, Smart-routed totals, per-provider/model reply rows, Ask/Compare/Mixed session counts, a zero-padded 14-day token activity series, and cache-aware credit/token/reservation/reasoning/reuse metrics. Research, prompt-optimization, and Cortex Analysis reuse rates are calculated from per-request `cache_reuse_events` audit rows within the selected period. Usage and exports may group by `day`, `provider`, `model`, or `operation`.
 The React Usage & insights screen uses the same period-scoped summary query; its period selector refetches the full analytics dashboard and its Export button downloads day-grouped CSV rows from `/v1/usage/export` for the loaded period. On phone layouts it preserves the same backend-driven values in shortened labels and a compact model/session presentation. AI-credit balance and ledger data are intentionally displayed on `/credits`, not mixed into this screen.
 
 Usage:
@@ -1033,9 +1042,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_rese
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 ```
 
-- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; and `20260804` adds generation-budget/reasoning audit fields plus normalized completion status. The scripts are additive/idempotent. Alteration scripts require ownership of `llm_requests`/`llm_responses`. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, and generation-budget columns before provider traffic.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; `20260804` adds generation-budget/reasoning audit fields plus normalized completion status; and `20260807` adds cache-aware ledger columns, reusable optimizer/research/Cortex/context-summary persistence, and the `cache_reuse_events` telemetry table. The scripts are additive/idempotent. Alteration scripts require ownership of the affected tables. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, generation-budget, and cache-accounting columns before provider traffic.
 
 ## Release Gate
 

@@ -99,7 +99,16 @@ REQUIRED_BILLING_SCHEMA: Mapping[str, frozenset[str]] = {
             "operation_type",
             "item_index",
             "item_type",
+            "normal_input_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "normal_input_credits",
+            "cached_input_credits",
+            "cache_write_credits",
             "total_credits",
+            "uncached_equivalent_credits",
+            "cache_savings_credits",
             "metadata",
         }
     ),
@@ -112,9 +121,15 @@ REQUIRED_BILLING_SCHEMA: Mapping[str, frozenset[str]] = {
             "user_id",
             "session_id",
             "request_group_id",
+            "source_fingerprint",
+            "model",
+            "analysis_policy_version",
             "recommended_answer",
             "created_at",
         }
+    ),
+    "cache_reuse_events": frozenset(
+        {"id", "user_id", "request_id", "operation_type", "reused", "created_at"}
     ),
 }
 

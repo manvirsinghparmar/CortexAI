@@ -9,13 +9,13 @@ billing module owns a second output-token default.
 
 | Profile | Requested output ceiling | Default reasoning effort | Intended use |
 | --- | ---: | --- | --- |
-| `quick` | 2,048 | low | Short, low-credit answers and legacy omitted requests |
-| `balanced` | 8,192 | medium | Browser default and normal detailed answers |
-| `deep` | 32,768 | high | Long analysis and reasoning-heavy work |
-| `extended` | 65,536 | max | Maximum room when the selected model supports it |
+| `quick` | 1,024 | low | Short, low-credit answers and legacy omitted requests |
+| `balanced` | 4,096 | medium | Browser default and normal detailed answers |
+| `deep` | 12,288 | high | Long analysis and reasoning-heavy work |
+| `extended` | 32,768 | max | Maximum room when the selected model supports it |
 
 The effective ceiling is the minimum of the profile ceiling, the selected model's
-`max_output_tokens`, the 65,536 operational ceiling, and remaining context after a
+`max_output_tokens`, the 32,768 operational ceiling, and remaining context after a
 1,024-token safety margin. Profiles are transparently reduced to those safe bounds.
 An explicit `generation.max_output_tokens` or legacy `max_tokens` above the safe
 bound is rejected with `422 invalid_generation_budget`; it is never silently clipped.
@@ -37,7 +37,7 @@ Ask and Compare accept a shared `generation` object:
 `max_tokens` are also mutually exclusive. Compare additionally permits a target-level
 `generation` override; a target override wins over the shared Compare value.
 
-Legacy clients that omit both fields continue to use `quick` (2,048). The React app
+Legacy clients that omit both fields use `quick` (1,024). The React app
 explicitly defaults new Ask and Compare turns to `balanced` and exposes Quick,
 Balanced, Deep, and Extended through the Answer depth selector.
 

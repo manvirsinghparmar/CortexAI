@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil
 
+from config.pricing import ModelPricing
 from orchestrator.routing_types import ModelCandidate
 from server.billing.credit_calculator import (
     ADVANCED_WEB_SEARCH_CREDITS,
     CreditCharge,
     calculate_credit_charge,
+    resolve_cache_credit_multipliers,
 )
 from orchestrator.generation_policy import LEGACY_PROFILE, load_generation_policy
+from utils.token_estimation import estimate_tokens
 
 
 @dataclass(frozen=True)
@@ -22,9 +24,9 @@ class CreditEstimate:
 
 
 def estimate_text_tokens(text: str) -> int:
-    """Use a deterministic conservative approximation when no tokenizer is available."""
-    normalized = str(text or "")
-    return max(1, ceil(len(normalized.encode("utf-8")) / 3)) if normalized else 0
+    """Backward-compatible wrapper around the shared estimator."""
+
+    return estimate_tokens(text)
 
 
 def estimate_model_credits(
@@ -42,10 +44,23 @@ def estimate_model_credits(
     if isinstance(output_tokens, bool) or output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
     input_tokens = estimate_text_tokens(input_text)
+    pricing_snapshot = ModelPricing.get_pricing_snapshot(
+        candidate.provider,
+        candidate.model_name,
+        prompt_tokens=input_tokens,
+    )
+    _cached_multiplier, cache_write_multiplier = resolve_cache_credit_multipliers(
+        input_credit_multiplier=candidate.input_credit_multiplier,
+        pricing_snapshot=pricing_snapshot,
+    )
+    reservation_input_multiplier = max(
+        candidate.input_credit_multiplier,
+        float(cache_write_multiplier),
+    )
     charge = calculate_credit_charge(
         input_tokens=input_tokens,
         output_tokens=int(output_tokens),
-        input_multiplier=candidate.input_credit_multiplier,
+        input_multiplier=reservation_input_multiplier,
         output_multiplier=candidate.output_credit_multiplier,
         fixed_credits=ADVANCED_WEB_SEARCH_CREDITS if include_research else 0,
         estimated=True,

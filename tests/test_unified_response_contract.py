@@ -14,6 +14,7 @@ from api.deepseek_client import DeepSeekClient
 from api.google_gemini_client import GeminiClient
 from api.grok_client import GrokClient
 from api.openai_client import OpenAIClient
+from orchestrator.cache_context import CacheContext
 from server.schemas.responses import CompareResponseDTO
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 
@@ -770,6 +771,147 @@ class TestProviderContractCompliance:
         contents = mock_genai.return_value.models.generate_content.call_args.kwargs["contents"]
         user_parts = contents[-1]["parts"]
         assert any("inline_data" in part for part in user_parts)
+
+
+class TestProviderCacheAdapters:
+    @patch("openai.OpenAI")
+    def test_openai_prompt_cache_key_is_flagged_and_compatibly_retried(
+        self, mock_openai, monkeypatch
+    ):
+        monkeypatch.setenv("OPENAI_PROMPT_CACHE_ENABLED", "true")
+        unsupported = Exception("Unsupported parameter: 'prompt_cache_key'")
+        success = Mock(
+            output_text="cached",
+            usage=Mock(input_tokens=8, output_tokens=2, total_tokens=10),
+            status="completed",
+            finish_reason=None,
+        )
+        mock_openai.return_value.responses.create.side_effect = [unsupported, success]
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+
+        response = client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        )
+
+        assert response.is_success
+        first, second = mock_openai.return_value.responses.create.call_args_list
+        assert first.kwargs["prompt_cache_key"] == "cortex_pc_abc"
+        assert "prompt_cache_key" not in second.kwargs
+
+    @patch("openai.OpenAI")
+    def test_openai_prompt_cache_key_is_absent_when_flag_disabled(
+        self, mock_openai, monkeypatch
+    ):
+        monkeypatch.setenv("OPENAI_PROMPT_CACHE_ENABLED", "false")
+        mock_openai.return_value.responses.create.return_value = Mock(
+            output_text="answer",
+            usage=Mock(input_tokens=8, output_tokens=2, total_tokens=10),
+            status="completed",
+            finish_reason=None,
+        )
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+        assert client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        ).is_success
+        assert "prompt_cache_key" not in (
+            mock_openai.return_value.responses.create.call_args.kwargs
+        )
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_prompt_cache_and_usage_mapping(self, mock_anthropic, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROMPT_CACHE_ENABLED", "true")
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude cached answer")]
+        mock_response.usage = Mock(
+            input_tokens=20,
+            output_tokens=5,
+            cache_read_input_tokens=70,
+            cache_creation_input_tokens=10,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-sonnet-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        client = ClaudeClient(api_key="test-key", model_name="claude-sonnet-5")
+
+        response = client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        )
+
+        assert response.is_success
+        assert mock_anthropic.return_value.messages.create.call_args.kwargs[
+            "cache_control"
+        ] == {"type": "ephemeral"}
+        assert response.token_usage.prompt_tokens == 100
+        assert response.token_usage.cached_input_tokens == 70
+        assert response.token_usage.cache_write_tokens == 10
+
+    @patch("openai.OpenAI")
+    def test_grok_uses_opaque_cache_affinity_header(self, mock_openai, monkeypatch):
+        monkeypatch.setenv("GROK_PROMPT_CACHE_ENABLED", "true")
+        monkeypatch.setenv("CACHE_KEY_SECRET", "unit-test-secret")
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Test response"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        client = GrokClient(api_key="test-key", model_name="grok-4-latest")
+
+        response = client.get_completion(
+            "Test prompt",
+            _cache_scope={
+                "scope_id": "person@example.com",
+                "mode": "ask",
+                "stable_context_hash": "abc123",
+            },
+        )
+
+        assert response.is_success
+        header = mock_openai.return_value.chat.completions.create.call_args.kwargs[
+            "extra_headers"
+        ]["x-grok-conv-id"]
+        assert header.startswith("cortex_pc_")
+        assert "person@example.com" not in header
+        assert len(header) == len("cortex_pc_") + 64
+
+    @patch("google.genai.Client")
+    def test_gemini_maps_cached_content_tokens(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Cached response"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=100,
+            cached_content_token_count=80,
+            candidates_token_count=20,
+            thoughts_token_count=0,
+            total_token_count=120,
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+        response = GeminiClient(
+            api_key="test-key", model_name="gemini-2.5-flash"
+        ).get_completion("Test prompt")
+        assert response.token_usage.cached_input_tokens == 80
+
+    @patch("openai.OpenAI")
+    def test_deepseek_maps_compatible_cache_hit_fields_without_parameters(
+        self, mock_openai
+    ):
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Cached"), finish_reason="stop")]
+        mock_response.usage = Mock(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=Mock(cached_tokens=75, cache_write_tokens=0),
+        )
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        response = DeepSeekClient(
+            api_key="test-key", model_name="deepseek-chat"
+        ).get_completion("Test prompt")
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert "prompt_cache_key" not in payload
+        assert response.token_usage.cached_input_tokens == 75
 
 
 class TestErrorHandlingContract:

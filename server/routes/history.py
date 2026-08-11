@@ -78,6 +78,10 @@ class HistoryEntry(BaseModel):
     cost: Optional[float] = None
     ai_credits: Optional[int] = None
     credit_usage_estimated: bool = False
+    cache_hit: bool = False
+    cache_hit_ratio: float = 0.0
+    cache_savings_ai_credits: int = 0
+    uncached_equivalent_ai_credits: int = 0
     research_ai_credits: Optional[int] = None
     research_credit_usage_estimated: bool = False
     web_source_items: List[dict[str, str]] = Field(default_factory=list)
@@ -116,20 +120,33 @@ async def list_history(
             session_id=session_id,
         )
     for entry in entries:
-        if entry.get("ai_credits") is not None:
-            continue
         credit_usage = calculate_response_credit_usage(
             provider=str(entry.get("provider") or ""),
             model=str(entry.get("model") or ""),
             requested_model=str(entry.get("requested_model") or ""),
             input_tokens=max(0, int(entry.get("prompt_tokens") or 0)),
+            cached_input_tokens=max(0, int(entry.get("cached_input_tokens") or 0)),
+            cache_write_tokens=max(0, int(entry.get("cache_write_tokens") or 0)),
+            reasoning_tokens=max(0, int(entry.get("reasoning_tokens") or 0)),
             output_tokens=max(0, int(entry.get("completion_tokens") or 0)),
             output_text=str(entry.get("response") or ""),
             is_error=str(entry.get("response") or "").lower().startswith("[error]"),
+            pricing_snapshot=(
+                entry.get("pricing_snapshot")
+                if isinstance(entry.get("pricing_snapshot"), dict)
+                else None
+            ),
             include_research_charge=False,
         )
-        entry["ai_credits"] = credit_usage.ai_credits
+        if entry.get("ai_credits") is None:
+            entry["ai_credits"] = credit_usage.ai_credits
         entry["credit_usage_estimated"] = credit_usage.credit_usage_estimated
+        entry["cache_hit"] = credit_usage.cache_hit
+        entry["cache_hit_ratio"] = credit_usage.cache_hit_ratio
+        entry["cache_savings_ai_credits"] = credit_usage.cache_savings_ai_credits
+        entry["uncached_equivalent_ai_credits"] = (
+            credit_usage.uncached_equivalent_ai_credits
+        )
     return entries
 
 

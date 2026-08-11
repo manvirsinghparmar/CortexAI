@@ -49,7 +49,10 @@ export const test = base.extend({
             },
         });
 
-        expect(pageErrors, "uncaught browser errors").toEqual([]);
+        expect(
+            pageErrors.map(error => error.stack || error.message),
+            "uncaught browser errors",
+        ).toEqual([]);
     },
 });
 
@@ -312,8 +315,12 @@ function makeResponsiveAnalysisRun({
             "Both responses favor incremental rollout over a one-time cutover.",
         ],
         disagreements: [
-            "The responses assign different priorities to cost and operational control.",
+            {
+                who: "Claude (Sonnet 4.5)",
+                text: "Assigns a different priority to cost and operational control.",
+            },
         ],
+        disagreementNote: "These are different implementation priorities, not conflicting facts.",
         uniqueInsights: [
             {
                 responseName: "ChatGPT",

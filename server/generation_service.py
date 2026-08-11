@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from fastapi import HTTPException, status
 
+from config.cache_optimization import credit_aware_generation_budget_enabled
 from models.unified_response import UnifiedResponse
 from orchestrator.completion_status import attach_generation_budget
 from orchestrator.generation_policy import (
@@ -43,7 +45,27 @@ def resolve_request_budget(
         # Operational rollback: keep the historical Quick/2K ceiling without
         # changing request schemas or provider adapters.
         generation = None
-        legacy_max_tokens = min(int(legacy_max_tokens), 2_048) if legacy_max_tokens else None
+        legacy_max_tokens = min(int(legacy_max_tokens), 2_048) if legacy_max_tokens else 2_048
+        try:
+            resolved = resolve_generation_budget(
+                provider=provider,
+                model=model,
+                generation=None,
+                legacy_max_tokens=legacy_max_tokens,
+                estimated_input_tokens=estimated_tokens_from_text(input_text),
+                registry=registry,
+            )
+        except GenerationPolicyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_generation_budget",
+                    "message": str(exc),
+                    "provider": str(provider or ""),
+                    "model": str(model or ""),
+                },
+            ) from exc
+        return replace(resolved, profile="quick", policy_version="generation-budget-v1-rollback")
     try:
         return resolve_generation_budget(
             provider=provider,
@@ -70,3 +92,32 @@ def annotate_response(
     resolution: GenerationBudgetResolution,
 ) -> UnifiedResponse:
     return attach_generation_budget(response, resolution)
+
+
+def constrain_budget_to_reservation(
+    resolution: GenerationBudgetResolution,
+    reservation: object | None,
+    *,
+    provider: str,
+    model: str,
+) -> GenerationBudgetResolution:
+    """Apply the preflight-affordable ceiling to provider execution metadata."""
+
+    if not credit_aware_generation_budget_enabled() or reservation is None:
+        return resolution
+    estimates = tuple(getattr(reservation, "model_estimates", ()) or ())
+    match = next(
+        (
+            item
+            for item in estimates
+            if str(getattr(item, "provider", "")) == str(provider)
+            and str(getattr(item, "model", "")) == str(model)
+        ),
+        None,
+    )
+    if match is None and len(estimates) == 1:
+        match = estimates[0]
+    affordable = int(getattr(match, "output_tokens", 0) or 0) if match else 0
+    if affordable <= 0 or affordable >= resolution.effective_max_output_tokens:
+        return resolution
+    return replace(resolution, effective_max_output_tokens=affordable)

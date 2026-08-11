@@ -5,12 +5,22 @@ from concurrent.futures import Future
 import os
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from config.cache_optimization import (
+    OPTIMIZER_PROMPT_VERSION,
+    prompt_optimization_reuse_enabled,
+)
+from db import (
+    get_prompt_optimization_cache,
+    record_cache_reuse_event,
+    store_prompt_optimization_cache,
+)
 from server import persistence as persistence_service
 from server.billing.enforcement_service import (
     BillableModelUsage,
@@ -23,7 +33,7 @@ from server.routes.session_auth import SessionScopedAuthGuard
 from server.schemas.requests import UserContextRequest
 from server.utils import effective_output_token_limit
 from utils.logger import get_logger
-from utils.prompt_optimizer import PromptOptimizer
+from utils.prompt_optimizer import PromptOptimizer, prompt_optimization_cache_key
 
 router = APIRouter(prefix="/v1", tags=["Optimize"])
 logger = get_logger(__name__)
@@ -38,6 +48,7 @@ _resolve_and_enforce_caps = persistence_service.resolve_and_enforce_usage_caps
 _reserve_subscription_usage = persistence_service.reserve_subscription_usage
 _finalize_subscription_usage = persistence_service.finalize_subscription_usage
 _release_subscription_usage = persistence_service.release_subscription_usage
+_db_uow = persistence_service.db_uow
 
 # Singleton optimizer (created once, reused across requests)
 _optimizer: PromptOptimizer | None = None
@@ -48,6 +59,30 @@ def _get_optimizer() -> PromptOptimizer:
     if _optimizer is None:
         _optimizer = PromptOptimizer()
     return _optimizer
+
+
+def _record_optimization_reuse_decision(
+    *,
+    user_id: UUID,
+    request_id: str,
+    reused: bool,
+) -> None:
+    """Best-effort audit recording must never block prompt optimization."""
+
+    try:
+        with _db_uow() as db_session:
+            record_cache_reuse_event(
+                db_session,
+                user_id=user_id,
+                request_id=request_id,
+                operation_type="prompt_optimization",
+                reused=reused,
+            )
+    except Exception:
+        logger.warning(
+            "Prompt optimization reuse telemetry unavailable",
+            exc_info=True,
+        )
 
 
 OptimizationStatus = Literal[
@@ -178,10 +213,21 @@ def _result_model_usages(result: dict | None) -> tuple[BillableModelUsage, ...]:
         BillableModelUsage(
             provider=str(item.get("provider") or ""),
             model=str(item.get("model") or ""),
-            input_tokens=max(0, int(item.get("input_tokens") or 0)),
+            prompt_tokens=max(
+                0, int(item.get("prompt_tokens") or item.get("input_tokens") or 0)
+            ),
+            cached_input_tokens=max(0, int(item.get("cached_input_tokens") or 0)),
+            cache_write_tokens=max(0, int(item.get("cache_write_tokens") or 0)),
             output_tokens=max(0, int(item.get("output_tokens") or 0)),
+            reasoning_tokens=max(0, int(item.get("reasoning_tokens") or 0)),
             output_text=str(item.get("output_text") or ""),
             provider_cost_usd=max(0.0, float(item.get("provider_cost_usd") or 0.0)),
+            pricing_snapshot=(
+                dict(item.get("pricing_snapshot") or {})
+                if isinstance(item.get("pricing_snapshot"), dict)
+                else None
+            ),
+            pricing_version=str(item.get("pricing_version") or "") or None,
         )
         for item in raw_items
         if isinstance(item, dict)
@@ -301,6 +347,7 @@ class OptimizeResponse(BaseModel):
     server_optimization_enabled: bool
     optimization_status: OptimizationStatus
     fallback_reason: str | None = None
+    optimization_reused: bool = False
 
 
 # ── Endpoint ─────────────────────────────────────────────────────────────────
@@ -350,6 +397,63 @@ async def optimize_prompt(
 
     billing_reservation: ReservedRequestUsage | None = None
     optimizer = _get_optimizer()
+    identity = None
+    reuse_key: str | None = None
+    if API_DB_ENABLED and prompt_optimization_reuse_enabled():
+        reuse_key = prompt_optimization_cache_key(
+            original_prompt=request.prompt,
+            relevant_context=_optimization_input_text(request),
+            optimizer_provider=optimizer.provider,
+            optimizer_model=optimizer.model,
+        )
+        try:
+            with _db_uow() as db_session:
+                identity = _resolve_identity(
+                    auth=auth,
+                    request_id=req_id,
+                    db_session=db_session,
+                )
+                cached = get_prompt_optimization_cache(
+                    db_session,
+                    user_id=identity.user_id,
+                    cache_key=reuse_key,
+                )
+            _record_optimization_reuse_decision(
+                user_id=identity.user_id,
+                request_id=req_id,
+                reused=isinstance(cached, dict),
+            )
+            if isinstance(cached, dict):
+                optimized = str(cached.get("optimized_prompt") or request.prompt)
+                status = _status_from_optimizer_result(cached, request.prompt, optimized)
+                logger.info(
+                    "Reused a saved prompt optimization",
+                    extra={
+                        "extra_fields": {
+                            "event": "optimization.reused",
+                            "request_id": req_id,
+                            "operation_type": "optimize",
+                            "provider": optimizer.provider,
+                            "model": optimizer.model,
+                            "credits": 0,
+                            "cache_policy_version": OPTIMIZER_PROMPT_VERSION,
+                        }
+                    },
+                )
+                return OptimizeResponse(
+                    original_prompt=request.prompt,
+                    optimized_prompt=optimized,
+                    was_optimized=status == "optimized",
+                    server_optimization_enabled=True,
+                    optimization_status=status,
+                    fallback_reason=_fallback_reason_from_status(status, cached),
+                    optimization_reused=True,
+                )
+        except Exception:
+            logger.warning(
+                "Prompt optimization reuse lookup unavailable; continuing normally",
+                exc_info=True,
+            )
     max_retries = _optimizer_route_max_retries()
     effective_max_tokens = effective_output_token_limit(
         getattr(optimizer, "max_output_tokens", None)
@@ -456,6 +560,39 @@ async def optimize_prompt(
                 }
             },
         )
+
+        if (
+            API_DB_ENABLED
+            and prompt_optimization_reuse_enabled()
+            and reuse_key
+            and status in {"optimized", "kept_original"}
+        ):
+            try:
+                with _db_uow() as db_session:
+                    if identity is None:
+                        identity = _resolve_identity(
+                            auth=auth,
+                            request_id=req_id,
+                            db_session=db_session,
+                        )
+                    store_prompt_optimization_cache(
+                        db_session,
+                        user_id=identity.user_id,
+                        cache_key=reuse_key,
+                        optimizer_provider=optimizer.provider,
+                        optimizer_model=optimizer.model,
+                        prompt_version=OPTIMIZER_PROMPT_VERSION,
+                        result={
+                            "optimized_prompt": optimized,
+                            "fallback_reason": fallback_reason,
+                        },
+                        expires_at=datetime.now(UTC) + timedelta(hours=24),
+                    )
+            except Exception:
+                logger.warning(
+                    "Prompt optimization reuse persistence unavailable",
+                    exc_info=True,
+                )
 
         return OptimizeResponse(
             original_prompt=request.prompt,

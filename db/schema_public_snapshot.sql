@@ -164,6 +164,9 @@ CREATE TABLE public.context_snapshots (
 	base_message_id UUID, 
 	context_hash TEXT NOT NULL, 
 	context_text TEXT NOT NULL, 
+	source_message_range TEXT,
+	source_hash TEXT,
+	summary_policy_version TEXT,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	CONSTRAINT context_snapshots_pkey PRIMARY KEY (id), 
 	CONSTRAINT context_snapshots_base_message_id_fkey FOREIGN KEY(base_message_id) REFERENCES public.messages (id) ON DELETE SET NULL, 
@@ -244,9 +247,15 @@ CREATE TABLE public.cortex_analysis_runs (
 	combined_response_count INTEGER NOT NULL,
 	failed_response_count INTEGER DEFAULT 0 NOT NULL,
 	prompt_tokens INTEGER DEFAULT 0 NOT NULL,
+	cached_input_tokens BIGINT DEFAULT 0 NOT NULL,
+	cache_write_tokens BIGINT DEFAULT 0 NOT NULL,
+	reasoning_tokens BIGINT DEFAULT 0 NOT NULL,
 	completion_tokens INTEGER DEFAULT 0 NOT NULL,
 	total_tokens INTEGER DEFAULT 0 NOT NULL,
 	estimated_cost NUMERIC(12, 6) DEFAULT 0 NOT NULL,
+	pricing_snapshot JSONB DEFAULT '{}'::jsonb NOT NULL,
+	pricing_version TEXT,
+	analysis_policy_version TEXT DEFAULT 'cortex-analysis-v1' NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	CONSTRAINT cortex_analysis_runs_pkey PRIMARY KEY (id),
 	CONSTRAINT cortex_analysis_runs_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
@@ -255,6 +264,47 @@ CREATE TABLE public.cortex_analysis_runs (
 	CONSTRAINT cortex_analysis_runs_high_stakes_domain_check CHECK (high_stakes_domain IS NULL OR high_stakes_domain = ANY (ARRAY['financial'::text, 'medical'::text, 'legal'::text, 'safety'::text])),
 	CONSTRAINT cortex_analysis_runs_combined_response_count_check CHECK (combined_response_count BETWEEN 2 AND 3),
 	CONSTRAINT cortex_analysis_runs_failed_response_count_check CHECK (failed_response_count >= 0)
+);
+
+
+CREATE TABLE public.prompt_optimization_cache (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	cache_key TEXT NOT NULL,
+	optimizer_provider TEXT NOT NULL,
+	optimizer_model TEXT NOT NULL,
+	prompt_version TEXT NOT NULL,
+	result JSONB NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	last_used_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	CONSTRAINT prompt_optimization_cache_pkey PRIMARY KEY (id),
+	CONSTRAINT prompt_optimization_cache_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT uq_prompt_optimization_cache_user_key UNIQUE NULLS DISTINCT (user_id, cache_key)
+);
+
+
+CREATE TABLE public.research_reuse_cache (
+	session_id TEXT NOT NULL,
+	state JSONB NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	last_used_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	CONSTRAINT research_reuse_cache_pkey PRIMARY KEY (session_id)
+);
+
+
+CREATE TABLE public.cache_reuse_events (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	request_id CHARACTER VARYING(255) NOT NULL,
+	operation_type CHARACTER VARYING(64) NOT NULL,
+	reused BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	CONSTRAINT cache_reuse_events_pkey PRIMARY KEY (id),
+	CONSTRAINT cache_reuse_events_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT cache_reuse_events_operation_type_check CHECK (operation_type = ANY (ARRAY['research'::character varying, 'prompt_optimization'::character varying, 'cortex_analysis'::character varying])),
+	CONSTRAINT uq_cache_reuse_events_user_operation_request UNIQUE NULLS DISTINCT (user_id, operation_type, request_id)
 );
 
 
@@ -302,6 +352,7 @@ CREATE TABLE public.routing_attempts (
 CREATE INDEX idx_api_keys_user_id ON public.api_keys USING btree (user_id);
 CREATE INDEX idx_context_snapshots_user_session_time ON public.context_snapshots USING btree (user_id, session_id, created_at DESC);
 CREATE UNIQUE INDEX uq_context_snapshots_session_hash ON public.context_snapshots USING btree (session_id, context_hash);
+CREATE UNIQUE INDEX uq_context_snapshots_reusable_summary ON public.context_snapshots USING btree (session_id, source_message_range, source_hash, summary_policy_version) WHERE (source_hash IS NOT NULL);
 CREATE INDEX idx_feedback_request ON public.feedback USING btree (llm_request_id);
 CREATE INDEX idx_feedback_user_time ON public.feedback USING btree (user_id, created_at DESC);
 CREATE INDEX idx_ledger_reference ON public.ledger_entries USING btree (reference);
@@ -317,6 +368,10 @@ CREATE INDEX idx_llm_requests_user_time ON public.llm_requests USING btree (user
 CREATE INDEX idx_llm_responses_request_id ON public.llm_responses USING btree (llm_request_id);
 CREATE INDEX idx_cortex_analysis_runs_user_group_time ON public.cortex_analysis_runs USING btree (user_id, request_group_id, created_at DESC);
 CREATE INDEX idx_cortex_analysis_runs_user_session_time ON public.cortex_analysis_runs USING btree (user_id, session_id, created_at DESC);
+CREATE INDEX idx_cortex_analysis_runs_reuse ON public.cortex_analysis_runs USING btree (user_id, request_group_id, source_fingerprint, model, analysis_policy_version, created_at DESC);
+CREATE INDEX idx_prompt_optimization_cache_expiry ON public.prompt_optimization_cache USING btree (expires_at);
+CREATE INDEX idx_research_reuse_cache_expiry ON public.research_reuse_cache USING btree (expires_at);
+CREATE INDEX idx_cache_reuse_events_user_created ON public.cache_reuse_events USING btree (user_id, created_at DESC);
 CREATE INDEX idx_messages_session_id ON public.messages USING btree (session_id);
 CREATE INDEX idx_messages_session_time ON public.messages USING btree (session_id, created_at);
 CREATE INDEX idx_routing_attempts_decision_id ON public.routing_attempts USING btree (routing_decision_id);

@@ -3,6 +3,10 @@ from typing import Any
 
 import openai
 
+from config.cache_optimization import (
+    cache_friendly_prompt_ordering_enabled,
+    grok_prompt_cache_enabled,
+)
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
@@ -63,6 +67,9 @@ class GrokClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        cache_context = self._resolve_cache_context(
+            kwargs, provider="grok", model=model
+        )
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
         reasoning_setting = str(kwargs.get("reasoning_mode") or "").strip().lower()
@@ -111,6 +118,10 @@ class GrokClient(BaseAIClient):
             }
             if reasoning_mode:
                 request_payload["reasoning_effort"] = reasoning_mode
+            if cache_context.enabled and grok_prompt_cache_enabled():
+                request_payload["extra_headers"] = {
+                    "x-grok-conv-id": cache_context.cache_scope_key
+                }
             adaptive_retry = None
 
             try:
@@ -126,6 +137,7 @@ class GrokClient(BaseAIClient):
                         "frequency_penalty",
                         "max_tokens",
                         "reasoning_effort",
+                        "extra_headers",
                     },
                 )
                 if retry_payload is not None and dropped_param is not None:
@@ -295,8 +307,6 @@ class GrokClient(BaseAIClient):
             text = cls._normalize_message_text(message)
             if last_user_idx is not None and idx == last_user_idx:
                 content_parts: list[dict[str, Any]] = []
-                if text:
-                    content_parts.append({"type": "text", "text": text})
                 for attachment in attachments:
                     data_uri = (
                         f"data:{attachment['mime_type']};base64,{attachment['data_base64']}"
@@ -304,6 +314,12 @@ class GrokClient(BaseAIClient):
                     content_parts.append(
                         {"type": "image_url", "image_url": {"url": data_uri}}
                     )
+                if text:
+                    text_block = {"type": "text", "text": text}
+                    if cache_friendly_prompt_ordering_enabled():
+                        content_parts.append(text_block)
+                    else:
+                        content_parts.insert(0, text_block)
                 out.append({"role": role, "content": content_parts or [{"type": "text", "text": ""}]})
             else:
                 out.append({"role": role, "content": text})

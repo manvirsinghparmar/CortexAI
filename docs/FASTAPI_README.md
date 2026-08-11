@@ -135,6 +135,8 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `BILLING_ENABLED=false` resolves all users to Free, keeps Stripe lazy, and makes Checkout, Portal, and webhook routes return `503 billing_not_configured`. `DEV_SUBSCRIPTION_PLAN` works only when billing is disabled and the runtime is explicitly local/development. The `unrestricted` development value additionally requires `DEV_SUBSCRIPTION_BYPASS_ENABLED=true`; prefer the guarded `run_app.py --subscription-plan unrestricted` entrypoint.
 - With billing enabled, startup validates the secret key, webhook signing secret, paid-plan Price IDs, server redirect URLs, and optional API version. The API rejects client-supplied Price IDs, amounts, currencies, Customer IDs, and redirects. `server/billing/webhook_service.py` makes verified Stripe Checkout/subscription/invoice state authoritative, locks provider-event retries, rejects stale snapshots, preserves usage counters across same-period changes, and delegates paid/grace/cancellation access to `subscription_service.py`.
 - `/v1/chat`, `/v1/chat/stream`, `/v1/compare`, and `/v1/compare/stream` calculate one effective output limit and use it for both provider execution and credit reservation. They settle actual successful input/output credits and release unused estimates and failed targets. Advanced Web Search reserves 10,000 Cortex credits for the normal two-credit Tavily call, then settles `provider credits used x 5,000`; missing Tavily usage falls back to two credits and is marked estimated. Cached/session-reused research is free for the turn. Compare shares retrieval and performs aggregate partial settlement. Improve Prompt reserves all configured attempts and settles each billable usage item. Cortex Analysis reserves and settles its source-context synthesis as a separate unified-wallet call without charging again for reused Compare research. Upload/storage itself is free.
+- Cache-aware accounting partitions reported prompt usage into normal, cached-read, and cache-write tokens, applies effective provider-price ratios to the existing Cortex input multiplier, and falls back to the full multiplier when pricing evidence is absent. The canonical calculator feeds settlement, response DTOs, and history. Initial rollout computes `cache_aware_shadow_total`, `legacy_total`, and their delta while `CACHE_AWARE_CREDIT_SETTLEMENT_ENABLED=false` keeps legacy settlement authoritative.
+- Provider caching, persistent research reuse, optimizer/Cortex reuse, credit-aware ceilings, and context compaction are independently flag-controlled. Affinity identifiers are HMAC-SHA256 values derived with `CACHE_KEY_SECRET`; raw session, user, prompt, and file content never appears in cache keys or cache telemetry.
 - Ask/Compare consumer-credit settlement and response DTO statistics use the canonical requested model even when a provider reports a versioned served-model snapshot. Served/pricing identities remain available for response audit and provider-cost calculation. Per-model response credits, aggregate Compare credits, and itemized ledger charges therefore use the same multipliers, and one provider snapshot cannot prevent the other successful Compare targets from producing ledger rows. Any finalization failure releases and unregisters the reservation instead of leaving it heartbeat-active.
 - Focused validation: `python -m pytest tests/test_billing_metering.py tests/test_billing_entitlements.py tests/test_stripe_billing.py tests/test_stripe_webhooks.py tests/test_baseline_safety_rails.py tests/test_fastapi_contract_and_guardrails.py -q`. Use `BILLING_TEST_DATABASE_URL` with `tests/test_billing_postgres_integration.py` for real row-lock concurrency coverage.
 - `/v1/models?enabled_only=true` exposes only currently selectable rows. `enabled_only=false` also returns compatibility and lifecycle records retained for historical resolution. Every row includes `requested`-independent canonical identity, display/lifecycle/replacement/alias fields, current input/output/cached-input prices, the effective pricing rule and date, official pricing/lifecycle URLs with `source_verified_at`, context/output limits, reasoning modes, attachment capabilities, and `billing_class`/credit metadata. Credit access classes remain independent from smart-routing `tier`.
@@ -175,7 +177,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `POST /v1/billing/portal-session`
 - `POST /v1/billing/webhook`
 - `GET /v1/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
+- `GET /v1/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model|operation`
 - `GET /v1/savings?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day|provider|model`
 - `GET /v1/usage/export?format=csv&from=...&to=...&group_by=...`
 - `GET /v1/savings/export?format=csv&from=...&to=...&group_by=...`
@@ -197,6 +199,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - One Ask turn produces one row.
 - One Compare turn produces one row per target model; all target rows from that turn share the same `request_group_id`.
 - Completed rows include `prompt_tokens`, `completion_tokens`, `ai_credits`, `credit_usage_estimated`, `research_ai_credits`, and `research_credit_usage_estimated`. The credit values are the persisted response-card snapshot; React uses the shared research component once when rebuilding a Compare aggregate. Legacy rows without a snapshot derive their model-credit value from persisted token counts.
+- Completed rows also expose `cached_input_tokens`, `cache_write_tokens`, `reasoning_tokens`, `cache_hit`, `cache_hit_ratio`, `cache_savings_ai_credits`, and `uncached_equivalent_ai_credits`. Savings remain informational; `ai_credits` is authoritative.
 - Completed model responses retain `requested_model`, provider-reported `served_model`, `pricing_model`, lifecycle/alias resolution, reasoning mode, cached-input/cache-write/reasoning token detail, and the exact pricing rule/version. History returns the identity and pricing-evidence fields needed to explain old charges after the live catalogue changes.
 - If an exact served-model price is absent, the calculator uses the provider's highest current configured rate, marks `pricing_unknown=true`, and persists the full price snapshot; it never turns an unknown model into a zero-dollar response.
 - The React client groups sidebar items by `session_id`, reconstructs Compare turns by `request_group_id` when a thread is selected, and persists the active thread id as `cortex_active_session_id` so startup can restore the same transcript after a browser refresh/remount.
@@ -212,6 +215,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `sessionModes` is classified from `llm_requests.route_mode` per `session_id` within the period: Ask only, Compare only, or Mixed. The `sessions.mode` creation value is not used.
 - `tokensDeltaPct` compares the selected period with the immediately preceding equal-length period. It returns `0` when both periods have zero tokens and `100` when the current period has tokens but the previous period is zero.
 - `activityDaily` always contains 14 entries ending at `period.to`, zero-filled for days without usage.
+- Cache/accounting fields include total and average AI credits, normal/cached/cache-write tokens, cache-hit ratio, Cortex and provider-cost cache savings, reservation/settlement/release values, output utilization, reasoning tokens, research calls, and reuse-rate fields. A missing pre-migration table safely returns zero metrics rather than inventing discounts.
 
 ## Authentication
 
@@ -397,8 +401,8 @@ Notes:
 - `routing.smart_mode` defaults to `true`.
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
-- `generation.profile` is `quick|balanced|deep|extended` (2K/8K/32K/64K before model/context limits). `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
-- Omitted legacy requests use Quick/2K. React sends Balanced explicitly. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
+- `generation.profile` is `quick|balanced|deep|extended` (1K/4K/12K/32K before model/context/affordability limits). `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
+- Omitted requests use Quick/1K. React sends Balanced explicitly. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
 - The browser UI avoids that fallback on explicit fresh login by marking `cortex_fresh_login_pending`, consuming the backend `fresh_login=1` callback marker, clearing the stored active thread id, and sending `new_session=true` for the first turn after sign-in.
 
@@ -416,7 +420,7 @@ Prompt optimization:
 - Optimizer route logs include status, fallback reason, prompt-quality class, attempt count, and retry reasons without logging raw prompt text.
 - Optimize request payloads may include optional display-only `credit_activity_id`, `context_hint`, and compact `context`; Chat/Compare may carry the same activity ID plus the original `initial_query`. These display fields never affect billing authority or arithmetic. The frontend sends recent mixed user/assistant context whenever a thread has prior messages. Attachment file contents are not copied into optimize requests. React caps optimize context to ten compact messages and a 4,000-character `context_hint` so ordinal, pronoun, and formatting references like "the second one", "their cadres", or "write it as a table" can be resolved in longer chats.
 - Optimizer output is parsed as schema-constrained JSON and rejected when it appears to answer the prompt, or when it introduces unresolved placeholders such as `[specific topic]`, instead of rewriting it.
-- Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`) and `fallback_reason`.
+- Responses include `optimization_status` (`optimized`, `kept_original`, `disabled`, `timeout`, `failed`, `rejected`), `fallback_reason`, and `optimization_reused`. A reused result performs no provider call and consumes no new optimizer credits.
 - Rejected, timed out, failed, kept-original, or disabled optimization returns the original prompt with `was_optimized=false`.
 - With the frontend Improve toggle enabled, the user bubble always shows the prompt being sent in normal case. Optimization state renders as a right-aligned pill below the bubble: pending shows `Improving your prompt`, optimized shows `Prompt optimized` with `View original`, and kept-original shows `Already clear — sent as-is`. Ask response cards and Compare response tabs, cards, and summary remain hidden while optimization is pending, then appear when optimization resolves and model generation begins; cancelling during optimization leaves the placeholder response UI hidden.
 
@@ -670,6 +674,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_add_usage_rese
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 ```
 
 The first Cortex Analysis migration adds Compare response revision metadata and
@@ -682,11 +687,16 @@ itself remains implemented in persistence/session resolution logic.
 
 The billing foundation, Cortex revision table, unified-credit ledger,
 reservation-activity migration, model-pricing audit migration, Cortex
-attribution migration, and generation-budget audit migration are all required. They are additive and
+attribution migration, generation-budget audit migration, and cache-aware accounting migration are all required. They are additive and
 idempotent under the repository migration convention. PostgreSQL startup checks
 the required tables and columns and fails before serving provider routes when a
 migration is missing. See `docs/runbooks/db-migrations.md` for verification and
 rollback guidance.
+
+The cache-aware migration also creates `cache_reuse_events`. Ask/Compare
+research, prompt optimization, and Cortex Analysis each record one idempotent
+reuse decision per request; `/v1/usage/summary` derives the three period-scoped
+reuse rates from those audit rows.
 
 ## OpenAI Compatibility Note
 

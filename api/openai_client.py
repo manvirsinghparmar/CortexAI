@@ -1,8 +1,13 @@
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import openai
 
+from config.cache_optimization import (
+    cache_friendly_prompt_ordering_enabled,
+    openai_extended_prompt_cache_enabled,
+    openai_prompt_cache_enabled,
+)
 from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
@@ -10,6 +15,9 @@ from utils.logger import get_logger
 from .base_client import BaseAIClient
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from orchestrator.cache_context import CacheContext
 
 
 class OpenAIClient(BaseAIClient):
@@ -63,6 +71,9 @@ class OpenAIClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        cache_context = self._resolve_cache_context(
+            kwargs, provider="openai", model=model
+        )
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
@@ -89,6 +100,7 @@ class OpenAIClient(BaseAIClient):
                 attachments=binary_attachments,
                 reasoning_mode=reasoning_mode,
                 reasoning_effort=reasoning_effort,
+                cache_context=cache_context,
             )
 
             latency_ms = self._measure_latency(start_time)
@@ -235,6 +247,7 @@ class OpenAIClient(BaseAIClient):
         attachments: list[dict[str, Any]],
         reasoning_mode: str,
         reasoning_effort: str,
+        cache_context: "CacheContext",
     ) -> tuple[Any, str, dict[str, Any] | None]:
         if self._should_use_responses_api_for_model(model, attachments=attachments):
             payload = self._build_responses_payload(
@@ -247,6 +260,7 @@ class OpenAIClient(BaseAIClient):
                 reasoning_mode=reasoning_mode,
                 reasoning_effort=reasoning_effort,
             )
+            self._apply_prompt_cache_options(payload, cache_context)
             return self._create_openai_response_with_compat_retries(
                 request_id=request_id,
                 model=model,
@@ -269,6 +283,7 @@ class OpenAIClient(BaseAIClient):
             request_payload["max_completion_tokens"] = max_completion_tokens
         else:
             request_payload["max_tokens"] = max_tokens
+        self._apply_prompt_cache_options(request_payload, cache_context)
 
         try:
             return self.client.chat.completions.create(**request_payload), "chat.completions", None
@@ -308,6 +323,7 @@ class OpenAIClient(BaseAIClient):
                     reasoning_mode=reasoning_mode,
                     reasoning_effort=reasoning_effort,
                 )
+                self._apply_prompt_cache_options(payload, cache_context)
                 logger.warning(
                     "Retrying OpenAI request with responses API",
                     extra={
@@ -336,6 +352,8 @@ class OpenAIClient(BaseAIClient):
                     "max_completion_tokens",
                     "response_format",
                     "reasoning_effort",
+                    "prompt_cache_key",
+                    "prompt_cache_retention",
                 },
             )
             if retry_payload is not None and dropped_param is not None:
@@ -420,6 +438,16 @@ class OpenAIClient(BaseAIClient):
         return payload
 
     @staticmethod
+    def _apply_prompt_cache_options(
+        payload: dict[str, Any], cache_context: "CacheContext"
+    ) -> None:
+        if not cache_context.enabled or not openai_prompt_cache_enabled():
+            return
+        payload["prompt_cache_key"] = cache_context.cache_scope_key
+        if openai_extended_prompt_cache_enabled():
+            payload["prompt_cache_retention"] = "24h"
+
+    @staticmethod
     def _last_user_message_index(messages: list[dict[str, Any]]) -> int | None:
         idx = None
         for i, message in enumerate(messages):
@@ -449,8 +477,6 @@ class OpenAIClient(BaseAIClient):
             text = cls._normalize_message_text(message)
             if last_user_idx is not None and idx == last_user_idx:
                 content_parts: list[dict[str, Any]] = []
-                if text:
-                    content_parts.append({"type": "text", "text": text})
                 for attachment in attachments:
                     data_uri = (
                         f"data:{attachment['mime_type']};base64,{attachment['data_base64']}"
@@ -458,6 +484,12 @@ class OpenAIClient(BaseAIClient):
                     content_parts.append(
                         {"type": "image_url", "image_url": {"url": data_uri}}
                     )
+                if text:
+                    text_block = {"type": "text", "text": text}
+                    if cache_friendly_prompt_ordering_enabled():
+                        content_parts.append(text_block)
+                    else:
+                        content_parts.insert(0, text_block)
                 out.append({"role": role, "content": content_parts or [{"type": "text", "text": ""}]})
             else:
                 out.append({"role": role, "content": text})
@@ -478,8 +510,9 @@ class OpenAIClient(BaseAIClient):
             text = cls._normalize_message_text(message)
             text_content_type = cls._responses_text_content_type(role)
             content_items: list[dict[str, Any]] = []
-            if text:
-                content_items.append({"type": text_content_type, "text": text})
+            text_block = {"type": text_content_type, "text": text} if text else None
+            if text_block and not cache_friendly_prompt_ordering_enabled():
+                content_items.append(text_block)
 
             if attachments and last_user_idx is not None and idx == last_user_idx:
                 for attachment in attachments:
@@ -495,6 +528,9 @@ class OpenAIClient(BaseAIClient):
                                 "file_data": data_uri,
                             }
                         )
+
+            if text_block and cache_friendly_prompt_ordering_enabled():
+                content_items.append(text_block)
 
             if not content_items:
                 content_items.append({"type": text_content_type, "text": ""})
@@ -525,6 +561,8 @@ class OpenAIClient(BaseAIClient):
                     "max_completion_tokens",
                     "reasoning_effort",
                     "reasoning",
+                    "prompt_cache_key",
+                    "prompt_cache_retention",
                 },
             )
             if retry_payload is not None and dropped_param is not None:

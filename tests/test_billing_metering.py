@@ -132,11 +132,20 @@ def metering_db(monkeypatch):
         Column("provider", String(64)),
         Column("model", String(255)),
         Column("input_tokens", BigInteger, nullable=False, server_default="0"),
+        Column("normal_input_tokens", BigInteger, nullable=False, server_default="0"),
+        Column("cached_input_tokens", BigInteger, nullable=False, server_default="0"),
+        Column("cache_write_tokens", BigInteger, nullable=False, server_default="0"),
+        Column("reasoning_tokens", BigInteger, nullable=False, server_default="0"),
         Column("output_tokens", BigInteger, nullable=False, server_default="0"),
         Column("input_credits", BigInteger, nullable=False, server_default="0"),
+        Column("normal_input_credits", BigInteger, nullable=False, server_default="0"),
+        Column("cached_input_credits", BigInteger, nullable=False, server_default="0"),
+        Column("cache_write_credits", BigInteger, nullable=False, server_default="0"),
         Column("output_credits", BigInteger, nullable=False, server_default="0"),
         Column("fixed_credits", BigInteger, nullable=False, server_default="0"),
         Column("total_credits", BigInteger, nullable=False),
+        Column("uncached_equivalent_credits", BigInteger, nullable=False, server_default="0"),
+        Column("cache_savings_credits", BigInteger, nullable=False, server_default="0"),
         Column("provider_cost_usd", Float, nullable=False, server_default="0"),
         Column("usage_estimated", Boolean, nullable=False, server_default="0"),
         Column("pricing_version", String(64), nullable=False),
@@ -495,12 +504,18 @@ def test_actual_model_tokens_settle_and_create_reconciliation_item(metering_db):
     assert item["input_credits"] == 100
     assert item["output_credits"] == 800
     assert item["usage_estimated"] is False
-    assert item["metadata"] == {
+    expected_metadata = {
         "file_context": True,
         "credit_activity_id": "activity-model-research",
         "initial_query": "How do atomic credit reservations work?",
         "prompt_optimization": False,
     }
+    assert {
+        key: item["metadata"][key]
+        for key in expected_metadata
+    } == expected_metadata
+    assert item["metadata"]["credit_policy_version"]
+    assert item["metadata"]["cache_aware_shadow_total"] == item["total_credits"]
 
 
 def test_optimizer_reservation_covers_every_configured_attempt(metering_db):

@@ -267,9 +267,6 @@ const CompareTurn = memo(function CompareTurn({
           <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
             {turn.compareSummary.total_tokens.toLocaleString()} tok
           </span>
-          <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
-            ${turn.compareSummary.total_cost.toFixed(5)}
-          </span>
           {(turn.compareSummary.total_ai_credits ?? 0) > 0 && (
             <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
               {(turn.compareSummary.total_ai_credits ?? 0).toLocaleString()} credits
@@ -430,17 +427,10 @@ function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
       ? null
       : responseDurationMs(response),
   );
-  const costs = responses.map((response) =>
-    response.error || response.ui_status === "failed"
-      ? null
-      : positiveNumber(response.estimated_cost),
-  );
   const fastestDuration = minMetric(durations);
-  const cheapestCost = minMetric(costs);
 
   return responses.map((_, index) => ({
     fastest: fastestDuration !== null && durations[index] === fastestDuration,
-    cheapest: cheapestCost !== null && costs[index] === cheapestCost,
   }));
 }
 

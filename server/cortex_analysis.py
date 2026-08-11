@@ -11,7 +11,7 @@ import json
 import os
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal
 from uuid import uuid4
@@ -119,6 +119,11 @@ class AnalysisResult:
     completion_tokens: int
     total_tokens: int
     estimated_cost: float
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    pricing_snapshot: dict[str, Any] = field(default_factory=dict)
+    pricing_version: str | None = None
 
 
 def configured_analysis_model() -> str:
@@ -244,6 +249,14 @@ def analyze_responses(
         max_completion_tokens=CORTEX_ANALYSIS_MAX_OUTPUT_TOKENS,
         response_format=_analysis_response_format(),
         request_id=f"cortex-analysis-{uuid4()}",
+        _cache_scope={
+            "scope_id": source_fingerprint(sources),
+            "mode": "cortex_analysis",
+            "stable_context_hash": hashlib.sha256(
+                _analysis_system_prompt().encode("utf-8")
+            ).hexdigest(),
+            "retention_policy": "ephemeral",
+        },
     )
     if response.is_error:
         provider_error = response.error
@@ -324,7 +337,12 @@ def analyze_responses(
         prompt_tokens=max(0, int(response.token_usage.prompt_tokens)),
         completion_tokens=max(0, int(response.token_usage.completion_tokens)),
         total_tokens=max(0, int(response.token_usage.total_tokens)),
+        cached_input_tokens=max(0, int(response.token_usage.cached_input_tokens)),
+        cache_write_tokens=max(0, int(response.token_usage.cache_write_tokens)),
+        reasoning_tokens=max(0, int(response.token_usage.reasoning_tokens)),
         estimated_cost=max(0.0, float(response.estimated_cost)),
+        pricing_snapshot=dict(response.pricing_snapshot or {}),
+        pricing_version=response.pricing_version,
     )
 
 

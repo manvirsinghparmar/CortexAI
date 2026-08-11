@@ -9,6 +9,7 @@ from orchestrator.prompt_analyzer import PromptAnalyzer
 from orchestrator.response_validator import ResponseValidator
 from orchestrator.routing_types import ModelCandidate, PromptFeatures, RoutingConstraints, Tier
 from orchestrator.tier_decider import TierDecider
+from utils.token_estimation import estimate_tokens
 
 
 class SmartRouter:
@@ -129,11 +130,7 @@ class SmartRouter:
 
     @staticmethod
     def _estimate_text_tokens(text: str) -> int:
-        if not text:
-            return 0
-        words = len(re.findall(r"\b[\w'-]+\b", text))
-        chars = len(text)
-        return max(int(words * 1.3), int(chars / 4))
+        return estimate_tokens(text)
 
     def _apply_runtime_message_features(
         self,

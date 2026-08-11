@@ -1,10 +1,11 @@
 import pytest
+from types import SimpleNamespace
 from pydantic import ValidationError
 
 from models.unified_response import TokenUsage, UnifiedResponse
 from orchestrator.completion_status import attach_generation_budget
 from orchestrator.generation_policy import GenerationPolicyError, resolve_generation_budget
-from server.generation_service import resolve_request_budget
+from server.generation_service import constrain_budget_to_reservation, resolve_request_budget
 from server.schemas.requests import ChatRequest
 from server.schemas.responses import ChatResponseDTO
 
@@ -16,19 +17,19 @@ def test_legacy_request_keeps_quick_profile():
     )
 
     assert resolved.profile == "quick"
-    assert resolved.effective_max_output_tokens == 2048
+    assert resolved.effective_max_output_tokens == 1024
     assert resolved.effective_reasoning_mode == "thinking"
     assert resolved.effective_reasoning_effort == "high"
 
 
-def test_balanced_profile_removes_global_2048_clamp():
+def test_balanced_profile_uses_v2_ceiling():
     resolved = resolve_generation_budget(
         provider="deepseek",
         model="deepseek-v4-flash",
         generation={"profile": "balanced", "reasoning": {"mode": "auto"}},
     )
 
-    assert resolved.effective_max_output_tokens == 8192
+    assert resolved.effective_max_output_tokens == 4096
     assert resolved.retry_profile == "deep"
 
 
@@ -39,7 +40,7 @@ def test_profile_is_clamped_to_model_native_limit():
         generation={"profile": "extended"},
     )
 
-    assert resolved.requested_max_output_tokens == 65536
+    assert resolved.requested_max_output_tokens == 32768
     assert resolved.effective_max_output_tokens == 16384
 
 
@@ -106,7 +107,7 @@ def test_length_response_is_exposed_as_incomplete_with_retry_profile():
         provider="deepseek",
         model="deepseek-v4-flash",
         latency_ms=10,
-        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=8192, total_tokens=8202),
+        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=4096, total_tokens=4106),
         estimated_cost=0.0,
         finish_reason="length",
     )
@@ -116,7 +117,7 @@ def test_length_response_is_exposed_as_incomplete_with_retry_profile():
     assert dto.completion_status == "incomplete"
     assert dto.stop_cause == "token_limit"
     assert dto.generation_budget is not None
-    assert dto.generation_budget.effective_max_output_tokens == 8192
+    assert dto.generation_budget.effective_max_output_tokens == 4096
     assert dto.retry_with_more_room.available is True
     assert dto.retry_with_more_room.recommended_profile == "deep"
 
@@ -135,9 +136,9 @@ def test_empty_reasoning_length_response_stays_billable_and_incomplete():
         latency_ms=10,
         token_usage=TokenUsage(
             prompt_tokens=10,
-            completion_tokens=8192,
-            total_tokens=8202,
-            reasoning_tokens=8192,
+            completion_tokens=4096,
+            total_tokens=4106,
+            reasoning_tokens=4096,
         ),
         estimated_cost=0.0,
         finish_reason="length",
@@ -161,3 +162,30 @@ def test_rollout_switch_restores_quick_budget(monkeypatch):
 
     assert resolved.profile == "quick"
     assert resolved.effective_max_output_tokens == 2048
+
+
+def test_affordable_reservation_ceiling_is_used_for_provider_execution(monkeypatch):
+    monkeypatch.setenv("CREDIT_AWARE_GENERATION_BUDGET_ENABLED", "true")
+    resolved = resolve_generation_budget(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        generation={"profile": "balanced"},
+    )
+    reservation = SimpleNamespace(
+        model_estimates=(
+            SimpleNamespace(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                output_tokens=900,
+            ),
+        )
+    )
+    constrained = constrain_budget_to_reservation(
+        resolved,
+        reservation,
+        provider="deepseek",
+        model="deepseek-v4-flash",
+    )
+    assert constrained.requested_max_output_tokens == 4096
+    assert constrained.effective_max_output_tokens == 900
+    assert constrained.provider_kwargs()["max_tokens"] == 900

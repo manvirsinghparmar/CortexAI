@@ -65,6 +65,7 @@ class DeepSeekClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        self._resolve_cache_context(kwargs, provider="deepseek", model=model)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
         reasoning_mode = str(kwargs.get("reasoning_mode") or "thinking").strip().lower()

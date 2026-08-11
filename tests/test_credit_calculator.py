@@ -3,11 +3,13 @@ from decimal import Decimal
 import pytest
 
 from orchestrator.model_registry import ModelRegistry
+from config.pricing import ModelPricing
 from server.billing.credit_calculator import (
     ADVANCED_WEB_SEARCH_CREDITS,
     CORTEX_CREDITS_PER_TAVILY_CREDIT,
     TAVILY_ADVANCED_SEARCH_CREDIT_ESTIMATE,
     calculate_credit_charge,
+    calculate_model_credit_charge,
     calculate_research_credit_charge,
     research_credit_usage_from_metadata,
 )
@@ -178,3 +180,113 @@ def test_credit_calculator_rejects_negative_accounting_inputs(field):
             input_multiplier=1,
             output_multiplier=1,
         )
+
+
+CACHE_PRICING = {
+    "input": 2.0,
+    "cached_input": 0.2,
+    "cache_write": 2.5,
+}
+
+
+def _cache_charge(*, cached: int = 0, cache_write: int = 0):
+    return calculate_model_credit_charge(
+        prompt_tokens=10_000,
+        cached_input_tokens=cached,
+        cache_write_tokens=cache_write,
+        output_tokens=100,
+        input_credit_multiplier=1,
+        output_credit_multiplier=4,
+        pricing_snapshot=CACHE_PRICING,
+    )
+
+
+def test_uncached_cache_aware_charge_equals_legacy_total():
+    cache_aware = _cache_charge()
+    legacy = calculate_credit_charge(
+        input_tokens=10_000,
+        output_tokens=100,
+        input_multiplier=1,
+        output_multiplier=4,
+    )
+    assert cache_aware.total_credits == legacy.total_credits
+    assert cache_aware.normal_input_tokens == 10_000
+
+
+def test_partial_and_full_cache_hits_only_discount_reported_tokens():
+    partial = _cache_charge(cached=8_000)
+    full = _cache_charge(cached=10_000)
+    assert (partial.normal_input_tokens, partial.cached_input_tokens) == (2_000, 8_000)
+    assert (partial.normal_input_credits, partial.cached_input_credits) == (2_000, 800)
+    assert partial.cache_savings_credits == 7_200
+    assert (full.normal_input_tokens, full.cached_input_tokens) == (0, 10_000)
+    assert full.cached_input_credits == 1_000
+
+
+def test_cache_creation_uses_write_ratio_and_never_reports_negative_savings():
+    charge = _cache_charge(cache_write=8_000)
+    assert (charge.normal_input_tokens, charge.cache_write_tokens) == (2_000, 8_000)
+    assert charge.cache_write_credits == 10_000
+    assert charge.cache_savings_credits == 0
+
+
+def test_invalid_provider_cache_partitions_are_clamped_to_prompt_tokens():
+    overreported = _cache_charge(cached=15_000)
+    mixed = _cache_charge(cached=8_000, cache_write=8_000)
+    assert (overreported.normal_input_tokens, overreported.cached_input_tokens) == (0, 10_000)
+    assert (
+        mixed.normal_input_tokens,
+        mixed.cached_input_tokens,
+        mixed.cache_write_tokens,
+    ) == (0, 8_000, 2_000)
+
+
+def test_missing_pricing_snapshot_never_grants_cache_discount():
+    charge = calculate_model_credit_charge(
+        prompt_tokens=10_000,
+        cached_input_tokens=8_000,
+        cache_write_tokens=2_000,
+        output_tokens=0,
+        input_credit_multiplier=1,
+        output_credit_multiplier=4,
+        pricing_snapshot=None,
+    )
+    assert charge.input_credits == 10_000
+    assert charge.cache_savings_credits == 0
+
+
+def test_long_context_effective_pricing_snapshot_drives_cache_ratios():
+    snapshot = ModelPricing.get_pricing_snapshot(
+        "openai",
+        "gpt-5.6-luna",
+        prompt_tokens=300_000,
+    )
+    assert snapshot is not None
+    assert snapshot["long_context_applied"] is True
+    charge = calculate_model_credit_charge(
+        prompt_tokens=300_000,
+        cached_input_tokens=200_000,
+        output_tokens=0,
+        input_credit_multiplier=1,
+        output_credit_multiplier=4,
+        pricing_snapshot=snapshot,
+    )
+    assert charge.cached_input_credits == 20_000
+    assert charge.normal_input_credits == 100_000
+
+
+def test_reservation_uses_expensive_cache_write_multiplier():
+    candidate = ModelRegistry.from_yaml().find_model("openai", "gpt-5.6-luna")
+    assert candidate is not None
+    estimate = estimate_model_credits(
+        candidate,
+        input_text="x" * 300,
+        max_output_tokens=1,
+    )
+    normal_only = calculate_credit_charge(
+        input_tokens=estimate.input_tokens,
+        output_tokens=1,
+        input_multiplier=candidate.input_credit_multiplier,
+        output_multiplier=candidate.output_credit_multiplier,
+    )
+    assert estimate.charge.input_credits > normal_only.input_credits

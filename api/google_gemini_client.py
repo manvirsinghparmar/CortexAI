@@ -4,6 +4,7 @@ from typing import Any
 
 from google import genai
 
+from config.cache_optimization import cache_friendly_prompt_ordering_enabled
 from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
@@ -84,7 +85,7 @@ class GeminiClient(BaseAIClient):
             # Map roles: user->user, assistant->model
             gemini_role = "model" if role == "assistant" else "user"
             parts: list[dict[str, Any]] = []
-            if content:
+            if content and not cache_friendly_prompt_ordering_enabled():
                 parts.append({"text": content})
 
             if attachments and last_user_index is not None and idx == last_user_index:
@@ -97,6 +98,9 @@ class GeminiClient(BaseAIClient):
                             }
                         }
                     )
+
+            if content and cache_friendly_prompt_ordering_enabled():
+                parts.append({"text": content})
 
             gemini_contents.append({"role": gemini_role, "parts": parts or [{"text": ""}]})
 
@@ -132,6 +136,7 @@ class GeminiClient(BaseAIClient):
         start_time = time.time()
 
         model_name = kwargs.get("model", self.model_name)
+        self._resolve_cache_context(kwargs, provider="gemini", model=model_name)
         temperature = kwargs.get("temperature", 0.7)
         # Keep route-level max_tokens clamp compatible with Gemini's max_output_tokens naming.
         max_output_tokens = kwargs.get("max_output_tokens", kwargs.get("max_tokens", 2048))

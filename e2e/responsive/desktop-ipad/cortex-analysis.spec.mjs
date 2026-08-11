@@ -45,7 +45,7 @@ test("desktop restores Cortex Analysis below Compare responses and retains every
   );
 
   await firstTurn
-    .getByRole("button", { name: "Run Cortex Analysis again" })
+    .getByRole("button", { name: "Regenerate analysis" })
     .click();
   await expect(firstTurn.getByLabel("Analysis history")).toBeVisible();
   await expect(

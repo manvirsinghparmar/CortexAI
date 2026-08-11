@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelsCatalogScreen, ModelsPage } from "../pages/ModelsPage";
+import { MODELS_CATALOG, getModelsCatalogSummary } from "../config/modelsCatalog";
 import { useChatStore } from "../store/chatStore";
 import type {
   BillingPlansResponse,
@@ -59,6 +60,13 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 
 describe("ModelsPage", () => {
+  const catalogModelCount = getModelsCatalogSummary(MODELS_CATALOG).modelCount;
+  const codingModelCount = MODELS_CATALOG.providers.reduce(
+    (total, provider) =>
+      total + provider.models.filter((model) => model.tags.includes("Coding")).length,
+    0,
+  );
+
   beforeEach(() => {
     resetStore();
     hookMocks.subscriptionState.current = { entitlements: null, plans: null };
@@ -74,7 +82,9 @@ describe("ModelsPage", () => {
     renderPage();
 
     expect(screen.getAllByRole("heading", { name: "Models" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
+    expect(
+      screen.getByText(`${catalogModelCount} of ${catalogModelCount} models`),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute(
       "aria-current",
       "page",
@@ -95,7 +105,9 @@ describe("ModelsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Coding" }));
 
-    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
+    expect(
+      screen.getByText(`${codingModelCount} of ${catalogModelCount} models`),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Coding" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -116,12 +128,14 @@ describe("ModelsPage", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "Search models" }), "not-a-model");
 
-    expect(screen.getByText("0 of 3 models")).toBeInTheDocument();
+    expect(screen.getByText(`0 of ${catalogModelCount} models`)).toBeInTheDocument();
     expect(screen.getByText("No models match — clear filters")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
 
-    expect(screen.getByText("3 of 3 models")).toBeInTheDocument();
+    expect(
+      screen.getByText(`${catalogModelCount} of ${catalogModelCount} models`),
+    ).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "Search models" })).toHaveValue("");
   });
 

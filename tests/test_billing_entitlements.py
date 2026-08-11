@@ -156,11 +156,20 @@ def billing_service_db(monkeypatch):
         Column("provider", String(64)),
         Column("model", String(255)),
         Column("input_tokens", BigInteger, nullable=False, default=0),
+        Column("normal_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cached_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cache_write_tokens", BigInteger, nullable=False, default=0),
+        Column("reasoning_tokens", BigInteger, nullable=False, default=0),
         Column("output_tokens", BigInteger, nullable=False, default=0),
         Column("input_credits", BigInteger, nullable=False, default=0),
+        Column("normal_input_credits", BigInteger, nullable=False, default=0),
+        Column("cached_input_credits", BigInteger, nullable=False, default=0),
+        Column("cache_write_credits", BigInteger, nullable=False, default=0),
         Column("output_credits", BigInteger, nullable=False, default=0),
         Column("fixed_credits", BigInteger, nullable=False, default=0),
         Column("total_credits", BigInteger, nullable=False),
+        Column("uncached_equivalent_credits", BigInteger, nullable=False, default=0),
+        Column("cache_savings_credits", BigInteger, nullable=False, default=0),
         Column("provider_cost_usd", Float, nullable=False, default=0),
         Column("usage_estimated", Boolean, nullable=False, default=False),
         Column("pricing_version", String(64), nullable=False),
@@ -855,8 +864,9 @@ def test_credit_transactions_endpoint_returns_itemized_reconciliation(
         response = client.get("/v1/credits/transactions?limit=20&offset=0")
 
     assert response.status_code == 200
-    assert response.json()["items"][0] == {
-        "id": response.json()["items"][0]["id"],
+    item = response.json()["items"][0]
+    expected = {
+        "id": item["id"],
         "request_id": "credit-route-request",
         "activity_id": "activity-credit-route",
         "query": "How do atomic credit reservations work?",
@@ -880,6 +890,12 @@ def test_credit_transactions_endpoint_returns_itemized_reconciliation(
         },
         "created_at": "2026-07-29T12:00:00Z",
     }
+    assert {key: item[key] for key in expected} == expected
+    assert item["normal_input_tokens"] == 0
+    assert item["cached_input_tokens"] == 0
+    assert item["cache_write_tokens"] == 0
+    assert item["reasoning_tokens"] == 0
+    assert item["cache_savings_credits"] == 0
 
 
 @pytest.mark.integration

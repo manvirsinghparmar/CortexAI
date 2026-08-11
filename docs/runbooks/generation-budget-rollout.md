@@ -3,13 +3,14 @@
 ## Preconditions
 
 1. Back up the target PostgreSQL database.
-2. Apply all migrations through `20260804_add_generation_budget_audit.sql` with the
+2. Apply all migrations through `20260807_add_cache_aware_credit_accounting.sql` with the
    schema-owner connection.
 3. Restart the API so SQLAlchemy reflection sees the added columns.
 4. Confirm the model registry and pricing alignment tests pass.
 
 ```powershell
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 venv\Scripts\python.exe -m pytest tests/test_generation_policy.py tests/test_registry_pricing_alignment.py -q
 ```
 

@@ -540,6 +540,96 @@ def test_run_dto_keeps_legacy_flat_disagreements_readable():
 
 
 @pytest.mark.unit
+def test_identical_analysis_reuse_skips_provider_and_credit_reservation(monkeypatch):
+    user_id = UUID("11111111-1111-1111-1111-111111111111")
+    session_id = UUID("22222222-2222-2222-2222-222222222222")
+    group_id = UUID("33333333-3333-3333-3333-333333333333")
+    source_payload = {
+        "session_id": session_id,
+        "question": "Choose an approach",
+        "responses": [
+            {
+                "request_id": "a",
+                "response_version": 1,
+                "provider": "openai",
+                "model": "gpt-5.1",
+                "content": "A",
+                "error_message": None,
+            },
+            {
+                "request_id": "b",
+                "response_version": 1,
+                "provider": "claude",
+                "model": "claude-sonnet-4-5",
+                "content": "B",
+                "error_message": None,
+            },
+        ],
+    }
+    sources, _ = analysis_service.normalize_analysis_sources(source_payload["responses"])
+    reusable = {
+        "analysis_id": "44444444-4444-4444-4444-444444444444",
+        "request_group_id": str(group_id),
+        "session_id": str(session_id),
+        "model": analysis_service.configured_analysis_model(),
+        "source_fingerprint": analysis_service.source_fingerprint(sources),
+        "analysis_policy_version": "cortex-analysis-v1",
+        "source_snapshot": [],
+        "recommended_answer": "Reuse this.",
+        "agreements": [],
+        "disagreements": [],
+        "unique_insights": [],
+        "confidence_level": "moderate",
+        "confidence_reason": "Existing evidence.",
+        "verify_items": [],
+        "combined_response_count": 2,
+        "failed_response_count": 0,
+        "created_at": "2026-08-07T12:00:00Z",
+    }
+
+    @contextmanager
+    def fake_uow(*, commit_on_success=True):
+        yield object()
+
+    monkeypatch.setenv("CORTEX_ANALYSIS_REUSE_ENABLED", "true")
+    monkeypatch.setattr(analysis_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(analysis_route, "_require_analysis_schema", lambda **kwargs: None)
+    monkeypatch.setattr(analysis_route, "_db_uow", fake_uow)
+    monkeypatch.setattr(
+        analysis_route,
+        "_resolve_identity",
+        lambda **kwargs: SimpleNamespace(user_id=user_id, api_key_id=None),
+    )
+    monkeypatch.setattr(
+        analysis_route, "get_compare_analysis_sources", lambda *args, **kwargs: source_payload
+    )
+    monkeypatch.setattr(
+        analysis_route, "list_cortex_analysis_runs", lambda *args, **kwargs: [reusable]
+    )
+    monkeypatch.setattr(
+        analysis_route.analysis_service,
+        "analyze_responses",
+        lambda **kwargs: pytest.fail("reused analysis must not call the provider"),
+    )
+    monkeypatch.setattr(
+        analysis_route.persistence_service,
+        "reserve_subscription_usage",
+        lambda **kwargs: pytest.fail("reused analysis must consume zero new credits"),
+    )
+
+    result = asyncio.run(
+        analysis_route.create_analysis_run(
+            request_group_id=group_id,
+            request=SimpleNamespace(state=SimpleNamespace(request_id="reuse")),
+            regenerate=False,
+            auth=AuthResult(api_key=None, cognito_claims=None, user_id=user_id),
+        )
+    )
+    assert result.analysis_id == reusable["analysis_id"]
+    assert result.recommended_answer == "Reuse this."
+
+
+@pytest.mark.unit
 def test_list_analysis_runs_returns_503_when_migration_is_missing(monkeypatch):
     user_id = UUID("11111111-1111-1111-1111-111111111111")
     session_id = UUID("22222222-2222-2222-2222-222222222222")

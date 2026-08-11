@@ -61,6 +61,11 @@ ALLOWED_PROMPT_CATEGORIES = {
 
 ALLOWED_RESEARCH_MODES = {"off", "auto", "on"}
 ALLOWED_ROUTING_MODES = {"smart", "cheap", "strong", "explicit", "legacy"}
+ALLOWED_CACHE_REUSE_OPERATIONS = {
+    "research",
+    "prompt_optimization",
+    "cortex_analysis",
+}
 ALLOWED_FILE_STATUSES = {"uploaded", "processing", "ready", "failed", "expired", "deleted"}
 ALLOWED_ATTACHMENT_USAGE_ROLES = {"primary", "reference"}
 ALLOWED_ATTACHMENT_TRANSFORM_MODES = {"auto", "text_only", "vision_pages", "table_summary"}
@@ -664,6 +669,10 @@ def create_context_snapshot(
     session_id: UUID,
     context_text: str,
     base_message_id: UUID | None = None,
+    *,
+    source_message_range: str | None = None,
+    source_hash: str | None = None,
+    summary_policy_version: str | None = None,
 ) -> UUID:
     """
     Create a new context snapshot (with hash-based deduplication).
@@ -686,18 +695,37 @@ def create_context_snapshot(
 
     context_snapshots = get_table("context_snapshots")
 
-    context_hash = compute_context_hash(context_text)
+    context_hash = compute_context_hash(
+        ":".join(
+            part
+            for part in (
+                source_hash,
+                source_message_range,
+                summary_policy_version,
+            )
+            if part
+        )
+        or context_text
+    )
+    columns = set(context_snapshots.c.keys())
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "base_message_id": base_message_id,
+        "context_hash": context_hash,
+        "context_text": context_text,
+    }
+    if "source_message_range" in columns:
+        values["source_message_range"] = source_message_range
+    if "source_hash" in columns:
+        values["source_hash"] = source_hash
+    if "summary_policy_version" in columns:
+        values["summary_policy_version"] = summary_policy_version
 
     # Use PostgreSQL UPSERT to handle duplicate hash
     stmt = (
         pg_insert(context_snapshots)
-        .values(
-            user_id=user_id,
-            session_id=session_id,
-            base_message_id=base_message_id,
-            context_hash=context_hash,
-            context_text=context_text,
-        )
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["session_id", "context_hash"])
         .returning(context_snapshots.c.id)
     )
@@ -2138,6 +2166,7 @@ def get_usage_aggregates(
 
     created_col = llm_requests.c.created_at if "created_at" in req_cols else None
     provider_col = llm_requests.c.provider if "provider" in req_cols else None
+    operation_col = llm_requests.c.route_mode if "route_mode" in req_cols else None
     model_col = (
         llm_responses.c.served_model
         if "served_model" in resp_cols
@@ -2151,6 +2180,8 @@ def get_usage_aggregates(
         bucket_expr = provider_col if provider_col is not None else literal("unknown")
     elif group == "model":
         bucket_expr = model_col if model_col is not None else literal("unknown")
+    elif group == "operation":
+        bucket_expr = operation_col if operation_col is not None else literal("unknown")
     else:
         group = "day"
         if created_col is not None:
@@ -2686,6 +2717,125 @@ def get_compare_analysis_sources(
     }
 
 
+def get_prompt_optimization_cache(
+    db: Session,
+    *,
+    user_id: UUID,
+    cache_key: str,
+) -> dict[str, Any] | None:
+    """Return one unexpired shared optimizer result and refresh its usage time."""
+
+    from db.tables import get_table
+
+    cache = get_table("prompt_optimization_cache")
+    row = db.execute(
+        select(cache).where(
+            and_(
+                cache.c.user_id == user_id,
+                cache.c.cache_key == str(cache_key),
+                cache.c.expires_at > func.now(),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    payload = dict(row._mapping)
+    db.execute(
+        update(cache)
+        .where(cache.c.id == payload["id"])
+        .values(last_used_at=func.now())
+    )
+    result = _decode_json_value(payload.get("result"), {})
+    return result if isinstance(result, dict) else None
+
+
+def record_cache_reuse_event(
+    db: Session,
+    *,
+    user_id: UUID,
+    request_id: str,
+    operation_type: str,
+    reused: bool,
+) -> None:
+    """Record one idempotent cache/reuse decision for dashboard rates."""
+
+    from db.tables import get_table
+
+    operation = str(operation_type or "").strip().lower()
+    if operation not in ALLOWED_CACHE_REUSE_OPERATIONS:
+        raise ValueError(f"Unsupported cache reuse operation: {operation_type}")
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        raise ValueError("request_id is required for a cache reuse event")
+    normalized_request_id = normalized_request_id[:255]
+
+    events = get_table("cache_reuse_events")
+    existing = db.execute(
+        select(events.c.id).where(
+            and_(
+                events.c.user_id == user_id,
+                events.c.operation_type == operation,
+                events.c.request_id == normalized_request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.execute(
+            insert(events).values(
+                user_id=user_id,
+                request_id=normalized_request_id,
+                operation_type=operation,
+                reused=bool(reused),
+            )
+        )
+        return
+    db.execute(
+        update(events).where(events.c.id == existing).values(reused=bool(reused))
+    )
+
+
+def store_prompt_optimization_cache(
+    db: Session,
+    *,
+    user_id: UUID,
+    cache_key: str,
+    optimizer_provider: str,
+    optimizer_model: str,
+    prompt_version: str,
+    result: dict[str, Any],
+    expires_at: datetime,
+) -> None:
+    """Persist one successful optimizer result for cross-worker reuse."""
+
+    from db.tables import get_table
+
+    cache = get_table("prompt_optimization_cache")
+    existing = db.execute(
+        select(cache.c.id).where(
+            and_(cache.c.user_id == user_id, cache.c.cache_key == str(cache_key))
+        )
+    ).scalar_one_or_none()
+    values = {
+        "optimizer_provider": str(optimizer_provider),
+        "optimizer_model": str(optimizer_model),
+        "prompt_version": str(prompt_version),
+        "result": dict(result),
+        "last_used_at": func.now(),
+        "expires_at": expires_at,
+    }
+    if existing is None:
+        db.execute(
+            insert(cache).values(
+                id=uuid4(),
+                user_id=user_id,
+                cache_key=str(cache_key),
+                **values,
+            )
+        )
+    else:
+        db.execute(update(cache).where(cache.c.id == existing).values(**values))
+
+
 def create_cortex_analysis_run(
     db: Session,
     *,
@@ -2710,6 +2860,12 @@ def create_cortex_analysis_run(
     completion_tokens: int = 0,
     total_tokens: int = 0,
     estimated_cost: float = 0.0,
+    analysis_policy_version: str = "cortex-analysis-v1",
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    pricing_snapshot: dict[str, Any] | None = None,
+    pricing_version: str | None = None,
 ) -> UUID:
     """Append one immutable Cortex Analysis run."""
     from db.tables import get_table
@@ -2740,6 +2896,12 @@ def create_cortex_analysis_run(
             completion_tokens=max(0, int(completion_tokens)),
             total_tokens=max(0, int(total_tokens)),
             estimated_cost=max(0.0, float(estimated_cost)),
+            analysis_policy_version=str(analysis_policy_version or "cortex-analysis-v1"),
+            cached_input_tokens=max(0, int(cached_input_tokens)),
+            cache_write_tokens=max(0, int(cache_write_tokens)),
+            reasoning_tokens=max(0, int(reasoning_tokens)),
+            pricing_snapshot=dict(pricing_snapshot or {}),
+            pricing_version=str(pricing_version or "") or None,
         )
     )
     return analysis_id
@@ -2788,6 +2950,9 @@ def list_cortex_analysis_runs(
                 "session_id": str(payload.get("session_id") or ""),
                 "model": str(payload.get("model") or ""),
                 "source_fingerprint": str(payload.get("source_fingerprint") or ""),
+                "analysis_policy_version": str(
+                    payload.get("analysis_policy_version") or ""
+                ),
                 "source_snapshot": _decode_json_value(
                     payload.get("source_snapshot"),
                     [],
@@ -2814,6 +2979,13 @@ def list_cortex_analysis_runs(
                 ),
                 "combined_response_count": int(payload.get("combined_response_count") or 0),
                 "failed_response_count": int(payload.get("failed_response_count") or 0),
+                "cached_input_tokens": int(payload.get("cached_input_tokens") or 0),
+                "cache_write_tokens": int(payload.get("cache_write_tokens") or 0),
+                "reasoning_tokens": int(payload.get("reasoning_tokens") or 0),
+                "pricing_snapshot": _decode_json_value(
+                    payload.get("pricing_snapshot"), {}
+                ),
+                "pricing_version": str(payload.get("pricing_version") or "") or None,
                 "created_at": _to_history_timestamp(payload.get("created_at")),
             }
         )
@@ -2898,6 +3070,18 @@ def get_llm_history_entries(
     resp_completion_tokens_col = (
         llm_responses.c.completion_tokens if "completion_tokens" in resp_cols else None
     )
+    resp_cached_input_tokens_col = (
+        llm_responses.c.cached_input_tokens if "cached_input_tokens" in resp_cols else None
+    )
+    resp_cache_write_tokens_col = (
+        llm_responses.c.cache_write_tokens if "cache_write_tokens" in resp_cols else None
+    )
+    resp_reasoning_tokens_col = (
+        llm_responses.c.reasoning_tokens if "reasoning_tokens" in resp_cols else None
+    )
+    resp_pricing_snapshot_col = (
+        llm_responses.c.pricing_snapshot if "pricing_snapshot" in resp_cols else None
+    )
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
@@ -2945,6 +3129,22 @@ def get_llm_history_entries(
     )
     completion_tokens_expr = (
         resp_completion_tokens_col if resp_completion_tokens_col is not None else literal(None)
+    )
+    cached_input_tokens_expr = (
+        resp_cached_input_tokens_col
+        if resp_cached_input_tokens_col is not None
+        else literal(0)
+    )
+    cache_write_tokens_expr = (
+        resp_cache_write_tokens_col
+        if resp_cache_write_tokens_col is not None
+        else literal(0)
+    )
+    reasoning_tokens_expr = (
+        resp_reasoning_tokens_col if resp_reasoning_tokens_col is not None else literal(0)
+    )
+    pricing_snapshot_expr = (
+        resp_pricing_snapshot_col if resp_pricing_snapshot_col is not None else literal(None)
     )
     tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
@@ -3058,6 +3258,10 @@ def get_llm_history_entries(
             response_text_expr.label("response_text"),
             latency_expr.label("latency_ms"),
             prompt_tokens_expr.label("prompt_tokens"),
+            cached_input_tokens_expr.label("cached_input_tokens"),
+            cache_write_tokens_expr.label("cache_write_tokens"),
+            reasoning_tokens_expr.label("reasoning_tokens"),
+            pricing_snapshot_expr.label("pricing_snapshot"),
             completion_tokens_expr.label("completion_tokens"),
             tokens_expr.label("tokens"),
             cost_expr.label("cost"),
@@ -3161,6 +3365,12 @@ def get_llm_history_entries(
                 "response": str(response_text),
                 "latency_ms": payload.get("latency_ms"),
                 "prompt_tokens": payload.get("prompt_tokens"),
+                "cached_input_tokens": payload.get("cached_input_tokens"),
+                "cache_write_tokens": payload.get("cache_write_tokens"),
+                "reasoning_tokens": payload.get("reasoning_tokens"),
+                "pricing_snapshot": _decode_json_value(
+                    payload.get("pricing_snapshot"), {}
+                ),
                 "completion_tokens": payload.get("completion_tokens"),
                 "tokens": payload.get("tokens"),
                 "cost": float(payload["cost"]) if payload.get("cost") is not None else None,

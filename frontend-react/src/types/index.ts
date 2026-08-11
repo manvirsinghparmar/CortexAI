@@ -142,6 +142,10 @@ export interface ChatResponse {
   pricing_snapshot?: Record<string, unknown>;
   ai_credits?: number;
   credit_usage_estimated?: boolean;
+  cache_hit?: boolean;
+  cache_hit_ratio?: number;
+  cache_savings_ai_credits?: number;
+  uncached_equivalent_ai_credits?: number;
   finish_reason?: string;
   completion_status?: "complete" | "incomplete" | "failed";
   stop_cause?: string;
@@ -179,6 +183,7 @@ export interface CompareResponse {
   total_tokens: number;
   total_cost: number;
   total_ai_credits?: number;
+  total_cache_savings_ai_credits?: number;
   timestamp: string;
 }
 
@@ -565,6 +570,23 @@ export interface UsageSummary {
   sessionModes: UsageSummarySessionModes;
   switchedMidSession: number;
   activityDaily: UsageActivityDay[];
+  totalAiCredits?: number;
+  averageAiCreditsPerRequest?: number;
+  normalInputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  cacheHitRatio?: number;
+  cacheSavingsAiCredits?: number;
+  providerCostCacheSavings?: number;
+  reservationCredits?: number;
+  settledCredits?: number;
+  reservationReleaseRatio?: number;
+  outputTokenUtilization?: number;
+  reasoningTokens?: number;
+  researchRequests?: number;
+  researchReuseRate?: number;
+  promptOptimizationReuseRate?: number;
+  cortexAnalysisReuseRate?: number;
 }
 
 export interface OptimizeRequest {
@@ -581,6 +603,7 @@ export interface OptimizeResponse {
   server_optimization_enabled: boolean;
   optimization_status: string;
   fallback_reason?: string;
+  optimization_reused?: boolean;
 }
 
 export type ChatMode = "single" | "compare";

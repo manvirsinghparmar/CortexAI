@@ -8,13 +8,17 @@ This enforces the "locked" contract across all providers.
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import re
 
+from config.cache_optimization import cache_friendly_prompt_ordering_enabled
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from orchestrator.cache_context import CacheContext
 
 
 class BaseAIClient(ABC):
@@ -131,6 +135,34 @@ class BaseAIClient(ABC):
         raise ValueError("Either 'prompt' or 'messages' must be provided")
 
     @staticmethod
+    def _resolve_cache_context(
+        kwargs: dict[str, Any],
+        *,
+        provider: str,
+        model: str,
+    ) -> "CacheContext":
+        from orchestrator.cache_context import CacheContext, build_cache_context
+
+        supplied = kwargs.pop("cache_context", None)
+        scope = kwargs.pop("_cache_scope", None)
+        if isinstance(supplied, CacheContext):
+            return supplied
+        if not isinstance(scope, dict):
+            return CacheContext()
+        try:
+            return build_cache_context(
+                scope_id=str(scope.get("scope_id") or ""),
+                provider=provider,
+                model=model,
+                mode=str(scope.get("mode") or "ask"),
+                stable_context_hash=str(scope.get("stable_context_hash") or ""),
+                retention_policy=str(scope.get("retention_policy") or "ephemeral"),
+            )
+        except Exception:
+            # Cache affinity is an optimization and must never block inference.
+            return CacheContext()
+
+    @staticmethod
     def _extract_text_from_content(content: Any) -> str:
         """Extract plain text from provider-neutral message content."""
         if isinstance(content, str):
@@ -232,7 +264,11 @@ class BaseAIClient(ABC):
         if isinstance(current_content, str):
             combined = current_content.strip()
             if combined:
-                combined = f"{combined}\n\n{text_block}"
+                combined = (
+                    f"{text_block}\n\n{combined}"
+                    if cache_friendly_prompt_ordering_enabled()
+                    else f"{combined}\n\n{text_block}"
+                )
             else:
                 combined = text_block
             current["content"] = combined
@@ -240,7 +276,11 @@ class BaseAIClient(ABC):
 
         if isinstance(current_content, list):
             next_content = list(current_content)
-            next_content.append({"type": "text", "text": text_block})
+            block = {"type": "text", "text": text_block}
+            if cache_friendly_prompt_ordering_enabled():
+                next_content.insert(0, block)
+            else:
+                next_content.append(block)
             current["content"] = next_content
             return merged_messages, binary_attachments
 

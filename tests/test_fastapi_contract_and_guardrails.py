@@ -2303,7 +2303,7 @@ def test_compare_stream_done_payload_counts_incomplete_successes_and_uses_profil
         cookies={"cortex_session": "test-session-cookie"},
     )
     assert r.status_code == 200
-    assert observed_kwargs.get("max_tokens") == 8192
+    assert observed_kwargs.get("max_tokens") == 4096
 
     events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
     done = next((event for event in events if event.get("type") == "done"), None)
@@ -2446,10 +2446,10 @@ def test_chat_uses_same_profile_limit_for_billing_and_provider(
     )
 
     assert response.status_code == 200
-    assert reservations[0]["max_output_tokens"] == 8192
+    assert reservations[0]["max_output_tokens"] == 4096
     assert reservations[0]["initial_query"] == "Give me a summary"
     assert reservations[0]["credit_activity_id"] == "activity-chat"
-    assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 8192
+    assert app.state.fake_orchestrator.last_ask_kwargs["max_tokens"] == 4096
 
 
 def test_compare_uses_same_profile_limit_for_billing_and_provider(
@@ -2487,19 +2487,19 @@ def test_compare_uses_same_profile_limit_for_billing_and_provider(
 
     assert response.status_code == 200
     assert reservations[0]["max_output_tokens_by_target"] == {
-        "openai:gpt-4o-mini": 8192,
-        "gemini:gemini-2.5-flash": 8192,
+        "openai:gpt-4o-mini": 4096,
+        "gemini:gemini-2.5-flash": 4096,
     }
     assert reservations[0]["initial_query"] == "Compare these"
     assert reservations[0]["credit_activity_id"] == "activity-compare"
     assert app.state.fake_orchestrator.last_compare_kwargs["_per_client_generation"] == {
         "openai:gpt-4o-mini": {
-            "max_tokens": 8192,
+            "max_tokens": 4096,
             "reasoning_mode": "off",
             "reasoning_effort": "none",
         },
         "gemini:gemini-2.5-flash": {
-            "max_tokens": 8192,
+            "max_tokens": 4096,
             "reasoning_mode": "off",
             "reasoning_effort": "none",
         },

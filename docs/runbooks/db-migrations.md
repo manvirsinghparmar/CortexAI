@@ -78,6 +78,7 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260730_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_model_pricing_audit.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
@@ -85,6 +86,40 @@ own that table. The later unified-credit and activity scripts depend on the
 `20260718` billing foundation. PostgreSQL startup validates the complete table
 and column contract, including generation-budget audit fields, and exits before serving provider traffic if any script is
 missing.
+
+### Cache-aware accounting and reuse migration
+
+`20260807_add_cache_aware_credit_accounting.sql` is additive and idempotent. It
+backfills historical credit rows as uncached without changing their totals, adds
+non-negative cache token/credit columns, extends Cortex Analysis audit evidence,
+creates reusable optimizer/research/context-summary storage, and adds the
+`cache_reuse_events` audit table used for period-scoped reuse rates. Apply it with the
+schema-owner connection after `20260804`, restart all API processes to refresh
+SQLAlchemy reflection, and leave cache-aware settlement disabled until shadow
+totals have been reconciled against provider invoices.
+
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'credit_transactions'
+  AND column_name IN (
+    'normal_input_tokens', 'cached_input_tokens', 'cache_write_tokens',
+    'reasoning_tokens', 'normal_input_credits', 'cached_input_credits',
+    'cache_write_credits', 'uncached_equivalent_credits', 'cache_savings_credits'
+  )
+ORDER BY column_name;
+
+SELECT input_tokens, normal_input_tokens, cached_input_tokens,
+       cache_write_tokens, total_credits, uncached_equivalent_credits
+FROM public.credit_transactions
+ORDER BY created_at DESC
+LIMIT 20;
+
+SELECT to_regclass('public.prompt_optimization_cache'),
+       to_regclass('public.research_reuse_cache'),
+       to_regclass('public.cache_reuse_events');
+```
 
 ### Generation budget audit migration
 

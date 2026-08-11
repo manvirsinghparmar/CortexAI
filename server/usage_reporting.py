@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from db import get_savings_aggregates, get_table, get_usage_aggregates
 
-VALID_GROUP_BY = {"day", "provider", "model"}
+VALID_GROUP_BY = {"day", "provider", "model", "operation"}
 SMART_ROUTING_MODES = {"cheap", "smart", "strong"}
 USAGE_CSV_COLUMNS = ("bucket", "requests", "tokens", "cost")
 SAVINGS_CSV_COLUMNS = (
@@ -84,7 +84,7 @@ def normalize_group_by(group_by: str | None) -> str:
     if value not in VALID_GROUP_BY:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid group_by '{group_by}'. Use one of: day, provider, model.",
+            detail=f"Invalid group_by '{group_by}'. Use one of: day, provider, model, operation.",
         )
     return value
 
@@ -390,6 +390,13 @@ def build_usage_summary(
         for offset in range(14)
     ]
 
+    cache_metrics = _cache_usage_metrics(
+        db_session,
+        user_id=user_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
     return {
         "period": {
             "from": date_from.isoformat(),
@@ -410,7 +417,212 @@ def build_usage_summary(
         "sessionModes": session_modes,
         "switchedMidSession": session_modes["mixed"],
         "activityDaily": activity_daily,
+        **cache_metrics,
     }
+
+
+def _cache_usage_metrics(
+    db_session: Session,
+    *,
+    user_id: UUID,
+    date_from: date,
+    date_to: date,
+) -> dict[str, int | float]:
+    empty: dict[str, int | float] = {
+        "totalAiCredits": 0,
+        "averageAiCreditsPerRequest": 0.0,
+        "normalInputTokens": 0,
+        "cachedInputTokens": 0,
+        "cacheWriteTokens": 0,
+        "cacheHitRatio": 0.0,
+        "cacheSavingsAiCredits": 0,
+        "providerCostCacheSavings": 0.0,
+        "reservationCredits": 0,
+        "settledCredits": 0,
+        "reservationReleaseRatio": 0.0,
+        "outputTokenUtilization": 0.0,
+        "reasoningTokens": 0,
+        "researchRequests": 0,
+        "researchReuseRate": 0.0,
+        "promptOptimizationReuseRate": 0.0,
+        "cortexAnalysisReuseRate": 0.0,
+    }
+    try:
+        accounts = get_table("billing_accounts")
+        transactions = get_table("credit_transactions")
+        reservations = get_table("usage_reservations")
+        reuse_events = get_table("cache_reuse_events")
+        tx_columns = {column.name for column in transactions.columns}
+        required = {
+            "normal_input_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "cache_savings_credits",
+        }
+        if not required.issubset(tx_columns):
+            return empty
+
+        tx_stmt = (
+            select(transactions)
+            .select_from(
+                transactions.join(
+                    accounts,
+                    transactions.c.billing_account_id == accounts.c.id,
+                )
+            )
+            .where(accounts.c.owner_id == user_id)
+        )
+        tx_stmt = _apply_request_date_range(
+            tx_stmt,
+            transactions.c.created_at,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        tx_rows = [dict(row._mapping) for row in db_session.execute(tx_stmt).fetchall()]
+        model_rows = [row for row in tx_rows if row.get("item_type") == "model"]
+        prompt_tokens = sum(int(row.get("input_tokens") or 0) for row in model_rows)
+        total_credits = sum(int(row.get("total_credits") or 0) for row in tx_rows)
+        request_count = len({str(row.get("request_id") or "") for row in tx_rows})
+        provider_cost_cache_savings = 0.0
+        reserved_output_tokens = 0
+        actual_output_tokens = 0
+        for row in model_rows:
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            snapshot = (
+                metadata.get("pricing_snapshot")
+                if isinstance(metadata.get("pricing_snapshot"), dict)
+                else {}
+            )
+            rates = (
+                snapshot.get("rates_per_1m")
+                if isinstance(snapshot.get("rates_per_1m"), dict)
+                else snapshot
+            )
+            try:
+                normal_rate = max(0.0, float(rates.get("input") or 0.0))
+                cached_rate = max(0.0, float(rates.get("cached_input") or normal_rate))
+                write_rate = max(0.0, float(rates.get("cache_write") or normal_rate))
+            except Exception:
+                normal_rate = cached_rate = write_rate = 0.0
+            uncached_cost = int(row.get("input_tokens") or 0) * normal_rate / 1_000_000
+            actual_input_cost = (
+                int(row.get("normal_input_tokens") or 0) * normal_rate
+                + int(row.get("cached_input_tokens") or 0) * cached_rate
+                + int(row.get("cache_write_tokens") or 0) * write_rate
+            ) / 1_000_000
+            provider_cost_cache_savings += max(0.0, uncached_cost - actual_input_cost)
+            reserved_output_tokens += max(
+                0, int(metadata.get("reserved_output_tokens") or 0)
+            )
+            actual_output_tokens += max(0, int(row.get("output_tokens") or 0))
+
+        reservation_stmt = (
+            select(reservations)
+            .select_from(
+                reservations.join(
+                    accounts,
+                    reservations.c.billing_account_id == accounts.c.id,
+                )
+            )
+            .where(accounts.c.owner_id == user_id)
+        )
+        reservation_stmt = _apply_request_date_range(
+            reservation_stmt,
+            reservations.c.created_at,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        reservation_rows = [
+            dict(row._mapping) for row in db_session.execute(reservation_stmt).fetchall()
+        ]
+        reserved = sum(
+            int((row.get("requested_quantities") or {}).get("ai_credits") or 0)
+            for row in reservation_rows
+        )
+        settled = sum(
+            int((row.get("settled_quantities") or {}).get("ai_credits") or 0)
+            for row in reservation_rows
+        )
+
+        reuse_stmt = select(reuse_events).where(reuse_events.c.user_id == user_id)
+        reuse_stmt = _apply_request_date_range(
+            reuse_stmt,
+            reuse_events.c.created_at,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        reuse_rows = [
+            dict(row._mapping) for row in db_session.execute(reuse_stmt).fetchall()
+        ]
+
+        def reuse_counts(operation_type: str) -> tuple[int, int]:
+            rows = [
+                row
+                for row in reuse_rows
+                if row.get("operation_type") == operation_type
+            ]
+            return len(rows), sum(1 for row in rows if bool(row.get("reused")))
+
+        research_requests, research_reuses = reuse_counts("research")
+        optimization_requests, optimization_reuses = reuse_counts(
+            "prompt_optimization"
+        )
+        cortex_requests, cortex_reuses = reuse_counts("cortex_analysis")
+
+        return {
+            **empty,
+            "totalAiCredits": total_credits,
+            "averageAiCreditsPerRequest": (
+                total_credits / request_count if request_count else 0.0
+            ),
+            "normalInputTokens": sum(
+                int(row.get("normal_input_tokens") or 0) for row in model_rows
+            ),
+            "cachedInputTokens": sum(
+                int(row.get("cached_input_tokens") or 0) for row in model_rows
+            ),
+            "cacheWriteTokens": sum(
+                int(row.get("cache_write_tokens") or 0) for row in model_rows
+            ),
+            "cacheHitRatio": (
+                sum(int(row.get("cached_input_tokens") or 0) for row in model_rows)
+                / prompt_tokens
+                if prompt_tokens
+                else 0.0
+            ),
+            "cacheSavingsAiCredits": sum(
+                int(row.get("cache_savings_credits") or 0) for row in model_rows
+            ),
+            "providerCostCacheSavings": provider_cost_cache_savings,
+            "reservationCredits": reserved,
+            "settledCredits": settled,
+            "reservationReleaseRatio": (
+                max(0, reserved - settled) / reserved if reserved else 0.0
+            ),
+            "outputTokenUtilization": (
+                min(1.0, actual_output_tokens / reserved_output_tokens)
+                if reserved_output_tokens
+                else 0.0
+            ),
+            "reasoningTokens": sum(
+                int(row.get("reasoning_tokens") or 0) for row in model_rows
+            ),
+            "researchRequests": research_requests,
+            "researchReuseRate": (
+                research_reuses / research_requests if research_requests else 0.0
+            ),
+            "promptOptimizationReuseRate": (
+                optimization_reuses / optimization_requests
+                if optimization_requests
+                else 0.0
+            ),
+            "cortexAnalysisReuseRate": (
+                cortex_reuses / cortex_requests if cortex_requests else 0.0
+            ),
+        }
+    except Exception:
+        return empty
 
 
 def build_usage_report(

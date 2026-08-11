@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import Any
 
+from config.cache_optimization import cache_friendly_prompt_ordering_enabled
 from api.base_client import BaseAIClient
 from api.client_registry import ClientRegistry
 from models.unified_response import (
@@ -27,6 +28,7 @@ from models.unified_response import (
 )
 from models.user_context import UserContext
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
+from orchestrator.cache_context import stable_context_digest
 from orchestrator.model_registry import ModelRegistry
 from orchestrator.model_selector import ModelSelector, ReliabilityStore
 from orchestrator.prompt_analyzer import PromptAnalyzer
@@ -54,6 +56,10 @@ from tools.web.research_state import (
     ResearchSource,
     ResearchState,
     create_initial_state,
+)
+from tools.web.persistent_research_store import (
+    load_research_state,
+    save_research_state,
 )
 from tools.web.session_state import get_session_store
 from utils.cost_calculator import CostCalculator
@@ -343,13 +349,53 @@ Never fabricate numbers, dates, percentages, or citations.
 Never claim you performed web browsing yourself; the system handles retrieval.
 """
 
+        if cache_friendly_prompt_ordering_enabled():
+            system_content = system_content.replace(
+                f"CURRENT DATE: {current_date_text}\n\n",
+                "",
+            )
+
         system_instruction = {"role": "system", "content": system_content}
+        runtime_instruction = {
+            "role": "system",
+            "content": f"DYNAMIC RUNTIME CONTEXT:\nCURRENT DATE: {current_date_text}",
+        }
+        prefix = (
+            [system_instruction, runtime_instruction]
+            if cache_friendly_prompt_ordering_enabled()
+            else [system_instruction]
+        )
 
         if context and context.conversation_history:
             msgs = context.get_messages()
             msgs.append({"role": "user", "content": prompt})
-            return [system_instruction, *msgs]
-        return [system_instruction, {"role": "user", "content": prompt}]
+            return [*prefix, *msgs]
+        return [*prefix, {"role": "user", "content": prompt}]
+
+    @staticmethod
+    def _inject_reference_context(
+        messages: list[dict[str, str]], content: str
+    ) -> list[dict[str, str]]:
+        reference = {"role": "system", "content": content}
+        if cache_friendly_prompt_ordering_enabled() and messages:
+            return [messages[0], reference, *messages[1:]]
+        return [reference, *messages]
+
+    def _cache_scope(
+        self,
+        *,
+        context: UserContext | None,
+        messages: list[dict[str, str]],
+        mode: str,
+    ) -> dict[str, str]:
+        scope_id = self._get_session_id(context, messages)
+        stable_messages = messages[:-1] if messages else []
+        return {
+            "scope_id": scope_id,
+            "mode": mode,
+            "stable_context_hash": stable_context_digest(stable_messages),
+            "retention_policy": "ephemeral",
+        }
 
     @staticmethod
     def _empty_research_metadata(error: str | None = None) -> dict[str, Any]:
@@ -492,8 +538,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if session_id not in self._research_states:
                 # Get TTL from env, default to 900 seconds (15 minutes)
                 ttl_seconds = int(os.getenv("RESEARCH_TTL_SECONDS", "900"))
-                self._research_states[session_id] = create_initial_state(
-                    session_id=session_id, mode=research_mode, ttl_seconds=ttl_seconds
+                persisted = load_research_state(session_id)
+                self._research_states[session_id] = (
+                    persisted
+                    if persisted is not None and not persisted.is_expired()
+                    else create_initial_state(
+                        session_id=session_id,
+                        mode=research_mode,
+                        ttl_seconds=ttl_seconds,
+                    )
                 )
             else:
                 # Update mode if it changed
@@ -556,12 +609,24 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         if should_reuse:
             # Inject previous research
-            injected_messages = [{"role": "system", "content": state.injected_text}, *messages]
+            injected_messages = self._inject_reference_context(messages, state.injected_text)
 
             # Update last_used_at
             updated_state = state.with_update(last_used_at=datetime.now(timezone.utc).isoformat())
             with self._research_lock:
                 self._research_states[session_id] = updated_state
+            save_research_state(updated_state)
+            logger.info(
+                "Reused research context",
+                extra={
+                    "extra_fields": {
+                        "event": "research.reused",
+                        "operation_type": "research",
+                        "provider": "tavily",
+                        "credits": 0,
+                    }
+                },
+            )
 
             # Build metadata
             metadata = {
@@ -683,17 +748,20 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 session_id=session_id,
                 mode=research_mode,
                 ttl_seconds=state.ttl_seconds,
+                provider_credits_consumed=max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
             )
 
             # Store new state (thread-safe)
             with self._research_lock:
                 self._research_states[session_id] = new_state
+            save_research_state(new_state)
 
             # Inject research
-            injected_messages = [
-                {"role": "system", "content": research_ctx.injected_text},
-                *messages,
-            ]
+            injected_messages = self._inject_reference_context(
+                messages, research_ctx.injected_text
+            )
 
             metadata = {
                 "research_used": True,
@@ -711,6 +779,18 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     for s in sources
                 ],
             }
+            if bool(research_ctx.cache_hit):
+                logger.info(
+                    "Reused research context",
+                    extra={
+                        "extra_fields": {
+                            "event": "research.reused",
+                            "operation_type": "research",
+                            "provider": "tavily",
+                            "credits": 0,
+                        }
+                    },
+                )
             return injected_messages, metadata
         else:
             # Search failed
@@ -1193,6 +1273,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             )
             response = client.get_completion(messages=messages, **kwargs)
             response = self._normalize_empty_success_response(response)
+            response = replace(
+                response,
+                metadata={
+                    **(response.metadata or {}),
+                    "provider_cost_owner": "customer" if override_key else "cortex",
+                },
+            )
             circuit_breaker.record_response(response)
             return response
         except Exception as e:
@@ -1555,6 +1642,11 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 research_metadata = prepared_turn["research_metadata"]
                 opt_metadata = prepared_turn["optimization_metadata"]
 
+            kwargs.setdefault(
+                "_cache_scope",
+                self._cache_scope(context=context, messages=messages, mode="ask"),
+            )
+
             routing_mode_norm = (routing_mode or "").lower().strip()
             # Only use smart routing when explicitly requested.
             # Any other value (e.g., "legacy") preserves direct model invocation.
@@ -1591,6 +1683,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
                 resp = self._normalize_empty_success_response(resp)
+                resp = replace(
+                    resp,
+                    metadata={
+                        **(resp.metadata or {}),
+                        "provider_cost_owner": (
+                            "customer" if provider_api_keys.get(provider_norm) else "cortex"
+                        ),
+                    },
+                )
                 record_direct_circuit = True
                 md = resp.metadata or {}
                 md["routing"] = {
@@ -1669,6 +1770,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
                 resp = self._normalize_empty_success_response(resp)
+                resp = replace(
+                    resp,
+                    metadata={
+                        **(resp.metadata or {}),
+                        "provider_cost_owner": (
+                            "customer" if provider_api_keys.get(provider_norm) else "cortex"
+                        ),
+                    },
+                )
                 record_direct_circuit = True
 
             # Merge research and optimization metadata into response
@@ -1737,7 +1847,16 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             metadata = normalized.metadata or {}
             return replace(
                 normalized,
-                metadata={**metadata, **research_metadata, "research_mode": research_mode},
+                metadata={
+                    **metadata,
+                    **research_metadata,
+                    "research_mode": research_mode,
+                    "provider_cost_owner": (
+                        "customer"
+                        if provider_api_keys.get(response.provider.lower())
+                        else "cortex"
+                    ),
+                },
             )
 
         try:
@@ -1769,6 +1888,11 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     "research_error": "service_not_configured",
                     "sources": [],
                 }
+
+            kwargs.setdefault(
+                "_cache_scope",
+                self._cache_scope(context=context, messages=messages, mode="compare"),
+            )
 
             clients: list[BaseAIClient] = []
 

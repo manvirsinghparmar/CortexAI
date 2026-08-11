@@ -2,10 +2,10 @@ import type { GenerationProfile } from "../../types";
 import styles from "./PromptComposer.module.css";
 
 const OPTIONS: Array<{ value: GenerationProfile; label: string; detail: string }> = [
-  { value: "quick", label: "Quick", detail: "2K - shortest" },
-  { value: "balanced", label: "Balanced", detail: "8K - recommended" },
-  { value: "deep", label: "Deep", detail: "32K - more credits" },
-  { value: "extended", label: "Extended", detail: "64K - highest room" },
+  { value: "quick", label: "Quick", detail: "1K - shortest" },
+  { value: "balanced", label: "Balanced", detail: "4K - recommended" },
+  { value: "deep", label: "Deep", detail: "12K - more credits" },
+  { value: "extended", label: "Extended", detail: "32K - highest room" },
 ];
 
 export function GenerationProfileSelector({

@@ -376,11 +376,20 @@ def _bootstrap_b2b_schema(database_url: str) -> None:
         Column("provider", String(64)),
         Column("model", String(255)),
         Column("input_tokens", BigInteger, nullable=False, default=0),
+        Column("normal_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cached_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cache_write_tokens", BigInteger, nullable=False, default=0),
+        Column("reasoning_tokens", BigInteger, nullable=False, default=0),
         Column("output_tokens", BigInteger, nullable=False, default=0),
         Column("input_credits", BigInteger, nullable=False, default=0),
+        Column("normal_input_credits", BigInteger, nullable=False, default=0),
+        Column("cached_input_credits", BigInteger, nullable=False, default=0),
+        Column("cache_write_credits", BigInteger, nullable=False, default=0),
         Column("output_credits", BigInteger, nullable=False, default=0),
         Column("fixed_credits", BigInteger, nullable=False, default=0),
         Column("total_credits", BigInteger, nullable=False),
+        Column("uncached_equivalent_credits", BigInteger, nullable=False, default=0),
+        Column("cache_savings_credits", BigInteger, nullable=False, default=0),
         Column("provider_cost_usd", Float, nullable=False, default=0.0),
         Column("usage_estimated", Boolean, nullable=False, default=False),
         Column("pricing_version", String(64), nullable=False),
@@ -585,6 +594,30 @@ def _bootstrap_b2b_schema(database_url: str) -> None:
         Column("error_type", String),
         Column("error_message", String),
         PrimaryKeyConstraint("routing_decision_id", "attempt_number"),
+    )
+
+    Table(
+        "cache_reuse_events",
+        metadata,
+        Column(
+            "id",
+            Uuid,
+            primary_key=True,
+            nullable=False,
+            server_default=text("(lower(hex(randomblob(16))))"),
+        ),
+        Column("user_id", Uuid, nullable=False),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("reused", Boolean, nullable=False),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_cache_reuse_events_user_operation_request",
+            "user_id",
+            "operation_type",
+            "request_id",
+            unique=True,
+        ),
     )
 
     metadata.create_all(engine)
@@ -996,6 +1029,8 @@ def test_usage_summary_contract_from_audit_tables(b2b_db_client):
     compare_group = uuid4().hex
     db = SessionLocal()
     try:
+        from db.tables import get_table
+
         user_id = _create_reporting_api_key_owner(db, label="usage-summary-test")
 
         _insert_usage_summary_row(
@@ -1052,6 +1087,24 @@ def test_usage_summary_contract_from_audit_tables(b2b_db_client):
             latency_ms=2000,
             routing_mode="explicit",
         )
+        reuse_events = get_table("cache_reuse_events")
+        for operation_type, reused, index in (
+            ("research", False, 1),
+            ("research", True, 2),
+            ("prompt_optimization", True, 3),
+            ("cortex_analysis", False, 4),
+            ("cortex_analysis", True, 5),
+        ):
+            db.execute(
+                insert(reuse_events).values(
+                    id=uuid4().hex,
+                    user_id=user_id,
+                    request_id=f"reuse-{index}",
+                    operation_type=operation_type,
+                    reused=reused,
+                    created_at=datetime(2026, 6, 12, 15, index, 0),
+                )
+            )
         _insert_usage_summary_row(
             db,
             user_id=user_id,
@@ -1095,6 +1148,10 @@ def test_usage_summary_contract_from_audit_tables(b2b_db_client):
     assert body["smartRoutedTotal"] == 1
     assert body["sessionModes"] == {"askOnly": 1, "compareOnly": 1, "mixed": 1}
     assert body["switchedMidSession"] == 1
+    assert body["researchRequests"] == 2
+    assert body["researchReuseRate"] == pytest.approx(0.5)
+    assert body["promptOptimizationReuseRate"] == pytest.approx(1.0)
+    assert body["cortexAnalysisReuseRate"] == pytest.approx(0.5)
 
     models_by_id = {item["modelId"]: item for item in body["models"]}
     assert models_by_id["gpt-5.4-mini"] == {

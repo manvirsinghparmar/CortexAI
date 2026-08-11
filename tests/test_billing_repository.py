@@ -217,6 +217,7 @@ def test_billing_tables_are_registered_for_lazy_reflection():
         "usage_counters",
         "usage_reservations",
         "billing_webhook_events",
+        "cache_reuse_events",
     }.issubset(TABLE_NAMES)
 
 
@@ -761,3 +762,13 @@ def test_billing_migration_contains_required_constraints_and_is_additive():
     assert "usage_counters.meter_key = 'ai_credits'" in credit_migration
     assert credit_migration.startswith("begin;")
     assert credit_migration.rstrip().endswith("commit;")
+
+    cache_migration = (
+        Path("db/migrations/20260807_add_cache_aware_credit_accounting.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    assert "create table if not exists public.cache_reuse_events" in cache_migration
+    assert "uq_cache_reuse_events_user_operation_request" in cache_migration
+    assert cache_migration.startswith("begin;")
+    assert cache_migration.rstrip().endswith("commit;")

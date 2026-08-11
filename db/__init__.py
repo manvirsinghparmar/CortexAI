@@ -58,6 +58,7 @@ from db.repository import (
     compute_prompt_sha256,
     create_context_snapshot,
     create_cortex_analysis_run,
+    record_cache_reuse_event,
     # LLM Audit
     create_llm_request,
     create_llm_response,
@@ -72,6 +73,7 @@ from db.repository import (
     # Context Snapshots
     get_latest_context_snapshot,
     get_llm_history_entries,
+    get_prompt_optimization_cache,
     rename_history_session,
     require_cortex_analysis_schema,
     # User & Auth
@@ -102,6 +104,7 @@ from db.repository import (
     save_compare_summary,
     # Message Management
     save_message,
+    store_prompt_optimization_cache,
     update_api_key_last_used,
     update_file_deletion_job,
     update_uploaded_file_status,
@@ -134,6 +137,7 @@ __all__ = [
     "create_api_key",
     "create_context_snapshot",
     "create_cortex_analysis_run",
+    "record_cache_reuse_event",
     "create_credit_transaction",
     "create_llm_request",
     "create_llm_response",
@@ -167,6 +171,7 @@ __all__ = [
     "get_latest_subscription_for_account",
     "get_live_subscription_for_account",
     "get_llm_history_entries",
+    "get_prompt_optimization_cache",
     "get_or_create_billing_account_for_user",
     "get_or_create_cli_user",
     "get_or_create_service_user",
@@ -206,6 +211,7 @@ __all__ = [
     "reserve_usage_quantities",
     "save_compare_summary",
     "save_message",
+    "store_prompt_optimization_cache",
     "set_stripe_customer_id",
     "settle_usage_quantities",
     "settle_usage_reservation",

@@ -149,7 +149,7 @@ describe("ResultsSection layout states", () => {
     expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
   });
 
-  it("renders the Compare run summary with fastest and cheapest metric tags", () => {
+  it("renders the Compare run summary with credits and a fastest metric tag", () => {
     const turn = compareTurn("compare-metrics", "Compare metrics");
     turn.responses = [
       response("compare-metrics-openai", "openai", "gpt-5.1", {
@@ -172,6 +172,7 @@ describe("ResultsSection layout states", () => {
       error_count: 0,
       total_tokens: 300,
       total_cost: 0.0047,
+      total_ai_credits: 470,
       timestamp: "2026-06-09T00:00:00.000Z",
     };
     setTurns([turn]);
@@ -181,13 +182,12 @@ describe("ResultsSection layout states", () => {
     expect(screen.getByText("3 succeeded")).toBeInTheDocument();
     expect(screen.getByText("0 errors")).toBeInTheDocument();
     expect(screen.getByText("300 tok")).toBeInTheDocument();
-    expect(screen.getByText("$0.00470")).toBeInTheDocument();
+    expect(screen.getByText("470 credits")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00470")).not.toBeInTheDocument();
     const fastestLabel = screen.getByText(/Fastest/);
-    const cheapestLabel = screen.getByText(/Cheapest/);
     expect(fastestLabel).toHaveClass("winner-label");
     expect(fastestLabel.parentElement).toHaveTextContent("0.3s");
-    expect(cheapestLabel).toHaveClass("winner-label");
-    expect(cheapestLabel.parentElement).toHaveTextContent("$0.0005");
+    expect(screen.queryByText(/Cheapest/)).not.toBeInTheDocument();
   });
 
   it("switches the active mobile Compare response from the model tabs", async () => {

@@ -229,6 +229,25 @@ describe("attachmentUploadQueue", () => {
     expect(apiMocks.completeFileUpload).toHaveBeenCalledTimes(1);
   });
 
+  it("explains model-incompatible authorization before any S3 transfer", async () => {
+    apiMocks.createUploadIntents.mockRejectedValue(
+      new ApiClientError(400, "incompatible", {
+        detail: { code: "attachment_model_incompatible", message: "opaque detail" },
+      }),
+    );
+
+    await expect(
+      beginAttachmentUploads([textFile("incompatible.txt")], { mode: "direct" }),
+    ).rejects.toThrow("incompatible");
+
+    expect(useAttachmentUploadStore.getState().tasks[0]).toMatchObject({
+      state: "failed",
+      failureStage: "authorization",
+      error: "Selected model does not support this file type.",
+    });
+    expect(transferMock).not.toHaveBeenCalled();
+  });
+
   it("aborts and deletes an authorized upload when the user removes it", async () => {
     apiMocks.createUploadIntents.mockResolvedValue(intentResponse("file-remove", "remove.txt"));
     transferMock.mockImplementation(

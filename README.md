@@ -151,8 +151,10 @@ ATTACHMENTS_S3_ACCESS_KEY_ID=
 ATTACHMENTS_S3_SECRET_ACCESS_KEY=
 ATTACHMENTS_S3_SESSION_TOKEN=
 ATTACHMENTS_S3_USE_SSL=true
-ATTACHMENTS_S3_FORCE_PATH_STYLE=true
+ATTACHMENTS_S3_FORCE_PATH_STYLE=false  # use true with a MinIO/local endpoint when required
 ATTACHMENTS_S3_KEY_PREFIX=attachments
+ATTACHMENTS_S3_SERVER_SIDE_ENCRYPTION= # blank uses bucket default; AES256 or aws:kms signs an exact field
+ATTACHMENTS_S3_SSE_KMS_KEY_ID=         # optional; valid only with aws:kms
 ATTACHMENTS_MAX_FILE_BYTES=20971520
 ATTACHMENTS_FILE_TTL_HOURS=168
 ENABLE_ATTACHMENTS_CLEANUP_WORKER=false
@@ -586,6 +588,14 @@ direct mode is off, multipart `POST /v1/files/upload-batch` and raw-byte
 `ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED=true`; the React queue uses the batch
 route without duplicating the attachment UI. Both legacy routes keep their
 current plan validation and SHA-256 same-user deduplication behavior.
+
+S3 remains private. Cortex can optionally add exact SSE-S3 (`AES256`) or
+SSE-KMS (`aws:kms` plus an approved key ID) fields to both presigned POSTs and
+legacy writes; leave those variables blank when bucket default encryption
+already satisfies policy. This repository contains no AWS infrastructure as
+code, so production S3 CORS, IAM, bucket/KMS policy, WAF, signing-identity, and
+cleanup deployment verification must follow
+`docs/runbooks/direct-s3-attachment-rollout.md` before the direct flag is enabled.
 
 In DB mode, upload access and the plan per-file limit are enforced from the authenticated user's server-resolved plan. Upload and storage are free; credits are charged only when a model processes file context as part of a billable generation.
 

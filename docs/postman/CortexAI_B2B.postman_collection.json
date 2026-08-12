@@ -745,7 +745,7 @@
               "mode": "raw",
               "raw": "{\n  \"files\": [\n    {\n      \"filename\": \"postman-direct-upload.txt\",\n      \"mime_type\": \"text/plain\",\n      \"size_bytes\": 29\n    }\n  ],\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
             },
-            "description": "Creates an uploading metadata row and a five-minute presigned S3 POST. The browser must submit every returned upload.fields entry plus the file itself directly to upload.url; Cortex never receives the file bytes. Set ATTACHMENTS_DIRECT_UPLOAD_ENABLED=true for this route.",
+            "description": "Creates an uploading metadata row and a five-minute presigned S3 POST. The browser must submit every returned upload.fields entry unchanged, including optional exact encryption fields, plus the file itself directly to upload.url; Cortex never receives the file bytes. Set ATTACHMENTS_DIRECT_UPLOAD_ENABLED=true for this route.",
             "url": "{{base_url}}/v1/files/upload-intents"
           },
           "event": [

@@ -231,7 +231,7 @@ async def upload_file(
             max_file_bytes=policy.max_file_bytes if policy is not None else None,
         )
     except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
         logger.warning(
             "Attachment upload route rejected request",
             extra={
@@ -324,11 +324,13 @@ async def upload_file_batch(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail={"code": "attachments_require_db", "message": "Attachments require DB mode."},
         )
+    provider = _header_value(request, "X-Provider")
+    model = _header_value(request, "X-Model")
     policy = files_service.resolve_upload_policy(
         auth=auth,
         request_id=request_id,
-        provider=_header_value(request, "X-Provider"),
-        model=_header_value(request, "X-Model"),
+        provider=provider,
+        model=model,
     )
     content_length = _safe_int(_header_value(request, "Content-Length"))
     max_request_bytes = (policy.max_files * policy.max_file_bytes) + 1_000_000
@@ -383,6 +385,16 @@ async def upload_file_batch(
                 max_file_bytes=len(payload),
             )
         prepared.append((upload.filename or "file", mime_type, payload))
+
+    files_service.validate_upload_batch_metadata(
+        files=[
+            {"filename": filename, "mime_type": mime_type, "size_bytes": len(payload)}
+            for filename, mime_type, payload in prepared
+        ],
+        policy=policy,
+        provider=provider,
+        model=model,
+    )
 
     results: list[dict[str, Any]] = []
     created_ids: list[UUID] = []

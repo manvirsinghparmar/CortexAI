@@ -228,10 +228,22 @@ async def lifespan(app: FastAPI):
                     stats = await asyncio.to_thread(attachment_cleanup_service.run_cleanup_cycle)
                     logger.info(
                         "Attachment cleanup cycle completed",
-                        extra={"extra_fields": {"stats": stats}},
+                        extra={
+                            "extra_fields": {
+                                "event": "upload.cleanup.cycle.completed",
+                                "stats": stats,
+                            }
+                        },
                     )
                 except Exception:
-                    logger.exception("Attachment cleanup cycle failed")
+                    logger.exception(
+                        "Attachment cleanup cycle failed",
+                        extra={
+                            "extra_fields": {
+                                "event": "upload.cleanup.cycle.failed",
+                            }
+                        },
+                    )
 
                 try:
                     await asyncio.wait_for(
@@ -247,7 +259,12 @@ async def lifespan(app: FastAPI):
         )
         logger.info(
             "Attachment cleanup worker started",
-            extra={"extra_fields": {"interval_seconds": interval_seconds}},
+            extra={
+                "extra_fields": {
+                    "event": "upload.cleanup.worker.started",
+                    "interval_seconds": interval_seconds,
+                }
+            },
         )
 
     if postgres_runtime and _env_bool(

@@ -162,6 +162,12 @@ Authentication diagnostics:
   - filenames/object keys are hashed (`filename_hash`, `object_key_hash`, `storage_key_hash`)
 - Client-facing attachment errors remain sanitized; detailed failures are available in server logs.
 - Upload route logs include CloudFront/proxy context fields when forwarded by infrastructure (`X-Amz-Cf-Id`, `X-Forwarded-*`, viewer hints) to speed edge-origin triage.
+- Direct upload control-plane logs distinguish `upload.intent.created`,
+  `upload.completion.pending|rejected|verified|idempotent`,
+  `upload.ingestion.*`, `upload.status.lookup.success`, and
+  `upload.cleanup.worker.started|cycle.completed|cycle.failed`. The browser-to-S3
+  byte transfer is intentionally absent from server logs; use browser network
+  evidence and approved S3 object data events without copying signed form fields.
 
 ## EC2 Troubleshooting Workflow
 

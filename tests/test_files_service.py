@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -127,6 +128,32 @@ def test_upload_policy_applies_stricter_platform_and_provider_limits(monkeypatch
     )
     assert provider_policy.max_files == 5
     assert provider_policy.max_file_bytes == 10_485_760
+
+
+def test_no_attachment_model_reports_compatibility_instead_of_zero_plan_limit(monkeypatch):
+    auth = _configure_policy_resolution(monkeypatch, "pro")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILES_PER_REQUEST", "5")
+    monkeypatch.setenv("ATTACHMENTS_MAX_FILE_BYTES", "20000000")
+
+    policy = files_service.resolve_upload_policy(
+        auth=auth,
+        request_id="policy-deepseek-image",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+    )
+
+    assert policy.max_files == 5
+    assert policy.max_file_bytes == 20_000_000
+    with pytest.raises(HTTPException) as exc:
+        files_service.validate_upload_batch_metadata(
+            files=[{"filename": "pixel.png", "mime_type": "image/png", "size_bytes": 67}],
+            policy=policy,
+            provider="deepseek",
+            model="deepseek-v4-flash",
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "attachment_model_incompatible"
 
 
 def test_upload_rejects_when_attachments_disabled(monkeypatch):
@@ -832,7 +859,7 @@ def test_direct_upload_rejects_model_mime_incompatibility_before_insert(monkeypa
     assert create_calls == []
 
 
-def test_complete_direct_upload_verifies_object_and_is_idempotent(monkeypatch):
+def test_complete_direct_upload_verifies_object_and_is_idempotent(monkeypatch, caplog):
     auth, user_id = _configure_direct_upload(monkeypatch)
     file_id = uuid4()
     row = {
@@ -879,21 +906,25 @@ def test_complete_direct_upload_verifies_object_and_is_idempotent(monkeypatch):
 
     monkeypatch.setattr(files_service, "update_uploaded_file_status", update)
 
-    first = files_service.complete_direct_upload(
-        auth=auth,
-        request_id="complete-1",
-        file_id=file_id,
-    )
-    second = files_service.complete_direct_upload(
-        auth=auth,
-        request_id="complete-2",
-        file_id=file_id,
-    )
+    with caplog.at_level(logging.INFO, logger=files_service.logger.name):
+        first = files_service.complete_direct_upload(
+            auth=auth,
+            request_id="complete-1",
+            file_id=file_id,
+        )
+        second = files_service.complete_direct_upload(
+            auth=auth,
+            request_id="complete-2",
+            file_id=file_id,
+        )
 
     assert first["status"] == "ready"
     assert second["status"] == "ready"
     assert head_calls == 1
     assert row["expires_at"] > datetime.now(timezone.utc) + timedelta(days=6)
+    events = [getattr(record, "extra_fields", {}).get("event") for record in caplog.records]
+    assert "upload.completion.verified" in events
+    assert "upload.completion.idempotent" in events
 
 
 def test_complete_direct_upload_rejects_object_metadata_mismatch(monkeypatch):

@@ -632,6 +632,46 @@ def test_batch_upload_rejects_size_and_mime_before_storage(
     assert upload_calls == []
 
 
+def test_batch_upload_rejects_model_incompatible_image_before_storage(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+    from server.routes import files as files_route
+
+    upload_calls: list[dict] = []
+    monkeypatch.setattr(files_route, "API_DB_ENABLED", True)
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=uuid.uuid4(),
+            plan_code="pro",
+            max_files=5,
+            max_file_bytes=20_000_000,
+            platform_max_files=5,
+            platform_max_file_bytes=20_000_000,
+        ),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "upload_user_file",
+        lambda **kwargs: upload_calls.append(kwargs),
+    )
+
+    response = client.post(
+        "/v1/files/upload-batch",
+        files=[("files", ("pixel.png", b"png", "image/png"))],
+        headers={"X-Provider": "deepseek", "X-Model": "deepseek-v4-flash"},
+        cookies=session_cookie,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "attachment_model_incompatible"
+    assert upload_calls == []
+
+
 def test_batch_upload_rolls_back_created_objects_after_partial_failure(
     client,
     monkeypatch,

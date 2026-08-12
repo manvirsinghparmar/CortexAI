@@ -212,7 +212,10 @@ any S3 write:
 `upload.url`, `upload.fields`, and `upload.expires_at` per item. The client must
 construct `FormData`, append every returned field unchanged, append the file
 last, and POST directly to `upload.url`. It must never invent or modify the key,
-content type, or `x-amz-meta-cortex-file-id`. After S3 succeeds, call
+content type, `x-amz-meta-cortex-file-id`, or optional exact encryption fields.
+`ATTACHMENTS_S3_SERVER_SIDE_ENCRYPTION` supports `AES256` or `aws:kms`; the
+optional `ATTACHMENTS_S3_SSE_KMS_KEY_ID` is valid only with `aws:kms`. Leave both
+blank to use bucket default encryption. After S3 succeeds, call
 `POST /v1/files/{file_id}/complete` with no body. Completion is idempotent for
 `ready`/`processing`; missing objects return
 `409 attachment_upload_not_complete`, verification mismatches return
@@ -224,8 +227,10 @@ existing cleanup worker; repeated calls are safe. The migration
 `20260811_add_direct_s3_attachment_upload.sql` makes `sha256` nullable for
 pre-byte intents and extends the lifecycle constraint with `uploading` and
 `deleting`. PostgreSQL startup fails fast when the direct flag is on but this
-schema contract is absent. See `docs/runbooks/direct-s3-attachment-rollout.md` for S3 CORS,
-IAM, WAF/CloudTrail diagnostics, rollout, and rollback.
+schema contract is absent. This repository has no AWS infrastructure as code.
+See `docs/runbooks/direct-s3-attachment-rollout.md` for the repo/AWS ownership
+boundary, exact S3 CORS shape, IAM/KMS and bucket-policy checks, WAF/CloudTrail
+diagnostics, cleanup verification, smoke tests, rollout, and rollback.
 
 ### History response contract
 

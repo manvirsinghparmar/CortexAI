@@ -13,7 +13,7 @@ Use this index to quickly find the current source of truth and avoid stale imple
 - `TAVILY_INTEGRATION.md` - web research/Tavily integration behavior
 - `runbooks/db-migrations.md` - migration authoring/apply/rollback runbook
 - `runbooks/aws-ec2-logging.md` - AWS EC2 Linux logging and incident triage runbook
-- `runbooks/direct-s3-attachment-rollout.md` - direct browser-to-S3 rollout, CORS/IAM, WAF/CloudTrail triage, and rollback
+- `runbooks/direct-s3-attachment-rollout.md` - repository/AWS ownership boundary, private-S3 CORS/IAM/KMS/WAF prerequisites, controlled rollout, smoke tests, troubleshooting, and rollback
 - `UNIFIED_RESPONSE_CONTRACT.md` - provider adapter response contract
 - `postman/CortexAI_B2B.postman_collection.json` - API collection/examples
 - `SRED_TECHNICAL_NARRATIVE_2026_DRAFT.md` - SR&ED technical narrative draft from git history (uncertainty/experiments/validation)

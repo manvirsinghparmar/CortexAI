@@ -422,6 +422,9 @@ function friendlyStageError(stage: AttachmentUploadFailureStage, error: unknown)
 function friendlyAuthorizationError(error: unknown): string {
   const code = apiErrorCode(error);
   if (code === "attachment_file_too_large") return "File exceeds your plan's upload limit.";
+  if (code === "attachment_model_incompatible") {
+    return "Selected model does not support this file type.";
+  }
   if (code === "attachment_mime_type_incompatible" || code === "unsupported_file_type") {
     return "This file type is not supported.";
   }

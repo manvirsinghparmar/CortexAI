@@ -79,6 +79,8 @@ class S3StorageConfig:
     use_ssl: bool
     force_path_style: bool
     key_prefix: str
+    server_side_encryption: str | None = None
+    sse_kms_key_id: str | None = None
 
     @classmethod
     def from_env(cls) -> "S3StorageConfig":
@@ -117,6 +119,25 @@ class S3StorageConfig:
             default=bool(endpoint_url),
         )
         key_prefix = _normalize_prefix(os.getenv("ATTACHMENTS_S3_KEY_PREFIX") or "attachments")
+        server_side_encryption = _normalize_optional(
+            os.getenv("ATTACHMENTS_S3_SERVER_SIDE_ENCRYPTION")
+        )
+        if server_side_encryption:
+            normalized_encryption = server_side_encryption.lower()
+            if normalized_encryption == "aes256":
+                server_side_encryption = "AES256"
+            elif normalized_encryption == "aws:kms":
+                server_side_encryption = "aws:kms"
+            else:
+                raise ObjectStorageConfigurationError(
+                    "ATTACHMENTS_S3_SERVER_SIDE_ENCRYPTION must be AES256 or aws:kms."
+                )
+        sse_kms_key_id = _normalize_optional(os.getenv("ATTACHMENTS_S3_SSE_KMS_KEY_ID"))
+        if sse_kms_key_id and server_side_encryption != "aws:kms":
+            raise ObjectStorageConfigurationError(
+                "ATTACHMENTS_S3_SSE_KMS_KEY_ID requires "
+                "ATTACHMENTS_S3_SERVER_SIDE_ENCRYPTION=aws:kms."
+            )
 
         return cls(
             bucket=bucket,
@@ -128,14 +149,21 @@ class S3StorageConfig:
             use_ssl=use_ssl,
             force_path_style=force_path_style,
             key_prefix=key_prefix,
+            server_side_encryption=server_side_encryption,
+            sse_kms_key_id=sse_kms_key_id,
         )
 
 
 class ObjectStorageClient(Protocol):
     """Interface used by attachment services."""
 
-    bucket: str
-    key_prefix: str
+    @property
+    def bucket(self) -> str:
+        """Configured private object-storage bucket."""
+
+    @property
+    def key_prefix(self) -> str:
+        """Configured server-owned attachment key prefix."""
 
     def put_bytes(
         self,
@@ -236,6 +264,7 @@ class S3ObjectStorage:
                     "force_path_style": bool(self._config.force_path_style),
                     "bucket": self._config.bucket,
                     "key_prefix": self._config.key_prefix,
+                    "server_side_encryption": self._config.server_side_encryption,
                 }
             },
         )
@@ -279,6 +308,10 @@ class S3ObjectStorage:
             }
             if metadata:
                 kwargs["Metadata"] = {str(k): str(v) for k, v in metadata.items()}
+            if self._config.server_side_encryption:
+                kwargs["ServerSideEncryption"] = self._config.server_side_encryption
+            if self._config.sse_kms_key_id:
+                kwargs["SSEKMSKeyId"] = self._config.sse_kms_key_id
             response = self._get_client().put_object(**kwargs)
             latency_ms = int((time.perf_counter() - started) * 1000)
             request_metadata = response.get("ResponseMetadata") if isinstance(response, dict) else {}
@@ -357,6 +390,22 @@ class S3ObjectStorage:
             {"x-amz-meta-cortex-file-id": normalized_file_id},
             ["content-length-range", 1, size_limit],
         ]
+        if self._config.server_side_encryption:
+            fields["x-amz-server-side-encryption"] = self._config.server_side_encryption
+            conditions.append(
+                {"x-amz-server-side-encryption": self._config.server_side_encryption}
+            )
+        if self._config.sse_kms_key_id:
+            fields["x-amz-server-side-encryption-aws-kms-key-id"] = (
+                self._config.sse_kms_key_id
+            )
+            conditions.append(
+                {
+                    "x-amz-server-side-encryption-aws-kms-key-id": (
+                        self._config.sse_kms_key_id
+                    )
+                }
+            )
         try:
             response = self._get_client().generate_presigned_post(
                 Bucket=self._config.bucket,

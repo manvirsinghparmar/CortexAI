@@ -356,9 +356,12 @@ def resolve_upload_policy(
     if normalized_provider and normalized_model:
         candidate = ModelRegistry.from_yaml().find_model(normalized_provider, normalized_model)
         if candidate is not None and candidate.enabled:
-            if candidate.max_attachments_per_request is not None:
+            if (
+                candidate.max_attachments_per_request is not None
+                and candidate.max_attachments_per_request > 0
+            ):
                 max_files = min(max_files, candidate.max_attachments_per_request)
-            if candidate.max_attachment_bytes is not None:
+            if candidate.max_attachment_bytes is not None and candidate.max_attachment_bytes > 0:
                 max_bytes = min(max_bytes, candidate.max_attachment_bytes)
 
     return UploadPolicy(
@@ -1291,6 +1294,23 @@ def _validate_direct_upload_files(
     return normalized
 
 
+def validate_upload_batch_metadata(
+    *,
+    files: list[dict[str, Any]],
+    policy: UploadPolicy,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Validate a complete legacy/direct batch before storing its first object."""
+
+    return _validate_direct_upload_files(
+        files=files,
+        policy=policy,
+        provider=provider,
+        model=model,
+    )
+
+
 def create_direct_upload_intents(
     *,
     auth: AuthResult,
@@ -1309,7 +1329,7 @@ def create_direct_upload_intents(
         provider=provider,
         model=model,
     )
-    prepared = _validate_direct_upload_files(
+    prepared = validate_upload_batch_metadata(
         files=files,
         policy=policy,
         provider=provider,
@@ -1482,6 +1502,18 @@ def complete_direct_upload(
 
     current_status = str(row.get("status") or "").strip().lower()
     if current_status in {"ready", "processing"}:
+        logger.info(
+            "Direct attachment upload completion was already verified",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.idempotent",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "status": current_status,
+                }
+            },
+        )
         return _serialize_uploaded_file_row(row, deduplicated=False)
     if current_status != "uploading":
         raise HTTPException(
@@ -1498,6 +1530,18 @@ def complete_direct_upload(
         with _db_uow() as db_session:
             update_uploaded_file_status(db_session, file_id=file_id, status="expired")
             enqueue_file_deletion_job(db_session, file_id=file_id)
+        logger.warning(
+            "Direct attachment upload completion rejected expired intent",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "intent_expired",
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail={"code": "attachment_upload_expired", "message": "This upload has expired."},
@@ -1520,6 +1564,18 @@ def complete_direct_upload(
             file_id=file_id,
             error_code="attachment_upload_mismatch",
         )
+        logger.warning(
+            "Direct attachment upload completion rejected storage target mismatch",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "storage_target_mismatch",
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -1530,6 +1586,18 @@ def complete_direct_upload(
     try:
         head = storage.head_object(key=storage_key)
     except ObjectStorageNotFoundError as exc:
+        logger.info(
+            "Direct attachment upload completion is waiting for the S3 object",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.pending",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "object_not_found",
+                }
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -1559,6 +1627,23 @@ def complete_direct_upload(
             user_id=resolution.user_id,
             file_id=file_id,
             error_code="attachment_upload_mismatch",
+        )
+        logger.warning(
+            "Direct attachment upload completion rejected object metadata mismatch",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "object_metadata_mismatch",
+                    "expected_size_bytes": expected_size,
+                    "actual_size_bytes": head.content_length,
+                    "expected_content_type": expected_type,
+                    "actual_content_type": head.content_type,
+                    "file_id_metadata_matches": metadata_file_id == str(file_id),
+                }
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1662,7 +1747,23 @@ def complete_direct_upload(
         )
         if refreshed is None:
             raise RuntimeError("Completed upload row was not found")
-        return _serialize_uploaded_file_row(refreshed, deduplicated=False)
+        result = _serialize_uploaded_file_row(refreshed, deduplicated=False)
+
+    logger.info(
+        "Direct attachment upload completion verified",
+        extra={
+            "extra_fields": {
+                "event": "upload.completion.verified",
+                "request_id": request_id,
+                "user_id": str(resolution.user_id),
+                "file_id": str(file_id),
+                "status": str(result.get("status") or ""),
+                "mime_type": expected_type,
+                "size_bytes": expected_size,
+            }
+        },
+    )
+    return result
 
 
 def delete_user_file(

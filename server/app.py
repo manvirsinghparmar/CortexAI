@@ -156,6 +156,14 @@ async def lifespan(app: FastAPI):
             "Billing database schema preflight passed",
             extra={"extra_fields": {"event": "billing.schema_preflight.passed"}},
         )
+        if _env_bool("ATTACHMENTS_DIRECT_UPLOAD_ENABLED", default=False):
+            from server.attachment_schema_preflight import validate_direct_upload_schema
+
+            validate_direct_upload_schema()
+            logger.info(
+                "Direct attachment upload schema preflight passed",
+                extra={"extra_fields": {"event": "attachment.schema_preflight.passed"}},
+            )
     else:
         logger.info(
             "Billing database schema preflight skipped for non-PostgreSQL development runtime",

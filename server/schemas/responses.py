@@ -704,5 +704,19 @@ class FileBatchUploadResponseDTO(BaseModel):
     files: List[FileUploadResponseDTO] = Field(default_factory=list)
 
 
+class PresignedPostDTO(BaseModel):
+    url: str
+    fields: Dict[str, str]
+    expires_at: str
+
+
+class FileUploadIntentItemDTO(FileBaseDTO):
+    upload: PresignedPostDTO
+
+
+class FileUploadIntentResponseDTO(BaseModel):
+    files: List[FileUploadIntentItemDTO] = Field(default_factory=list)
+
+
 class FileStatusResponseDTO(FileBaseDTO):
     deduplicated: bool = False

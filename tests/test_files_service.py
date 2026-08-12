@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -10,7 +12,11 @@ from fastapi import HTTPException
 from server import files_service
 from server.billing.plan_catalog import get_plan_catalog
 from server.dependencies import AuthResult
-from server.object_storage import ObjectStorageOperationError
+from server.object_storage import (
+    ObjectMetadata,
+    ObjectStorageNotFoundError,
+    ObjectStorageOperationError,
+)
 
 
 @contextmanager
@@ -44,6 +50,31 @@ def _configure_policy_resolution(monkeypatch, plan_code: str) -> AuthResult:
         lambda *_args, **_kwargs: SimpleNamespace(plan=get_plan_catalog().require(plan_code)),
     )
     return AuthResult(api_key=None, cognito_claims=None, user_id=user_id)
+
+
+def _configure_direct_upload(monkeypatch):
+    _configure_enabled_db(monkeypatch)
+    monkeypatch.setenv("ATTACHMENTS_DIRECT_UPLOAD_ENABLED", "true")
+    user_id = uuid4()
+    auth = AuthResult(api_key=None, cognito_claims=None, user_id=user_id)
+    monkeypatch.setattr(
+        files_service,
+        "_resolve_identity",
+        lambda **_kwargs: SimpleNamespace(user_id=user_id, api_key_id=None),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "resolve_upload_policy",
+        lambda **_kwargs: files_service.UploadPolicy(
+            user_id=user_id,
+            plan_code="plus",
+            max_files=3,
+            max_file_bytes=20_000_000,
+            platform_max_files=5,
+            platform_max_file_bytes=20_000_000,
+        ),
+    )
+    return auth, user_id
 
 
 @pytest.mark.parametrize(
@@ -679,3 +710,401 @@ def test_get_user_file_resolves_identity_from_session_auth(monkeypatch):
 
     assert result["file_id"] == str(file_id)
     assert result["status"] == "ready"
+
+
+def test_direct_upload_intent_persists_server_owned_key_and_presigned_post(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    rows: dict[object, dict] = {}
+    presign_calls: list[dict] = []
+
+    class Storage:
+        bucket = "cortex-files"
+        key_prefix = "attachments"
+
+        def create_presigned_post(self, **kwargs):
+            presign_calls.append(kwargs)
+            return SimpleNamespace(
+                url="https://cortex-files.s3.amazonaws.com",
+                fields={
+                    "key": kwargs["key"],
+                    "Content-Type": kwargs["content_type"],
+                    "x-amz-meta-cortex-file-id": kwargs["file_id"],
+                    "policy": "opaque",
+                },
+            )
+
+    monkeypatch.setattr(files_service, "get_object_storage", lambda: Storage())
+
+    def create(_db, **kwargs):
+        rows[kwargs["file_id"]] = {
+            "id": kwargs["file_id"],
+            "original_filename": kwargs["original_filename"],
+            "mime_type": kwargs["mime_type"],
+            "size_bytes": kwargs["size_bytes"],
+            "status": kwargs["status"],
+            "error_code": None,
+            "error_message": None,
+            "ingestion_meta": kwargs["ingestion_meta"],
+            "storage_bucket": kwargs["storage_bucket"],
+            "storage_key": kwargs["storage_key"],
+            "sha256": kwargs["sha256"],
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": None,
+            "expires_at": kwargs["expires_at"],
+        }
+        return kwargs["file_id"]
+
+    monkeypatch.setattr(files_service, "create_uploaded_file", create)
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda _db, **kwargs: dict(rows[kwargs["file_id"]]),
+    )
+
+    result = files_service.create_direct_upload_intents(
+        auth=auth,
+        request_id="intent-1",
+        files=[
+            {"filename": "Quarterly report.pdf", "mime_type": "application/pdf", "size_bytes": 500}
+        ],
+    )
+
+    assert len(result) == 1
+    file_id = result[0]["file_id"]
+    row = rows[next(iter(rows))]
+    assert row["status"] == "uploading"
+    assert row["sha256"] is None
+    assert row["storage_key"].startswith(f"attachments/users/{user_id}/")
+    assert row["storage_key"].endswith(f"{file_id}-Quarterly_report.pdf")
+    assert presign_calls[0]["max_size_bytes"] == 500
+    assert presign_calls[0]["file_id"] == file_id
+    assert result[0]["upload"]["fields"]["policy"] == "opaque"
+
+
+def test_direct_upload_validates_entire_batch_before_creating_rows(monkeypatch):
+    auth, _user_id = _configure_direct_upload(monkeypatch)
+    create_calls: list[dict] = []
+    monkeypatch.setattr(
+        files_service,
+        "create_uploaded_file",
+        lambda _db, **kwargs: create_calls.append(kwargs),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.create_direct_upload_intents(
+            auth=auth,
+            request_id="intent-invalid",
+            files=[
+                {"filename": "ok.txt", "mime_type": "text/plain", "size_bytes": 5},
+                {
+                    "filename": "too-large.txt",
+                    "mime_type": "text/plain",
+                    "size_bytes": 20_000_001,
+                },
+            ],
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "feature_not_in_plan"
+    assert create_calls == []
+
+
+def test_direct_upload_rejects_model_mime_incompatibility_before_insert(monkeypatch):
+    auth, _user_id = _configure_direct_upload(monkeypatch)
+    create_calls: list[dict] = []
+    monkeypatch.setattr(
+        files_service,
+        "create_uploaded_file",
+        lambda _db, **kwargs: create_calls.append(kwargs),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.create_direct_upload_intents(
+            auth=auth,
+            request_id="intent-incompatible",
+            provider="grok",
+            model="grok-4-1-fast-reasoning",
+            files=[{"filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 500}],
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "attachment_mime_type_incompatible"
+    assert create_calls == []
+
+
+def test_complete_direct_upload_verifies_object_and_is_idempotent(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    file_id = uuid4()
+    row = {
+        "id": file_id,
+        "user_id": user_id,
+        "original_filename": "notes.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "uploading",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {"ingestion_state": "awaiting_upload"},
+        "storage_bucket": "cortex-files",
+        "storage_key": f"attachments/users/{user_id}/{file_id}-notes.txt",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": None,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+    }
+    head_calls = 0
+
+    class Storage:
+        bucket = "cortex-files"
+
+        def head_object(self, *, key):
+            nonlocal head_calls
+            head_calls += 1
+            assert key == row["storage_key"]
+            return ObjectMetadata(
+                content_length=5,
+                content_type="text/plain",
+                metadata={"cortex-file-id": str(file_id)},
+            )
+
+    monkeypatch.setattr(files_service, "get_object_storage", lambda: Storage())
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: dict(row),
+    )
+
+    def update(_db, **kwargs):
+        row.update(kwargs)
+        return True
+
+    monkeypatch.setattr(files_service, "update_uploaded_file_status", update)
+
+    first = files_service.complete_direct_upload(
+        auth=auth,
+        request_id="complete-1",
+        file_id=file_id,
+    )
+    second = files_service.complete_direct_upload(
+        auth=auth,
+        request_id="complete-2",
+        file_id=file_id,
+    )
+
+    assert first["status"] == "ready"
+    assert second["status"] == "ready"
+    assert head_calls == 1
+    assert row["expires_at"] > datetime.now(timezone.utc) + timedelta(days=6)
+
+
+def test_complete_direct_upload_rejects_object_metadata_mismatch(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    file_id = uuid4()
+    row = {
+        "id": file_id,
+        "user_id": user_id,
+        "original_filename": "notes.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "uploading",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {},
+        "storage_bucket": "cortex-files",
+        "storage_key": "attachments/notes.txt",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": None,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+    }
+
+    class Storage:
+        bucket = "cortex-files"
+
+        def head_object(self, *, key):
+            return ObjectMetadata(
+                content_length=4,
+                content_type="text/plain",
+                metadata={"cortex-file-id": str(file_id)},
+            )
+
+    monkeypatch.setattr(files_service, "get_object_storage", lambda: Storage())
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: dict(row),
+    )
+
+    def update(_db, **kwargs):
+        row.update(kwargs)
+        return True
+
+    monkeypatch.setattr(files_service, "update_uploaded_file_status", update)
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.complete_direct_upload(
+            auth=auth,
+            request_id="complete-mismatch",
+            file_id=file_id,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "attachment_upload_mismatch"
+    assert row["status"] == "failed"
+
+
+def test_complete_direct_upload_reports_missing_s3_object_without_failing_intent(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    file_id = uuid4()
+    row = {
+        "id": file_id,
+        "user_id": user_id,
+        "original_filename": "notes.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "uploading",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {},
+        "storage_bucket": "cortex-files",
+        "storage_key": "attachments/notes.txt",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": None,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+    }
+
+    class Storage:
+        bucket = "cortex-files"
+
+        def head_object(self, *, key):
+            raise ObjectStorageNotFoundError("missing")
+
+    monkeypatch.setattr(files_service, "get_object_storage", lambda: Storage())
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: dict(row),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.complete_direct_upload(
+            auth=auth,
+            request_id="complete-missing",
+            file_id=file_id,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "attachment_upload_not_complete"
+    assert row["status"] == "uploading"
+
+
+def test_complete_direct_upload_expires_and_queues_stale_intent(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    file_id = uuid4()
+    row = {
+        "id": file_id,
+        "user_id": user_id,
+        "original_filename": "notes.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "uploading",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {},
+        "storage_bucket": "cortex-files",
+        "storage_key": "attachments/notes.txt",
+        "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
+        "updated_at": None,
+        "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+    }
+    queued: list[object] = []
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: dict(row),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "update_uploaded_file_status",
+        lambda _db, **kwargs: row.update(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        files_service,
+        "enqueue_file_deletion_job",
+        lambda _db, **kwargs: queued.append(kwargs["file_id"]) or uuid4(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        files_service.complete_direct_upload(
+            auth=auth,
+            request_id="complete-expired",
+            file_id=file_id,
+        )
+
+    assert exc.value.status_code == 410
+    assert exc.value.detail["code"] == "attachment_upload_expired"
+    assert row["status"] == "expired"
+    assert queued == [file_id]
+
+
+def test_delete_user_file_queues_once_and_returns_deleting(monkeypatch):
+    auth, user_id = _configure_direct_upload(monkeypatch)
+    file_id = uuid4()
+    row = {
+        "id": file_id,
+        "user_id": user_id,
+        "original_filename": "notes.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 5,
+        "status": "ready",
+        "error_code": None,
+        "error_message": None,
+        "ingestion_meta": {},
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": None,
+        "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+    }
+    queued: list[object] = []
+    monkeypatch.setattr(
+        files_service,
+        "get_uploaded_file_for_user",
+        lambda *_args, **_kwargs: dict(row),
+    )
+    monkeypatch.setattr(
+        files_service,
+        "update_uploaded_file_status",
+        lambda _db, **kwargs: row.update(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        files_service,
+        "enqueue_file_deletion_job",
+        lambda _db, **kwargs: queued.append(kwargs["file_id"]) or uuid4(),
+    )
+
+    first = files_service.delete_user_file(
+        auth=auth,
+        request_id="delete-1",
+        file_id=file_id,
+    )
+    second = files_service.delete_user_file(
+        auth=auth,
+        request_id="delete-2",
+        file_id=file_id,
+    )
+
+    assert first["status"] == "deleting"
+    assert second["status"] == "deleting"
+    assert queued == [file_id]
+
+
+def test_direct_upload_migration_allows_null_hash_and_new_lifecycle_states():
+    migration = (
+        Path("db/migrations/20260811_add_direct_s3_attachment_upload.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+
+    assert "alter column sha256 drop not null" in migration
+    assert "'uploading'::text" in migration
+    assert "'deleting'::text" in migration
+    assert "'ready'::text" in migration
+    assert migration.lstrip().startswith("-- direct-to-s3")
+    assert migration.rstrip().endswith("commit;")

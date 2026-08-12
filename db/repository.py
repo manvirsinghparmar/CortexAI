@@ -66,7 +66,16 @@ ALLOWED_CACHE_REUSE_OPERATIONS = {
     "prompt_optimization",
     "cortex_analysis",
 }
-ALLOWED_FILE_STATUSES = {"uploaded", "processing", "ready", "failed", "expired", "deleted"}
+ALLOWED_FILE_STATUSES = {
+    "uploading",
+    "uploaded",
+    "processing",
+    "ready",
+    "failed",
+    "expired",
+    "deleting",
+    "deleted",
+}
 ALLOWED_ATTACHMENT_USAGE_ROLES = {"primary", "reference"}
 ALLOWED_ATTACHMENT_TRANSFORM_MODES = {"auto", "text_only", "vision_pages", "table_summary"}
 ALLOWED_FILE_DELETION_JOB_STATUSES = {"pending", "in_progress", "retry", "succeeded", "failed"}
@@ -765,11 +774,12 @@ def _normalize_jsonb_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 def create_uploaded_file(
     db: Session,
     *,
+    file_id: UUID | None = None,
     user_id: UUID,
     original_filename: str,
     mime_type: str,
     size_bytes: int,
-    sha256: str,
+    sha256: str | None,
     storage_bucket: str,
     storage_key: str,
     api_key_id: UUID | None = None,
@@ -790,9 +800,7 @@ def create_uploaded_file(
     if int(size_bytes) <= 0:
         raise ValueError("size_bytes must be > 0")
 
-    normalized_sha = str(sha256 or "").strip().lower()
-    if not normalized_sha:
-        raise ValueError("sha256 is required")
+    normalized_sha = str(sha256 or "").strip().lower() or None
 
     uploaded_files = get_table("uploaded_files")
     values: dict[str, Any] = {
@@ -808,6 +816,8 @@ def create_uploaded_file(
         "ingestion_meta": _normalize_jsonb_payload(ingestion_meta),
         "expires_at": expires_at,
     }
+    if file_id is not None:
+        values["id"] = file_id
 
     if not values["mime_type"]:
         raise ValueError("mime_type is required")

@@ -50,6 +50,52 @@ class AttachmentRequestItem(BaseModel):
     )
 
 
+class DirectUploadFileRequest(BaseModel):
+    """Metadata for one browser-to-object-storage upload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(..., min_length=1, max_length=255)
+    mime_type: str = Field(..., min_length=1, max_length=255)
+    size_bytes: int = Field(..., gt=0)
+
+    @field_validator("filename")
+    @classmethod
+    def normalize_filename(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("filename is required")
+        return normalized
+
+    @field_validator("mime_type")
+    @classmethod
+    def normalize_mime_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class FileUploadIntentRequest(BaseModel):
+    """Atomic metadata batch used to create direct-upload authorizations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: List[DirectUploadFileRequest]
+    provider: Optional[str] = None
+    model: Optional[str] = Field(None, min_length=1, max_length=255)
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_provider(value.strip().lower(), field_name="provider")
+
+    @model_validator(mode="after")
+    def validate_provider_model_pair(self):
+        if self.model and not self.provider:
+            raise ValueError("provider is required when model is provided")
+        return self
+
+
 class CompareResponseRegenerationRequest(BaseModel):
     source_request_id: str = Field(..., min_length=1, max_length=160)
     refresh_research: bool = False

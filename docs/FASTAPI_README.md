@@ -106,7 +106,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - Selecting a React history row reloads the complete session transcript. Ask rows are restored chronologically and Compare target rows are grouped into one turn by `request_group_id`.
 - Explicit frontend fresh sign-in starts an empty new chat session; browser refreshes, Chrome tab reload/resume, same-browser reauth, and explicit History selections continue the selected thread.
 - React posts non-sensitive lifecycle diagnostics to `/v1/client-diagnostics`; backend logs them as `frontend.diagnostic` events so production refresh reports can be separated into reload/navigation, tab discard, back/forward cache restore, long main-thread task, or frontend error cases.
-- React attachment UX submits the complete selection to multipart `POST /v1/files/upload-batch`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests. The legacy raw-byte `POST /v1/files/upload` remains a one-file contract. Both routes authenticate and resolve the effective plan before storage; the batch route validates file count, every byte size, MIME type, platform ceiling, and any known provider capability before its first S3 write, then rolls back newly created objects after a partial failure. Upload/storage remains free.
+- React attachment UX currently submits the complete selection to multipart `POST /v1/files/upload-batch`, polls `GET /v1/files/{file_id}` for processing uploads, and sends uploaded file IDs on Ask/Compare requests. The raw-byte `POST /v1/files/upload` remains a one-file compatibility contract. Both legacy routes require `ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED=true`. The opt-in direct API (`POST /v1/files/upload-intents` -> browser presigned POST to S3 -> `POST /v1/files/{file_id}/complete`) is controlled by `ATTACHMENTS_DIRECT_UPLOAD_ENABLED`. It validates all metadata before persistence, generates the UUID/key server-side, and makes a file usable only after `HeadObject` confirms the DB bucket/key, exact size/type, and `x-amz-meta-cortex-file-id`. Upload/storage remains free.
 - React Ask defaults `Web` on for new page sessions, React Compare defaults `With sources` on, and users can turn either off for the current page session. Compare streams `/v1/compare/stream` events into per-model response columns.
 - React Ask waits for both `/v1/models` and `/v1/entitlements` before initializing its manual model. Turning Smart routing off shows the plan default: Free uses `openai:gpt-5.6-luna`, Plus uses `claude:claude-sonnet-4-6`, and Pro uses `openai:gpt-5.6-terra`. Valid existing/manual selections remain unchanged, and locked models remain visible in the picker.
 - React Compare keeps every selected response visible in a responsive grid without horizontal response scrolling on desktop and tablet widths: three columns on wide desktop, two at tablet widths, and stacked tall cards at the app's tablet/mobile shell breakpoint. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and elevates the stuck switcher into a frosted provider-tinted bar without changing model-pill horizontal positions.
@@ -159,7 +159,10 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `GET /v1/models?provider=<optional>&enabled_only=true|false`
 - `POST /v1/files/upload`
 - `POST /v1/files/upload-batch`
+- `POST /v1/files/upload-intents`
+- `POST /v1/files/{file_id}/complete`
 - `GET /v1/files/{file_id}`
+- `DELETE /v1/files/{file_id}`
 - `POST /v1/client-diagnostics`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
@@ -188,6 +191,41 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 - `GET /v1/auth/cognito-config`
 - `POST /v1/auth/dev-login`
 - `POST /v1/auth/logout`
+
+### Direct attachment upload contract
+
+Direct upload is metadata-first and session-scoped. With
+`ATTACHMENTS_DIRECT_UPLOAD_ENABLED=true`, submit the entire selection before
+any S3 write:
+
+```json
+{
+  "files": [
+    {"filename": "report.pdf", "mime_type": "application/pdf", "size_bytes": 48123}
+  ],
+  "provider": "openai",
+  "model": "gpt-5.6-luna"
+}
+```
+
+`POST /v1/files/upload-intents` returns one `uploading` file record with
+`upload.url`, `upload.fields`, and `upload.expires_at` per item. The client must
+construct `FormData`, append every returned field unchanged, append the file
+last, and POST directly to `upload.url`. It must never invent or modify the key,
+content type, or `x-amz-meta-cortex-file-id`. After S3 succeeds, call
+`POST /v1/files/{file_id}/complete` with no body. Completion is idempotent for
+`ready`/`processing`; missing objects return
+`409 attachment_upload_not_complete`, verification mismatches return
+`409 attachment_upload_mismatch`, and expired intents return
+`410 attachment_upload_expired`. Only `ready` files are accepted by Ask/Compare.
+
+`DELETE /v1/files/{file_id}` returns `deleting` immediately and queues the
+existing cleanup worker; repeated calls are safe. The migration
+`20260811_add_direct_s3_attachment_upload.sql` makes `sha256` nullable for
+pre-byte intents and extends the lifecycle constraint with `uploading` and
+`deleting`. PostgreSQL startup fails fast when the direct flag is on but this
+schema contract is absent. See `docs/runbooks/direct-s3-attachment-rollout.md` for S3 CORS,
+IAM, WAF/CloudTrail diagnostics, rollout, and rollback.
 
 ### History response contract
 
@@ -675,6 +713,7 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_add_
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
 ```
 
 The first Cortex Analysis migration adds Compare response revision metadata and
@@ -687,7 +726,7 @@ itself remains implemented in persistence/session resolution logic.
 
 The billing foundation, Cortex revision table, unified-credit ledger,
 reservation-activity migration, model-pricing audit migration, Cortex
-attribution migration, generation-budget audit migration, and cache-aware accounting migration are all required. They are additive and
+attribution migration, generation-budget audit migration, cache-aware accounting migration, and direct-S3 attachment lifecycle migration are all required. They are additive and
 idempotent under the repository migration convention. PostgreSQL startup checks
 the required tables and columns and fails before serving provider routes when a
 migration is missing. See `docs/runbooks/db-migrations.md` for verification and
@@ -734,7 +773,7 @@ Security/logging:
 - Research logs include `research.*` events with hashed prompt/query fields (raw Tavily query text is not logged).
 - Tavily search-option resolver logs include category, topic/time/country decisions, domain-rule metadata, returned source-content lengths, and API credits used.
 - Tavily emits `research.network.diagnostics` entries (DNS + TCP reachability to Tavily host) plus normalized failure `error_kind` values for EC2 network troubleshooting.
-- Attachment pipeline logs include `upload.*` + `storage.*` events for upload, storage, metadata write, sync/deferred ingestion, and rollback/error paths.
+- Attachment pipeline logs include `upload.*` + `storage.*` events for legacy uploads, presign success/failure, metadata write, HEAD verification failures, sync/deferred ingestion, deletion, and rollback/error paths. Presigned policies, signatures, tokens, returned form fields, and file bytes are never logged.
 - Upload route adds `upload.route.*` events with edge/proxy request context (`X-Amz-Cf-Id`, `X-Forwarded-*`, content-length vs payload-size checks) to help isolate CloudFront/WAF/origin issues.
 - Auth failures log `auth.failed` with method/path and auth-header presence flags (while redacting sensitive values).
 - Circuit-breaker telemetry includes `circuit.failure.recorded`, `circuit.transition.open`, `circuit.open.blocked`, and `circuit.transition.closed`.

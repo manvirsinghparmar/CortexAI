@@ -14,9 +14,12 @@ from server import files_service
 from server import persistence as persistence_service
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard, auth_mode as session_auth_mode
+from server.schemas.requests import FileUploadIntentRequest
 from server.schemas.responses import (
     FileBatchUploadResponseDTO,
     FileStatusResponseDTO,
+    FileUploadIntentItemDTO,
+    FileUploadIntentResponseDTO,
     FileUploadResponseDTO,
 )
 from utils.logger import get_logger
@@ -137,6 +140,7 @@ async def upload_file(
     """
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    files_service.require_legacy_proxy_upload_enabled(request_id=request_id)
     policy = (
         files_service.resolve_upload_policy(
             auth=auth,
@@ -314,6 +318,7 @@ async def upload_file_batch(
 
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    files_service.require_legacy_proxy_upload_enabled(request_id=request_id)
     if not API_DB_ENABLED:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -415,6 +420,62 @@ async def upload_file_batch(
                 )
         raise
     return FileBatchUploadResponseDTO(files=[FileUploadResponseDTO(**result) for result in results])
+
+
+@router.post("/upload-intents", response_model=FileUploadIntentResponseDTO)
+async def create_upload_intents(
+    request: Request,
+    payload: FileUploadIntentRequest,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Create constrained presigned POST forms without proxying file bytes."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    results = files_service.create_direct_upload_intents(
+        auth=auth,
+        request_id=request_id,
+        files=[item.model_dump() for item in payload.files],
+        provider=payload.provider,
+        model=payload.model,
+    )
+    return FileUploadIntentResponseDTO(files=[FileUploadIntentItemDTO(**item) for item in results])
+
+
+@router.post("/{file_id}/complete", response_model=FileStatusResponseDTO)
+async def complete_upload(
+    request: Request,
+    file_id: UUID,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Verify an uploaded object and make the attachment eligible for ingestion."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    result = files_service.complete_direct_upload(
+        auth=auth,
+        request_id=request_id,
+        file_id=file_id,
+    )
+    return FileStatusResponseDTO(**result)
+
+
+@router.delete("/{file_id}", response_model=FileStatusResponseDTO)
+async def delete_file(
+    request: Request,
+    file_id: UUID,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Queue an owned file for object-storage deletion."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    result = files_service.delete_user_file(
+        auth=auth,
+        request_id=request_id,
+        file_id=file_id,
+    )
+    return FileStatusResponseDTO(**result)
 
 
 @router.get("/{file_id}", response_model=FileStatusResponseDTO)

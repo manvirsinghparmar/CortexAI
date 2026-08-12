@@ -79,6 +79,7 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260731_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_cortex_analysis_attribution.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
@@ -86,6 +87,36 @@ own that table. The later unified-credit and activity scripts depend on the
 `20260718` billing foundation. PostgreSQL startup validates the complete table
 and column contract, including generation-budget audit fields, and exits before serving provider traffic if any script is
 missing.
+
+### Direct-S3 attachment lifecycle migration
+
+`20260811_add_direct_s3_attachment_upload.sql` must be applied before enabling
+`ATTACHMENTS_DIRECT_UPLOAD_ENABLED`. It drops the `NOT NULL` requirement from
+`uploaded_files.sha256` because a metadata intent exists before trusted file
+bytes are available, then replaces the status check with the existing states
+plus `uploading` and `deleting`. Existing rows and SHA-based legacy deduplication
+are unchanged.
+
+Apply it with the role that owns `uploaded_files`, restart the API so SQLAlchemy
+reflection is refreshed, then verify:
+
+```sql
+SELECT is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'uploaded_files'
+  AND column_name = 'sha256';
+
+SELECT pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.uploaded_files'::regclass
+  AND conname = 'uploaded_files_status_check';
+```
+
+Expected: `sha256.is_nullable = YES`, and the status constraint contains both
+`uploading` and `deleting`. Roll back application behavior by disabling the
+direct-upload flag; do not restore `NOT NULL` while any checksum-free intent
+rows exist.
 
 ### Cache-aware accounting and reuse migration
 

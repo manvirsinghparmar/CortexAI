@@ -428,6 +428,114 @@ def test_files_routes_reject_api_key_auth(client):
     assert response.json()["detail"]["code"] == "session_auth_required"
 
 
+def test_direct_upload_intent_route_passes_metadata_without_file_bytes(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+
+    file_id = uuid.uuid4()
+    captured = {}
+
+    def create_intents(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "file_id": str(file_id),
+                "original_filename": "demo.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 5,
+                "status": "uploading",
+                "error_code": None,
+                "error_message": None,
+                "ingestion_meta": {"ingestion_state": "awaiting_upload"},
+                "created_at": "2026-08-11T00:00:00Z",
+                "updated_at": None,
+                "expires_at": "2026-08-11T00:30:00Z",
+                "upload": {
+                    "url": "https://cortex-files.s3.amazonaws.com",
+                    "fields": {
+                        "key": "attachments/demo.txt",
+                        "Content-Type": "text/plain",
+                        "policy": "opaque",
+                    },
+                    "expires_at": "2026-08-11T00:05:00Z",
+                },
+            }
+        ]
+
+    monkeypatch.setattr(files_service, "create_direct_upload_intents", create_intents)
+    response = client.post(
+        "/v1/files/upload-intents",
+        json={
+            "files": [{"filename": "demo.txt", "mime_type": "text/plain", "size_bytes": 5}],
+            "provider": "openai",
+            "model": "gpt-5.2",
+        },
+        cookies=session_cookie,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["files"][0]["status"] == "uploading"
+    assert response.json()["files"][0]["upload"]["fields"]["policy"] == "opaque"
+    assert captured["files"] == [
+        {"filename": "demo.txt", "mime_type": "text/plain", "size_bytes": 5}
+    ]
+    assert captured["provider"] == "openai"
+    assert captured["auth"].user_id is not None
+
+
+def test_direct_upload_complete_and_delete_routes_use_owned_file_service(
+    client,
+    monkeypatch,
+    session_cookie,
+):
+    from server import files_service
+
+    file_id = uuid.uuid4()
+    calls: list[tuple[str, uuid.UUID]] = []
+
+    def complete(**kwargs):
+        calls.append(("complete", kwargs["file_id"]))
+        return _upload_result(file_id, "demo.txt")
+
+    def delete(**kwargs):
+        calls.append(("delete", kwargs["file_id"]))
+        payload = _upload_result(file_id, "demo.txt")
+        payload["status"] = "deleting"
+        return payload
+
+    monkeypatch.setattr(files_service, "complete_direct_upload", complete)
+    monkeypatch.setattr(files_service, "delete_user_file", delete)
+
+    complete_response = client.post(
+        f"/v1/files/{file_id}/complete",
+        cookies=session_cookie,
+    )
+    delete_response = client.delete(
+        f"/v1/files/{file_id}",
+        cookies=session_cookie,
+    )
+
+    assert complete_response.status_code == 200
+    assert complete_response.json()["status"] == "ready"
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleting"
+    assert calls == [("complete", file_id), ("delete", file_id)]
+
+
+def test_direct_upload_routes_reject_api_key_auth(client):
+    response = client.post(
+        "/v1/files/upload-intents",
+        json={"files": [{"filename": "demo.txt", "mime_type": "text/plain", "size_bytes": 5}]},
+        headers={"X-API-Key": "dev-key-1"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "session_auth_required"
+
+
 def test_batch_upload_rejects_plan_file_count_before_storage(
     client,
     monkeypatch,

@@ -201,6 +201,7 @@ def main() -> int:
     from fastapi.testclient import TestClient
 
     from models.unified_response import TokenUsage, UnifiedResponse
+    from server import persistence as persistence_service
     from server import dependencies as deps
     from server.app import create_app
     from server.billing.enforcement_service import ReservedRequestUsage
@@ -247,6 +248,10 @@ def main() -> int:
     chat_route._reserve_subscription_usage = lambda **_kwargs: smoke_reservation
     chat_route._finalize_subscription_usage = lambda **_kwargs: None
     chat_route._release_subscription_usage = lambda **_kwargs: None
+    # Routing telemetry uses PostgreSQL JSONB/upsert behavior and has dedicated
+    # repository/contract coverage. Keep this deliberately minimal SQLite smoke
+    # focused on the core request/response and usage_daily transaction.
+    persistence_service.persist_routing_telemetry = lambda *_args, **_kwargs: None
     client = TestClient(app)
 
     response = client.post(

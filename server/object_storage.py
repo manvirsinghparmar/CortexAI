@@ -28,6 +28,10 @@ class ObjectStorageOperationError(ObjectStorageError):
     """Raised when object storage operations fail."""
 
 
+class ObjectStorageNotFoundError(ObjectStorageOperationError):
+    """Raised when a requested object does not exist."""
+
+
 def _env_bool(name: str, *, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -43,6 +47,23 @@ def _normalize_optional(value: str | None) -> str | None:
 def _normalize_prefix(value: str | None) -> str:
     normalized = str(value or "").strip().strip("/")
     return normalized
+
+
+@dataclass(frozen=True)
+class PresignedPost:
+    """Browser-safe form target returned by an S3 presign operation."""
+
+    url: str
+    fields: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ObjectMetadata:
+    """Normalized metadata returned by an object HEAD request."""
+
+    content_length: int
+    content_type: str
+    metadata: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -131,6 +152,20 @@ class ObjectStorageClient(Protocol):
 
     def get_bytes(self, *, key: str) -> bytes:
         """Read raw bytes for one object key."""
+
+    def create_presigned_post(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        max_size_bytes: int,
+        file_id: str,
+        expires_in_seconds: int,
+    ) -> PresignedPost:
+        """Create a constrained browser POST policy for one exact object key."""
+
+    def head_object(self, *, key: str) -> ObjectMetadata:
+        """Read normalized metadata without downloading object bytes."""
 
 
 class S3ObjectStorage:
@@ -287,6 +322,132 @@ class S3ObjectStorage:
             raise ObjectStorageOperationError(
                 f"Failed to upload object to bucket '{self._config.bucket}' key '{object_key}'"
             ) from exc
+
+    def create_presigned_post(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        max_size_bytes: int,
+        file_id: str,
+        expires_in_seconds: int,
+    ) -> PresignedPost:
+        object_key = str(key or "").strip()
+        normalized_type = str(content_type or "").strip().lower()
+        normalized_file_id = str(file_id or "").strip()
+        size_limit = int(max_size_bytes)
+        ttl_seconds = int(expires_in_seconds)
+        if not object_key:
+            raise ObjectStorageOperationError("Storage key is required")
+        if not normalized_type:
+            raise ObjectStorageOperationError("Content type is required")
+        if not normalized_file_id:
+            raise ObjectStorageOperationError("File ID is required")
+        if size_limit <= 0 or ttl_seconds <= 0:
+            raise ObjectStorageOperationError("Presign size and expiry must be positive")
+
+        fields = {
+            "key": object_key,
+            "Content-Type": normalized_type,
+            "x-amz-meta-cortex-file-id": normalized_file_id,
+        }
+        conditions: list[Any] = [
+            {"key": object_key},
+            {"Content-Type": normalized_type},
+            {"x-amz-meta-cortex-file-id": normalized_file_id},
+            ["content-length-range", 1, size_limit],
+        ]
+        try:
+            response = self._get_client().generate_presigned_post(
+                Bucket=self._config.bucket,
+                Key=object_key,
+                Fields=fields,
+                Conditions=conditions,
+                ExpiresIn=ttl_seconds,
+            )
+            url = str(response.get("url") or "").strip()
+            response_fields = response.get("fields")
+            if not url or not isinstance(response_fields, dict):
+                raise ObjectStorageOperationError("S3 returned an invalid presigned POST")
+            logger.info(
+                "Object storage presigned POST created",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.presign_post.success",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": self._hash_key(object_key),
+                        "content_type": normalized_type,
+                        "max_size_bytes": size_limit,
+                        "expires_in_seconds": ttl_seconds,
+                    }
+                },
+            )
+            return PresignedPost(
+                url=url,
+                fields={str(name): str(value) for name, value in response_fields.items()},
+            )
+        except ObjectStorageOperationError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Object storage presigned POST creation failed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.presign_post.failure",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": self._hash_key(object_key),
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
+            raise ObjectStorageOperationError("Failed to authorize object upload") from exc
+
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        response = getattr(exc, "response", None)
+        if not isinstance(response, dict):
+            return False
+        error = response.get("Error")
+        code = str(error.get("Code") if isinstance(error, dict) else "").strip()
+        return code in {"404", "NoSuchKey", "NotFound"}
+
+    def head_object(self, *, key: str) -> ObjectMetadata:
+        object_key = str(key or "").strip()
+        if not object_key:
+            raise ObjectStorageOperationError("Storage key is required")
+        try:
+            response = self._get_client().head_object(
+                Bucket=self._config.bucket,
+                Key=object_key,
+            )
+            raw_metadata = response.get("Metadata")
+            return ObjectMetadata(
+                content_length=int(response.get("ContentLength") or 0),
+                content_type=str(response.get("ContentType") or "").strip().lower(),
+                metadata=(
+                    {str(name).lower(): str(value) for name, value in raw_metadata.items()}
+                    if isinstance(raw_metadata, dict)
+                    else {}
+                ),
+            )
+        except Exception as exc:
+            if self._is_not_found_error(exc):
+                raise ObjectStorageNotFoundError("Object does not exist") from exc
+            logger.exception(
+                "Object storage HEAD failed",
+                extra={
+                    "extra_fields": {
+                        "event": "storage.head.failure",
+                        "storage_backend": "s3",
+                        "bucket": self._config.bucket,
+                        "object_key_hash": self._hash_key(object_key),
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
+            raise ObjectStorageOperationError("Failed to inspect object") from exc
 
     def delete_object(self, *, key: str) -> None:
         object_key = str(key or "").strip()

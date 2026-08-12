@@ -1603,6 +1603,11 @@ def test_circuit_breaker_opens_and_smart_fallback_skips_open_model(monkeypatch):
     )
     monkeypatch.setattr(orch._model_registry, "next_tier", lambda _tier: None)
     monkeypatch.setattr(orch, "_get_client", lambda *args, **kwargs: _FakeClient())
+    monkeypatch.setattr(
+        orch,
+        "available_providers",
+        lambda **_kwargs: ["openai", "gemini"],
+    )
 
     response = orch.ask(
         prompt="trigger smart fallback",

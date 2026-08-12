@@ -278,6 +278,11 @@ def test_explicit_unknown_model_rejected():
 
 def test_smart_retry_on_refusal_then_success(monkeypatch):
     orchestrator = CortexOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda **_kwargs: ["gemini", "openai"],
+    )
 
     features = PromptFeatures(
         word_count=20,
@@ -392,6 +397,11 @@ def test_smart_retry_on_refusal_then_success(monkeypatch):
 
 def test_smart_skips_unauthorized_expensive_candidate_before_provider_call(monkeypatch):
     orchestrator = CortexOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda **_kwargs: ["claude", "deepseek"],
+    )
     features = PromptFeatures(
         word_count=20,
         char_count=120,

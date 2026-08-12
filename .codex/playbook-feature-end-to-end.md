@@ -44,6 +44,8 @@
 - `python scripts/release_gate.py` for pre-handoff confidence.
 - `npm run --prefix frontend-react build` when React UI is touched.
 - `npm run --prefix e2e test` when end-user flow or streaming UX changed.
+- When the user requests a commit, run [ci-commit-gate.md](./ci-commit-gate.md)
+  exactly once against the clean final commit SHA before push or handoff.
 
 ## Done Criteria
 

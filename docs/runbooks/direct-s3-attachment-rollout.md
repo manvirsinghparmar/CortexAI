@@ -616,7 +616,7 @@ polling reaches `ready`, then use it in Chat and Compare.
 | Symptom | Boundary | First checks | Expected action |
 | --- | --- | --- | --- |
 | Cortex 4xx from `/upload-intents` | Application validation/auth/plan | Response code, safe detail code, request ID, entitlement and MIME/count/size | Correct request/plan; do not change WAF or S3 |
-| Cortex 5xx/502 authorizing intent | Cortex storage configuration/signing identity | `storage.client.initialized`, `storage.presign_post.failure`, role credentials, bucket/Region | Fix role/config; do not expose provider exception to client |
+| Cortex 5xx/502 authorizing intent | Cortex storage configuration/signing identity | `storage.client.initialized`, `storage.presign_post.failure`, effective STS identity, boto3 provider method, bucket/Region | Fix role/config; do not expose provider exception to client |
 | Browser CORS error | Browser to S3 | Exact page origin, bucket CORS, OPTIONS request, CSP, S3 host | Correct only the required origin/method/header |
 | S3 `AccessDenied` | S3 IAM/bucket/KMS policy | STS identity, object-prefix resource, explicit denies, KMS key policy, encryption fields | Fix least-privilege policy or signed fields; never make bucket public |
 | S3 `SignatureDoesNotMatch` | Signed form modified or generated for wrong endpoint/Region/time | Bucket Region, client clock, exact unchanged fields, form expiry | Obtain a fresh intent; do not log the form |

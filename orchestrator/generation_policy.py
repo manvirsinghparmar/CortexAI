@@ -101,9 +101,9 @@ def _reasoning_value(generation: object | Mapping[str, Any] | None, name: str, d
 def _supports_reasoning(provider: str, model: str, modes: list[str], tags: list[str]) -> bool:
     if modes:
         return any(mode != "none" for mode in modes)
-    return "reasoning" in tags or provider in {"openai", "claude"} and any(
+    return "reasoning" in tags or (provider in {"openai", "claude"} and any(
         marker in model for marker in ("gpt-5", "claude-")
-    )
+    ))
 
 
 def _resolve_reasoning(

@@ -124,6 +124,7 @@ npm run --prefix frontend-react build
 - CI changed-file quality gates:
   - Ruff/MyPy run on added or modified Python files; deleted paths are excluded before tooling runs. Black is advisory until a formatting baseline lands.
   - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
+  - For every user-requested commit, run the mandatory [per-commit CI parity gate](./ci-commit-gate.md) exactly once against the clean final commit SHA before push or handoff. Re-run once after any amend; do not create a commit solely to perform this validation.
 - Frontend local checks (when UI touched):
   - `npm run --prefix frontend-react build` when React UI is touched
   - `npm run --prefix frontend-react test` when React component logic/tests are touched

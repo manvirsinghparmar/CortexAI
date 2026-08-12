@@ -1124,6 +1124,13 @@ It runs:
   - frontend artifact build
   - API image build metadata export
   - pinned Gitleaks CLI directory scan of the checked-out tree
+
+When a commit is requested, run the repository's [per-commit CI parity gate](.codex/ci-commit-gate.md)
+exactly once against the clean final commit SHA before pushing or handing it off.
+The gate mirrors the applicable blocking jobs above, records the validated SHA,
+and becomes stale after an amend or any additional change. Do not create a commit
+solely to run the gate when no commit was requested.
+
 - `.github/workflows/incident-regression-38.yml`:
   - targeted backend regression pack for routing/guardrail mismatches (38 tests)
   - no live provider keys required

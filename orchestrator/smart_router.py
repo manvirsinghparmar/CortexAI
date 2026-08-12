@@ -1,4 +1,3 @@
-import re
 from dataclasses import replace
 from typing import Any
 

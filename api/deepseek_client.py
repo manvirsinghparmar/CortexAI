@@ -2,7 +2,7 @@ import time
 
 import openai
 
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import NormalizedError, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 

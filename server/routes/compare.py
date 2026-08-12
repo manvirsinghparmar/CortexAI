@@ -587,7 +587,7 @@ async def compare(
                 provider=target.provider,
                 model=target.model or "",
             )
-            for target, budget in zip(request.targets, generation_budgets)
+            for target, budget in zip(request.targets, generation_budgets, strict=False)
         ]
         kwargs["_per_client_generation"] = {
             f"{item.provider}:{item.model}": item.provider_kwargs()
@@ -781,7 +781,7 @@ async def compare_stream(
                 provider=target.provider,
                 model=target.model or "",
             )
-            for target, budget in zip(request.targets, generation_budgets)
+            for target, budget in zip(request.targets, generation_budgets, strict=False)
         ]
 
     async def event_stream():

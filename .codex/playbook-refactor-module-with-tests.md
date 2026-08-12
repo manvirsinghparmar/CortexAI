@@ -35,6 +35,8 @@
 - Relevant targeted tests for refactored module(s).
 - `python -m pytest -q`
 - `python scripts/release_gate.py` for high-confidence refactors.
+- When the user requests a commit, run [ci-commit-gate.md](./ci-commit-gate.md)
+  exactly once against the clean final commit SHA before push or handoff.
 
 ## Done Criteria
 

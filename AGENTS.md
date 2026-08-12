@@ -70,6 +70,11 @@ codex --cd C:\path\to\primary\repo `
 - E2E suite: `npm run --prefix e2e test`
 - React frontend build: `npm run --prefix frontend-react build`
 - Pricing/registry alignment: `python -m pytest tests/test_registry_pricing_alignment.py -q`
+- Per-commit CI parity (mandatory when the user requests a commit): after the
+  final commit is created, run [ci-commit-gate.md](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/.codex/ci-commit-gate.md)
+  exactly once against that clean commit SHA before push or handoff. Any amend or
+  follow-up change invalidates the result and requires one new run. Do not create
+  a commit solely for validation when the user did not authorize one.
 
 Choose the smallest relevant subset during iteration, then run broader gates before handoff.
 

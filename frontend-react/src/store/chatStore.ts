@@ -23,6 +23,7 @@ import {
   persistActiveSessionId,
 } from "../session/activeSession";
 import type { SubscriptionError } from "../subscription/subscriptionErrors";
+import { clearAttachmentUploads } from "../uploads/attachmentUploadQueue";
 
 interface BeginTurnInput {
   mode: ChatMode;
@@ -340,6 +341,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       ),
     })),
   hydrateFromHistoryThread: (thread, analysisRuns = []) => {
+    void clearAttachmentUploads({ deleteRemote: true });
     const analysisByGroup = new Map<string, CortexAnalysisRun[]>();
     for (const run of analysisRuns) {
       const existing = analysisByGroup.get(run.requestGroupId) ?? [];
@@ -372,6 +374,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
     });
   },
   startNewChat: () => {
+    void clearAttachmentUploads({ deleteRemote: true });
     clearActiveSessionId();
     set({
       prompt: "",

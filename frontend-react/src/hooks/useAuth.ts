@@ -6,6 +6,7 @@ import {
   buildCognitoLogoutUrl,
 } from "../api/auth";
 import { markFreshLoginPending } from "../session/activeSession";
+import { getRuntimeConfig } from "../config/runtimeConfig";
 import type { CognitoConfig, WhoAmIResponse } from "../types";
 
 interface AuthState {
@@ -15,15 +16,11 @@ interface AuthState {
   loggedIn: boolean;
 }
 
-type RuntimeConfig = { enableDevSessionLogin?: boolean; devSessionLoginToken?: string };
-const runtimeConfig = (): RuntimeConfig =>
-  (window as unknown as { CORTEX_RUNTIME_CONFIG?: RuntimeConfig }).CORTEX_RUNTIME_CONFIG ?? {};
-
 const isLocalhost = () =>
   ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
 async function ensureDevSession(cognitoEnabled: boolean): Promise<void> {
-  const cfg = runtimeConfig();
+  const cfg = getRuntimeConfig();
   if (cognitoEnabled || !cfg.enableDevSessionLogin || !isLocalhost()) return;
 
   // Already have a valid session — nothing to do.

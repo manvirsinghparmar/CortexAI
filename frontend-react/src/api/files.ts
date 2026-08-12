@@ -1,5 +1,8 @@
-import { ApiClientError, buildHeaders, get } from "./client";
-import type { FileUploadResponse } from "../types";
+import { ApiClientError, buildHeaders, del, get, post } from "./client";
+import type {
+  FileUploadIntentResponse,
+  FileUploadResponse,
+} from "../types";
 
 export async function uploadFile(file: File): Promise<FileUploadResponse> {
   const res = await fetch("/v1/files/upload", {
@@ -34,6 +37,23 @@ export async function uploadFile(file: File): Promise<FileUploadResponse> {
 export interface FileUploadTarget {
   provider: string;
   model: string;
+}
+
+export interface FileUploadMetadata {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+}
+
+export async function createUploadIntents(
+  files: FileUploadMetadata[],
+  target?: FileUploadTarget,
+): Promise<FileUploadIntentResponse> {
+  return post<FileUploadIntentResponse>("/v1/files/upload-intents", {
+    files,
+    provider: target?.provider,
+    model: target?.model,
+  });
 }
 
 export async function uploadFiles(
@@ -75,7 +95,13 @@ export async function fetchFileStatus(fileId: string): Promise<FileUploadRespons
   return get<FileUploadResponse>(`/v1/files/${encodeURIComponent(fileId)}`);
 }
 
+export async function completeFileUpload(fileId: string): Promise<FileUploadResponse> {
+  return post<FileUploadResponse>(
+    `/v1/files/${encodeURIComponent(fileId)}/complete`,
+    {},
+  );
+}
+
 export async function deleteFile(fileId: string): Promise<void> {
-  void fileId;
-  // The backend has no DELETE /v1/files/{id} contract. Removing a chip is local-only.
+  await del<FileUploadResponse>(`/v1/files/${encodeURIComponent(fileId)}`);
 }

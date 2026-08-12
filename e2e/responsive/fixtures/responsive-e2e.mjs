@@ -32,6 +32,13 @@ export const test = base.extend({
             uploadedFiles: new Map(),
             models: [...MODELS],
             subscriptionPlan: "free",
+            maxFilesPerRequest: 1,
+            directUploadIntentRequests: [],
+            s3UploadRequests: [],
+            completeUploadRequests: [],
+            s3FailuresByFilename: new Map(),
+            s3DelayMs: 0,
+            directUploadSequence: 0,
         };
         const pageErrors = [];
         page.on("pageerror", error => pageErrors.push(error));
@@ -91,9 +98,47 @@ async function installResponsiveRoutes(page, state) {
         route.fulfill({
             status: 200,
             contentType: "application/javascript",
-            body: "window.CORTEX_RUNTIME_CONFIG = { enableDevSessionLogin: false };",
+            body: "window.CORTEX_RUNTIME_CONFIG = { enableDevSessionLogin: false, directAttachmentUploads: true, legacyAttachmentUploads: true };",
         }),
     );
+
+    await page.route("https://*.amazonaws.com/**", async route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const fileId = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "");
+        const uploaded = state.uploadedFiles.get(fileId);
+        const body = request.postDataBuffer();
+        state.s3UploadRequests.push({
+            fileId,
+            headers: request.headers(),
+            body: body?.toString("latin1") ?? "",
+        });
+        if (!uploaded) {
+            return route.fulfill({
+                status: 404,
+                headers: { "Access-Control-Allow-Origin": "*" },
+                body: "missing upload intent",
+            });
+        }
+        const failuresRemaining = state.s3FailuresByFilename.get(uploaded.original_filename) ?? 0;
+        if (failuresRemaining > 0) {
+            state.s3FailuresByFilename.set(uploaded.original_filename, failuresRemaining - 1);
+            return route.fulfill({
+                status: 503,
+                headers: { "Access-Control-Allow-Origin": "*" },
+                body: "temporary storage failure",
+            });
+        }
+        if (state.s3DelayMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, state.s3DelayMs));
+        }
+        uploaded.s3Uploaded = true;
+        return route.fulfill({
+            status: 204,
+            headers: { "Access-Control-Allow-Origin": "*" },
+            body: "",
+        });
+    });
 
     await page.route("**/v1/**", async route => {
         const request = route.request();
@@ -135,7 +180,7 @@ async function installResponsiveRoutes(page, state) {
             });
         }
         if (url.pathname === "/v1/entitlements" && method === "GET") {
-            return json(route, entitlements(state.subscriptionPlan));
+            return json(route, entitlements(state.subscriptionPlan, state.maxFilesPerRequest));
         }
         if (url.pathname === "/v1/credits/transactions" && method === "GET") {
             return json(route, creditTransactions());
@@ -218,6 +263,64 @@ async function installResponsiveRoutes(page, state) {
                 return uploaded;
             });
             return json(route, { files: uploadedFiles });
+        }
+        if (url.pathname === "/v1/files/upload-intents" && method === "POST") {
+            const payload = request.postDataJSON();
+            state.directUploadIntentRequests.push(payload);
+            const files = (payload.files ?? []).map(metadata => {
+                state.directUploadSequence += 1;
+                const fileId = `direct-file-${state.directUploadSequence}`;
+                const uploaded = {
+                    file_id: fileId,
+                    original_filename: metadata.filename,
+                    mime_type: metadata.mime_type,
+                    size_bytes: metadata.size_bytes,
+                    status: "uploading",
+                    ingestion_meta: {},
+                    created_at: "2026-08-11T12:00:00Z",
+                    deduplicated: false,
+                    s3Uploaded: false,
+                };
+                state.uploadedFiles.set(fileId, uploaded);
+                return {
+                    ...uploaded,
+                    upload: {
+                        url: `https://cortex-e2e-bucket.s3.us-east-1.amazonaws.com/${fileId}`,
+                        fields: {
+                            key: `attachments/users/e2e/${fileId}`,
+                            "Content-Type": metadata.mime_type,
+                            "x-amz-meta-cortex-file-id": fileId,
+                            policy: `policy-${fileId}`,
+                            "x-amz-signature": `signature-${fileId}`,
+                        },
+                        expires_at: "2026-08-11T12:05:00Z",
+                    },
+                };
+            });
+            return json(route, { files });
+        }
+        const completeMatch = url.pathname.match(/^\/v1\/files\/([^/]+)\/complete$/);
+        if (completeMatch && method === "POST") {
+            const fileId = decodeURIComponent(completeMatch[1]);
+            const uploaded = state.uploadedFiles.get(fileId);
+            state.completeUploadRequests.push(fileId);
+            if (!uploaded?.s3Uploaded) {
+                return json(route, {
+                    detail: {
+                        code: "attachment_upload_not_complete",
+                        message: "The object has not reached storage.",
+                    },
+                }, 409);
+            }
+            uploaded.status = "ready";
+            return json(route, uploaded);
+        }
+        if (url.pathname.startsWith("/v1/files/") && method === "DELETE") {
+            const fileId = decodeURIComponent(url.pathname.split("/").at(-1));
+            const uploaded = state.uploadedFiles.get(fileId);
+            if (!uploaded) return json(route, { detail: "File not found" }, 404);
+            uploaded.status = "deleting";
+            return json(route, uploaded);
         }
         if (url.pathname === "/v1/files/upload" && method === "POST") {
             const fileName = request.headers()["x-file-name"] || "attachment.txt";
@@ -505,7 +608,7 @@ function whoAmI() {
     };
 }
 
-function entitlements(planCode = "free") {
+function entitlements(planCode = "free", maxFilesPerRequest = 1) {
     const plan = {
         free: {
             displayName: "Free",
@@ -555,7 +658,7 @@ function entitlements(planCode = "free") {
             allowed_billing_classes: plan.allowedBillingClasses,
         },
         limits: {
-            max_files_per_request: 1,
+            max_files_per_request: maxFilesPerRequest,
             max_file_bytes: 10000000,
         },
         allowances: {

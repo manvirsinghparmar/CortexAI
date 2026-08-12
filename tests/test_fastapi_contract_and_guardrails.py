@@ -474,6 +474,8 @@ def test_runtime_config_js_defaults_to_request_origin(client):
     payload = _parse_runtime_config_payload(r.text)
     assert payload["apiBase"] == "http://testserver"
     assert payload["enableDevSessionLogin"] is False
+    assert payload["directAttachmentUploads"] is False
+    assert payload["legacyAttachmentUploads"] is True
 
 
 def test_runtime_config_js_honors_frontend_env_overrides(client, monkeypatch):
@@ -481,6 +483,8 @@ def test_runtime_config_js_honors_frontend_env_overrides(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_RUNTIME_API_BASE", "https://kudlo.triobrain.com/")
     monkeypatch.setenv("FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN", "true")
     monkeypatch.setenv("FRONTEND_RUNTIME_DEV_SESSION_LOGIN_TOKEN", "local-token")
+    monkeypatch.setenv("ATTACHMENTS_DIRECT_UPLOAD_ENABLED", "true")
+    monkeypatch.setenv("ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED", "false")
 
     r = client.get("/runtime-config.js")
     assert r.status_code == 200
@@ -488,6 +492,8 @@ def test_runtime_config_js_honors_frontend_env_overrides(client, monkeypatch):
     assert payload["apiBase"] == "https://kudlo.triobrain.com"
     assert payload["enableDevSessionLogin"] is True
     assert payload["devSessionLoginToken"] == "local-token"
+    assert payload["directAttachmentUploads"] is True
+    assert payload["legacyAttachmentUploads"] is False
 
 
 def test_runtime_config_js_disables_dev_session_login_in_production(client, monkeypatch):

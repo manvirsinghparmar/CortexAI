@@ -12,6 +12,7 @@ import {
   resolveOptimizationResponse,
 } from "../optimization/promptOptimization";
 import { makePlaceholderResponse, useChatStore } from "../store/chatStore";
+import { clearAttachmentUploads } from "../uploads/attachmentUploadQueue";
 import { StreamDeltaBuffer } from "../streaming/streamDeltaBuffer";
 import {
   isSubscriptionDenial,
@@ -871,6 +872,7 @@ function deferredComposerClear(enabled: boolean): () => void {
     if (committed) return;
     committed = true;
     const state = useChatStore.getState();
+    void clearAttachmentUploads({ deleteRemote: false });
     state.setPrompt("");
     state.clearAttachments();
   };

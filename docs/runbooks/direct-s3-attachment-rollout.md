@@ -231,8 +231,11 @@ operations team because object keys contain user and file identifiers.
 4. Set `ATTACHMENTS_DIRECT_UPLOAD_ENABLED=true` in staging. Exercise intent,
    direct S3 POST, completion, Office-file processing, delete, and abandoned
    intent cleanup.
-5. Move the API consumer/React client to the direct sequence. This repository
-   change does not switch the current React uploader by itself.
+5. Verify `/runtime-config.js` exposes `directAttachmentUploads: true`. The
+   bundled React client then selects the direct sequence automatically; confirm
+   Preparing/Uploading/Processing/Ready progress, pending-Send blocking,
+   individual retry/remove, and partial multi-file success. The CSP permits AWS
+   S3 HTTPS endpoints, but bucket CORS must still allow the real app origin.
 6. Canary production users and compare upload success, latency, WAF blocks,
    completion mismatches, and abandoned intent counts.
 7. After all clients are direct and rollback confidence is sufficient, set
@@ -247,6 +250,10 @@ Set:
 ATTACHMENTS_DIRECT_UPLOAD_ENABLED=false
 ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED=true
 ```
+
+After restart, `/runtime-config.js` makes React return to the legacy batch path
+without changing the attachment UI. Do not disable the legacy flag during a
+rollback.
 
 No database rollback is required. Existing `uploading` rows expire after the
 intent TTL and the cleanup queue removes any abandoned object. Keep the cleanup

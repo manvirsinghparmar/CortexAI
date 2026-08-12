@@ -5,6 +5,8 @@ import { FeatureChips } from "./FeatureChips";
 import { AttachmentStrip } from "./AttachmentStrip";
 import { GenerationProfileSelector } from "./GenerationProfileSelector";
 import { useChatStore } from "../../store/chatStore";
+import { useAttachmentUploadStore } from "../../store/attachmentUploadStore";
+import { attachmentUploadsBlockSubmission } from "../../uploads/attachmentUploadQueue";
 import { useChat } from "../../hooks/useChat";
 import { isModelDropdownVisible } from "../../hooks/useSmartRouting";
 import type { ModelCatalogItem } from "../../types";
@@ -60,11 +62,17 @@ export function PromptComposer({
   const setPrompt = useChatStore((s) => s.setPrompt);
   const attachments = useChatStore((s) => s.attachments);
   const streaming = useChatStore((s) => s.streaming);
+  const setError = useChatStore((s) => s.setError);
   const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
+  const uploadTasks = useAttachmentUploadStore((s) => s.tasks);
   const [generationEstimateLabel, setGenerationEstimateLabel] = useState<string>();
 
   const { submit, cancel } = useChat();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const uploadsPending =
+    attachmentUploadsBlockSubmission(uploadTasks) ||
+    attachments.some((attachment) => attachment.status !== "ready");
+  const uploadWaitMessage = "Waiting for attachments to finish uploading";
 
   const lockedModelKeys = availableModels
     .filter((model) => modelAccessError(model, entitlements, plans) !== null)
@@ -92,6 +100,10 @@ export function PromptComposer({
   const thirdTargetError = compareTargetAccessError(3, entitlements, plans);
 
   const handleSubmit = () => {
+    if (uploadsPending) {
+      setError(uploadWaitMessage);
+      return;
+    }
     const accessError = submitAccessError({
       mode,
       smartMode,
@@ -233,7 +245,11 @@ export function PromptComposer({
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (!streaming && (prompt.trim() || attachments.length > 0)) handleSubmit();
+      if (!streaming && uploadsPending) {
+        setError(uploadWaitMessage);
+      } else if (!streaming && (prompt.trim() || attachments.length > 0)) {
+        handleSubmit();
+      }
     }
   };
 
@@ -335,13 +351,23 @@ export function PromptComposer({
         </div>
 
         <div className={styles.actions}>
+          {uploadsPending ? (
+            <span id="attachmentSubmitStatus" className={styles.screenReaderOnly}>
+              {uploadWaitMessage}
+            </span>
+          ) : null}
           <button
             className={`${styles.submitButton} ${streaming ? styles.stopButton : ""}`}
             type="button"
             aria-label={streaming ? "Stop" : "Send message"}
+            aria-describedby={uploadsPending ? "attachmentSubmitStatus" : undefined}
+            title={!streaming && uploadsPending ? uploadWaitMessage : undefined}
             id="submitBtn"
             onClick={() => (streaming ? cancel() : handleSubmit())}
-            disabled={!streaming && !prompt.trim() && attachments.length === 0}
+            disabled={
+              !streaming &&
+              (uploadsPending || (!prompt.trim() && attachments.length === 0))
+            }
           >
             <CortexIcon name={streaming ? "stop" : "send"} />
           </button>

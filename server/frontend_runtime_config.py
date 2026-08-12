@@ -63,6 +63,12 @@ def build_frontend_runtime_config(request: Request) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "apiBase": api_base,
         "enableDevSessionLogin": bool(enable_dev_session_login),
+        "directAttachmentUploads": _env_bool(
+            "ATTACHMENTS_DIRECT_UPLOAD_ENABLED", default=False
+        ),
+        "legacyAttachmentUploads": _env_bool(
+            "ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED", default=True
+        ),
     }
 
     frontend_dev_login_token = str(

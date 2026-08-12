@@ -486,6 +486,31 @@ export interface FileUploadResponse {
   deduplicated: boolean;
 }
 
+export interface PresignedPost {
+  url: string;
+  fields: Record<string, string>;
+  expires_at: string;
+}
+
+export interface FileUploadIntentItem {
+  file_id: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  status: FileUploadStatus;
+  error_code?: string | null;
+  error_message?: string | null;
+  ingestion_meta: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string | null;
+  expires_at?: string | null;
+  upload: PresignedPost;
+}
+
+export interface FileUploadIntentResponse {
+  files: FileUploadIntentItem[];
+}
+
 export interface CognitoConfig {
   enabled: boolean;
   client_id?: string;

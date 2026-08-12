@@ -1,12 +1,22 @@
-import { useRef } from "react";
-import { uploadFiles, deleteFile, fetchFileStatus } from "../../api/files";
-import { CortexIcon } from "../shared/CortexIcon";
+import { useEffect, useMemo, useRef } from "react";
+import { deleteFile } from "../../api/files";
+import { getAttachmentUploadMode } from "../../config/runtimeConfig";
 import { useChatStore } from "../../store/chatStore";
-import styles from "./AttachmentStrip.module.css";
-import type { BillingPlansResponse, EntitlementsResponse } from "../../types";
+import { useAttachmentUploadStore } from "../../store/attachmentUploadStore";
+import type { AttachmentUploadTask } from "../../store/attachmentUploadStore";
 import {
-  fileSelectionAccessError,
-} from "../../subscription/subscriptionAccess";
+  beginAttachmentUploads,
+  removeAttachmentUpload,
+  retryAttachmentUpload,
+} from "../../uploads/attachmentUploadQueue";
+import { CortexIcon } from "../shared/CortexIcon";
+import styles from "./AttachmentStrip.module.css";
+import type {
+  BillingPlansResponse,
+  EntitlementsResponse,
+  FileUploadResponse,
+} from "../../types";
+import { fileSelectionAccessError } from "../../subscription/subscriptionAccess";
 import {
   isSubscriptionDenial,
   toSubscriptionError,
@@ -22,108 +32,111 @@ export function AttachmentStrip({
   entitlements?: EntitlementsResponse | null;
   plans?: BillingPlansResponse | null;
 }) {
-  const attachments = useChatStore((s) => s.attachments);
-  const addAttachment = useChatStore((s) => s.addAttachment);
-  const removeAttachment = useChatStore((s) => s.removeAttachment);
-  const setError = useChatStore((s) => s.setError);
-  const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
-  const mode = useChatStore((s) => s.mode);
-  const smartMode = useChatStore((s) => s.smartMode);
-  const selectedModelKey = useChatStore((s) => s.selectedModelKey);
+  const attachments = useChatStore((state) => state.attachments);
+  const addAttachment = useChatStore((state) => state.addAttachment);
+  const removeAttachment = useChatStore((state) => state.removeAttachment);
+  const setError = useChatStore((state) => state.setError);
+  const setSubscriptionError = useChatStore((state) => state.setSubscriptionError);
+  const mode = useChatStore((state) => state.mode);
+  const smartMode = useChatStore((state) => state.smartMode);
+  const selectedModelKey = useChatStore((state) => state.selectedModelKey);
+  const tasks = useAttachmentUploadStore((state) => state.tasks);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    for (const task of tasks) {
+      if (task.state === "ready" && task.serverFile) addAttachment(task.serverFile);
+    }
+  }, [addAttachment, tasks]);
+
+  const taskFileIds = useMemo(
+    () => new Set(tasks.map((task) => task.fileId).filter(Boolean)),
+    [tasks],
+  );
+  const standaloneAttachments = attachments.filter(
+    (attachment) => !taskFileIds.has(attachment.file_id),
+  );
+  const selectedCount = tasks.length + standaloneAttachments.length;
 
   const handleFiles = async (files: FileList | null) => {
     if (!files) return;
     const selectedFiles = Array.from(files);
     const accessError = fileSelectionAccessError(
       selectedFiles,
-      attachments.length,
+      selectedCount,
       entitlements,
       plans,
     );
     if (accessError) {
       setSubscriptionError(accessError);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      resetFileInput();
       return;
     }
 
+    const target = selectedUploadTarget(mode, smartMode, selectedModelKey);
     try {
-      const separatorIndex = selectedModelKey.indexOf(":");
-      const selectedTarget =
-        mode === "single" && !smartMode && separatorIndex > 0
-          ? {
-              provider: selectedModelKey.slice(0, separatorIndex),
-              model: selectedModelKey.slice(separatorIndex + 1),
-            }
-          : undefined;
-      const uploadedFiles = selectedTarget
-        ? await uploadFiles(selectedFiles, selectedTarget)
-        : await uploadFiles(selectedFiles);
-      for (const uploaded of uploadedFiles) {
-        addAttachment(uploaded);
-        if (uploaded.status === "processing") {
-          void pollAttachment(uploaded.file_id);
-        }
-      }
-    } catch (err) {
-      const subscriptionError = toSubscriptionError(err, "Upload failed");
+      setError(null);
+      setSubscriptionError(null);
+      await beginAttachmentUploads(selectedFiles, {
+        mode: getAttachmentUploadMode(),
+        target,
+      });
+    } catch (error) {
+      const subscriptionError = toSubscriptionError(error, "Upload failed");
       if (isSubscriptionDenial(subscriptionError)) {
         setSubscriptionError(subscriptionError);
       } else {
-        setError(err instanceof Error ? err.message : "Upload failed");
+        setError("Upload could not be prepared. Retry the upload.");
       }
+    } finally {
+      resetFileInput();
     }
+  };
+
+  const handleTaskRemove = (task: AttachmentUploadTask) => {
+    if (task.fileId) removeAttachment(task.fileId);
+    void removeAttachmentUpload(task.clientId);
+  };
+
+  const handleServerFileRemove = (file: FileUploadResponse) => {
+    removeAttachment(file.file_id);
+    void deleteFile(file.file_id).catch(() => undefined);
+  };
+
+  const handleRetry = (task: AttachmentUploadTask) => {
+    setError(null);
+    void retryAttachmentUpload(task.clientId).catch((error) => {
+      const subscriptionError = toSubscriptionError(error, "Upload failed");
+      if (isSubscriptionDenial(subscriptionError)) {
+        setSubscriptionError(subscriptionError);
+      } else {
+        setError("Upload could not be prepared. Retry the upload.");
+      }
+    });
+  };
+
+  const resetFileInput = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleRemove = async (fileId: string) => {
-    removeAttachment(fileId);
-    await deleteFile(fileId).catch(() => null);
-  };
-
-  const pollAttachment = async (fileId: string) => {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1200));
-      const status = await fetchFileStatus(fileId).catch(() => null);
-      if (!status) return;
-      useChatStore.getState().updateAttachment(status);
-      if (status.status !== "processing") return;
-    }
-  };
-
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const formatPlanFileSize = (bytes: number) => {
-    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`;
-    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
-    return `${bytes} B`;
   };
 
   return (
     <div id="attachmentStrip" className={styles.strip}>
-      {attachments.length > 0 && (
-        <ul className={styles.list} aria-live="polite">
-          {attachments.map((a) => (
-            <li key={a.file_id} className={styles.item}>
-              <span className={`attachment-chip is-${a.status}`} />
-              <span className={styles.fileName} title={a.original_filename}>
-                {a.original_filename}
-              </span>
-              <span className={styles.fileSize}>{formatSize(a.size_bytes)}</span>
-              <span className={styles.status}>{a.status === "ready" ? "Ready" : a.status}</span>
-              <button
-                type="button"
-                className={styles.removeBtn}
-                aria-label={`Remove ${a.original_filename}`}
-                onClick={() => void handleRemove(a.file_id)}
-              >
-                &times;
-              </button>
-            </li>
+      {selectedCount > 0 && (
+        <ul className={styles.list} aria-live="polite" aria-label="Selected attachments">
+          {tasks.map((task) => (
+            <UploadTaskChip
+              key={task.clientId}
+              task={task}
+              onRemove={() => handleTaskRemove(task)}
+              onRetry={() => handleRetry(task)}
+            />
+          ))}
+          {standaloneAttachments.map((attachment) => (
+            <ServerAttachmentChip
+              key={attachment.file_id}
+              attachment={attachment}
+              onRemove={() => handleServerFileRemove(attachment)}
+            />
           ))}
         </ul>
       )}
@@ -140,7 +153,8 @@ export function AttachmentStrip({
         </button>
         {entitlements ? (
           <span id="attachmentPlanLimit" className={styles.planLimit}>
-            Up to {entitlements.limits.max_files_per_request} {entitlements.limits.max_files_per_request === 1 ? "file" : "files"}
+            Up to {entitlements.limits.max_files_per_request}{" "}
+            {entitlements.limits.max_files_per_request === 1 ? "file" : "files"}
             {" · "}
             {formatPlanFileSize(entitlements.limits.max_file_bytes)} each
           </span>
@@ -154,8 +168,144 @@ export function AttachmentStrip({
         multiple
         accept={ACCEPTED}
         className={styles.hiddenInput}
-        onChange={(e) => void handleFiles(e.target.files)}
+        onChange={(event) => void handleFiles(event.target.files)}
       />
     </div>
   );
+}
+
+function UploadTaskChip({
+  task,
+  onRemove,
+  onRetry,
+}: {
+  task: AttachmentUploadTask;
+  onRemove: () => void;
+  onRetry: () => void;
+}) {
+  const status = taskStatus(task);
+  return (
+    <li
+      className={styles.item}
+      aria-label={`${task.filename}, ${status.accessibleLabel}`}
+      title={task.error}
+    >
+      <span className={`attachment-chip is-${task.state}`} aria-hidden="true" />
+      <span className={styles.fileName} title={task.filename}>
+        {task.filename}
+      </span>
+      <span className={styles.fileSize}>{formatSize(task.sizeBytes)}</span>
+      <span
+        className={`${styles.status} ${task.state === "failed" ? styles.failedStatus : ""}`}
+        role={task.state === "uploading" ? "progressbar" : "status"}
+        aria-label={status.accessibleLabel}
+        aria-valuemin={task.state === "uploading" ? 0 : undefined}
+        aria-valuemax={task.state === "uploading" ? 100 : undefined}
+        aria-valuenow={task.state === "uploading" ? task.progress : undefined}
+      >
+        {status.visibleLabel}
+      </span>
+      {task.state === "failed" ? (
+        <button
+          type="button"
+          className={styles.retryBtn}
+          aria-label={`Retry ${task.filename}`}
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      ) : null}
+      <RemoveButton filename={task.filename} onClick={onRemove} />
+    </li>
+  );
+}
+
+function ServerAttachmentChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: FileUploadResponse;
+  onRemove: () => void;
+}) {
+  const label = attachment.status === "ready" ? "Ready" : attachment.status;
+  return (
+    <li
+      className={styles.item}
+      aria-label={`${attachment.original_filename}, ${label}`}
+    >
+      <span className={`attachment-chip is-${attachment.status}`} aria-hidden="true" />
+      <span className={styles.fileName} title={attachment.original_filename}>
+        {attachment.original_filename}
+      </span>
+      <span className={styles.fileSize}>{formatSize(attachment.size_bytes)}</span>
+      <span className={styles.status}>{label}</span>
+      <RemoveButton filename={attachment.original_filename} onClick={onRemove} />
+    </li>
+  );
+}
+
+function RemoveButton({ filename, onClick }: { filename: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={styles.removeBtn}
+      aria-label={`Remove ${filename}`}
+      onClick={onClick}
+    >
+      &times;
+    </button>
+  );
+}
+
+function taskStatus(task: AttachmentUploadTask): {
+  visibleLabel: string;
+  accessibleLabel: string;
+} {
+  if (task.state === "authorizing") {
+    return { visibleLabel: "Preparing…", accessibleLabel: "preparing upload" };
+  }
+  if (task.state === "uploading") {
+    return {
+      visibleLabel: `Uploading ${task.progress}%`,
+      accessibleLabel: `uploading, ${task.progress} percent`,
+    };
+  }
+  if (task.state === "processing") {
+    return { visibleLabel: "Processing…", accessibleLabel: "processing" };
+  }
+  if (task.state === "ready") {
+    return { visibleLabel: "Ready", accessibleLabel: "ready" };
+  }
+  if (task.state === "failed") {
+    return {
+      visibleLabel: "Upload failed",
+      accessibleLabel: task.error ? `upload failed, ${task.error}` : "upload failed",
+    };
+  }
+  return { visibleLabel: "Cancelled", accessibleLabel: "cancelled" };
+}
+
+function selectedUploadTarget(
+  mode: "single" | "compare",
+  smartMode: boolean,
+  selectedModelKey: string,
+): { provider: string; model: string } | undefined {
+  const separatorIndex = selectedModelKey.indexOf(":");
+  if (mode !== "single" || smartMode || separatorIndex <= 0) return undefined;
+  return {
+    provider: selectedModelKey.slice(0, separatorIndex),
+    model: selectedModelKey.slice(separatorIndex + 1),
+  };
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatPlanFileSize(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
+  return `${bytes} B`;
 }

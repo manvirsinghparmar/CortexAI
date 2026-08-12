@@ -399,6 +399,49 @@ describe("subscription feature gating", () => {
     expect(useChatStore.getState().attachments).toEqual([]);
   });
 
+  it("rejects an over-count batch before requesting upload authorization", async () => {
+    const entitlements = entitlementFixture();
+    render(<AttachmentStrip entitlements={entitlements} plans={plansFixture()} />);
+
+    fireEvent.change(document.querySelector("#attachmentInput")!, {
+      target: {
+        files: [
+          new File(["one"], "one.txt", { type: "text/plain" }),
+          new File(["two"], "two.txt", { type: "text/plain" }),
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().subscriptionError?.details.feature).toBe(
+        "attachment_count",
+      );
+    });
+    expect(uploadFiles).not.toHaveBeenCalled();
+    expect(screen.queryByText("one.txt")).not.toBeInTheDocument();
+    expect(screen.queryByText("two.txt")).not.toBeInTheDocument();
+  });
+
+  it("preserves file-analysis entitlement gating before any upload request", async () => {
+    const entitlements = entitlementFixture();
+    entitlements.features.file_analysis_enabled = false;
+    render(<AttachmentStrip entitlements={entitlements} plans={plansFixture()} />);
+
+    fireEvent.change(document.querySelector("#attachmentInput")!, {
+      target: {
+        files: [new File(["notes"], "notes.txt", { type: "text/plain" })],
+      },
+    });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().subscriptionError?.details.feature).toBe(
+        "file_analysis",
+      );
+    });
+    expect(uploadFiles).not.toHaveBeenCalled();
+    expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
+  });
+
   it("uploads an accepted multi-file selection through one batch request", async () => {
     const entitlements = {
       ...entitlementFixture({

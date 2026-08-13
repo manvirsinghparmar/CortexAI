@@ -66,6 +66,25 @@ def test_ci_python_quality_filter_excludes_deleted_files():
     assert "\n              - '**/*.py'" not in python_filter
 
 
+def test_local_git_hook_policy_is_installed_and_ci_visible():
+    repo_root = Path(__file__).resolve().parents[1]
+    workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    shared_filter = workflow.split("            shared:", maxsplit=1)[1].split(
+        "\n\n  backend-quality:", maxsplit=1
+    )[0]
+    hook_config = (repo_root / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    gate = (repo_root / ".codex" / "ci-commit-gate.md").read_text(encoding="utf-8")
+    launcher = (repo_root / "scripts" / "run_local_ci_hook.sh").read_text(encoding="utf-8")
+    runner = (repo_root / "scripts" / "run_local_ci.py").read_text(encoding="utf-8")
+
+    assert "'.pre-commit-config.yaml'" in shared_filter
+    assert "stages: [pre-commit]" in hook_config
+    assert "stages: [pre-push]" in hook_config
+    assert "pre_commit install" in gate
+    assert "scripts/run_local_ci.py" in launcher
+    assert "tests/test_component_boundaries.py" in runner
+
+
 def test_runtime_health_reports_interpreter_and_claude_readiness(monkeypatch):
     _set_min_api_env(monkeypatch)
     monkeypatch.setenv("SERVE_FRONTEND", "false")

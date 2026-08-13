@@ -58,6 +58,7 @@ jobs:
               - 'db/migrations/**'
             shared:
               - '.github/workflows/**'
+              - '.pre-commit-config.yaml'
               - 'scripts/**'
               - 'README.md'
               - '.env.example'

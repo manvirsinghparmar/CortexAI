@@ -1,0 +1,23 @@
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+
+repos:
+  - repo: local
+    hooks:
+      - id: cortex-pre-commit
+        name: CortexAI staged quality gate
+        entry: git -c "alias.cortex-local-ci=!sh scripts/run_local_ci_hook.sh" cortex-local-ci pre-commit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: cortex-pre-push
+        name: CortexAI ci.yml parity gate
+        entry: git -c "alias.cortex-local-ci=!sh scripts/run_local_ci_hook.sh" cortex-local-ci pre-push
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

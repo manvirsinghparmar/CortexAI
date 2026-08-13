@@ -1125,11 +1125,17 @@ It runs:
   - API image build metadata export
   - pinned Gitleaks CLI directory scan of the checked-out tree
 
-When a commit is requested, run the repository's [per-commit CI parity gate](.codex/ci-commit-gate.md)
-exactly once against the clean final commit SHA before pushing or handing it off.
-The gate mirrors the applicable blocking jobs above, records the validated SHA,
-and becomes stale after an amend or any additional change. Do not create a commit
-solely to run the gate when no commit was requested.
+Install the repository's [local Git gates](.codex/ci-commit-gate.md) once per
+clone so checks run automatically:
+
+```powershell
+venv\Scripts\python.exe -m pre_commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+```
+
+The blocking `pre-commit` hook scans the exact staged tree and runs staged-Python
+Ruff/MyPy plus fast staged/component tests. The blocking `pre-push` hook mirrors
+every applicable `ci.yml` backend, React, security, artifact, and image job
+against the committed branch.
 
 - `.github/workflows/incident-regression-38.yml`:
   - targeted backend regression pack for routing/guardrail mismatches (38 tests)

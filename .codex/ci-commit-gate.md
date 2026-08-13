@@ -1,27 +1,46 @@
-# Per-Commit CI Parity Gate
+# Local Commit and CI Parity Gates
 
-`.github/workflows/ci.yml` is the source of truth for this gate. Update this
-document in the same change whenever that workflow's blocking jobs or commands
-change.
+`.github/workflows/ci.yml` is the source of truth. The repository-managed Git
+hooks apply its quality policy automatically instead of relying on documentation
+or IDE behavior.
 
-## When the gate is required
+## Install once per clone
 
-- When the user requests a commit, run this gate exactly once against the final
-  commit SHA after the commit is created and before pushing or handing it off.
-- Run from a clean checkout of that exact SHA so generated files, ignored logs,
-  and local `.env` secrets cannot change the Gitleaks result.
-- If the commit is amended or another change is added, the prior result is stale;
-  run the gate once again against the new SHA.
-- Do not create a commit only to run this gate when the user did not authorize a
-  commit. Continue to use proportionate validation for uncommitted work.
-- Record the validated SHA and the result of every applicable blocking job in the
-  handoff. Fix failures before push; if an environment prerequisite is
-  unavailable, report that check as unverified rather than claiming CI parity.
+After installing `requirements-dev.txt`, use the project interpreter:
+
+```powershell
+venv\Scripts\python.exe -m pre_commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+```
+
+Use `.venv` or set `CORTEX_CI_PYTHON` when the project interpreter has another
+location. Confirm both managed hooks exist with `git config --get core.hooksPath`
+and `.git/hooks/pre-commit` / `.git/hooks/pre-push`. `pre-commit` preserves an
+unmanaged existing hook in migration mode; review that hook before relying on
+the combined result.
+
+## Automatic stages
+
+- `pre-commit` exports and checks the exact staged tree. It blocks on Gitleaks
+  8.30.1, Ruff, changed-file MyPy, staged test files, or the fast component-boundary
+  regression. Black runs and reports as advisory, matching CI. Unstaged and
+  ignored `.env`/log files cannot mask or contaminate the result.
+- `pre-push` fetches the target base, scans the exact committed `HEAD` tree, then
+  runs every applicable blocking backend/React/build job from an exported clean
+  snapshot selected by the same path boundaries as `ci.yml`. Uncommitted changes
+  cannot mask a committed failure. A failure blocks the push.
+- The default target is `origin/develop`. Set `CORTEX_CI_BASE_REF` for a PR that
+  targets another branch.
+- Use a Python 3.12 project environment for exact parity. Gitleaks is downloaded
+  once into the clone's Git tool cache and verified against the official release
+  checksum.
+- Do not bypass hooks with `--no-verify` or `SKIP` for a normal handoff. If an
+  external prerequisite such as Docker is unavailable, report the gate as
+  unverified instead of claiming CI parity.
 
 ## Select the applicable jobs
 
-Compare the final commit/PR branch with its target branch (normally
-`origin/develop`). Match the path filters in `.github/workflows/ci.yml`:
+The pre-push hook compares the final branch with its target (normally
+`origin/develop`) and matches the path filters in `.github/workflows/ci.yml`:
 
 - Always run the security secrets scan.
 - Run backend quality and the API image build for backend, database, or shared
@@ -30,7 +49,17 @@ Compare the final commit/PR branch with its target branch (normally
   shared changes.
 - A shared change runs both backend and React paths.
 
-## Backend quality
+## Manual equivalent
+
+Normally the hooks invoke these commands. For diagnosis, they can be run
+directly:
+
+```powershell
+venv\Scripts\python.exe scripts\run_local_ci.py pre-commit
+venv\Scripts\python.exe scripts\run_local_ci.py pre-push
+```
+
+## Backend quality details
 
 Use Python 3.12 with `requirements.txt` and `requirements-dev.txt` installed.
 Build the changed-file list from added or modified Python files only:
@@ -57,7 +86,7 @@ docker build -f Dockerfile.api -t cortexai-api:ci .
 
 Black is advisory in CI; run and report it, but it does not determine CI success.
 
-## React responsive quality and artifact
+## React responsive quality and artifact details
 
 Use Node.js 20. In a clean checkout, run:
 
@@ -75,10 +104,10 @@ npm run --prefix e2e test:desktop-ipad
 python scripts/build_frontend_artifact.py
 ```
 
-## Security secrets scan
+## Security secrets scan details
 
-Use Gitleaks `8.30.1`, matching CI, and run the exact blocking scan from the clean
-checkout root:
+The hook uses Gitleaks `8.30.1`, matching CI, against an exported tracked-tree
+snapshot equivalent to a clean checkout:
 
 ```powershell
 gitleaks version

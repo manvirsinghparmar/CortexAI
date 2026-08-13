@@ -14,8 +14,9 @@ Use these as repeatable templates for long-running tasks.
 2. Select the closest playbook.
 3. Execute in phases (design -> implementation -> validation -> docs).
 4. Report what changed, what was validated, and what remains.
-5. If the user requested a commit, run [ci-commit-gate.md](./ci-commit-gate.md)
-   exactly once against the clean final commit SHA before push or handoff.
+5. If the user requested a commit, verify the blocking local hooks from
+   [ci-commit-gate.md](./ci-commit-gate.md) are installed; do not bypass the
+   automatic pre-commit or pre-push gates.
 
 ## Cross-Repo Variant
 

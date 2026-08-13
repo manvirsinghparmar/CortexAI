@@ -117,7 +117,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Runs blocking Ruff/MyPy checks against changed Python files with pinned dev tools.
   - Runs Black as an advisory changed-file format check until a repo-wide baseline is applied.
   - Runs Gitleaks as a pinned CLI directory scan of the checked-out tree.
-  - Per-commit local parity instructions are owned by `.codex/ci-commit-gate.md`; every user-requested commit must run that gate once against its clean final SHA before push or handoff.
+  - Managed local hooks are configured in `.pre-commit-config.yaml`, launched by `scripts/run_local_ci_hook.sh`, executed by `scripts/run_local_ci.py`, and documented in `.codex/ci-commit-gate.md`; pre-commit checks staged content and pre-push blocks unless applicable CI parity jobs pass.
 - Targeted backend regression pack: `.github/workflows/incident-regression-38.yml`
 - Live browser E2E: `.github/workflows/live-e2e.yml`
 

@@ -18,5 +18,5 @@ pytest-cov
 pip-audit==2.10.0
 bandit==1.9.4
 
-# Git hooks (optional but recommended)
-pre-commit
+# Git hooks
+pre-commit==4.6.0

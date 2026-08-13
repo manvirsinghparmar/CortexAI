@@ -6,10 +6,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config.cache_optimization import persistent_research_reuse_enabled
-from tools.web.research_state import ResearchSource, ResearchState
+from tools.web.research_state import ResearchMode, ResearchSource, ResearchState
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _decode_research_mode(value: object) -> ResearchMode:
+    if value == "off":
+        return "off"
+    if value == "on":
+        return "on"
+    return "auto"
 
 
 def load_research_state(session_id: str) -> ResearchState | None:
@@ -123,7 +131,7 @@ def _decode_state(payload: dict[str, Any]) -> ResearchState:
         cache_hit=bool(payload.get("cache_hit")),
         error=str(payload.get("error")) if payload.get("error") else None,
         session_id=str(payload.get("session_id") or "default"),
-        mode=str(payload.get("mode") or "auto"),
+        mode=_decode_research_mode(payload.get("mode")),
         ttl_seconds=max(1, int(payload.get("ttl_seconds") or 900)),
         topic_key=str(payload.get("topic_key") or ""),
         provider_credits_consumed=max(

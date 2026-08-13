@@ -130,7 +130,7 @@ class InspectableOrchestrator:
         self.compare_calls += 1
         self.last_compare_kwargs = kwargs
         request_group_id = str(uuid4())
-        responses: list[UnifiedResponse] = []
+        responses: list[UnifiedResponse | None] = []
         for index, item in enumerate(models_list):
             provider = item["provider"]
             model = item.get("model") or "unknown-model"

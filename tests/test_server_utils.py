@@ -1,4 +1,4 @@
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import FinishReason, NormalizedError, TokenUsage, UnifiedResponse
 from server.utils import (
     clamp_max_tokens,
     effective_output_token_limit,
@@ -14,7 +14,7 @@ from server.schemas.requests import ConversationHistoryItem, UserContextRequest
 def _build_response(
     *,
     text: str,
-    finish_reason: str | None = "stop",
+    finish_reason: FinishReason = "stop",
     error: NormalizedError | None = None,
     metadata: dict | None = None,
 ) -> UnifiedResponse:

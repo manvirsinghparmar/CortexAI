@@ -129,7 +129,7 @@ def _select_rule(
     return effective[0]
 
 
-def _number(value: object, *, default: float = 0.0) -> float:
+def _number(value: Any, *, default: float = 0.0) -> float:
     if value in (None, ""):
         return default
     return float(value)
@@ -166,7 +166,8 @@ class ModelPricing:
             return None
         record, provider_data, matched_alias = found
         canonical_model = str(record.get("name") or requested_model).strip()
-        lifecycle = record.get("lifecycle") if isinstance(record.get("lifecycle"), dict) else {}
+        raw_lifecycle = record.get("lifecycle")
+        lifecycle: dict[str, Any] = raw_lifecycle if isinstance(raw_lifecycle, dict) else {}
         lifecycle_status = str(lifecycle.get("status") or "ACTIVE").strip().upper()
         retirement_at = _optional_utc(lifecycle.get("retirement_date"))
         request_at = _coerce_utc(at)
@@ -182,7 +183,8 @@ class ModelPricing:
         ).strip()
         runtime_model = target if should_migrate else canonical_model
         pricing_model = str(record.get("pricing_model") or runtime_model).strip()
-        defaults = provider_data.get("defaults") if isinstance(provider_data.get("defaults"), dict) else {}
+        raw_defaults = provider_data.get("defaults")
+        defaults: dict[str, Any] = raw_defaults if isinstance(raw_defaults, dict) else {}
         return {
             "provider": provider,
             "requested_model": requested_model,
@@ -258,7 +260,8 @@ class ModelPricing:
         if cache_write_rate in (None, ""):
             cache_write_rate = rates.get(cache_write_key, rates.get("input", 0.0))
 
-        defaults = provider_data.get("defaults") if isinstance(provider_data.get("defaults"), dict) else {}
+        raw_defaults = provider_data.get("defaults")
+        defaults: dict[str, Any] = raw_defaults if isinstance(raw_defaults, dict) else {}
         catalog = _catalog(catalog_path)
         return {
             "provider": provider,

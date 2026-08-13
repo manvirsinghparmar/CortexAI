@@ -565,7 +565,7 @@ class TavilyResearchClient:
                     }
                 },
             )
-            return []
+            return ProviderSearchResponse()
 
     def qna_search(self, query: str) -> tuple[str, list[SourceDoc]]:
         """

@@ -174,3 +174,18 @@ def test_search_with_usage_preserves_explicit_zero_provider_credits():
 
     assert result.provider_credits_used == 0
     assert result.provider_credits_estimated is False
+
+
+def test_search_with_usage_returns_empty_contract_when_provider_fails(monkeypatch):
+    client = _make_client({"results": []})
+
+    def _fail_search(**_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(client.client, "search", _fail_search)
+
+    result = client.search_with_usage("latest docs")
+
+    assert result.sources == []
+    assert result.provider_credits_used == 0
+    assert result.provider_credits_estimated is False

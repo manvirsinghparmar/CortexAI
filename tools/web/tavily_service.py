@@ -2,16 +2,25 @@
 
 import hashlib
 from dataclasses import replace
+from typing import Protocol
 
 from utils.logger import get_logger
 
 from .cache import InMemoryTTLCache
-from .contracts import ResearchContext
+from .contracts import ProviderSearchResponse, ResearchContext
 from .intent import rewrite_query
 from .research_pack import build_injected_text
 from .tavily_client import TavilyResearchClient
 
 logger = get_logger(__name__)
+
+
+class _ResearchClient(Protocol):
+    def get_network_diagnostics_snapshot(self) -> dict: ...
+
+    def search_with_usage(
+        self, *, query: str, max_results: int, search_depth: str
+    ) -> ProviderSearchResponse: ...
 
 
 def _text_hash(value: str) -> str:
@@ -37,7 +46,7 @@ class TavilyResearchService:
             cache: TTL cache for results
             max_sources: Maximum sources to return (default: 5)
         """
-        self.client = TavilyResearchClient(api_key=api_key)
+        self.client: _ResearchClient = TavilyResearchClient(api_key=api_key)
         self.cache = cache
         self.max_sources = max_sources
 

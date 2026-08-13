@@ -12,7 +12,7 @@ from typing import Any, TYPE_CHECKING
 import re
 
 from config.cache_optimization import cache_friendly_prompt_ordering_enabled
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import FinishReason, NormalizedError, TokenUsage, UnifiedResponse
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,11 +43,8 @@ class BaseAIClient(ABC):
         self.api_key = api_key
         self.model_name = kwargs.get("model_name")
         self.requested_model_name = kwargs.get("requested_model_name") or self.model_name
-        self.model_identity = (
-            dict(kwargs.get("model_identity"))
-            if isinstance(kwargs.get("model_identity"), dict)
-            else {}
-        )
+        model_identity = kwargs.get("model_identity")
+        self.model_identity = dict(model_identity) if isinstance(model_identity, dict) else {}
         self.provider_name = self.__class__.__name__.replace("Client", "").lower()
 
     @abstractmethod
@@ -603,7 +600,7 @@ class BaseAIClient(ABC):
 
     def _normalize_finish_reason(
         self, provider_reason: str | None, provider: str | None = None
-    ) -> str | None:
+    ) -> FinishReason:
         """
         Normalize provider-specific finish reasons into standard codes.
 

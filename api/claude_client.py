@@ -156,7 +156,12 @@ class ClaudeClient(BaseAIClient):
         request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
-        model = kwargs.get("model", self.model_name)
+        requested_model = kwargs.get("model")
+        model = (
+            requested_model
+            if isinstance(requested_model, str)
+            else str(self.model_name or "claude-sonnet-4-5")
+        )
         cache_context = self._resolve_cache_context(
             kwargs, provider="claude", model=model
         )

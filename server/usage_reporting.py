@@ -6,6 +6,7 @@ import csv
 import io
 import os
 from datetime import date, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -488,17 +489,14 @@ def _cache_usage_metrics(
         reserved_output_tokens = 0
         actual_output_tokens = 0
         for row in model_rows:
-            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            snapshot = (
-                metadata.get("pricing_snapshot")
-                if isinstance(metadata.get("pricing_snapshot"), dict)
-                else {}
+            raw_metadata = row.get("metadata")
+            metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+            raw_snapshot = metadata.get("pricing_snapshot")
+            snapshot: dict[str, Any] = (
+                raw_snapshot if isinstance(raw_snapshot, dict) else {}
             )
-            rates = (
-                snapshot.get("rates_per_1m")
-                if isinstance(snapshot.get("rates_per_1m"), dict)
-                else snapshot
-            )
+            raw_rates = snapshot.get("rates_per_1m")
+            rates: dict[str, Any] = raw_rates if isinstance(raw_rates, dict) else snapshot
             try:
                 normal_rate = max(0.0, float(rates.get("input") or 0.0))
                 cached_rate = max(0.0, float(rates.get("cached_input") or normal_rate))

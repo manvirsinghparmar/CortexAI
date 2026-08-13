@@ -25,17 +25,20 @@ the combined result.
   regression. Black runs and reports as advisory, matching CI. Unstaged and
   ignored `.env`/log files cannot mask or contaminate the result.
 - `pre-push` fetches the target base, scans the exact committed `HEAD` tree, then
-  runs every applicable blocking backend/React/build job from an exported clean
-  snapshot selected by the same path boundaries as `ci.yml`. Uncommitted changes
-  cannot mask a committed failure. A failure blocks the push.
+  runs every locally runnable blocking backend/React/build job from an exported
+  clean snapshot selected by the same path boundaries as `ci.yml`. Uncommitted
+  changes cannot mask a committed failure. A failure blocks the push.
 - The default target is `origin/develop`. Set `CORTEX_CI_BASE_REF` for a PR that
   targets another branch.
 - Use a Python 3.12 project environment for exact parity. Gitleaks is downloaded
   once into the clone's Git tool cache and verified against the official release
   checksum.
-- Do not bypass hooks with `--no-verify` or `SKIP` for a normal handoff. If an
-  external prerequisite such as Docker is unavailable, report the gate as
-  unverified instead of claiming CI parity.
+- Do not bypass hooks with `--no-verify` or `SKIP` for a normal handoff. When the
+  Docker CLI or daemon is unavailable, the hook reports the API image build as
+  deferred and lets GitHub Actions remain authoritative for that job. Set
+  `CORTEX_CI_REQUIRE_DOCKER=1` to make an unavailable Docker environment block
+  the push. When Docker is available, an image build or inspection failure always
+  blocks the push.
 
 ## Select the applicable jobs
 
@@ -84,7 +87,9 @@ pip-audit -r requirements.txt -r requirements-dev.txt
 docker build -f Dockerfile.api -t cortexai-api:ci .
 ```
 
-Black is advisory in CI; run and report it, but it does not determine CI success.
+The hook runs the Docker command automatically when the CLI and daemon are
+available; otherwise it marks the image job as deferred to GitHub Actions. Black
+is advisory in CI; run and report it, but it does not determine CI success.
 
 ## React responsive quality and artifact details
 

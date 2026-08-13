@@ -81,8 +81,10 @@ def test_local_git_hook_policy_is_installed_and_ci_visible():
     assert "stages: [pre-commit]" in hook_config
     assert "stages: [pre-push]" in hook_config
     assert "pre_commit install" in gate
+    assert "CORTEX_CI_REQUIRE_DOCKER" in gate
     assert "scripts/run_local_ci.py" in launcher
     assert "tests/test_component_boundaries.py" in runner
+    assert "CORTEX_CI_REQUIRE_DOCKER" in runner
 
 
 def test_runtime_health_reports_interpreter_and_claude_readiness(monkeypatch):

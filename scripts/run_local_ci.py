@@ -320,10 +320,49 @@ def _run_gitleaks(snapshot: Path) -> None:
 
 
 def _require_executable(name: str) -> str:
-    executable = shutil.which(f"{name}.cmd" if os.name == "nt" else name)
+    executable = shutil.which(name)
     if executable is None:
         raise GateFailure(f"Required executable '{name}' was not found on PATH.")
     return executable
+
+
+def _docker_required() -> bool:
+    return os.environ.get("CORTEX_CI_REQUIRE_DOCKER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _run_api_image_build(snapshot: Path) -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        message = "Docker CLI was not found on PATH; API image build is deferred to GitHub Actions."
+        if _docker_required():
+            raise GateFailure(message)
+        print(f"WARNING: {message}")
+        return False
+
+    daemon = _run(
+        (docker, "version", "--format", "{{.Server.Version}}"),
+        cwd=snapshot,
+        check=False,
+        capture_output=True,
+    )
+    if daemon.returncode != 0:
+        message = "Docker daemon is unavailable; API image build is deferred to GitHub Actions."
+        if _docker_required():
+            raise GateFailure(message)
+        print(f"WARNING: {message}")
+        return False
+
+    _run(
+        (docker, "build", "-f", "Dockerfile.api", "-t", "cortexai-api:ci", "."),
+        cwd=snapshot,
+    )
+    _run((docker, "image", "inspect", "cortexai-api:ci"), cwd=snapshot)
+    return True
 
 
 def _refresh_base_ref(base_ref: str) -> None:
@@ -364,7 +403,7 @@ def run_pre_commit() -> None:
                 (str(python), "-m", "pytest", "tests/test_component_boundaries.py", "-q"),
                 cwd=snapshot,
             )
-    print("\nPre-commit gate passed. Full ci.yml parity runs automatically before push.")
+    print("\nPre-commit gate passed. Applicable ci.yml checks run automatically before push.")
 
 
 def run_pre_push(base_ref: str) -> None:
@@ -380,6 +419,7 @@ def run_pre_push(base_ref: str) -> None:
 
     python = _project_python()
     _report_python_version(python)
+    api_image_verified = True
     with tempfile.TemporaryDirectory(prefix="cortex-pre-push-") as temporary:
         snapshot = Path(temporary) / "tree"
         snapshot.mkdir()
@@ -419,14 +459,13 @@ def run_pre_push(base_ref: str) -> None:
             _run((str(python), "scripts/build_frontend_artifact.py"), cwd=snapshot)
 
         if backend_required:
-            docker = _require_executable("docker")
-            _run(
-                (docker, "build", "-f", "Dockerfile.api", "-t", "cortexai-api:ci", "."),
-                cwd=snapshot,
-            )
-            _run((docker, "image", "inspect", "cortexai-api:ci"), cwd=snapshot)
+            api_image_verified = _run_api_image_build(snapshot)
 
-    print("\nAll applicable local ci.yml parity gates passed for HEAD.")
+    if api_image_verified:
+        print("\nAll applicable local ci.yml parity gates passed for HEAD.")
+    else:
+        print("\nAll locally runnable ci.yml gates passed for HEAD.")
+        print("WARNING: API image build remains unverified until GitHub Actions completes it.")
 
 
 def _parse_args() -> argparse.Namespace:

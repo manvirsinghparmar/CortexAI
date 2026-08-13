@@ -124,7 +124,7 @@ npm run --prefix frontend-react build
 - CI changed-file quality gates:
   - Ruff/MyPy run on added or modified Python files; deleted paths are excluded before tooling runs. Black is advisory until a formatting baseline lands.
   - Gitleaks scans the checked-out tree with the pinned CLI rather than repository history.
-  - Install the mandatory [local Git gates](./ci-commit-gate.md) once per clone. `pre-commit` blocks staged Gitleaks/Ruff/MyPy failures; `pre-push` runs the applicable `ci.yml` parity jobs against the committed branch and blocks a failing push.
+  - Install the mandatory [local Git gates](./ci-commit-gate.md) once per clone. `pre-commit` blocks staged Gitleaks/Ruff/MyPy failures; `pre-push` runs applicable locally available `ci.yml` jobs against the committed branch and blocks failures. Missing Docker defers only the API image build to GitHub Actions unless `CORTEX_CI_REQUIRE_DOCKER=1`.
 - Frontend local checks (when UI touched):
   - `npm run --prefix frontend-react build` when React UI is touched
   - `npm run --prefix frontend-react test` when React component logic/tests are touched

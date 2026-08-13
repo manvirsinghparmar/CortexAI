@@ -1134,8 +1134,10 @@ venv\Scripts\python.exe -m pre_commit install --install-hooks --hook-type pre-co
 
 The blocking `pre-commit` hook scans the exact staged tree and runs staged-Python
 Ruff/MyPy plus fast staged/component tests. The blocking `pre-push` hook mirrors
-every applicable `ci.yml` backend, React, security, artifact, and image job
-against the committed branch.
+every locally runnable `ci.yml` backend, React, security, artifact, and image job
+against the committed branch. If the Docker CLI or daemon is unavailable, it
+defers only the API image build to GitHub Actions; set
+`CORTEX_CI_REQUIRE_DOCKER=1` when local Docker availability must be mandatory.
 
 - `.github/workflows/incident-regression-38.yml`:
   - targeted backend regression pack for routing/guardrail mismatches (38 tests)

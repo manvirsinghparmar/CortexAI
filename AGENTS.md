@@ -72,8 +72,10 @@ codex --cd C:\path\to\primary\repo `
 - Pricing/registry alignment: `python -m pytest tests/test_registry_pricing_alignment.py -q`
 - Local Git gates: ensure [ci-commit-gate.md](/C:/Users/14169/PycharmProjects/PythonProject/OpenAIProject/.codex/ci-commit-gate.md)
   is installed for a user-requested commit. The blocking `pre-commit` hook checks
-  the staged tree; `pre-push` runs applicable `ci.yml` parity checks against the
-  committed branch. Do not bypass either hook for a normal handoff.
+  the staged tree; `pre-push` runs applicable locally available `ci.yml` checks
+  against the committed branch. Missing Docker defers only the API image build to
+  GitHub Actions unless `CORTEX_CI_REQUIRE_DOCKER=1`. Do not bypass either hook
+  for a normal handoff.
 
 Choose the smallest relevant subset during iteration, then run broader gates before handoff.
 

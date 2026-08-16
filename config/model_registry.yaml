@@ -798,6 +798,10 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 200000
         max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["cheap", "fast", "general", "coding"]
         enabled: true
         selectable: true
@@ -925,6 +929,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1000000
         max_output_tokens: 64000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["strong", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
         selectable: true
@@ -951,6 +960,10 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 200000
         max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["compatibility", "reasoning", "coding"]
         enabled: true
         selectable: false
@@ -979,6 +992,11 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 1000000
         max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["flagship", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
         selectable: true
@@ -1005,6 +1023,10 @@ providers:
         credit_pricing_version: "2026-07-31"
         context_limit: 200000
         max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         tags: ["flagship", "reasoning", "coding", "agentic"]
         enabled: true
         selectable: true

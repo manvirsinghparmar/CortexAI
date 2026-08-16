@@ -62,6 +62,42 @@ def test_fable_reasoning_cannot_be_disabled():
         )
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"],
+)
+def test_manual_thinking_only_claude_models_default_to_normal_generation(model):
+    resolved = resolve_generation_budget(
+        provider="claude",
+        model=model,
+        generation={"profile": "balanced"},
+    )
+
+    assert resolved.effective_reasoning_mode == "off"
+    assert resolved.effective_reasoning_effort == "none"
+
+
+def test_manual_thinking_only_claude_models_reject_reasoning_on_locally():
+    with pytest.raises(GenerationPolicyError, match="does not support reasoning controls"):
+        resolve_generation_budget(
+            provider="claude",
+            model="claude-haiku-4-5",
+            generation={"profile": "balanced", "reasoning": {"mode": "on"}},
+        )
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-6"])
+def test_claude_46_models_use_registry_declared_adaptive_thinking(model):
+    resolved = resolve_generation_budget(
+        provider="claude",
+        model=model,
+        generation={"profile": "balanced"},
+    )
+
+    assert resolved.effective_reasoning_mode == "adaptive"
+    assert resolved.effective_reasoning_effort == "medium"
+
+
 def test_profile_effort_falls_back_to_model_supported_maximum():
     resolved = resolve_generation_budget(
         provider="claude",

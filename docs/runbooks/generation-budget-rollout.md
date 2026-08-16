@@ -11,7 +11,7 @@
 ```powershell
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
-venv\Scripts\python.exe -m pytest tests/test_generation_policy.py tests/test_registry_pricing_alignment.py -q
+venv\Scripts\python.exe -m pytest tests/test_generation_policy.py tests/test_unified_response_contract.py tests/test_model_registry_capabilities.py tests/test_registry_pricing_alignment.py -q
 ```
 
 ## Staged enablement
@@ -26,6 +26,8 @@ on staging, run one manual Ask and one two-target Compare at each profile, and v
 - partial text survives reload and Retry with more room uses the recommended profile;
 - unused temporary credit holds are released after settlement;
 - oversized explicit custom limits return `422 invalid_generation_budget`.
+- every selectable Claude model completes a default request without provider parameter rejection;
+- Claude 4.6/5 adaptive requests omit custom temperature and manual-budget-only Claude 4.5 requests resolve to normal generation.
 
 Promote the enabled setting by API fleet or environment only after those checks pass.
 Watch incomplete rate by provider/model/profile, empty-visible-text length stops,

@@ -22,12 +22,15 @@ the combined result.
 
 - `pre-commit` exports and checks the exact staged tree. It blocks on Gitleaks
   8.30.1, Ruff, changed-file MyPy, staged test files, or the fast component-boundary
-  regression. Black runs and reports as advisory, matching CI. Unstaged and
-  ignored `.env`/log files cannot mask or contaminate the result.
+  regression. Pytest uses a private temporary directory inside the gate workspace,
+  avoiding failures caused by inaccessible user-wide pytest temp roots on Windows.
+  Black runs and reports as advisory, matching CI. Unstaged and ignored `.env`/log
+  files cannot mask or contaminate the result.
 - `pre-push` fetches the target base, scans the exact committed `HEAD` tree, then
   runs every locally runnable blocking backend/React/build job from an exported
   clean snapshot selected by the same path boundaries as `ci.yml`. Uncommitted
-  changes cannot mask a committed failure. A failure blocks the push.
+  changes cannot mask a committed failure. Its pytest jobs use the same private
+  temp-root isolation. A failure blocks the push.
 - The default target is `origin/develop`. Set `CORTEX_CI_BASE_REF` for a PR that
   targets another branch.
 - Use a Python 3.12 project environment for exact parity. Gitleaks is downloaded

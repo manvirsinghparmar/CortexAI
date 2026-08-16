@@ -15,6 +15,8 @@ from api.google_gemini_client import GeminiClient
 from api.grok_client import GrokClient
 from api.openai_client import OpenAIClient
 from orchestrator.cache_context import CacheContext
+from orchestrator.generation_policy import resolve_generation_budget
+from orchestrator.model_registry import ModelRegistry
 from server.schemas.responses import CompareResponseDTO
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 
@@ -487,6 +489,7 @@ class TestProviderContractCompliance:
             max_tokens=32768,
             reasoning_mode="adaptive",
             reasoning_effort="xhigh",
+            temperature=0.7,
         )
 
         assert response.is_success
@@ -494,6 +497,88 @@ class TestProviderContractCompliance:
         assert payload["max_tokens"] == 32768
         assert payload["thinking"] == {"type": "adaptive"}
         assert payload["output_config"] == {"effort": "xhigh"}
+        assert "temperature" not in payload
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_all_registry_claude_models_build_compatible_default_payloads(
+        self, mock_anthropic
+    ):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        registry = ModelRegistry.from_yaml()
+        manual_only_models = {
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+        }
+        for candidate in registry.list_models(provider="claude"):
+            model = candidate.model_name
+            mock_response.model = model
+            budget = resolve_generation_budget(
+                provider="claude",
+                model=model,
+                generation={"profile": "balanced"},
+                registry=registry,
+            )
+            response = ClaudeClient(api_key="test-key", model_name=model).get_completion(
+                "Test prompt",
+                model=model,
+                **budget.provider_kwargs(),
+            )
+
+            assert response.is_success
+            payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+            assert "temperature" not in payload
+            if model in manual_only_models:
+                assert budget.effective_reasoning_mode == "off"
+                assert "thinking" not in payload
+                assert "output_config" not in payload
+            else:
+                assert budget.effective_reasoning_mode == "adaptive"
+                assert payload["thinking"] == {"type": "adaptive"}
+                assert payload["output_config"]["effort"] == (
+                    budget.effective_reasoning_effort
+                )
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_45_keeps_custom_temperature_when_thinking_is_off(
+        self, mock_anthropic
+    ):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-haiku-4-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        response = ClaudeClient(
+            api_key="test-key", model_name="claude-haiku-4-5"
+        ).get_completion(
+            "Test prompt",
+            reasoning_mode="off",
+            reasoning_effort="none",
+            temperature=0.4,
+        )
+
+        assert response.is_success
+        payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+        assert payload["temperature"] == 0.4
+        assert "thinking" not in payload
+        assert "output_config" not in payload
 
     @patch("openai.OpenAI")
     def test_deepseek_retries_without_unsupported_parameter(self, mock_openai):

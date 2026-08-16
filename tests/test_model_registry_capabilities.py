@@ -92,6 +92,14 @@ def test_registry_separates_selectable_models_from_compatibility_entries():
     assert ("grok", "grok-4-1-fast-reasoning") not in selectable
 
 
+def test_every_claude_model_declares_its_thinking_mode_explicitly():
+    registry = ModelRegistry.from_yaml()
+
+    for candidate in registry.list_models(provider="claude"):
+        assert candidate.reasoning_modes
+        assert candidate.default_reasoning_mode in candidate.reasoning_modes
+
+
 def test_active_claude_4_models_use_the_requested_subscription_classes():
     registry = ModelRegistry.from_yaml()
     catalog = get_plan_catalog()

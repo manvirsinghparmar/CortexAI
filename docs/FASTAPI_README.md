@@ -446,6 +446,7 @@ Notes:
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
 - `generation.profile` is `quick|balanced|deep|extended` (1K/4K/12K/32K before model/context/affordability limits). `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
 - Omitted requests use Quick/1K. React sends Balanced explicitly. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
+- Claude reasoning controls follow the selected model's registry declaration. Claude 4.6 and supported Claude 5 models use adaptive thinking; the manual-budget-only Claude 4.5 family defaults to normal generation and returns `422 invalid_generation_budget` for explicit reasoning-on. Claude custom temperature is omitted when Anthropic requires default sampling, including adaptive-thinking and Claude 5 requests.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
 - The browser UI avoids that fallback on explicit fresh login by marking `cortex_fresh_login_pending`, consuming the backend `fresh_login=1` callback marker, clearing the stored active thread id, and sending `new_session=true` for the first turn after sign-in.
 
@@ -501,6 +502,7 @@ Rules:
 - With `routing.smart_mode=true`, Ask uses the smart orchestration path.
 - With `routing.research_mode=true`, Ask uses orchestrator-managed web research with fresh sources for the current turn.
 - The resolved effective generation ceiling is used unchanged for provider execution and credit authorization.
+- Provider-neutral `temperature` remains optional. For Claude, the adapter forwards it only to Claude 4.5/4.6 requests with thinking off; incompatible values are omitted so Anthropic uses its required default sampling.
 
 ### Response shape
 
@@ -600,6 +602,7 @@ Rules:
 - With `routing.research_mode=true`, research runs once per compare turn and is shared across all selected targets for fairness.
 - Browser Ask sends `routing.research_mode=true` by default because the `Web` toggle starts on, and Browser Compare does the same because `With sources` starts on; users can turn either off for the current page session.
 - A target may provide its own `generation` object; it overrides the shared Compare generation value for that target only.
+- Each Claude target independently receives only the thinking, effort, and temperature fields supported by that model generation.
 
 Subscription enforcement:
 - The effective plan, model billing classes, feature access, and meter quantities are resolved server-side; client-supplied billing identifiers are ignored.

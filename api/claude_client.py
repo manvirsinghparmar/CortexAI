@@ -8,8 +8,11 @@ from config.cache_optimization import (
     claude_prompt_cache_enabled,
 )
 
+anthropic: Any
 try:
-    import anthropic
+    import anthropic as anthropic_sdk
+
+    anthropic = anthropic_sdk
     _anthropic_import_error: Exception | None = None
 except Exception as exc:
     anthropic = None
@@ -145,6 +148,17 @@ class ClaudeClient(BaseAIClient):
                 chunks.append(str(getattr(part, "text", "") or ""))
         return "".join(chunks).strip()
 
+    @staticmethod
+    def _supports_custom_temperature(model: str, reasoning_mode: str) -> bool:
+        """Return whether Anthropic accepts a non-default temperature here."""
+        normalized_model = str(model or "").strip().lower()
+        normalized_mode = str(reasoning_mode or "").strip().lower()
+        if normalized_mode not in {"", "none", "off", "disabled"}:
+            return False
+        # Claude 5 requires default sampling even when thinking is disabled.
+        # Current 4.5/4.6 models still accept custom sampling when thinking is off.
+        return any(marker in normalized_model for marker in ("-4-5", "-4-6"))
+
     def get_completion(
         self,
         prompt: str | None = None,
@@ -165,7 +179,7 @@ class ClaudeClient(BaseAIClient):
         cache_context = self._resolve_cache_context(
             kwargs, provider="claude", model=model
         )
-        temperature = kwargs.get("temperature", 0.7)
+        temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
         reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
@@ -186,8 +200,22 @@ class ClaudeClient(BaseAIClient):
                 "model": model,
                 "messages": claude_messages,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
+            if temperature is not None and self._supports_custom_temperature(
+                model, reasoning_mode
+            ):
+                request_payload["temperature"] = temperature
+            elif temperature is not None:
+                logger.info(
+                    "Omitting incompatible Claude temperature",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "reasoning_mode": reasoning_mode or "provider_default",
+                        }
+                    },
+                )
             if system_instruction:
                 request_payload["system"] = system_instruction
             if cache_context.enabled and claude_prompt_cache_enabled():
@@ -196,7 +224,7 @@ class ClaudeClient(BaseAIClient):
                 request_payload["thinking"] = {"type": "adaptive"}
             elif reasoning_mode == "disabled":
                 request_payload["thinking"] = {"type": "disabled"}
-            if reasoning_effort and reasoning_mode != "disabled":
+            if reasoning_mode == "adaptive" and reasoning_effort not in {"", "none"}:
                 request_payload["output_config"] = {"effort": reasoning_effort}
 
             adaptive_retry = None

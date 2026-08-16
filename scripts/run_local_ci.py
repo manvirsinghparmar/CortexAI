@@ -183,7 +183,11 @@ def _project_python() -> Path:
 
 def _report_python_version(python: Path) -> None:
     result = _run(
-        (str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"),
+        (
+            str(python),
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ),
         capture_output=True,
     )
     version = result.stdout.strip()
@@ -210,6 +214,28 @@ def _run_python_quality(python: Path, files: Sequence[str], *, cwd: Path = REPO_
             "--explicit-package-bases",
             "--follow-imports=skip",
             *files,
+        ),
+        cwd=cwd,
+    )
+
+
+def _run_pytest(
+    python: Path,
+    tests: Sequence[str],
+    *,
+    cwd: Path,
+    basetemp: Path,
+) -> None:
+    """Run pytest without relying on the user-wide temporary directory."""
+    _run(
+        (
+            str(python),
+            "-m",
+            "pytest",
+            *tests,
+            "-q",
+            "--basetemp",
+            str(basetemp),
         ),
         cwd=cwd,
     )
@@ -384,6 +410,7 @@ def run_pre_commit() -> None:
     _report_python_version(python)
     with tempfile.TemporaryDirectory(prefix="cortex-pre-commit-") as temporary:
         snapshot = Path(temporary) / "tree"
+        pytest_basetemp = Path(temporary) / "pytest"
         snapshot.mkdir()
         _export_snapshot(snapshot, "index")
         _run_gitleaks(snapshot)
@@ -397,11 +424,18 @@ def run_pre_commit() -> None:
         ]
         backend_required, _ = classify_ci_paths(staged)
         if staged_tests:
-            _run((str(python), "-m", "pytest", *staged_tests, "-q"), cwd=snapshot)
-        elif backend_required:
-            _run(
-                (str(python), "-m", "pytest", "tests/test_component_boundaries.py", "-q"),
+            _run_pytest(
+                python,
+                staged_tests,
                 cwd=snapshot,
+                basetemp=pytest_basetemp,
+            )
+        elif backend_required:
+            _run_pytest(
+                python,
+                ("tests/test_component_boundaries.py",),
+                cwd=snapshot,
+                basetemp=pytest_basetemp,
             )
     print("\nPre-commit gate passed. Applicable ci.yml checks run automatically before push.")
 
@@ -422,6 +456,7 @@ def run_pre_push(base_ref: str) -> None:
     api_image_verified = True
     with tempfile.TemporaryDirectory(prefix="cortex-pre-push-") as temporary:
         snapshot = Path(temporary) / "tree"
+        pytest_basetemp = Path(temporary) / "pytest"
         snapshot.mkdir()
         _export_snapshot(snapshot, "head")
         _run_gitleaks(snapshot)
@@ -431,7 +466,12 @@ def run_pre_push(base_ref: str) -> None:
                 branch_paths(base_ref, diff_filter="AM"), root=snapshot
             )
             _run_python_quality(python, changed_python, cwd=snapshot)
-            _run((str(python), "-m", "pytest", *BACKEND_TESTS, "-q"), cwd=snapshot)
+            _run_pytest(
+                python,
+                BACKEND_TESTS,
+                cwd=snapshot,
+                basetemp=pytest_basetemp,
+            )
             _run(
                 (
                     str(python),

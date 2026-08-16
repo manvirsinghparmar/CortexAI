@@ -711,6 +711,7 @@ Prompt optimization (`/v1/optimize`):
 
 - Ask and Compare accept `generation.profile` (`quick`, `balanced`, `deep`, or `extended`) or an explicit `generation.max_output_tokens`. The v2 profile ceilings are 1,024, 4,096, 12,288, and 32,768 output tokens, then safely reduced to selected-model, context, affordability, and operational limits.
 - `generation.reasoning` accepts provider-neutral `mode` (`auto|off|on`) and effort (`auto|minimal|low|medium|high|xhigh|max`). The resolver validates the selected model and translates these values for provider adapters.
+- Claude thinking is model-specific: Claude 4.6 and supported Claude 5 models use registry-declared adaptive thinking, while the manual-budget-only Claude 4.5 family defaults to normal generation and rejects explicit reasoning-on before provider work. The Claude adapter omits custom `temperature` whenever Anthropic requires default sampling, including all adaptive-thinking requests and Claude 5 requests.
 - The React Answer depth control explicitly defaults to `balanced`. API callers that omit both `generation` and `max_tokens` use `quick`/1K. Supplying `generation` together with legacy `max_tokens`, or asking for an unsafe explicit custom ceiling, returns `422 invalid_generation_budget`.
 - The same resolved per-model ceiling drives provider execution and the maximum temporary AI-credit hold. `POST /v1/billing/estimate-generation` returns that hold without reserving it; successful settlement charges actual usage and releases the unused amount.
 - Responses expose `completion_status`, `stop_cause`, `generation_budget`, and `retry_with_more_room`. Length-limited responses preserve partial text as `incomplete`; Retry with more room is a new model call at the next profile and may use more credits.
@@ -1135,8 +1136,10 @@ venv\Scripts\python.exe -m pre_commit install --install-hooks --hook-type pre-co
 The blocking `pre-commit` hook scans the exact staged tree and runs staged-Python
 Ruff/MyPy plus fast staged/component tests. The blocking `pre-push` hook mirrors
 every locally runnable `ci.yml` backend, React, security, artifact, and image job
-against the committed branch. If the Docker CLI or daemon is unavailable, it
-defers only the API image build to GitHub Actions; set
+against the committed branch. Both hooks give pytest a gate-private temp root so
+Windows user-temp ACL problems cannot create false test failures. If the Docker
+CLI or daemon is unavailable, the hook defers only the API image build to GitHub
+Actions; set
 `CORTEX_CI_REQUIRE_DOCKER=1` when local Docker availability must be mandatory.
 
 - `.github/workflows/incident-regression-38.yml`:

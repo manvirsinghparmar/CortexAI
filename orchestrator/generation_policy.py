@@ -101,9 +101,14 @@ def _reasoning_value(generation: object | Mapping[str, Any] | None, name: str, d
 def _supports_reasoning(provider: str, model: str, modes: list[str], tags: list[str]) -> bool:
     if modes:
         return any(mode != "none" for mode in modes)
-    return "reasoning" in tags or (provider in {"openai", "claude"} and any(
-        marker in model for marker in ("gpt-5", "claude-")
-    ))
+    # Claude thinking modes vary by model generation. Missing registry metadata
+    # must fail closed instead of assuming that every Claude model accepts
+    # adaptive thinking.
+    if provider == "claude":
+        return False
+    return "reasoning" in tags or (
+        provider == "openai" and "gpt-5" in model
+    )
 
 
 def _resolve_reasoning(
@@ -143,7 +148,15 @@ def _resolve_reasoning(
         effective_mode = "thinking" if mode == "on" else "none"
         effort = "max" if effort in {"xhigh", "max"} else "high"
     elif provider == "claude":
-        effective_mode = "disabled" if mode == "off" else "adaptive"
+        configured_default = str(default_mode or "none").strip().lower()
+        if mode == "off" or (mode == "auto" and configured_default == "none"):
+            effective_mode = "disabled"
+        elif "adaptive" in modes:
+            effective_mode = "adaptive"
+        else:
+            raise GenerationPolicyError(
+                f"{provider}:{model} does not support adaptive reasoning"
+            )
         if effective_mode == "disabled" and effort in {"xhigh", "max"} and "opus-5" in model:
             raise GenerationPolicyError("Claude Opus 5 cannot disable reasoning at xhigh/max effort")
     elif provider == "gemini":

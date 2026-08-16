@@ -46,9 +46,18 @@ Balanced, Deep, and Extended through the Answer depth selector.
 `orchestrator/generation_policy.py` translates the provider-neutral mode and effort
 into adapter parameters. The model registry declares supported modes, efforts,
 disable support, whether reasoning counts against output, and native output limits.
-DeepSeek receives thinking configuration, Claude receives adaptive thinking and output
-effort, Gemini receives thinking configuration, and supported OpenAI models receive
-reasoning effort. Unsupported combinations are rejected before credits are reserved.
+DeepSeek receives thinking configuration, Gemini receives thinking configuration, and
+supported OpenAI models receive reasoning effort. Claude translation is generation
+specific: registry-declared Claude 4.6 and Claude 5 models receive adaptive thinking
+and supported output effort, while manual-budget-only Claude 4.5 models default to
+normal generation because the public generation contract does not expose Anthropic
+`budget_tokens`. Explicit reasoning-on for those 4.5 models is rejected before credits
+are reserved.
+
+Anthropic sampling controls are coupled to thinking support. The Claude adapter has no
+implicit temperature default. It forwards a caller-supplied custom temperature only
+to Claude 4.5/4.6 requests whose thinking is off; adaptive-thinking requests and Claude
+5 requests omit it so Anthropic applies its required default sampling.
 
 Reasoning tokens are model work tokens, not hidden conversation history. When a
 provider counts them inside its output allowance, a small output ceiling can be

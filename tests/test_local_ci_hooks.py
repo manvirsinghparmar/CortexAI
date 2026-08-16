@@ -9,6 +9,7 @@ from scripts.run_local_ci import (
     GateFailure,
     _require_executable,
     _run_api_image_build,
+    _run_pytest,
     classify_ci_paths,
     python_files,
 )
@@ -50,6 +51,41 @@ def test_executable_lookup_uses_platform_path_resolution(monkeypatch):
     )
 
     assert _require_executable("docker") == "C:/tools/docker.exe"
+
+
+def test_pytest_uses_the_gate_private_temp_directory(monkeypatch, tmp_path):
+    commands: list[tuple[tuple[str, ...], Path]] = []
+
+    def _fake_run(command, *, cwd, **_kwargs):
+        commands.append((tuple(command), cwd))
+        return SimpleNamespace(returncode=0, stdout="")
+
+    snapshot = tmp_path / "tree"
+    basetemp = tmp_path / "pytest"
+    python = tmp_path / "venv" / "python"
+    monkeypatch.setattr("scripts.run_local_ci._run", _fake_run)
+
+    _run_pytest(
+        python,
+        ("tests/test_example.py",),
+        cwd=snapshot,
+        basetemp=basetemp,
+    )
+
+    assert commands == [
+        (
+            (
+                str(python),
+                "-m",
+                "pytest",
+                "tests/test_example.py",
+                "-q",
+                "--basetemp",
+                str(basetemp),
+            ),
+            snapshot,
+        )
+    ]
 
 
 def test_api_image_build_defers_when_docker_is_unavailable(monkeypatch, capsys):

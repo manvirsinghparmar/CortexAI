@@ -22,7 +22,7 @@ def test_legacy_request_keeps_quick_profile():
     assert resolved.effective_reasoning_effort == "high"
 
 
-def test_balanced_profile_uses_v2_ceiling():
+def test_explicit_balanced_profile_uses_fixed_4k_ceiling():
     resolved = resolve_generation_budget(
         provider="deepseek",
         model="deepseek-v4-flash",
@@ -31,6 +31,84 @@ def test_balanced_profile_uses_v2_ceiling():
 
     assert resolved.effective_max_output_tokens == 4096
     assert resolved.retry_profile == "deep"
+
+
+def test_auto_profile_keeps_a_simple_economical_model_at_4k():
+    resolved = resolve_generation_budget(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        generation={"profile": "auto"},
+        input_text="What is a Python virtual environment?",
+    )
+
+    assert resolved.profile == "auto"
+    assert resolved.requested_max_output_tokens == 4096
+    assert resolved.effective_max_output_tokens == 4096
+    assert resolved.retry_profile == "deep"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("openai", "gpt-5.6-terra"),
+        ("claude", "claude-sonnet-5"),
+        ("claude", "claude-sonnet-4-6"),
+    ],
+)
+def test_auto_profile_gives_advanced_reasoning_models_8k(provider, model):
+    resolved = resolve_generation_budget(
+        provider=provider,
+        model=model,
+        generation={"profile": "auto"},
+        input_text="Explain dependency injection with a short example.",
+    )
+
+    assert resolved.requested_max_output_tokens == 8192
+    assert resolved.effective_max_output_tokens == 8192
+    assert resolved.effective_reasoning_effort == "medium"
+    assert resolved.retry_profile == "deep"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-opus-5", "claude-fable-5", "claude-opus-4-6", "claude-opus-4-5"],
+)
+def test_auto_profile_gives_premium_models_12k(model):
+    resolved = resolve_generation_budget(
+        provider="claude",
+        model=model,
+        generation={"profile": "auto"},
+        input_text="Explain dependency injection with a short example.",
+    )
+
+    assert resolved.requested_max_output_tokens == 12288
+    assert resolved.effective_max_output_tokens == 12288
+    assert resolved.retry_profile == "extended"
+
+
+def test_auto_profile_escalates_detailed_advanced_work_to_12k():
+    resolved = resolve_generation_budget(
+        provider="openai",
+        model="gpt-5.6-terra",
+        generation={"profile": "auto"},
+        input_text="Create a comprehensive implementation plan for this production architecture.",
+    )
+
+    assert resolved.requested_max_output_tokens == 12288
+    assert resolved.effective_reasoning_effort == "high"
+    assert resolved.retry_profile == "extended"
+
+
+def test_chat_request_accepts_auto_generation_profile():
+    request = ChatRequest(
+        prompt="Explain this",
+        provider="openai",
+        model="gpt-5.6-terra",
+        generation={"profile": "auto"},
+    )
+
+    assert request.generation is not None
+    assert request.generation.profile == "auto"
 
 
 def test_profile_is_clamped_to_model_native_limit():

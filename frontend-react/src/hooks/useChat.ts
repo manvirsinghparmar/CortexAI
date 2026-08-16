@@ -35,6 +35,8 @@ import type {
   UserContextRequest,
 } from "../types";
 
+const MANAGED_GENERATION_PROFILE: GenerationProfile = "auto";
+
 let activeAbortController: AbortController | null = null;
 
 interface SubmitOptions {
@@ -340,7 +342,7 @@ async function runAskTurn({
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
-    generation: { profile: state.generationProfile },
+    generation: { profile: MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -514,7 +516,7 @@ async function runCompareTurn({
     initial_query: initialQuery,
     targets,
     routing: { smart_mode: false, research_mode: researchEnabled },
-    generation: { profile: state.generationProfile },
+    generation: { profile: MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -638,7 +640,7 @@ async function runRegenerateResponse({
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
-    generation: { profile: generationProfileOverride ?? state.generationProfile },
+    generation: { profile: generationProfileOverride ?? MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
     regeneration: regenerationSourceRequestId

@@ -20,7 +20,7 @@ export interface ChatRoutingRequest {
 
 export type AttachmentUsageRole = "primary" | "reference";
 export type AttachmentTransformMode = "auto" | "text_only" | "vision_pages" | "table_summary";
-export type GenerationProfile = "quick" | "balanced" | "deep" | "extended";
+export type GenerationProfile = "auto" | "quick" | "balanced" | "deep" | "extended";
 export type ReasoningMode = "auto" | "off" | "on";
 export type ReasoningEffort =
   | "auto"
@@ -238,20 +238,6 @@ export interface BillingPlansResponse {
   billing_period: "monthly";
   billing_enabled: boolean;
   plans: PublicBillingPlan[];
-}
-
-export interface GenerationEstimateResponse {
-  targets: Array<{
-    provider: string;
-    model: string;
-    profile: string;
-    effective_max_output_tokens: number;
-    estimated_max_ai_credits: number;
-  }>;
-  estimated_max_ai_credits: number;
-  remaining_ai_credits: number;
-  can_authorize: boolean;
-  temporary_hold_released_after_settlement: boolean;
 }
 
 export interface BillingSubscriptionResponse {

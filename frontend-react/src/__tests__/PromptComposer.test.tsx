@@ -21,10 +21,6 @@ vi.mock("../api/files", () => ({
   fetchFileStatus: vi.fn(),
 }));
 
-vi.mock("../api/billing", () => ({
-  estimateGeneration: vi.fn().mockRejectedValue(new Error("estimate unavailable")),
-}));
-
 describe("PromptComposer", () => {
   beforeEach(() => {
     useChatStore.setState({
@@ -33,7 +29,6 @@ describe("PromptComposer", () => {
       researchMode: true,
       compareResearchMode: true,
       optimizeMode: false,
-      generationProfile: "balanced",
       selectedModelKey: "openai:gpt-5.1",
       compareModelKeys: [
         "openai:gpt-5.1",
@@ -80,7 +75,6 @@ describe("PromptComposer", () => {
       name: "Helps you ask better for better results",
     });
     const sendButton = screen.getByRole("button", { name: "Send message" });
-    const answerDepth = screen.getByRole("combobox", { name: "Answer depth" });
 
     expect(textarea).toHaveAttribute("rows", "1");
     expect(textarea).toHaveAttribute(
@@ -97,7 +91,7 @@ describe("PromptComposer", () => {
       screen.getByRole("switch", { name: "Prompt optimization" }),
     ).toHaveAttribute("aria-describedby", improveTooltip.id);
     expect(card).toContainElement(sendButton);
-    expect(answerDepth).toHaveValue("balanced");
+    expect(screen.queryByRole("combobox", { name: "Answer depth" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Compare" })).not.toBeInTheDocument();
     expect(
       textarea.compareDocumentPosition(fileName) & Node.DOCUMENT_POSITION_FOLLOWING,

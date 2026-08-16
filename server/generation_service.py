@@ -53,6 +53,7 @@ def resolve_request_budget(
                 generation=None,
                 legacy_max_tokens=legacy_max_tokens,
                 estimated_input_tokens=estimated_tokens_from_text(input_text),
+                input_text=input_text,
                 registry=registry,
             )
         except GenerationPolicyError as exc:
@@ -73,6 +74,7 @@ def resolve_request_budget(
             generation=generation,
             legacy_max_tokens=legacy_max_tokens,
             estimated_input_tokens=estimated_tokens_from_text(input_text),
+            input_text=input_text,
             registry=registry,
         )
     except GenerationPolicyError as exc:

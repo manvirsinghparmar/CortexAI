@@ -433,7 +433,7 @@ Common request fields used by Ask and Compare:
     "research_mode": false
   },
   "generation": {
-    "profile": "balanced",
+    "profile": "auto",
     "reasoning": {"mode": "auto", "effort": "auto"}
   },
   "temperature": 0.7
@@ -444,8 +444,8 @@ Notes:
 - `routing.smart_mode` defaults to `true`.
 - `routing.research_mode` is a boolean in the current API contract, not `"off|auto|on"`.
 - Ask and Compare can reuse the same `session_id`; session continuity is shared across both modes.
-- `generation.profile` is `quick|balanced|deep|extended` (1K/4K/12K/32K before model/context/affordability limits). `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
-- Omitted requests use Quick/1K. React sends Balanced explicitly. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
+- `generation.profile` is `auto|quick|balanced|deep|extended`. Auto selects 4K for normal economical/standard calls, 8K for advanced reasoning models, and 12K for premium or deterministically complex/detailed tasks. Explicit Quick/Balanced/Deep/Extended use 1K/4K/12K/32K before model/context/affordability limits. `generation.max_output_tokens` is the mutually exclusive custom alternative. `generation` cannot be combined with legacy `max_tokens`.
+- Omitted API requests use Quick/1K. React sends Auto explicitly and exposes no Answer depth selector or live hold estimate; requested answer detail belongs in the prompt. Unsafe explicit ceilings and unsupported reasoning combinations return `422 invalid_generation_budget`.
 - Claude reasoning controls follow the selected model's registry declaration. Claude 4.6 and supported Claude 5 models use adaptive thinking; the manual-budget-only Claude 4.5 family defaults to normal generation and returns `422 invalid_generation_budget` for explicit reasoning-on. Claude custom temperature is omitted when Anthropic requires default sampling, including adaptive-thinking and Claude 5 requests.
 - If `session_id` is omitted in DB mode, the backend may resolve the user's most recent active session.
 - The browser UI avoids that fallback on explicit fresh login by marking `cortex_fresh_login_pending`, consuming the backend `fresh_login=1` callback marker, clearing the stored active thread id, and sending `new_session=true` for the first turn after sign-in.
@@ -489,7 +489,7 @@ Prompt optimization:
     "new_session": false
   },
   "generation": {
-    "profile": "balanced",
+    "profile": "auto",
     "reasoning": {"mode": "auto", "effort": "auto"}
   },
   "temperature": 0.7
@@ -525,7 +525,7 @@ Rules:
   "completion_status": "complete|incomplete|failed",
   "stop_cause": "natural|token_limit|context_limit|content_filter|error|unknown",
   "generation_budget": {
-    "profile": "balanced",
+    "profile": "auto",
     "requested_max_output_tokens": 8192,
     "effective_max_output_tokens": 8192,
     "requested_reasoning_mode": "auto",
@@ -534,7 +534,7 @@ Rules:
     "effective_reasoning_effort": "medium",
     "reasoning_disable_supported": true,
     "reasoning_counts_against_output": true,
-    "policy_version": "generation-budget-v1"
+    "policy_version": "generation-budget-v3"
   },
   "retry_with_more_room": {"available": false, "recommended_profile": null},
   "error": null,
@@ -587,7 +587,7 @@ Notes:
     "new_session": false
   },
   "generation": {
-    "profile": "balanced",
+    "profile": "auto",
     "reasoning": {"mode": "auto", "effort": "auto"}
   },
   "timeout_s": 30,

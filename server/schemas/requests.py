@@ -108,7 +108,7 @@ class GenerationReasoningRequest(BaseModel):
 
 
 class GenerationRequest(BaseModel):
-    profile: Optional[Literal["quick", "balanced", "deep", "extended"]] = None
+    profile: Optional[Literal["auto", "quick", "balanced", "deep", "extended"]] = None
     max_output_tokens: Optional[int] = Field(None, gt=0)
     reasoning: GenerationReasoningRequest = Field(default_factory=GenerationReasoningRequest)
 

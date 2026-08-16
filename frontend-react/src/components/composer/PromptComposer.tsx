@@ -1,9 +1,8 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { ModelSelector } from "./ModelSelector";
 import { CompareSelector } from "./CompareSelector";
 import { FeatureChips } from "./FeatureChips";
 import { AttachmentStrip } from "./AttachmentStrip";
-import { GenerationProfileSelector } from "./GenerationProfileSelector";
 import { useChatStore } from "../../store/chatStore";
 import { useAttachmentUploadStore } from "../../store/attachmentUploadStore";
 import { attachmentUploadsBlockSubmission } from "../../uploads/attachmentUploadQueue";
@@ -15,7 +14,6 @@ import { DEFAULT_MODELS } from "../../config/defaultModels";
 import { resolveAskModelKey } from "../../config/askDefaults";
 import { resolveCompareModelKeys } from "../../config/compareDefaults";
 import { CortexIcon } from "../shared/CortexIcon";
-import { estimateGeneration } from "../../api/billing";
 import styles from "./PromptComposer.module.css";
 import {
   allowanceAccessError,
@@ -52,8 +50,6 @@ export function PromptComposer({
   const setCompareResearchMode = useChatStore((s) => s.setCompareResearchMode);
   const optimizeMode = useChatStore((s) => s.optimizeMode);
   const setOptimizeMode = useChatStore((s) => s.setOptimizeMode);
-  const generationProfile = useChatStore((s) => s.generationProfile);
-  const setGenerationProfile = useChatStore((s) => s.setGenerationProfile);
   const selectedModelKey = useChatStore((s) => s.selectedModelKey);
   const setSelectedModelKey = useChatStore((s) => s.setSelectedModelKey);
   const compareModelKeys = useChatStore((s) => s.compareModelKeys);
@@ -65,7 +61,6 @@ export function PromptComposer({
   const setError = useChatStore((s) => s.setError);
   const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
   const uploadTasks = useAttachmentUploadStore((s) => s.tasks);
-  const [generationEstimateLabel, setGenerationEstimateLabel] = useState<string>();
 
   const { submit, cancel } = useChat();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -186,62 +181,6 @@ export function PromptComposer({
     subscriptionLoading,
   ]);
 
-  useEffect(() => {
-    const targetKeys =
-      mode === "compare"
-        ? compareModelKeys.filter(Boolean)
-        : smartMode
-          ? []
-          : selectedModelKey
-            ? [selectedModelKey]
-            : [];
-    if (!prompt.trim() || targetKeys.length === 0) {
-      setGenerationEstimateLabel(undefined);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      const targets = targetKeys.map((key) => {
-        const separator = key.indexOf(":");
-        return {
-          provider: separator >= 0 ? key.slice(0, separator) : key,
-          model: separator >= 0 ? key.slice(separator + 1) : "",
-        };
-      });
-      void estimateGeneration(
-        {
-          prompt,
-          targets,
-          generation: { profile: generationProfile },
-          research_enabled: mode === "compare" ? compareResearchMode : researchMode,
-        },
-        controller.signal,
-      )
-        .then((estimate) => {
-          const amount = estimate.estimated_max_ai_credits.toLocaleString();
-          setGenerationEstimateLabel(
-            estimate.can_authorize
-              ? `Up to ${amount} credits held; unused released`
-              : `Needs up to ${amount} credits`,
-          );
-        })
-        .catch(() => setGenerationEstimateLabel(undefined));
-    }, 350);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    compareModelKeys,
-    compareResearchMode,
-    generationProfile,
-    mode,
-    prompt,
-    researchMode,
-    selectedModelKey,
-    smartMode,
-  ]);
-
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -341,12 +280,6 @@ export function PromptComposer({
           <FeatureChips
             {...featureChipProps}
             variant={mode === "compare" ? "improveOnly" : "default"}
-          />
-          <GenerationProfileSelector
-            value={generationProfile}
-            onChange={setGenerationProfile}
-            disabled={streaming}
-            estimateLabel={generationEstimateLabel}
           />
         </div>
 

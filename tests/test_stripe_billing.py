@@ -451,7 +451,7 @@ def test_public_plans_returns_display_safe_server_catalogue(
 
 
 @pytest.mark.integration
-def test_generation_estimate_uses_resolved_profile_without_reserving(
+def test_generation_estimate_uses_managed_auto_profile_without_reserving(
     billing_route_harness,
     monkeypatch,
 ):
@@ -473,7 +473,7 @@ def test_generation_estimate_uses_resolved_profile_without_reserving(
         "/v1/billing/estimate-generation",
         json={
             "prompt": "Explain the rollout plan",
-            "generation": {"profile": "balanced"},
+            "generation": {"profile": "auto"},
             "targets": [{"provider": "openai", "model": "gpt-4o-mini"}],
         },
     )
@@ -484,11 +484,9 @@ def test_generation_estimate_uses_resolved_profile_without_reserving(
         {
             "provider": "openai",
             "model": "gpt-4o-mini",
-            "profile": "balanced",
+            "profile": "auto",
             "effective_max_output_tokens": 4096,
-            "estimated_max_ai_credits": payload["targets"][0][
-                "estimated_max_ai_credits"
-            ],
+            "estimated_max_ai_credits": payload["targets"][0]["estimated_max_ai_credits"],
         }
     ]
     assert payload["estimated_max_ai_credits"] > 0

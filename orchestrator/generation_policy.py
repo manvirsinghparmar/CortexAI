@@ -7,6 +7,7 @@ unchanged to both billing and provider execution.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -15,9 +16,10 @@ from typing import Any, Mapping
 import yaml
 
 from orchestrator.model_registry import ModelRegistry
-
+from orchestrator.prompt_analyzer import PromptAnalyzer
 
 PROFILE_ORDER = ("quick", "balanced", "deep", "extended")
+AUTO_PROFILE = "auto"
 LEGACY_PROFILE = "quick"
 
 
@@ -39,9 +41,12 @@ class GenerationBudgetResolution:
     policy_version: str
     provider: str
     model: str
+    retry_profile_override: str | None = None
 
     @property
     def retry_profile(self) -> str | None:
+        if self.profile == AUTO_PROFILE:
+            return self.retry_profile_override
         if self.profile not in PROFILE_ORDER:
             return None
         index = PROFILE_ORDER.index(self.profile)
@@ -80,7 +85,11 @@ def load_generation_policy(path: str | None = None) -> dict[str, Any]:
         else Path(__file__).resolve().parent.parent / "config" / "generation_profiles.yaml"
     )
     data = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("profiles"), dict):
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("profiles"), dict)
+        or not isinstance(data.get("auto_policy"), dict)
+    ):
         raise GenerationPolicyError("Invalid generation profile configuration")
     return data
 
@@ -106,9 +115,111 @@ def _supports_reasoning(provider: str, model: str, modes: list[str], tags: list[
     # adaptive thinking.
     if provider == "claude":
         return False
-    return "reasoning" in tags or (
-        provider == "openai" and "gpt-5" in model
+    return "reasoning" in tags or (provider == "openai" and "gpt-5" in model)
+
+
+def _configured_positive_int(config: Mapping[str, Any], name: str) -> int:
+    try:
+        value = int(config[name])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GenerationPolicyError(f"Invalid auto generation setting '{name}'") from exc
+    if value <= 0:
+        raise GenerationPolicyError(f"Invalid auto generation setting '{name}'")
+    return value
+
+
+def _contains_auto_output_marker(text: str, markers: object) -> bool:
+    if not isinstance(markers, list):
+        raise GenerationPolicyError("Invalid auto generation setting 'long_output_markers'")
+    for raw_marker in markers:
+        marker = str(raw_marker or "").strip()
+        if marker and re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text, re.IGNORECASE):
+            return True
+    return False
+
+
+def _auto_task_needs_deep_budget(
+    *,
+    input_text: str,
+    estimated_input_tokens: int,
+    auto_policy: Mapping[str, Any],
+) -> bool:
+    features = PromptAnalyzer().analyze(input_text, context=None)
+    if _contains_auto_output_marker(input_text, auto_policy.get("long_output_markers")):
+        return True
+
+    demanding_task = any(
+        (
+            features.has_code,
+            features.has_logs_stacktrace,
+            features.has_math,
+            features.has_analysis,
+        )
     )
+    large_input = max(features.token_estimate, max(0, estimated_input_tokens)) >= (
+        _configured_positive_int(auto_policy, "complex_input_token_threshold")
+    )
+    constrained_or_accuracy_sensitive = any(
+        (
+            features.needs_accuracy,
+            features.strict_format,
+            features.has_strict_constraints,
+        )
+    )
+    return demanding_task and (large_input or constrained_or_accuracy_sensitive)
+
+
+def _resolve_auto_budget(
+    *,
+    provider: str,
+    model: str,
+    candidate: object,
+    input_text: str,
+    estimated_input_tokens: int,
+    auto_policy: Mapping[str, Any],
+) -> tuple[int, str]:
+    tags = [str(tag).lower() for tag in getattr(candidate, "tags", [])]
+    reasoning_supported = _supports_reasoning(
+        provider,
+        model.lower(),
+        list(getattr(candidate, "reasoning_modes", []) or []),
+        tags,
+    )
+    billing_class_raw = getattr(candidate, "billing_class", "")
+    billing_class = str(getattr(billing_class_raw, "value", billing_class_raw)).lower()
+    tier_raw = getattr(candidate, "tier", "")
+    tier = str(getattr(tier_raw, "value", tier_raw)).upper()
+
+    deep_budget = _configured_positive_int(auto_policy, "complex_task_max_output_tokens")
+    deep_effort = str(auto_policy.get("deep_reasoning_effort") or "high").strip().lower()
+    if billing_class == "premium" or _auto_task_needs_deep_budget(
+        input_text=input_text,
+        estimated_input_tokens=estimated_input_tokens,
+        auto_policy=auto_policy,
+    ):
+        premium_budget = _configured_positive_int(auto_policy, "premium_max_output_tokens")
+        return max(deep_budget, premium_budget if billing_class == "premium" else 0), deep_effort
+
+    if reasoning_supported and (billing_class == "advanced" or tier in {"T2", "T3"}):
+        return (
+            _configured_positive_int(auto_policy, "advanced_reasoning_max_output_tokens"),
+            str(auto_policy.get("advanced_reasoning_effort") or "medium").strip().lower(),
+        )
+
+    return (
+        _configured_positive_int(auto_policy, "default_max_output_tokens"),
+        str(auto_policy.get("default_reasoning_effort") or "low").strip().lower(),
+    )
+
+
+def _auto_retry_profile(requested_max: int, profiles: Mapping[str, Any]) -> str | None:
+    deep_max = int(profiles["deep"]["max_output_tokens"])
+    extended_max = int(profiles["extended"]["max_output_tokens"])
+    if requested_max < deep_max:
+        return "deep"
+    if requested_max < extended_max:
+        return "extended"
+    return None
 
 
 def _resolve_reasoning(
@@ -154,15 +265,17 @@ def _resolve_reasoning(
         elif "adaptive" in modes:
             effective_mode = "adaptive"
         else:
-            raise GenerationPolicyError(
-                f"{provider}:{model} does not support adaptive reasoning"
-            )
+            raise GenerationPolicyError(f"{provider}:{model} does not support adaptive reasoning")
         if effective_mode == "disabled" and effort in {"xhigh", "max"} and "opus-5" in model:
-            raise GenerationPolicyError("Claude Opus 5 cannot disable reasoning at xhigh/max effort")
+            raise GenerationPolicyError(
+                "Claude Opus 5 cannot disable reasoning at xhigh/max effort"
+            )
     elif provider == "gemini":
         can_disable = "none" in modes
         if mode == "off" and not can_disable:
-            raise GenerationPolicyError(f"{provider}:{model} does not allow reasoning to be disabled")
+            raise GenerationPolicyError(
+                f"{provider}:{model} does not allow reasoning to be disabled"
+            )
         effective_mode = "none" if mode == "off" else "thinking"
         if effort in {"xhigh", "max"}:
             effort = "high"
@@ -198,6 +311,7 @@ def resolve_generation_budget(
     generation: object | Mapping[str, Any] | None = None,
     legacy_max_tokens: int | None = None,
     estimated_input_tokens: int = 0,
+    input_text: str = "",
     registry: ModelRegistry | None = None,
     policy_path: str | None = None,
 ) -> GenerationBudgetResolution:
@@ -222,21 +336,36 @@ def resolve_generation_budget(
             raise GenerationPolicyError("max_output_tokens must be a positive integer")
         requested_max = int(explicit_max)
         profile = "custom"
+        profile_effort = "medium"
     elif legacy_max_tokens is not None:
         if isinstance(legacy_max_tokens, bool) or int(legacy_max_tokens) <= 0:
             raise GenerationPolicyError("max_tokens must be a positive integer")
         requested_max = int(legacy_max_tokens)
         profile = "custom"
+        profile_effort = "medium"
     else:
         profile = str(profile_value or LEGACY_PROFILE).strip().lower()
-        if profile not in profiles:
+        if profile == AUTO_PROFILE:
+            requested_max, profile_effort = _resolve_auto_budget(
+                provider=provider,
+                model=model,
+                candidate=candidate,
+                input_text=str(input_text or ""),
+                estimated_input_tokens=estimated_input_tokens,
+                auto_policy=policy["auto_policy"],
+            )
+        elif profile in profiles:
+            requested_max = int(profiles[profile]["max_output_tokens"])
+            profile_effort = str(profiles[profile].get("default_reasoning_effort") or "medium")
+        else:
             raise GenerationPolicyError(f"Unknown generation profile '{profile}'")
-        requested_max = int(profiles[profile]["max_output_tokens"])
 
     native_max = int(candidate.max_output_tokens or requested_max)
     operational_max = int(policy.get("operational_max_output_tokens") or native_max)
     context_margin = int(policy.get("context_safety_margin_tokens") or 0)
-    remaining_context = max(1, int(candidate.context_limit) - max(0, estimated_input_tokens) - context_margin)
+    remaining_context = max(
+        1, int(candidate.context_limit) - max(0, estimated_input_tokens) - context_margin
+    )
     allowed_max = min(native_max, operational_max, remaining_context)
     if profile == "custom" and requested_max > allowed_max:
         raise GenerationPolicyError(
@@ -245,8 +374,6 @@ def resolve_generation_budget(
         )
     effective_max = min(requested_max, allowed_max)
 
-    profile_config = profiles.get(profile) or {}
-    profile_effort = str(profile_config.get("default_reasoning_effort") or "medium")
     requested_mode, effective_mode, requested_effort, effective_effort = _resolve_reasoning(
         provider=provider,
         model=model.lower(),
@@ -272,4 +399,7 @@ def resolve_generation_budget(
         policy_version=str(policy.get("version") or "generation-budget-unknown"),
         provider=provider,
         model=model,
+        retry_profile_override=(
+            _auto_retry_profile(requested_max, profiles) if profile == AUTO_PROFILE else None
+        ),
     )

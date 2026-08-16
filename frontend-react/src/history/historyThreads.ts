@@ -158,7 +158,10 @@ function buildCompareSummary(
 
 function toChatResponse(entry: HistoryEntry): ChatResponse {
   const isError = /^\[error\]/i.test(entry.response);
-  const retryProfile = nextGenerationProfile(entry.generation_profile);
+  const retryProfile = nextGenerationProfile(
+    entry.generation_profile,
+    entry.effective_max_output_tokens,
+  );
   return {
     request_id: entry.request_id || String(entry.id),
     response_version: entry.response_version ?? 1,
@@ -221,6 +224,7 @@ function toChatResponse(entry: HistoryEntry): ChatResponse {
 
 function nextGenerationProfile(
   profile: HistoryEntry["generation_profile"],
+  effectiveMaxOutputTokens?: number,
 ): HistoryEntry["generation_profile"] | undefined {
   const order: NonNullable<HistoryEntry["generation_profile"]>[] = [
     "quick",
@@ -229,6 +233,10 @@ function nextGenerationProfile(
     "extended",
   ];
   if (!profile) return undefined;
+  if (profile === "auto") {
+    if ((effectiveMaxOutputTokens ?? 0) >= 32768) return undefined;
+    return (effectiveMaxOutputTokens ?? 0) >= 12288 ? "extended" : "deep";
+  }
   const index = order.indexOf(profile);
   return index >= 0 && index + 1 < order.length ? order[index + 1] : undefined;
 }

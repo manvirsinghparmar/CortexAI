@@ -18,12 +18,18 @@ venv\Scripts\python.exe -m pytest tests/test_generation_policy.py tests/test_uni
 
 Deploy first with `GENERATION_BUDGET_POLICY_ENABLED=false`. This verifies the migrated
 schema and response metadata while retaining Quick/2K execution. Then enable the flag
-on staging, run one manual Ask and one two-target Compare at each profile, and verify:
+on staging. Run browser Ask and two-target Compare probes for a normal standard model,
+GPT-5.6 Terra, Claude Sonnet, Claude Opus/Fable, and an explicitly detailed task. Also
+run API probes for each explicit profile, and verify:
 
+- React sends `generation.profile=auto` and exposes no Answer depth control or live hold estimate;
+- normal standard/economical Auto calls request 4K, advanced reasoning calls request 8K, and premium or deterministically complex/detailed calls request 12K;
+- Auto never selects 32K on the first call;
 - response `generation_budget.effective_max_output_tokens` matches provider kwargs;
 - the billing authorization uses that same value for every target;
 - natural stops are `complete` and length stops are `incomplete/token_limit`;
 - partial text survives reload and Retry with more room uses the recommended profile;
+- Auto 4K/8K retries use Deep/12K and Auto 12K retries use Extended/32K;
 - unused temporary credit holds are released after settlement;
 - oversized explicit custom limits return `422 invalid_generation_budget`.
 - every selectable Claude model completes a default request without provider parameter rejection;
@@ -56,8 +62,9 @@ ORDER BY 1, 2;
 
 Set `GENERATION_BUDGET_POLICY_ENABLED=false` and restart/replace API processes. Do not
 roll back the additive migration: older application versions ignore the new columns,
-and keeping them preserves audit history. Confirm a new Balanced browser request is
-recorded and executed as Quick/2K, then investigate before re-enabling.
+and keeping them preserves audit history. Confirm a new Auto browser request is
+recorded with its public profile and executed at the rollback Quick/2K ceiling, then
+investigate before re-enabling.
 
 Use the switch for unexpected provider parameter rejection, excessive authorization
 denials, materially elevated latency/cost, or a mismatch between provider and billing

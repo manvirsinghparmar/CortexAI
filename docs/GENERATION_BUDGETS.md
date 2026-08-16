@@ -2,32 +2,66 @@
 
 Ask and Compare use one provider-aware generation budget for request validation,
 provider execution, credit authorization, response metadata, persistence, and retry UX.
-The canonical profile values are in `config/generation_profiles.yaml`; no route or
-billing module owns a second output-token default.
+The canonical policy is in `config/generation_profiles.yaml`; routes, providers,
+billing, and React do not own independent output-token defaults.
 
-## Profiles
+## Cortex-managed Auto policy
+
+The React app does not show an Answer depth control. New Ask and Compare calls send
+`generation.profile=auto`, and the server chooses enough output room from the selected
+model and the prompt. This is a technical capacity decision, not a promise about how
+verbose the answer will be; users request concise, detailed, tabular, or step-by-step
+answers in the prompt.
+
+| Auto case | Requested output ceiling | Default reasoning effort |
+| --- | ---: | --- |
+| Normal task on an economical or standard model | 4,096 | low |
+| Normal task on an advanced reasoning model, including GPT-5.6 Terra and Claude Sonnet | 8,192 | medium |
+| Premium model, including Claude Opus and Fable | 12,288 | high |
+| Clearly complex, accuracy-constrained, long, or explicitly detailed task | 12,288 | high |
+
+Complex-task detection is deterministic and local. Explicit output markers such as
+`comprehensive`, `detailed`, `step-by-step`, `architecture`, `production code`, and
+`full report` select 12K. Code, logs, math, or analysis select 12K when paired with
+strict/accuracy constraints or an estimated input of at least 1,800 tokens. Auto does
+not silently select 32K.
+
+All ceilings remain subject to the selected model's native output maximum, remaining
+context after the 1,024-token safety margin, the 32,768 operational ceiling, and any
+affordability clamp applied before provider execution.
+
+## Explicit API profiles
+
+API callers may deliberately override Auto:
 
 | Profile | Requested output ceiling | Default reasoning effort | Intended use |
 | --- | ---: | --- | --- |
-| `quick` | 1,024 | low | Short, low-credit answers and legacy omitted requests |
-| `balanced` | 4,096 | medium | Browser default and normal detailed answers |
-| `deep` | 12,288 | high | Long analysis and reasoning-heavy work |
-| `extended` | 32,768 | max | Maximum room when the selected model supports it |
+| `quick` | 1,024 | low | Short, low-credit API calls and omitted legacy requests |
+| `balanced` | 4,096 | medium | Fixed normal API budget |
+| `deep` | 12,288 | high | Explicit long-analysis budget or first Auto retry |
+| `extended` | 32,768 | max | Explicit maximum room or final retry |
 
-The effective ceiling is the minimum of the profile ceiling, the selected model's
-`max_output_tokens`, the 32,768 operational ceiling, and remaining context after a
-1,024-token safety margin. Profiles are transparently reduced to those safe bounds.
-An explicit `generation.max_output_tokens` or legacy `max_tokens` above the safe
+An explicit `generation.max_output_tokens` or legacy `max_tokens` above a model's safe
 bound is rejected with `422 invalid_generation_budget`; it is never silently clipped.
 
 ## Request contract
 
-Ask and Compare accept a shared `generation` object:
+The browser sends:
 
 ```json
 {
   "generation": {
-    "profile": "balanced",
+    "profile": "auto"
+  }
+}
+```
+
+API callers may also supply provider-neutral reasoning controls:
+
+```json
+{
+  "generation": {
+    "profile": "auto",
     "reasoning": {"mode": "auto", "effort": "auto"}
   }
 }
@@ -35,11 +69,8 @@ Ask and Compare accept a shared `generation` object:
 
 `profile` and `max_output_tokens` are mutually exclusive. `generation` and legacy
 `max_tokens` are also mutually exclusive. Compare additionally permits a target-level
-`generation` override; a target override wins over the shared Compare value.
-
-Legacy clients that omit both fields use `quick` (1,024). The React app
-explicitly defaults new Ask and Compare turns to `balanced` and exposes Quick,
-Balanced, Deep, and Extended through the Answer depth selector.
+`generation` override; a target override wins over the shared Compare value. API
+callers that omit both budget fields retain the compatibility default `quick`/1K.
 
 ## Reasoning mapping
 
@@ -69,11 +100,13 @@ work and is returned as `incomplete`, not rewritten as a provider failure.
 The exact effective ceiling passed to a provider is also passed to
 `server/billing/enforcement_service.py`. Compare authorizes each target with its own
 resolved ceiling. The preflight is a maximum temporary AI-credit hold; settlement
-uses actual successful usage and releases the unused amount.
+uses actual successful usage and releases the unused amount. The browser does not
+show a live hold estimate in the composer.
 
-`POST /v1/billing/estimate-generation` performs the same resolution and credit
-calculation without reserving credits. It returns per-target ceilings, the maximum
-temporary hold, remaining credits, and whether that hold can currently be authorized.
+`POST /v1/billing/estimate-generation` remains available to API callers. It performs
+the same Auto/profile resolution and credit calculation without reserving credits,
+returning per-target ceilings, the maximum temporary hold, remaining credits, and
+whether the hold can currently be authorized.
 
 ## Completion and retry contract
 
@@ -86,9 +119,11 @@ Every response exposes:
   policy version
 - `retry_with_more_room`: whether a larger profile is available and its recommendation
 
-Partial text is preserved. React displays an explicit incomplete banner and can retry
-the same response slot with the recommended next profile. A retry is a new model call
-and may use additional AI credits. If it fails, the original partial response remains.
+Partial text is preserved. React displays an incomplete banner and can retry the same
+response slot. Auto 4K and 8K calls retry with `deep`/12K; Auto 12K calls retry with
+`extended`/32K; an Auto call already at 32K has no larger retry. A retry is a new model
+call and may use additional AI credits. If it fails, the original partial response
+remains.
 
 ## Persistence and operations
 
@@ -97,7 +132,7 @@ code. It adds request-level budget/reasoning audit fields plus response-level te
 status and stop cause. PostgreSQL startup preflight requires these columns.
 
 `GENERATION_BUDGET_POLICY_ENABLED=true` enables provider-aware budgets and is the
-default. Setting it to `false` is the rollback switch: all new profile requests execute
+default. Setting it to `false` is the rollback switch: new profile requests execute
 with the historical Quick/2K ceiling while the public contract remains available.
 Restart API processes after changing the setting or applying the migration.
 

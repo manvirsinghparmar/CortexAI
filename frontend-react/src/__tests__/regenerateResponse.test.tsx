@@ -32,7 +32,6 @@ describe("response regeneration", () => {
       researchMode: false,
       compareResearchMode: true,
       optimizeMode: false,
-      generationProfile: "balanced",
       selectedModelKey: "openai:gpt-5.1",
       compareModelKeys: [
         "openai:gpt-5.1",
@@ -85,6 +84,7 @@ describe("response regeneration", () => {
       prompt: "Research this",
       provider: "openai",
       model: "gpt-5.1",
+      generation: { profile: "auto" },
       routing: { smart_mode: false, research_mode: true },
       attachments: [{ file_id: "source-file" }],
       context: {
@@ -146,6 +146,7 @@ describe("response regeneration", () => {
       prompt: "Compare this",
       provider: "claude",
       model: "claude-sonnet-4-5",
+      generation: { profile: "auto" },
       routing: { smart_mode: false, research_mode: true },
       context: {
         session_id: "session-1",
@@ -248,6 +249,7 @@ describe("response regeneration", () => {
       prompt: "Compare with three models",
       provider: "gemini",
       model: "gemini-2.5-pro",
+      generation: { profile: "auto" },
       routing: { smart_mode: false, research_mode: true },
       attachments: [{ file_id: "source-file" }],
     });

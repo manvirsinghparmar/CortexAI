@@ -94,6 +94,29 @@ describe("history threads", () => {
     });
   });
 
+  it.each([
+    [8_192, "deep"],
+    [12_288, "extended"],
+    [32_768, undefined],
+  ] as const)(
+    "reconstructs the Auto retry step from an effective %i-token budget",
+    (effectiveMaxOutputTokens, recommendedProfile) => {
+      const [restored] = buildTurnsFromHistoryEntries([
+        entry({
+          completion_status: "incomplete",
+          stop_cause: "token_limit",
+          generation_profile: "auto",
+          effective_max_output_tokens: effectiveMaxOutputTokens,
+        }),
+      ]);
+
+      expect(restored.responses[0].retry_with_more_room).toEqual({
+        available: Boolean(recommendedProfile),
+        recommended_profile: recommendedProfile,
+      });
+    },
+  );
+
   it("searches all prompts, responses, providers, and models in a thread", () => {
     const threads = buildHistoryThreads([
       entry({ prompt: "Initial question", response: "Contains a deployment checklist" }),

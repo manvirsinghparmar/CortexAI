@@ -1,6 +1,34 @@
-version: generation-budget-v2
+version: generation-budget-v3
 operational_max_output_tokens: 32768
 context_safety_margin_tokens: 1024
+auto_policy:
+  default_max_output_tokens: 4096
+  advanced_reasoning_max_output_tokens: 8192
+  premium_max_output_tokens: 12288
+  complex_task_max_output_tokens: 12288
+  default_reasoning_effort: low
+  advanced_reasoning_effort: medium
+  deep_reasoning_effort: high
+  complex_input_token_threshold: 1800
+  long_output_markers:
+    - comprehensive
+    - exhaustive
+    - long-form
+    - long form
+    - in-depth
+    - in depth
+    - deep dive
+    - step-by-step
+    - step by step
+    - implementation plan
+    - technical design
+    - architecture
+    - production code
+    - full report
+    - detailed
+    - detailed analysis
+    - detailed comparison
+    - thorough
 profiles:
   quick:
     max_output_tokens: 1024

@@ -41,7 +41,7 @@ This map is the quick "where do I change X?" reference for the current API-first
 
 - Provider catalog and defaults: `config/providers.yaml`
 - Canonical model catalogue, lifecycle, official source evidence, effective-dated provider pricing, smart-router metadata, and consumer credit metadata: `config/model_registry.yaml`; loaders/resolution: `config/pricing.py`, `orchestrator/model_registry.py`
-- Canonical generation v2 profiles and operational ceiling: `config/generation_profiles.yaml`; provider/model/context resolver: `orchestrator/generation_policy.py`; reservation-affordability clamp: `server/generation_service.py`; normalized terminal status: `orchestrator/completion_status.py`
+- Canonical generation v3 Auto policy, explicit profiles, and operational ceiling: `config/generation_profiles.yaml`; provider/model/prompt/context resolver: `orchestrator/generation_policy.py`; reservation-affordability clamp: `server/generation_service.py`; normalized terminal status: `orchestrator/completion_status.py`
 - Subscription placement is data-driven through each registry row's `billing_class` and the plan catalogue's allowed classes. Claude Sonnet 4.6 is `advanced` (Plus/Pro), while Claude Opus 4.5 and 4.6 are `premium` (Pro); do not duplicate per-model plan lists elsewhere.
 - Consumer subscription plans: `config/subscription_plans.yaml`
 - Immutable plan types, validation, and cache: `server/billing/models.py`, `server/billing/plan_catalog.py`
@@ -82,7 +82,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   - Task-first Models destination, live `/v1/models` catalogue transformation/evidence, presentation-only JSON, and offline fallback: `frontend-react/src/pages/ModelsPage.tsx`, `frontend-react/src/pages/ModelsPage.module.css`, `frontend-react/src/config/models.data.json`, `frontend-react/src/config/defaultModels.ts`, `frontend-react/src/config/modelsCatalog.ts`, `frontend-react/src/hooks/useModels.ts`
   - React prompt optimization request shaping and UI fallback state: `frontend-react/src/optimization/promptOptimization.ts`
   - Compare model preference resolution: `frontend-react/src/config/compareDefaults.ts`
-  - Answer depth, temporary credit-hold estimate, incomplete-response notice, and retry-with-more-room flow: `frontend-react/src/components/composer/GenerationProfileSelector.tsx`, `frontend-react/src/components/composer/PromptComposer.tsx`, `frontend-react/src/api/billing.ts`, `frontend-react/src/hooks/useChat.ts`, `frontend-react/src/components/results/ResponseCard.tsx`
+  - Cortex-managed Auto generation requests, incomplete-response notice, and retry-with-more-room flow: `frontend-react/src/components/composer/PromptComposer.tsx`, `frontend-react/src/hooks/useChat.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/components/results/ResponseCard.tsx`
   - Shared provider-first manual Ask/Compare picker, fine-pointer hover cascade, touch drill-down/Back flow, provider grouping, keyboard navigation, portal positioning, plan locks, and duplicate-state presentation: `frontend-react/src/components/composer/ModelPicker.tsx`, `frontend-react/src/components/composer/ModelPicker.module.css`
   - Model display labels and provider logo metadata: `frontend-react/src/config/modelPresentation.ts`
   - History thread grouping, persisted session rename, per-thread delete, and Compare-turn reconstruction: `server/routes/history.py`, `db/repository.py`, `frontend-react/src/api/history.ts`, `frontend-react/src/history/historyThreads.ts`, `frontend-react/src/hooks/useHistory.ts`, `frontend-react/src/components/layout/Sidebar.tsx`, `frontend-react/src/pages/ChatPage.tsx`
@@ -163,7 +163,7 @@ This map is the quick "where do I change X?" reference for the current API-first
   1. Update `config/generation_profiles.yaml` for profile policy and `config/model_registry.yaml` for native model capabilities; do not add route/provider/billing-local ceilings.
   2. Keep resolution in `orchestrator/generation_policy.py`, terminal normalization in `orchestrator/completion_status.py`, and provider translation in `api/`.
   3. Pass the same resolved target value to `server/billing/enforcement_service.py`, provider execution, response metadata, and `db/repository.py`.
-  4. Update Answer depth/estimate/incomplete/retry behavior in React and validate `tests/test_generation_policy.py`, provider contract tests, frontend tests, and responsive E2E.
+  4. Update managed-Auto/incomplete/retry behavior in React and validate `tests/test_generation_policy.py`, provider contract tests, frontend tests, and responsive E2E.
   5. Synchronize `docs/GENERATION_BUDGETS.md`, the rollout runbook, Postman, and every migration apply sequence.
 
 - Change subscription plan definitions or model credit economics:

@@ -28,6 +28,8 @@ from server.routes import (
     history,
     optimize,
     reporting,
+    tools,
+    work,
     whoami,
 )
 
@@ -163,6 +165,14 @@ async def lifespan(app: FastAPI):
             logger.info(
                 "Direct attachment upload schema preflight passed",
                 extra={"extra_fields": {"event": "attachment.schema_preflight.passed"}},
+            )
+        if _env_bool("CORTEX_WORK_ENABLED", default=False):
+            from server.work.schema_preflight import validate_work_schema
+
+            validate_work_schema()
+            logger.info(
+                "CortexAI Work database schema preflight passed",
+                extra={"extra_fields": {"event": "work.schema_preflight.passed"}},
             )
     else:
         logger.info(
@@ -479,6 +489,8 @@ def create_app() -> FastAPI:
     app.include_router(billing.router)
     app.include_router(catalog.router)
     app.include_router(files.router)
+    app.include_router(work.router)
+    app.include_router(tools.router)
 
     @app.get("/runtime-config.js", include_in_schema=False)
     async def frontend_runtime_config(request: Request):

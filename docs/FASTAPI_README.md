@@ -152,6 +152,41 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 
 ## Endpoints
 
+### CortexAI Work
+
+- `POST /v1/work/sessions` and `GET /v1/work/sessions`
+- `GET /v1/work/sessions/{work_session_id}`
+- `GET /v1/work/sessions/{work_session_id}/runs/latest`
+- `POST /v1/work/sessions/{work_session_id}/runs`
+- `POST /v1/work/sessions/{work_session_id}/instructions`
+- `GET /v1/work/runs/{run_id}`
+- `GET /v1/work/runs/{run_id}/events?after_sequence=N`
+- `GET /v1/work/runs/{run_id}/stream?after_sequence=N`
+- `POST /v1/work/runs/{run_id}/cancel`
+- `GET /v1/work/runs/{run_id}/artifacts`
+- `GET /v1/work/runs/{run_id}/artifacts/{file_id}/download`
+- `GET /v1/work/approvals/{approval_id}`
+- `POST /v1/work/approvals/{approval_id}/approve`
+- `POST /v1/work/approvals/{approval_id}/deny`
+- `GET /v1/tools/catalog` and `GET /v1/tools/connections`
+- `POST /v1/tools/connections`, `POST /v1/tools/connections/{id}/test`, and
+  `DELETE /v1/tools/connections/{id}`
+- `POST /v1/tools/{connector_key}/oauth/start` and
+  `GET /v1/tools/{connector_key}/oauth/callback`
+
+Every Work lookup is authenticated and joined through the owning Work session.
+Starting a run accepts `Idempotency-Key`; the ID is the idempotency key within the
+user's Work history. SSE emits persisted events in sequence, accepts either the
+`after_sequence` query or `Last-Event-ID`, sends heartbeat events without
+advancing the durable cursor, and can reconstruct the current state after a
+process or browser reconnect. Provider thinking and raw secret values are never
+included in the public event payload.
+
+The master feature flag is `CORTEX_WORK_ENABLED`. A disabled environment returns
+404 for Work operations and omits Work navigation through `/runtime-config.js`.
+The full provider, MCP, OAuth, AWS, rollout, rollback, and troubleshooting
+contract is in `docs/runbooks/cortex-work.md`.
+
 - `GET /health`
 - `GET /health/runtime`
 - `GET /runtime-config.js`
@@ -722,6 +757,7 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
 ```
 
 The first Cortex Analysis migration adds Compare response revision metadata and

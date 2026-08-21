@@ -340,6 +340,11 @@ function plansResponse(billingEnabled = true): BillingPlansResponse {
           research_enabled: true,
           prompt_improvement_enabled: true,
           file_analysis_enabled: true,
+          work_enabled: code !== "free",
+          verified_connectors_enabled: code !== "free",
+          custom_mcp_enabled: code === "pro",
+          action_tools_enabled: code !== "free",
+          max_active_work_runs: code === "pro" ? 3 : code === "plus" ? 1 : 0,
           allowed_billing_classes:
             code === "pro"
               ? ["economical", "standard", "advanced", "premium"]

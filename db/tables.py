@@ -59,6 +59,16 @@ TABLE_NAMES = [
     "prompt_optimization_cache",
     "research_reuse_cache",
     "cache_reuse_events",
+    "work_sessions",
+    "work_runs",
+    "work_events",
+    "work_run_files",
+    "tool_connections",
+    "work_run_connections",
+    "work_tool_calls",
+    "work_approvals",
+    "work_oauth_states",
+    "work_sync_leases",
 ]
 
 

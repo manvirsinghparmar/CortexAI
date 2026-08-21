@@ -1,0 +1,346 @@
+"""Anthropic Claude Managed Agents adapter.
+
+The SDK surface is isolated here so routes/services never depend on Anthropic
+event structures. Managed Agent events are normalized and thinking content is
+never copied into Cortex payloads.
+"""
+
+from __future__ import annotations
+
+from typing import Any, BinaryIO, Mapping, Sequence
+
+from server.work.config import WorkConfig
+from server.work.provider import (
+    AgentProvider,
+    ProviderArtifact,
+    ProviderEvent,
+    ProviderMcpServer,
+    ProviderResource,
+    ProviderSession,
+)
+from server.work.security import redact_mapping
+
+_MANAGED_AGENTS_BETA = ["managed-agents-2026-04-01"]
+
+
+def _dump(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return dict(value.model_dump(mode="json", exclude_none=True))
+    if isinstance(value, dict):
+        return dict(value)
+    result: dict[str, Any] = {}
+    for name in (
+        "id",
+        "type",
+        "status",
+        "content",
+        "name",
+        "input",
+        "stop_reason",
+        "usage",
+        "filename",
+        "mime_type",
+        "size_bytes",
+        "mcp_server_name",
+        "server_name",
+        "server",
+        "tool_use_id",
+    ):
+        if hasattr(value, name):
+            result[name] = getattr(value, name)
+    return result
+
+
+def _content_text(content: object) -> str | None:
+    if not isinstance(content, (list, tuple)):
+        return None
+    parts: list[str] = []
+    for block in content:
+        data = _dump(block)
+        if data.get("type") == "text" and data.get("text"):
+            parts.append(str(data["text"]))
+    normalized = "".join(parts).strip()
+    return normalized[:20_000] or None
+
+
+def _optional_non_negative_int(value: object) -> int | None:
+    if not isinstance(value, (str, int, float, bool)):
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _stop_reason(data: Mapping[str, object]) -> tuple[str | None, list[str]]:
+    raw = data.get("stop_reason")
+    value = _dump(raw) if raw is not None else {}
+    reason = str(value.get("type") or raw or "").strip() or None
+    event_ids = (
+        [str(item) for item in value.get("event_ids", [])]
+        if isinstance(value.get("event_ids"), list)
+        else []
+    )
+    return reason, event_ids
+
+
+def normalize_anthropic_event(event: Any) -> ProviderEvent:
+    data = _dump(event)
+    provider_type = str(data.get("type") or "provider.event")
+    provider_id = str(data.get("id") or f"unidentified:{hash(str(data))}")
+    payload: dict[str, object] = {"provider_type": provider_type}
+    display: str | None = None
+    terminal: str | None = None
+    stop_reason: str | None = None
+    normalized_type = "progress"
+
+    if provider_type == "agent.message":
+        normalized_type = "agent_message"
+        display = _content_text(data.get("content")) or "Agent updated the result"
+    elif provider_type == "agent.thinking":
+        normalized_type = "progress"
+        display = "Reasoning about the next step"
+    elif provider_type in {"agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"}:
+        normalized_type = "tool_started"
+        tool_name = str(data.get("name") or "tool")
+        display = f"Using {tool_name}"
+        payload.update({"tool_name": tool_name, "tool_use_id": provider_id})
+        server_name = data.get("mcp_server_name") or data.get("server_name") or data.get("server")
+        if server_name:
+            payload["mcp_server_name"] = str(server_name)
+        raw_input = data.get("input")
+        if isinstance(raw_input, dict):
+            payload["input_keys"] = sorted(str(key) for key in raw_input)[:50]
+            payload["input_summary"] = redact_mapping(raw_input)
+    elif provider_type in {"agent.tool_result", "agent.mcp_tool_result"}:
+        normalized_type = "tool_completed"
+        display = "Tool completed"
+        tool_use_id = data.get("tool_use_id")
+        if tool_use_id:
+            payload["tool_use_id"] = str(tool_use_id)
+    elif provider_type == "session.status_running":
+        normalized_type = "progress"
+        display = "Work is running"
+    elif provider_type == "session.status_idle":
+        stop_reason, event_ids = _stop_reason(data)
+        payload["stop_reason"] = stop_reason
+        if event_ids:
+            payload["blocking_event_ids"] = event_ids
+        if stop_reason == "requires_action":
+            normalized_type = "approval_required"
+            display = "Your approval is required"
+        elif stop_reason == "budget_reached":
+            normalized_type = "budget_exhausted"
+            display = "Credit budget reached"
+            terminal = "budget_exhausted"
+        else:
+            normalized_type = "run_completed"
+            display = "Work completed"
+            terminal = "completed"
+    elif provider_type == "session.usage":
+        normalized_type = "progress"
+        display = "Usage updated"
+        usage = data.get("usage") or data
+        if isinstance(usage, dict):
+            payload["usage"] = usage
+    elif provider_type.endswith("error") or ".error" in provider_type:
+        normalized_type = "run_failed"
+        display = "The agent could not continue"
+        terminal = "failed"
+    elif provider_type in {"session.file_created", "agent.file_created"}:
+        normalized_type = "file_created"
+        display = "Created a file"
+
+    return ProviderEvent(
+        id=provider_id,
+        type=normalized_type,
+        display_message=display,
+        payload=payload,
+        terminal_status=terminal,
+        stop_reason=stop_reason,
+    )
+
+
+class AnthropicManagedAgentProvider(AgentProvider):
+    name = "anthropic_managed_agents"
+
+    def __init__(self, config: WorkConfig, client: Any | None = None):
+        config.validate_provider()
+        if client is None:
+            try:
+                from anthropic import Anthropic
+            except ImportError as exc:  # pragma: no cover - environment guard
+                raise RuntimeError("Install requirements.txt to use Cortex Work") from exc
+            client = Anthropic()
+        if not hasattr(getattr(client, "beta", None), "sessions"):
+            raise RuntimeError("The installed Anthropic SDK does not support Managed Agents")
+        self._client = client
+        self._config = config
+
+    def create_session(
+        self,
+        *,
+        title: str,
+        resources: Sequence[ProviderResource],
+        mcp_servers: Sequence[ProviderMcpServer],
+        vault_ids: Sequence[str],
+        web_enabled: bool,
+        max_credit_budget: int,
+    ) -> ProviderSession:
+        kwargs: dict[str, object] = {
+            "agent": self._config.agent_id,
+            "environment_id": self._config.environment_id,
+            "title": title[:200],
+        }
+        toolsets: list[dict[str, object]] = [
+            {
+                "type": "agent_toolset_20260401",
+                "default_config": {
+                    "enabled": True,
+                    "permission_policy": {"type": "always_ask"},
+                },
+                "configs": [
+                    {
+                        "name": "web_search",
+                        "enabled": web_enabled,
+                        "permission_policy": {"type": "always_ask"},
+                    },
+                    {
+                        "name": "web_fetch",
+                        "enabled": web_enabled,
+                        "permission_policy": {"type": "always_ask"},
+                    },
+                ],
+            }
+        ]
+        for item in mcp_servers:
+            toolset: dict[str, object] = {
+                "type": "mcp_toolset",
+                "mcp_server_name": item.name,
+                "default_config": {
+                    "enabled": not bool(item.enabled_tools),
+                    "permission_policy": {"type": "always_ask"},
+                },
+            }
+            if item.enabled_tools:
+                toolset["configs"] = [
+                    {
+                        "name": name,
+                        "enabled": True,
+                        "permission_policy": {"type": "always_ask"},
+                    }
+                    for name in item.enabled_tools
+                ]
+            toolsets.append(toolset)
+        kwargs["agent"] = {
+            "type": "agent_with_overrides",
+            "id": self._config.agent_id,
+            "mcp_servers": [
+                {"type": "url", "name": item.name, "url": item.url} for item in mcp_servers
+            ],
+            "tools": toolsets,
+        }
+        if resources:
+            kwargs["resources"] = [
+                {"type": "file", "file_id": item.provider_file_id, "mount_path": item.mount_path}
+                for item in resources
+            ]
+        if vault_ids:
+            kwargs["vault_ids"] = list(vault_ids)
+        provider_budget_cents = max_credit_budget // 10_000
+        if provider_budget_cents > 0:
+            kwargs["budget"] = {
+                "type": "limit",
+                "max_list_cost": {"amount": str(provider_budget_cents), "currency": "USD"},
+            }
+        kwargs["betas"] = _MANAGED_AGENTS_BETA
+        created = self._client.beta.sessions.create(**kwargs)
+        data = _dump(created)
+        return ProviderSession(
+            id=str(data["id"]),
+            status=str(data.get("status") or "idle"),
+            usage=_dump(data.get("usage")) if data.get("usage") is not None else {},
+        )
+
+    def send_instruction(self, session_id: str, instruction: str) -> None:
+        self._client.beta.sessions.events.send(
+            session_id,
+            events=[{"type": "user.message", "content": [{"type": "text", "text": instruction}]}],
+            betas=_MANAGED_AGENTS_BETA,
+        )
+
+    def get_session(self, session_id: str) -> ProviderSession:
+        result = self._client.beta.sessions.retrieve(session_id, betas=_MANAGED_AGENTS_BETA)
+        data = _dump(result)
+        return ProviderSession(
+            id=str(data["id"]),
+            status=str(data.get("status") or "unknown"),
+            usage=_dump(data.get("usage")) if data.get("usage") is not None else {},
+        )
+
+    def list_events(self, session_id: str) -> list[ProviderEvent]:
+        page = self._client.beta.sessions.events.list(
+            session_id, order="asc", limit=100, betas=_MANAGED_AGENTS_BETA
+        )
+        data = list(page) if hasattr(page, "__iter__") else getattr(page, "data", page)
+        return [normalize_anthropic_event(event) for event in data]
+
+    def interrupt(self, session_id: str) -> None:
+        self._client.beta.sessions.events.send(
+            session_id,
+            events=[{"type": "user.interrupt"}],
+            betas=_MANAGED_AGENTS_BETA,
+        )
+
+    def confirm_tool(
+        self, session_id: str, tool_use_id: str, *, allow: bool, deny_message: str | None
+    ) -> None:
+        event: dict[str, object] = {
+            "type": "user.tool_confirmation",
+            "tool_use_id": tool_use_id,
+            "result": "allow" if allow else "deny",
+        }
+        if not allow and deny_message:
+            event["deny_message"] = deny_message[:500]
+        self._client.beta.sessions.events.send(
+            session_id, events=[event], betas=_MANAGED_AGENTS_BETA
+        )
+
+    def upload_file(self, source: BinaryIO, *, filename: str) -> str:
+        result = self._client.files.upload(file=(filename, source))
+        return str(_dump(result)["id"])
+
+    def add_resource(self, session_id: str, resource: ProviderResource) -> None:
+        self._client.beta.sessions.resources.add(
+            session_id,
+            type="file",
+            file_id=resource.provider_file_id,
+            mount_path=resource.mount_path,
+            betas=_MANAGED_AGENTS_BETA,
+        )
+
+    def list_artifacts(self, session_id: str) -> list[ProviderArtifact]:
+        page = self._client.beta.files.list(
+            scope_id=session_id,
+            betas=_MANAGED_AGENTS_BETA,
+        )
+        items = list(page) if hasattr(page, "__iter__") else getattr(page, "data", page)
+        artifacts: list[ProviderArtifact] = []
+        for item in items:
+            data = _dump(item)
+            artifacts.append(
+                ProviderArtifact(
+                    id=str(data.get("id")),
+                    filename=str(data.get("filename") or "artifact"),
+                    mime_type=(str(data["mime_type"]) if data.get("mime_type") else None),
+                    size_bytes=_optional_non_negative_int(data.get("size_bytes")),
+                )
+            )
+        return artifacts
+
+    def download_artifact(self, file_id: str) -> bytes:
+        content = self._client.files.download(file_id)
+        if hasattr(content, "read"):
+            return bytes(content.read())
+        raw = getattr(content, "content", content)
+        return bytes(raw)

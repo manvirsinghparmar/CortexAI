@@ -80,6 +80,7 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
@@ -87,6 +88,13 @@ own that table. The later unified-credit and activity scripts depend on the
 `20260718` billing foundation. PostgreSQL startup validates the complete table
 and column contract, including generation-budget audit fields, and exits before serving provider traffic if any script is
 missing.
+
+`20260820_add_cortex_work_mode.sql` expands the existing session-mode check and
+adds Work-owned tables/indexes without deleting or rewriting existing data. It
+must be applied before `CORTEX_WORK_ENABLED=true`; Work schema preflight fails
+startup when the flag is enabled and a required table/column is absent. Rollback
+is the feature flag and prior application build. Retain the additive tables for
+billing/approval audit and provider-session recovery.
 
 ### Direct-S3 attachment lifecycle migration
 

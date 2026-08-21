@@ -21,6 +21,45 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 - Optional prompt optimization endpoint: `/v1/optimize`
 - Release gate: compile checks + full tests + DB smoke
 
+## CortexAI Work
+
+CortexAI Work is a separate durable task surface at `/work`; it does not reuse
+the Ask/Compare turn reducer. Paid users can start a Work session with files,
+an explicit AI-credit ceiling, optional web access, and selected tool
+connections. The backend reserves the ceiling, creates or reuses an Anthropic
+Managed Agent session, persists provider-neutral events, resumes through SSE
+with `Last-Event-ID`, imports validated artifacts into private Cortex object
+storage, and settles only the cumulative-usage delta for the run.
+
+Work is off by default. Free has no Work entitlement; Plus enables one active
+run and verified connectors; Pro raises the run/connection/budget limits and
+adds custom remote MCP. Read tools are automatic. WRITE actions require an
+approval unless the user explicitly saved the exact tool + connection grant
+for the current Work session. Destructive, deployment, financial, and external
+communication actions always interrupt for approval.
+
+Before enabling it, apply
+`db/migrations/20260820_add_cortex_work_mode.sql` and complete
+[the Work rollout runbook](docs/runbooks/cortex-work.md). The architecture and
+recovery contract are documented in [docs/work/architecture.md](docs/work/architecture.md);
+the evidence-based infrastructure gate is
+[docs/work/00-infrastructure-readiness.md](docs/work/00-infrastructure-readiness.md).
+
+For a local provider-double smoke test only:
+
+```ini
+CORTEX_WORK_ENABLED=true
+CORTEX_WORK_AGENT_PROVIDER=fake
+CORTEX_WORK_MCP_ENABLED=true
+CORTEX_WORK_ACTION_TOOLS_ENABLED=true
+CORTEX_WORK_ARTIFACT_IMPORT_ENABLED=true
+CORTEX_WORK_WEB_ENABLED=true
+DEV_SUBSCRIPTION_PLAN=pro
+```
+
+Production must use `anthropic_managed_agents` and valid provider IDs; the fake
+adapter is deterministic test infrastructure, not a deployment fallback.
+
 ## Runtime Modes
 
 - `DATABASE_URL` is required at startup:
@@ -1100,9 +1139,10 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260802_add_
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_generation_budget_audit.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
 ```
 
-- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; `20260804` adds generation-budget/reasoning audit fields plus normalized completion status; `20260807` adds cache-aware ledger columns, reusable optimizer/research/Cortex/context-summary persistence, and the `cache_reuse_events` telemetry table; and `20260811` permits checksum-free upload intents and adds `uploading`/`deleting` attachment states. The scripts are additive/idempotent. Alteration scripts require ownership of the affected tables. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, generation-budget, and cache-accounting columns before provider traffic; when direct upload is enabled it also fails fast unless the `20260811` nullable-hash/status contract is present.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; `20260804` adds generation-budget/reasoning audit fields plus normalized completion status; `20260807` adds cache-aware ledger columns, reusable optimizer/research/Cortex/context-summary persistence, and the `cache_reuse_events` telemetry table; `20260811` permits checksum-free upload intents and adds `uploading`/`deleting` attachment states; and `20260820` adds durable Work sessions/runs/events, files, tool connections/calls, approvals, OAuth state, and reconciliation leases. The scripts are additive/idempotent. Alteration scripts require ownership of the affected tables. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, generation-budget, and cache-accounting columns before provider traffic; when direct upload or Work is enabled it also validates the corresponding additive schema.
 
 ## Release Gate
 

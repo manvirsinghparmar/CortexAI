@@ -332,9 +332,21 @@ function resolvePlanAction({
 function planFeatures(plan: PublicBillingPlan): string[] {
   const allowances = plan.allowances;
   const classes = plan.features.allowed_billing_classes;
+  const workFeatures = plan.features.work_enabled
+    ? [
+        `CortexAI Work with up to ${plan.features.max_active_work_runs} active ${plan.features.max_active_work_runs === 1 ? "run" : "runs"}`,
+        plan.features.custom_mcp_enabled
+          ? "Verified connectors and custom MCP servers"
+          : "Verified Work connectors",
+        plan.features.action_tools_enabled
+          ? "Approval-gated Work actions"
+          : "Read-only Work tools",
+      ]
+    : ["Core Chat and Compare access"];
   return [
     `${formatCount(allowances.ai_credits)} AI credits per month`,
     `Compare up to ${plan.features.max_compare_models} models`,
+    ...workFeatures,
     "Advanced Web Search draws from AI credits",
     "Improve Prompt draws from AI credits",
     "File upload is free; model processing uses AI credits",

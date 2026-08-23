@@ -7,12 +7,21 @@ from urllib.parse import urlparse
 from uuid import uuid4, UUID
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from server import files_service
+from server import persistence as persistence_service
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard, auth_mode as session_auth_mode
-from server.schemas.responses import FileUploadResponseDTO, FileStatusResponseDTO
+from server.schemas.requests import FileUploadIntentRequest
+from server.schemas.responses import (
+    FileBatchUploadResponseDTO,
+    FileStatusResponseDTO,
+    FileUploadIntentItemDTO,
+    FileUploadIntentResponseDTO,
+    FileUploadResponseDTO,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +33,8 @@ _SESSION_AUTH_GUARD = SessionScopedAuthGuard(
 )
 
 router = APIRouter(prefix="/v1/files", tags=["Files"])
+API_DB_ENABLED = persistence_service.API_DB_ENABLED
+_resolve_identity = persistence_service.resolve_identity
 
 
 _EDGE_HEADER_KEYS = (
@@ -129,6 +140,17 @@ async def upload_file(
     """
     request_id = str(getattr(request.state, "request_id", "") or uuid4())
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    files_service.require_legacy_proxy_upload_enabled(request_id=request_id)
+    policy = (
+        files_service.resolve_upload_policy(
+            auth=auth,
+            request_id=request_id,
+            provider=_header_value(request, "X-Provider"),
+            model=_header_value(request, "X-Model"),
+        )
+        if API_DB_ENABLED
+        else None
+    )
     filename = _header_value(request, "X-File-Name") or "file"
     mime_type = (
         _header_value(request, "X-File-Content-Type")
@@ -150,9 +172,19 @@ async def upload_file(
         },
     )
 
+    content_length_header = _safe_int(_header_value(request, "Content-Length"))
+    if (
+        policy is not None
+        and content_length_header is not None
+        and content_length_header > policy.max_file_bytes
+    ):
+        raise _upload_limit_error(
+            policy=policy,
+            file_count=1,
+            max_file_bytes=content_length_header,
+        )
     payload = await request.body()
     payload_size = len(payload or b"")
-    content_length_header = _safe_int(_header_value(request, "Content-Length"))
     logger.info(
         "Attachment upload route read request body",
         extra={
@@ -162,7 +194,9 @@ async def upload_file(
                 "payload_size_bytes": payload_size,
                 "content_length_header": content_length_header,
                 "content_length_matches_payload": (
-                    content_length_header == payload_size if content_length_header is not None else None
+                    content_length_header == payload_size
+                    if content_length_header is not None
+                    else None
                 ),
                 "filename_hash": _hash_for_logs(filename),
                 "mime_type": mime_type,
@@ -194,9 +228,10 @@ async def upload_file(
             filename=filename,
             mime_type=mime_type,
             payload=payload,
+            max_file_bytes=policy.max_file_bytes if policy is not None else None,
         )
     except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
         logger.warning(
             "Attachment upload route rejected request",
             extra={
@@ -212,7 +247,7 @@ async def upload_file(
             },
         )
         raise
-    except Exception as exc:
+    except BaseException as exc:
         logger.exception(
             "Attachment upload route failed unexpectedly",
             extra={
@@ -243,6 +278,216 @@ async def upload_file(
         },
     )
     return FileUploadResponseDTO(**result)
+
+
+def _upload_limit_error(
+    *,
+    policy: files_service.UploadPolicy,
+    file_count: int,
+    max_file_bytes: int,
+) -> HTTPException:
+    feature = "attachment_count" if file_count > policy.max_files else "attachment_size"
+    current_limit = policy.max_files if feature == "attachment_count" else policy.max_file_bytes
+    required_plan = files_service.required_plan_for_upload(
+        file_count=file_count,
+        max_file_bytes=max_file_bytes,
+    )
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "feature_not_in_plan",
+            "message": (
+                f"The {policy.plan_code.title()} plan allows up to {policy.max_files} "
+                f"files per request and {policy.max_file_bytes} bytes per file."
+            ),
+            "feature": feature,
+            "current_plan": policy.plan_code,
+            "limit": current_limit,
+            "required": file_count if feature == "attachment_count" else max_file_bytes,
+            "recommended_plan": required_plan,
+        },
+    )
+
+
+@router.post("/upload-batch", response_model=FileBatchUploadResponseDTO)
+async def upload_file_batch(
+    request: Request,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Validate an entire composer selection before storing its first object."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    files_service.require_legacy_proxy_upload_enabled(request_id=request_id)
+    if not API_DB_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={"code": "attachments_require_db", "message": "Attachments require DB mode."},
+        )
+    provider = _header_value(request, "X-Provider")
+    model = _header_value(request, "X-Model")
+    policy = files_service.resolve_upload_policy(
+        auth=auth,
+        request_id=request_id,
+        provider=provider,
+        model=model,
+    )
+    content_length = _safe_int(_header_value(request, "Content-Length"))
+    max_request_bytes = (policy.max_files * policy.max_file_bytes) + 1_000_000
+    if content_length is not None and content_length > max_request_bytes:
+        raise _upload_limit_error(
+            policy=policy,
+            file_count=policy.max_files,
+            max_file_bytes=content_length,
+        )
+
+    form = await request.form()
+    uploads = [
+        item
+        for item in form.getlist("files")
+        if isinstance(item, (UploadFile, StarletteUploadFile))
+    ]
+    if not uploads:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "empty_file_batch", "message": "Select at least one file."},
+        )
+    if len(uploads) > policy.max_files:
+        raise _upload_limit_error(
+            policy=policy,
+            file_count=len(uploads),
+            max_file_bytes=0,
+        )
+
+    prepared: list[tuple[str, str, bytes]] = []
+    allowed_mime_types = files_service._allowed_mime_types()
+    for upload in uploads:
+        mime_type = str(upload.content_type or "application/octet-stream").strip().lower()
+        if mime_type not in allowed_mime_types:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={
+                    "code": "unsupported_file_type",
+                    "message": f"Unsupported MIME type '{mime_type}'.",
+                    "allowed_mime_types": sorted(allowed_mime_types),
+                },
+            )
+        payload = await upload.read()
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_file", "message": "Uploaded file is empty."},
+            )
+        if len(payload) > policy.max_file_bytes:
+            raise _upload_limit_error(
+                policy=policy,
+                file_count=len(uploads),
+                max_file_bytes=len(payload),
+            )
+        prepared.append((upload.filename or "file", mime_type, payload))
+
+    files_service.validate_upload_batch_metadata(
+        files=[
+            {"filename": filename, "mime_type": mime_type, "size_bytes": len(payload)}
+            for filename, mime_type, payload in prepared
+        ],
+        policy=policy,
+        provider=provider,
+        model=model,
+    )
+
+    results: list[dict[str, Any]] = []
+    created_ids: list[UUID] = []
+    try:
+        for filename, mime_type, payload in prepared:
+            result = files_service.upload_user_file(
+                auth=auth,
+                request_id=request_id,
+                filename=filename,
+                mime_type=mime_type,
+                payload=payload,
+                max_file_bytes=policy.max_file_bytes,
+            )
+            results.append(result)
+            if not bool(result.get("deduplicated")):
+                created_ids.append(UUID(str(result["file_id"])))
+    except BaseException:
+        for file_id in reversed(created_ids):
+            try:
+                files_service.rollback_batch_upload(
+                    auth=auth,
+                    request_id=request_id,
+                    file_id=file_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Partial batch upload rollback failed",
+                    extra={
+                        "extra_fields": {
+                            "event": "upload.batch.rollback.failed",
+                            "request_id": request_id,
+                            "file_id": str(file_id),
+                        }
+                    },
+                )
+        raise
+    return FileBatchUploadResponseDTO(files=[FileUploadResponseDTO(**result) for result in results])
+
+
+@router.post("/upload-intents", response_model=FileUploadIntentResponseDTO)
+async def create_upload_intents(
+    request: Request,
+    payload: FileUploadIntentRequest,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Create constrained presigned POST forms without proxying file bytes."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    results = files_service.create_direct_upload_intents(
+        auth=auth,
+        request_id=request_id,
+        files=[item.model_dump() for item in payload.files],
+        provider=payload.provider,
+        model=payload.model,
+    )
+    return FileUploadIntentResponseDTO(files=[FileUploadIntentItemDTO(**item) for item in results])
+
+
+@router.post("/{file_id}/complete", response_model=FileStatusResponseDTO)
+async def complete_upload(
+    request: Request,
+    file_id: UUID,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Verify an uploaded object and make the attachment eligible for ingestion."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    result = files_service.complete_direct_upload(
+        auth=auth,
+        request_id=request_id,
+        file_id=file_id,
+    )
+    return FileStatusResponseDTO(**result)
+
+
+@router.delete("/{file_id}", response_model=FileStatusResponseDTO)
+async def delete_file(
+    request: Request,
+    file_id: UUID,
+    auth: AuthResult = Depends(get_auth),
+):
+    """Queue an owned file for object-storage deletion."""
+
+    request_id = str(getattr(request.state, "request_id", "") or uuid4())
+    _SESSION_AUTH_GUARD.require(auth=auth, request_id=request_id)
+    result = files_service.delete_user_file(
+        auth=auth,
+        request_id=request_id,
+        file_id=file_id,
+    )
+    return FileStatusResponseDTO(**result)
 
 
 @router.get("/{file_id}", response_model=FileStatusResponseDTO)

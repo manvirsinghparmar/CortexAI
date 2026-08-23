@@ -40,9 +40,9 @@ interface ResponseCardProps {
   suggestedFollowUps?: string[];
   onSuggestedFollowUp?: (suggestion: string) => void | Promise<void>;
   onRegenerate?: () => void;
+  onRetryWithMoreRoom?: () => void;
   compareHighlights?: {
     fastest?: boolean;
-    cheapest?: boolean;
   };
 }
 
@@ -57,6 +57,7 @@ export function ResponseCard({
   suggestedFollowUps = [],
   onSuggestedFollowUp,
   onRegenerate,
+  onRetryWithMoreRoom,
   compareHighlights,
 }: ResponseCardProps) {
   const [copied, setCopied] = useState(false);
@@ -76,12 +77,18 @@ export function ResponseCard({
   const durationMs = resolveDisplayDurationMs(response);
   const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
   const isFailed = hasError || response.ui_status === "failed";
-  const hasCost = !loadingStatus && !isFailed && response.estimated_cost > 0;
+  const aiCredits = response.ai_credits ?? 0;
+  const hasCredits = !loadingStatus && !isFailed && aiCredits > 0;
+  const cacheSavings = Math.max(0, response.cache_savings_ai_credits ?? 0);
   const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
-  const hasMetaContent = !!loadingStatus || isFailed || hasCompletedMetrics || hasCost;
+  const hasMetaContent =
+    !!loadingStatus || isFailed || hasCompletedMetrics || hasCredits;
   const metaPinned = !!loadingStatus || isFailed;
   const showLoading = !!loadingStatus && !responseText;
   const showRegenerate = !!onRegenerate && !loadingStatus;
+  const isIncomplete = response.completion_status === "incomplete";
+  const canRetryWithMoreRoom =
+    isIncomplete && response.retry_with_more_room?.available && !!onRetryWithMoreRoom;
   const showSuggestedFollowUps =
     suggestedFollowUps.length > 0 && !!onSuggestedFollowUp && !hasError && !showLoading;
   const responseId = String(response.request_id || `response-${slotIndex}`);
@@ -184,19 +191,11 @@ export function ResponseCard({
                     {formatTokens(totalTokens)} tok
                   </span>
                 )}
-                {hasCost && (
-                  <span
-                    className={`${styles.metricPill} ${
-                      compareHighlights?.cheapest ? styles.metricHighlight : ""
-                    }`}
-                  >
-                    <CortexIcon name="cost" />${formatCost(response.estimated_cost)}
-                    {compareHighlights?.cheapest && (
-                      <span className={`${styles.winnerLabel} winner-label`}>
-                        {" "}
-                        &middot; Cheapest
-                      </span>
-                    )}
+                {hasCredits && (
+                  <span className={`${styles.metricPill} ${styles.metricText}`}>
+                    <CortexIcon name="cost" />
+                    {aiCredits.toLocaleString()} credits
+                    {response.credit_usage_estimated ? " estimated" : ""}
                   </span>
                 )}
               </>
@@ -223,8 +222,31 @@ export function ResponseCard({
         ) : (
           <ResponseMarkdown text={responseText} sources={response.web_source_items} />
         )}
+        {cacheSavings > 0 && !hasError && !showLoading && (
+          <div className={styles.cacheSavings} role="status">
+            Saved ~{cacheSavings.toLocaleString()} credits through context reuse
+          </div>
+        )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}
       </div>
+
+      {isIncomplete && (
+        <div className={styles.incompleteNotice} role="status">
+          <div>
+            <strong>Response stopped at its token limit.</strong>
+            <span>The partial answer was preserved.</span>
+          </div>
+          {canRetryWithMoreRoom && (
+            <button
+              type="button"
+              onClick={onRetryWithMoreRoom}
+              title="Starts a new model call and uses additional AI credits"
+            >
+              Retry with more room
+            </button>
+          )}
+        </div>
+      )}
 
       {showSuggestedFollowUps && (
         <SuggestedFollowUps
@@ -258,7 +280,8 @@ export function ResponseCard({
               type="button"
               className={styles.actionButton}
               aria-label="Regenerate response"
-              title="Regenerate response"
+              aria-description="This creates a new model call and uses AI credits."
+              title="Regenerate response · New model credits will be used"
               onClick={onRegenerate}
             >
               <CortexIcon name="regenerate" />
@@ -679,10 +702,6 @@ function formatMetricDurationSeconds(durationMs: number) {
 
 function formatDurationSeconds(durationMs: number) {
   return `${(Math.max(0, durationMs) / 1000).toFixed(1)} sec`;
-}
-
-function formatCost(cost: number) {
-  return cost.toFixed(4);
 }
 
 function formatElapsedClock(durationMs: number) {

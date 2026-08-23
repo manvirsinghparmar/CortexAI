@@ -52,6 +52,7 @@ class ResearchState:
     mode: ResearchMode = "auto"
     ttl_seconds: int = 900  # 15 minutes default
     topic_key: str = ""  # computed topic key for research reuse
+    provider_credits_consumed: int = 0
 
     def is_expired(self, now: datetime | None = None) -> bool:
         """
@@ -96,6 +97,8 @@ class ResearchState:
         return {
             "research_used": self.used,
             "research_reused": self.cache_hit,
+            "research_provider_credits_used": 0,
+            "research_provider_credits_estimated": False,
             "research_topic": self.topic if self.topic else None,
             "research_error": self.error,
             "sources": [

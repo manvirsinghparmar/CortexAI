@@ -8,9 +8,28 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from server.frontend_runtime_config import render_frontend_runtime_config_js
+from server.billing.plan_catalog import get_plan_catalog
+from server.billing.stripe_gateway import load_stripe_billing_config
 from server.middleware import RequestIDMiddleware
 from server.runtime_checks import check_claude_runtime
-from server.routes import admin, auth as auth_routes, byok, catalog, chat, client_diagnostics, compare, files, health, history, optimize, reporting, whoami
+from server.routes import (
+    admin,
+    auth as auth_routes,
+    billing,
+    byok,
+    catalog,
+    chat,
+    client_diagnostics,
+    compare,
+    cortex_analysis,
+    entitlements,
+    files,
+    health,
+    history,
+    optimize,
+    reporting,
+    whoami,
+)
 
 from utils.logger import get_logger
 
@@ -74,8 +93,33 @@ def _parse_positive_int_env(name: str, default: int) -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup/shutdown logic."""
-    cleanup_task: asyncio.Task | None = None
-    cleanup_stop_event: asyncio.Event | None = None
+    attachment_cleanup_task: asyncio.Task | None = None
+    attachment_cleanup_stop_event: asyncio.Event | None = None
+    reservation_cleanup_task: asyncio.Task | None = None
+    reservation_cleanup_stop_event: asyncio.Event | None = None
+
+    plan_catalog = get_plan_catalog()
+    logger.info(
+        "Subscription plan catalog validated",
+        extra={
+            "extra_fields": {
+                "catalog_version": plan_catalog.version,
+                "plan_codes": [plan.code for plan in plan_catalog.list_plans()],
+            }
+        },
+    )
+    stripe_billing_config = load_stripe_billing_config(catalog=plan_catalog)
+    logger.info(
+        "Stripe billing configuration validated",
+        extra={
+            "extra_fields": {
+                "billing_enabled": stripe_billing_config.enabled,
+                "configured_plan_codes": sorted(stripe_billing_config.price_ids),
+                "webhook_signing_secret_configured": bool(stripe_billing_config.webhook_secret),
+                "explicit_api_version": bool(stripe_billing_config.api_version),
+            }
+        },
+    )
 
     runtime_check = check_claude_runtime()
     logger.info(
@@ -94,12 +138,37 @@ async def lifespan(app: FastAPI):
         )
     if not database_url.startswith(("postgresql://", "postgresql+")):
         if _env_bool("ALLOW_NON_POSTGRES_DATABASE_URL", default=False):
-            logger.warning("Non-PostgreSQL DATABASE_URL accepted by ALLOW_NON_POSTGRES_DATABASE_URL")
+            logger.warning(
+                "Non-PostgreSQL DATABASE_URL accepted by ALLOW_NON_POSTGRES_DATABASE_URL"
+            )
         else:
             raise RuntimeError(
                 "DATABASE_URL must use a PostgreSQL URL "
                 "(postgresql:// or postgresql+psycopg://)."
             )
+
+    postgres_runtime = database_url.startswith(("postgresql://", "postgresql+"))
+    if postgres_runtime:
+        from server.billing.schema_preflight import validate_billing_schema
+
+        validate_billing_schema()
+        logger.info(
+            "Billing database schema preflight passed",
+            extra={"extra_fields": {"event": "billing.schema_preflight.passed"}},
+        )
+        if _env_bool("ATTACHMENTS_DIRECT_UPLOAD_ENABLED", default=False):
+            from server.attachment_schema_preflight import validate_direct_upload_schema
+
+            validate_direct_upload_schema()
+            logger.info(
+                "Direct attachment upload schema preflight passed",
+                extra={"extra_fields": {"event": "attachment.schema_preflight.passed"}},
+            )
+    else:
+        logger.info(
+            "Billing database schema preflight skipped for non-PostgreSQL development runtime",
+            extra={"extra_fields": {"event": "billing.schema_preflight.skipped_non_postgres"}},
+        )
 
     required_keys = ["API_KEYS"]
     missing = [k for k in required_keys if not os.getenv(k)]
@@ -151,39 +220,194 @@ async def lifespan(app: FastAPI):
             "ATTACHMENTS_CLEANUP_INTERVAL_SECONDS",
             default=300,
         )
-        cleanup_stop_event = asyncio.Event()
+        attachment_cleanup_stop_event = asyncio.Event()
 
         async def _cleanup_loop():
-            while not cleanup_stop_event.is_set():
+            while not attachment_cleanup_stop_event.is_set():
                 try:
                     stats = await asyncio.to_thread(attachment_cleanup_service.run_cleanup_cycle)
                     logger.info(
                         "Attachment cleanup cycle completed",
-                        extra={"extra_fields": {"stats": stats}},
+                        extra={
+                            "extra_fields": {
+                                "event": "upload.cleanup.cycle.completed",
+                                "stats": stats,
+                            }
+                        },
                     )
                 except Exception:
-                    logger.exception("Attachment cleanup cycle failed")
+                    logger.exception(
+                        "Attachment cleanup cycle failed",
+                        extra={
+                            "extra_fields": {
+                                "event": "upload.cleanup.cycle.failed",
+                            }
+                        },
+                    )
 
                 try:
-                    await asyncio.wait_for(cleanup_stop_event.wait(), timeout=interval_seconds)
+                    await asyncio.wait_for(
+                        attachment_cleanup_stop_event.wait(),
+                        timeout=interval_seconds,
+                    )
                 except TimeoutError:
                     continue
 
-        cleanup_task = asyncio.create_task(_cleanup_loop(), name="attachment-cleanup-worker")
+        attachment_cleanup_task = asyncio.create_task(
+            _cleanup_loop(),
+            name="attachment-cleanup-worker",
+        )
         logger.info(
             "Attachment cleanup worker started",
-            extra={"extra_fields": {"interval_seconds": interval_seconds}},
+            extra={
+                "extra_fields": {
+                    "event": "upload.cleanup.worker.started",
+                    "interval_seconds": interval_seconds,
+                }
+            },
+        )
+
+    if postgres_runtime and _env_bool(
+        "ENABLE_BILLING_RESERVATION_CLEANUP_WORKER",
+        default=True,
+    ):
+        from server.billing import reservation_cleanup as reservation_cleanup_service
+
+        cleanup_interval_seconds = _parse_positive_int_env(
+            "BILLING_RESERVATION_CLEANUP_INTERVAL_SECONDS",
+            default=300,
+        )
+        stale_after_seconds = _parse_positive_int_env(
+            "BILLING_RESERVATION_STALE_AFTER_SECONDS",
+            default=1800,
+        )
+        heartbeat_interval_seconds = _parse_positive_int_env(
+            "BILLING_RESERVATION_HEARTBEAT_INTERVAL_SECONDS",
+            default=60,
+        )
+        try:
+            initial_stats = await asyncio.to_thread(
+                reservation_cleanup_service.run_cleanup_cycle,
+                stale_after_seconds=stale_after_seconds,
+            )
+            logger.info(
+                "Billing reservation startup cleanup completed",
+                extra={
+                    "extra_fields": {
+                        "event": "billing.reservation_cleanup.startup",
+                        **initial_stats.as_dict(),
+                    }
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Billing reservation startup cleanup failed",
+                extra={
+                    "extra_fields": {
+                        "event": "billing.reservation_cleanup.startup_failed",
+                        "errors": 1,
+                    }
+                },
+            )
+        reservation_cleanup_stop_event = asyncio.Event()
+
+        async def _reservation_maintenance_loop():
+            elapsed_since_cleanup = 0
+            while not reservation_cleanup_stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        reservation_cleanup_stop_event.wait(),
+                        timeout=heartbeat_interval_seconds,
+                    )
+                    break
+                except TimeoutError:
+                    pass
+
+                try:
+                    touched = await asyncio.to_thread(
+                        reservation_cleanup_service.heartbeat_active_reservations
+                    )
+                    if touched:
+                        logger.info(
+                            "Billing reservation heartbeat completed",
+                            extra={
+                                "extra_fields": {
+                                    "event": "billing.reservation_heartbeat.completed",
+                                    "reservations_touched": touched,
+                                }
+                            },
+                        )
+                except Exception:
+                    logger.exception(
+                        "Billing reservation heartbeat failed",
+                        extra={
+                            "extra_fields": {
+                                "event": "billing.reservation_heartbeat.failed",
+                            }
+                        },
+                    )
+
+                elapsed_since_cleanup += heartbeat_interval_seconds
+                if elapsed_since_cleanup >= cleanup_interval_seconds:
+                    try:
+                        stats = await asyncio.to_thread(
+                            reservation_cleanup_service.run_cleanup_cycle,
+                            stale_after_seconds=stale_after_seconds,
+                        )
+                        logger.info(
+                            "Billing reservation cleanup completed",
+                            extra={
+                                "extra_fields": {
+                                    "event": "billing.reservation_cleanup.completed",
+                                    **stats.as_dict(),
+                                }
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Billing reservation cleanup failed",
+                            extra={
+                                "extra_fields": {
+                                    "event": "billing.reservation_cleanup.failed",
+                                    "errors": 1,
+                                }
+                            },
+                        )
+                    elapsed_since_cleanup = 0
+
+        reservation_cleanup_task = asyncio.create_task(
+            _reservation_maintenance_loop(),
+            name="billing-reservation-maintenance-worker",
+        )
+        logger.info(
+            "Billing reservation maintenance worker started",
+            extra={
+                "extra_fields": {
+                    "event": "billing.reservation_cleanup.worker_started",
+                    "cleanup_interval_seconds": cleanup_interval_seconds,
+                    "stale_after_seconds": stale_after_seconds,
+                    "heartbeat_interval_seconds": heartbeat_interval_seconds,
+                }
+            },
         )
 
     yield
 
-    if cleanup_stop_event is not None:
-        cleanup_stop_event.set()
-    if cleanup_task is not None:
+    if reservation_cleanup_stop_event is not None:
+        reservation_cleanup_stop_event.set()
+    if reservation_cleanup_task is not None:
         try:
-            await asyncio.wait_for(cleanup_task, timeout=5)
+            await asyncio.wait_for(reservation_cleanup_task, timeout=5)
         except Exception:
-            cleanup_task.cancel()
+            reservation_cleanup_task.cancel()
+
+    if attachment_cleanup_stop_event is not None:
+        attachment_cleanup_stop_event.set()
+    if attachment_cleanup_task is not None:
+        try:
+            await asyncio.wait_for(attachment_cleanup_task, timeout=5)
+        except Exception:
+            attachment_cleanup_task.cancel()
 
     logger.info("FastAPI server shutting down")
 
@@ -194,7 +418,7 @@ def create_app() -> FastAPI:
         title="CortexAI API",
         description="Unified API for multiple AI providers",
         version="1.0.0",
-        lifespan=lifespan
+        lifespan=lifespan,
     )
 
     # Proxy headers middleware must be outermost so that downstream middleware
@@ -208,6 +432,7 @@ def create_app() -> FastAPI:
     if _env_bool("ENABLE_PROXY_HEADERS", default=True):
         try:
             from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
             trusted = _trusted_proxy_ips()
             app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
             logger.info(
@@ -233,20 +458,25 @@ def create_app() -> FastAPI:
 
     # API routes - registered first so /v1/* takes precedence over static files
     app.include_router(health.router)
+
     # Cognito callback at /auth (when app client callback URL is e.g. .../auth)
     @app.get("/auth")
     async def auth_callback(request: Request, response: Response, code: str | None = None):
         return await auth_routes.handle_oauth_callback(request, response, code)
+
     app.include_router(auth_routes.router)
     app.include_router(chat.router)
     app.include_router(client_diagnostics.router)
     app.include_router(compare.router)
+    app.include_router(cortex_analysis.router)
     app.include_router(optimize.router)
     app.include_router(history.router)
     app.include_router(admin.router)
     app.include_router(reporting.router)
     app.include_router(byok.router)
     app.include_router(whoami.router)
+    app.include_router(entitlements.router)
+    app.include_router(billing.router)
     app.include_router(catalog.router)
     app.include_router(files.router)
 
@@ -265,4 +495,3 @@ def create_app() -> FastAPI:
         logger.info("SERVE_FRONTEND=false; static frontend mount disabled")
 
     return app
-

@@ -4,6 +4,8 @@ import type {
   ChatResponse,
   ChatTurn,
   CompareResponse,
+  CortexAnalysisRun,
+  CortexAnalysisStatus,
   FileUploadResponse,
   HistoryEntry,
   HistoryThread,
@@ -19,6 +21,8 @@ import {
   normalizeSessionId,
   persistActiveSessionId,
 } from "../session/activeSession";
+import type { SubscriptionError } from "../subscription/subscriptionErrors";
+import { clearAttachmentUploads } from "../uploads/attachmentUploadQueue";
 
 interface BeginTurnInput {
   mode: ChatMode;
@@ -84,8 +88,18 @@ interface ChatStoreState {
     patch?: Partial<ChatResponse>,
   ) => void;
   setTurnStatus: (turnId: string, status: TurnStatus) => void;
+  discardTurn: (turnId: string) => void;
   setTurnCompareSummary: (turnId: string, summary: CompareResponse) => void;
-  hydrateFromHistoryThread: (thread: HistoryThread) => void;
+  setTurnAnalysisStatus: (
+    turnId: string,
+    status: CortexAnalysisStatus,
+    error?: string,
+  ) => void;
+  addTurnAnalysisRun: (turnId: string, run: CortexAnalysisRun) => void;
+  hydrateFromHistoryThread: (
+    thread: HistoryThread,
+    analysisRuns?: CortexAnalysisRun[],
+  ) => void;
   startNewChat: () => void;
 
   responses: ChatResponse[];
@@ -101,6 +115,8 @@ interface ChatStoreState {
 
   error: string | null;
   setError: (err: string | null) => void;
+  subscriptionError: SubscriptionError | null;
+  setSubscriptionError: (err: SubscriptionError | null) => void;
 
   history: HistoryEntry[];
   setHistory: (entries: HistoryEntry[]) => void;
@@ -258,6 +274,18 @@ export const useChatStore = create<ChatStoreState>((set) => ({
             ? false
             : state.streaming,
     })),
+  discardTurn: (turnId) =>
+    set((state) => {
+      const turns = state.turns.filter((turn) => turn.id !== turnId);
+      const nextActive = turns[turns.length - 1] ?? null;
+      return {
+        turns,
+        activeTurnId: nextActive?.id ?? null,
+        responses: nextActive?.responses ?? [],
+        streaming: false,
+        streamingText: "",
+      };
+    }),
   setTurnCompareSummary: (turnId, summary) =>
     set((state) => {
       let activeResponses = state.responses;
@@ -277,8 +305,51 @@ export const useChatStore = create<ChatStoreState>((set) => ({
         responses: state.activeTurnId === turnId ? activeResponses : state.responses,
       };
     }),
-  hydrateFromHistoryThread: (thread) => {
-    const turns = buildTurnsFromHistoryEntries(thread.entries);
+  setTurnAnalysisStatus: (turnId, status, error) =>
+    set((state) => ({
+      turns: state.turns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              analysisStatus: status,
+              analysisError: status === "failed" ? error : undefined,
+            }
+          : turn,
+      ),
+    })),
+  addTurnAnalysisRun: (turnId, run) =>
+    set((state) => ({
+      turns: state.turns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              analysisRuns: [
+                run,
+                ...(turn.analysisRuns ?? []).filter(
+                  (item) => item.analysisId !== run.analysisId,
+                ),
+              ],
+              analysisStatus: "idle",
+              analysisError: undefined,
+            }
+          : turn,
+      ),
+    })),
+  hydrateFromHistoryThread: (thread, analysisRuns = []) => {
+    void clearAttachmentUploads({ deleteRemote: true });
+    const analysisByGroup = new Map<string, CortexAnalysisRun[]>();
+    for (const run of analysisRuns) {
+      const existing = analysisByGroup.get(run.requestGroupId) ?? [];
+      existing.push(run);
+      analysisByGroup.set(run.requestGroupId, existing);
+    }
+    const turns = buildTurnsFromHistoryEntries(thread.entries).map((turn) => ({
+      ...turn,
+      analysisRuns: turn.requestGroupId
+        ? analysisByGroup.get(turn.requestGroupId) ?? []
+        : [],
+      analysisStatus: "idle" as const,
+    }));
     const latestTurn = turns[turns.length - 1] ?? null;
     const sessionId = normalizeSessionId(thread.sessionId);
     persistActiveSessionId(sessionId);
@@ -294,9 +365,11 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       sessionId,
       pendingNewSession: !sessionId,
       error: null,
+      subscriptionError: null,
     });
   },
   startNewChat: () => {
+    void clearAttachmentUploads({ deleteRemote: true });
     clearActiveSessionId();
     set({
       prompt: "",
@@ -307,6 +380,7 @@ export const useChatStore = create<ChatStoreState>((set) => ({
       streamingText: "",
       streaming: false,
       error: null,
+      subscriptionError: null,
       sessionId: null,
       pendingNewSession: true,
     });
@@ -326,6 +400,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
 
   error: null,
   setError: (err) => set({ error: err }),
+  subscriptionError: null,
+  setSubscriptionError: (err) => set({ subscriptionError: err }),
 
   history: [],
   setHistory: (entries) => set({ history: entries }),

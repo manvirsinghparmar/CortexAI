@@ -27,6 +27,9 @@ Primary model: `models/unified_response.py`
   - `token_usage`
   - `estimated_cost`
   - `finish_reason`
+  - `metadata.completion_status`
+  - `metadata.stop_cause`
+  - `metadata.generation_budget`
   - `error`
   - `metadata`
   - `raw` (optional, debug/full-save only)
@@ -82,10 +85,11 @@ persisted history entries.
 
 ## Route/Orchestrator Guardrails Tied to Contract
 
-- Route-level `max_tokens` clamps in `server/utils.py` (current cap: `2048`).
-- Empty-success normalization in `server/utils.py` converts blank `finish_reason=length` payloads into provider errors for safe retry/fallback behavior.
+- `orchestrator/generation_policy.py` resolves named profiles or explicit limits against model, context, and operational ceilings. Its effective per-target value is shared by provider execution and credit authorization.
+- Omitted legacy requests keep the Quick/2,048 default. Unsafe explicit limits are rejected with `422` instead of silently clamped.
+- `orchestrator/completion_status.py` maps provider finish reasons to `complete|incomplete|failed` and normalized stop causes. Blank or partial `finish_reason=length` payloads remain billable incomplete work; unexplained empty successes still follow provider-error normalization.
 - Provider availability errors are sanitized in `server/utils.py` so manual Ask, Compare, and streaming cards never render raw upstream JSON. Smart routing still uses retryable provider errors for its existing fallback path, and frontend response cards render transient capacity failures with `.model-soft-error`.
-- OpenAI compatibility retry (`max_tokens` -> `max_completion_tokens`) is handled in `api/openai_client.py` for models that reject legacy parameter shapes.
+- OpenAI GPT-5.6/Codex requests use Responses API `max_output_tokens`; compatible chat models retain the `max_tokens` to `max_completion_tokens` retry.
 
 ## Validation Tests
 
@@ -94,6 +98,7 @@ Primary contract and regression coverage:
 - `tests/test_unified_response_contract.py`
 - `tests/test_fastapi_contract_and_guardrails.py`
 - `tests/test_server_utils.py`
+- `tests/test_generation_policy.py`
 - `tests/test_routing_regression.py`
 - `tests/test_api_persistence_guardrails.py`
 
@@ -102,7 +107,8 @@ Primary contract and regression coverage:
 - API behavior and route contracts: `docs/FASTAPI_README.md`
 - High-level project runtime and workflows: `README.md`
 - Smart routing decision flow: `docs/SMART_ROUTING_DIAGRAM.md`
+- Generation budget contract: `docs/GENERATION_BUDGETS.md`
 
 ---
 
-Last updated: 2026-03-19
+Last updated: 2026-08-04

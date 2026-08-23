@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+
+from server.billing.models import ModelBillingClass
 
 
 class Tier(str, Enum):
@@ -43,6 +44,8 @@ class RoutingConstraints:
     max_total_latency_ms: int | None = None
     preferred_provider: str | None = None
     allowed_providers: list[str] | None = None
+    allowed_billing_classes: list[str] | None = None
+    allowed_models: list[str] | None = None
     min_context_limit: int | None = None
     json_only: bool = False
     strict_format: bool = False
@@ -57,7 +60,37 @@ class ModelCandidate:
     output_cost_per_1m: float
     context_limit: int
     tags: list[str]
+    billing_class: ModelBillingClass = ModelBillingClass.ADVANCED
+    input_credit_multiplier: float = 0.0
+    output_credit_multiplier: float = 0.0
+    credit_usage_label: str = ""
+    credit_pricing_version: str = ""
     enabled: bool = True
+    selectable: bool = True
+    display_name: str = ""
+    description: str = ""
+    release_status: str = "unknown"
+    lifecycle_status: str = "ACTIVE"
+    replacement_model: str | None = None
+    retirement_date: str | None = None
+    migration_reason: str | None = None
+    pricing_model: str | None = None
+    pricing_rule_id: str | None = None
+    pricing_effective_from: str | None = None
+    pricing_effective_until: str | None = None
+    long_context_threshold_tokens: int | None = None
+    cached_input_cost_per_1m: float | None = None
+    cache_write_cost_per_1m: float | None = None
+    max_output_tokens: int | None = None
+    aliases: list[str] = field(default_factory=list)
+    reasoning_modes: list[str] = field(default_factory=list)
+    default_reasoning_mode: str | None = None
+    reasoning_efforts: list[str] = field(default_factory=list)
+    reasoning_disable_supported: bool = True
+    reasoning_counts_against_output: bool = True
+    pricing_source_url: str | None = None
+    lifecycle_source_url: str | None = None
+    source_verified_at: str | None = None
     supports_image_input: bool = False
     supported_attachment_mime_types: list[str] = field(default_factory=list)
     max_attachment_bytes: int | None = None

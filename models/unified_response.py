@@ -10,6 +10,9 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
     def __post_init__(self):
         if self.total_tokens == 0 and (self.prompt_tokens > 0 or self.completion_tokens > 0):
@@ -40,6 +43,19 @@ class UnifiedResponse:
     token_usage: TokenUsage
     estimated_cost: float
 
+    # Auditable model identity and provider-cost evidence.
+    requested_model: str | None = None
+    served_model: str | None = None
+    pricing_model: str | None = None
+    model_lifecycle_status: str = "UNKNOWN"
+    alias_redirected: bool = False
+    replacement_model: str | None = None
+    migration_reason: str | None = None
+    reasoning_mode: str | None = None
+    pricing_rule_applied: str | None = None
+    pricing_unknown: bool = False
+    pricing_snapshot: dict[str, Any] = field(default_factory=dict)
+
     # NEW: routing/debugging/caching guardrails
     mode: str | None = None  # ask/compare/eval
     language: str | None = "en"  # requested/expected output language
@@ -58,6 +74,9 @@ class UnifiedResponse:
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
 
     def __post_init__(self):
+        object.__setattr__(self, "requested_model", self.requested_model or self.model)
+        object.__setattr__(self, "served_model", self.served_model or self.model)
+        object.__setattr__(self, "pricing_model", self.pricing_model or self.served_model or self.model)
         valid_reasons = {"stop", "length", "tool", "content_filter", "error", None}
         if self.finish_reason not in valid_reasons:
             # preserve provider reason for debugging instead of dropping it silently
@@ -80,15 +99,29 @@ class UnifiedResponse:
             "text": self.text if len(self.text) <= 200 else self.text[:200] + "...",
             "provider": self.provider,
             "model": self.model,
+            "requested_model": self.requested_model,
+            "served_model": self.served_model,
+            "pricing_model": self.pricing_model,
+            "model_lifecycle_status": self.model_lifecycle_status,
+            "alias_redirected": self.alias_redirected,
+            "replacement_model": self.replacement_model,
+            "migration_reason": self.migration_reason,
+            "reasoning_mode": self.reasoning_mode,
             "latency_ms": self.latency_ms,
             "token_usage": {
                 "prompt_tokens": self.token_usage.prompt_tokens,
                 "completion_tokens": self.token_usage.completion_tokens,
                 "total_tokens": self.token_usage.total_tokens,
+                "cached_input_tokens": self.token_usage.cached_input_tokens,
+                "cache_write_tokens": self.token_usage.cache_write_tokens,
+                "reasoning_tokens": self.token_usage.reasoning_tokens,
             },
             "estimated_cost": self.estimated_cost,
             "cost_currency": self.cost_currency,
             "pricing_version": self.pricing_version,
+            "pricing_rule_applied": self.pricing_rule_applied,
+            "pricing_unknown": self.pricing_unknown,
+            "pricing_snapshot": self.pricing_snapshot,
             "mode": self.mode,
             "language": self.language,
             "input_hash": self.input_hash,

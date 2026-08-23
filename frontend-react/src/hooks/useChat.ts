@@ -12,7 +12,12 @@ import {
   resolveOptimizationResponse,
 } from "../optimization/promptOptimization";
 import { makePlaceholderResponse, useChatStore } from "../store/chatStore";
+import { clearAttachmentUploads } from "../uploads/attachmentUploadQueue";
 import { StreamDeltaBuffer } from "../streaming/streamDeltaBuffer";
+import {
+  isSubscriptionDenial,
+  toSubscriptionError,
+} from "../subscription/subscriptionErrors";
 import { parseModelKey } from "./useSmartRouting";
 import type {
   ApiError,
@@ -24,10 +29,13 @@ import type {
   CompareRequest,
   ConversationHistoryItem,
   FileUploadResponse,
+  GenerationProfile,
   PromptOptimizationState,
   ResponseRunStatus,
   UserContextRequest,
 } from "../types";
+
+const MANAGED_GENERATION_PROFILE: GenerationProfile = "auto";
 
 let activeAbortController: AbortController | null = null;
 
@@ -52,14 +60,17 @@ export function useChat() {
       return;
     }
 
+    const previousActiveTurnId = state.activeTurnId;
     const controller = beginRequestController();
 
     state.setError(null);
+    state.setSubscriptionError(null);
     state.setStreamingText("");
 
     let finalPrompt = rawPrompt;
     let turnId: string | undefined;
     let optimization: PromptOptimizationState | undefined;
+    const creditActivityId = createCreditActivityId();
     const requestStartedAt = new Date().toISOString();
     const attachmentItems = toAttachmentItems(attachments);
     const conversationHistory = buildConversationHistory(state.turns);
@@ -88,11 +99,6 @@ export function useChat() {
           status: "optimizing",
           optimization,
         });
-        if (clearComposer) {
-          state.setPrompt("");
-          state.clearAttachments();
-        }
-
         try {
           const optimized = await optimizePrompt(
             buildOptimizeRequest({
@@ -100,6 +106,7 @@ export function useChat() {
               conversationHistory,
               context,
               attachments,
+              creditActivityId,
             }),
             controller.signal,
           );
@@ -109,6 +116,7 @@ export function useChat() {
           optimization = resolved.optimization;
         } catch (err) {
           if (controller.signal.aborted) return;
+          if (isSubscriptionDenial(err)) throw toSubscriptionError(err);
           console.warn("Prompt optimization failed; continuing with original prompt", err);
           const resolved = resolveOptimizationFailure(rawPrompt);
           finalPrompt = resolved.finalPrompt;
@@ -128,6 +136,8 @@ export function useChat() {
           signal: controller.signal,
           turnId,
           optimization,
+          creditActivityId,
+          initialQuery: rawPrompt,
           startedAt: requestStartedAt,
           clearComposer,
         });
@@ -141,6 +151,8 @@ export function useChat() {
           signal: controller.signal,
           turnId,
           optimization,
+          creditActivityId,
+          initialQuery: rawPrompt,
           startedAt: requestStartedAt,
           clearComposer,
         });
@@ -148,6 +160,16 @@ export function useChat() {
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const latest = useChatStore.getState();
+      if (isSubscriptionDenial(err)) {
+        const denial = toSubscriptionError(err);
+        if (latest.activeTurnId && latest.activeTurnId !== previousActiveTurnId) {
+          latest.discardTurn(latest.activeTurnId);
+        }
+        latest.setSubscriptionError(denial);
+        latest.setError(null);
+        latest.setStreaming(false);
+        return;
+      }
       const message = toFriendlyError(err);
       if (latest.activeTurnId) {
         markTurnResponsesFailed(latest.activeTurnId, message);
@@ -172,7 +194,11 @@ export function useChat() {
     [submit],
   );
 
-  const regenerate = useCallback(async (turnId: string, responseIndex = 0) => {
+  const regenerate = useCallback(async (
+    turnId: string,
+    responseIndex = 0,
+    generationProfileOverride?: GenerationProfile,
+  ) => {
     const state = useChatStore.getState();
     const sourceTurn = state.turns.find((turn) => turn.id === turnId);
     const sourceResponse = sourceTurn?.responses[responseIndex];
@@ -192,7 +218,9 @@ export function useChat() {
     const controller = beginRequestController();
 
     state.setError(null);
+    state.setSubscriptionError(null);
     state.setStreamingText("");
+    state.setStreaming(true);
 
     try {
       await runRegenerateResponse({
@@ -205,11 +233,29 @@ export function useChat() {
         startedAt: requestStartedAt,
         targetOverride: target,
         researchEnabledOverride: !!sourceTurn.researchEnabled,
+        regenerationSourceRequestId:
+          sourceTurn.mode === "compare" ? sourceResponse.request_id : undefined,
+        generationProfileOverride,
       });
     } catch (err: unknown) {
       if (controller.signal.aborted) return;
       const latest = useChatStore.getState();
+      if (generationProfileOverride) {
+        latest.updateTurnResponse(turnId, responseIndex, sourceResponse);
+        latest.setTurnStatus(turnId, "complete");
+      }
+      if (isSubscriptionDenial(err)) {
+        latest.setSubscriptionError(toSubscriptionError(err));
+        latest.setError(null);
+        latest.setStreaming(false);
+        return;
+      }
       const message = toFriendlyError(err);
+      if (generationProfileOverride) {
+        latest.setError(`Retry failed. The partial answer was kept. ${message}`);
+        latest.setStreaming(false);
+        return;
+      }
       if (latest.activeTurnId) {
         markTurnResponsesFailed(latest.activeTurnId, message);
         latest.setTurnStatus(latest.activeTurnId, "error");
@@ -220,6 +266,17 @@ export function useChat() {
       clearRequestController(controller);
     }
   }, []);
+
+  const retryWithMoreRoom = useCallback(
+    async (turnId: string, responseIndex = 0) => {
+      const state = useChatStore.getState();
+      const response = state.turns.find((turn) => turn.id === turnId)?.responses[responseIndex];
+      const profile = response?.retry_with_more_room?.recommended_profile;
+      if (!profile) return;
+      await regenerate(turnId, responseIndex, profile);
+    },
+    [regenerate],
+  );
 
   const cancel = useCallback(() => {
     activeAbortController?.abort();
@@ -238,7 +295,7 @@ export function useChat() {
     state.setStreaming(false);
   }, []);
 
-  return { submit, submitFollowUp, regenerate, cancel };
+  return { submit, submitFollowUp, regenerate, retryWithMoreRoom, cancel };
 }
 
 async function runAskTurn({
@@ -250,6 +307,8 @@ async function runAskTurn({
   signal,
   turnId,
   optimization,
+  creditActivityId,
+  initialQuery,
   startedAt,
   targetOverride,
   researchEnabledOverride,
@@ -263,6 +322,8 @@ async function runAskTurn({
   signal: AbortSignal;
   turnId?: string;
   optimization?: PromptOptimizationState;
+  creditActivityId: string;
+  initialQuery: string;
   startedAt: string;
   targetOverride?: Partial<CompareTargetRequest>;
   researchEnabledOverride?: boolean;
@@ -276,9 +337,12 @@ async function runAskTurn({
   const researchEnabled = researchEnabledOverride ?? state.researchMode;
   const request: ChatRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: creditActivityId,
+    initial_query: initialQuery,
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    generation: { profile: MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -308,20 +372,17 @@ async function runAskTurn({
       responses: [placeholder],
       optimization,
     });
-  } else {
-    if (clearComposer) {
-      state.setPrompt("");
-      state.clearAttachments();
-    }
   }
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
+  const commitComposer = deferredComposerClear(clearComposer);
   // finally guarantees no orphaned timeout can mutate a turn after the
   // cancel/error path has settled it.
   try {
     for await (const chunk of streamChat(request, signal)) {
       if (signal.aborted) break;
+      commitComposer();
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(0, chunk.text);
         continue;
@@ -389,7 +450,11 @@ async function runAskTurn({
       started_at: current.started_at ?? startedAt,
       completed_at: finalResponse.error ? current.completed_at : completedAt,
       failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
-      ui_status: finalResponse.error ? "failed" : "complete",
+      ui_status: finalResponse.error
+        ? "failed"
+        : finalResponse.completion_status === "incomplete"
+          ? "incomplete"
+          : "complete",
     } as ChatResponse;
     latest.updateTurnResponse(activeTurnId, 0, completedResponse);
     const resolvedSession = completedResponse.session_id;
@@ -409,6 +474,8 @@ async function runCompareTurn({
   signal,
   turnId,
   optimization,
+  creditActivityId,
+  initialQuery,
   startedAt,
   clearComposer,
 }: {
@@ -420,6 +487,8 @@ async function runCompareTurn({
   signal: AbortSignal;
   turnId?: string;
   optimization?: PromptOptimizationState;
+  creditActivityId: string;
+  initialQuery: string;
   startedAt: string;
   clearComposer: boolean;
 }) {
@@ -443,8 +512,11 @@ async function runCompareTurn({
   );
   const request: CompareRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: creditActivityId,
+    initial_query: initialQuery,
     targets,
     routing: { smart_mode: false, research_mode: researchEnabled },
+    generation: { profile: MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
   };
@@ -467,17 +539,14 @@ async function runCompareTurn({
       responses: placeholders,
       optimization,
     });
-  } else {
-    if (clearComposer) {
-      state.setPrompt("");
-      state.clearAttachments();
-    }
   }
 
   const deltaBuffer = new StreamDeltaBuffer(activeTurnId);
+  const commitComposer = deferredComposerClear(clearComposer);
   try {
     for await (const chunk of streamCompare(request, signal)) {
       if (signal.aborted) break;
+      commitComposer();
       const index = chunk.index ?? 0;
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(index, chunk.text);
@@ -503,7 +572,11 @@ async function runCompareTurn({
           started_at: current.started_at ?? startedAt,
           completed_at: failed ? current.completed_at : completedAt,
           failed_at: failed ? current.failed_at ?? completedAt : current.failed_at,
-          ui_status: failed ? "failed" : "complete",
+          ui_status: failed
+            ? "failed"
+            : chunk.response.completion_status === "incomplete"
+              ? "incomplete"
+              : "complete",
         });
       } else if (chunk.type === "done") {
         if (chunk.compare) latest.setTurnCompareSummary(activeTurnId, chunk.compare);
@@ -539,6 +612,8 @@ async function runRegenerateResponse({
   startedAt,
   targetOverride,
   researchEnabledOverride,
+  regenerationSourceRequestId,
+  generationProfileOverride,
 }: {
   turnId: string;
   responseIndex: number;
@@ -549,6 +624,8 @@ async function runRegenerateResponse({
   startedAt: string;
   targetOverride?: Partial<CompareTargetRequest>;
   researchEnabledOverride?: boolean;
+  regenerationSourceRequestId?: string;
+  generationProfileOverride?: GenerationProfile;
 }) {
   const state = useChatStore.getState();
   const selected = parseModelKey(state.selectedModelKey);
@@ -558,11 +635,20 @@ async function runRegenerateResponse({
   const researchEnabled = researchEnabledOverride ?? state.researchMode;
   const request: ChatRequest = {
     prompt: submittedPrompt,
+    credit_activity_id: createCreditActivityId(),
+    initial_query: submittedPrompt,
     provider: smartMode ? undefined : provider || undefined,
     model: smartMode ? undefined : model || undefined,
     routing: { smart_mode: smartMode, research_mode: researchEnabled },
+    generation: { profile: generationProfileOverride ?? MANAGED_GENERATION_PROFILE },
     attachments: attachmentItems.length > 0 ? attachmentItems : undefined,
     context,
+    regeneration: regenerationSourceRequestId
+      ? {
+          source_request_id: regenerationSourceRequestId,
+          retry_reason: generationProfileOverride ? "output_limit" : undefined,
+        }
+      : undefined,
   };
 
   const placeholder = makePlaceholderResponse(
@@ -572,13 +658,21 @@ async function runRegenerateResponse({
     state.sessionId,
     { startedAt },
   );
-  state.prepareTurnResponseForStreaming(turnId, responseIndex, placeholder);
 
   let finalResponse: Partial<ChatResponse> = {};
   const deltaBuffer = new StreamDeltaBuffer(turnId);
+  let prepared = false;
   try {
     for await (const chunk of streamChat(request, signal)) {
       if (signal.aborted) break;
+      if (!prepared) {
+        useChatStore.getState().prepareTurnResponseForStreaming(
+          turnId,
+          responseIndex,
+          placeholder,
+        );
+        prepared = true;
+      }
       if (chunk.type === "delta" && chunk.text) {
         deltaBuffer.append(responseIndex, chunk.text);
         continue;
@@ -637,7 +731,11 @@ async function runRegenerateResponse({
       started_at: current.started_at ?? startedAt,
       completed_at: finalResponse.error ? current.completed_at : completedAt,
       failed_at: finalResponse.error ? current.failed_at ?? completedAt : current.failed_at,
-      ui_status: finalResponse.error ? "failed" : "complete",
+      ui_status: finalResponse.error
+        ? "failed"
+        : finalResponse.completion_status === "incomplete"
+          ? "incomplete"
+          : "complete",
     } as ChatResponse;
     latest.updateTurnResponse(turnId, responseIndex, completedResponse);
     const resolvedSession = completedResponse.session_id;
@@ -770,6 +868,18 @@ function toAttachmentItems(attachments: FileUploadResponse[]): AttachmentRequest
   }));
 }
 
+function deferredComposerClear(enabled: boolean): () => void {
+  let committed = !enabled;
+  return () => {
+    if (committed) return;
+    committed = true;
+    const state = useChatStore.getState();
+    void clearAttachmentUploads({ deleteRemote: false });
+    state.setPrompt("");
+    state.clearAttachments();
+  };
+}
+
 async function refreshHistory() {
   const state = useChatStore.getState();
   try {
@@ -803,6 +913,13 @@ function getDetailRecord(body: unknown): Record<string, unknown> | null {
   if (typeof body !== "object" || body === null) return null;
   const detail = (body as Record<string, unknown>).detail;
   return typeof detail === "object" && detail !== null ? (detail as Record<string, unknown>) : null;
+}
+
+function createCreditActivityId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `credit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function beginRequestController(): AbortController {

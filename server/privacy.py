@@ -176,6 +176,14 @@ def sanitize_routing_payload_for_storage(
             "final_tier": routing_metadata.get("final_tier"),
             "attempt_count": routing_metadata.get("attempt_count"),
             "fallback_used": bool(routing_metadata.get("fallback_used", False)),
+            "ai_credits": routing_metadata.get("ai_credits"),
+            "credit_usage_estimated": bool(
+                routing_metadata.get("credit_usage_estimated", False)
+            ),
+            "research_ai_credits": routing_metadata.get("research_ai_credits"),
+            "research_credit_usage_estimated": bool(
+                routing_metadata.get("research_credit_usage_estimated", False)
+            ),
         }
         slim_attempts: list[dict[str, Any]] = []
         for attempt in attempts:

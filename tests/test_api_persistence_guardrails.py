@@ -4,18 +4,22 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     Float,
     Integer,
+    Index,
     MetaData,
     PrimaryKeyConstraint,
     String,
@@ -31,10 +35,13 @@ from sqlalchemy.orm import sessionmaker
 import db.repository as repo
 from models.unified_response import MultiUnifiedResponse, TokenUsage, UnifiedResponse
 from server import dependencies as deps
+from server import cortex_analysis as cortex_analysis_service
 from server import persistence as persistence_service
+from server import rate_limit as rate_limit_service
 from server.app import create_app
 from server.routes import chat as chat_route
 from server.routes import compare as compare_route
+from server.routes import cortex_analysis as cortex_analysis_route
 from server.routes import history as history_route
 from server.utils import redact_sensitive_headers
 
@@ -71,7 +78,9 @@ class FakeOrchestrator:
             "sources": [{"title": "Example Source", "url": "https://example.com/report"}],
         }
 
-    def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         self.ask_calls += 1
         return UnifiedResponse(
             request_id="req_guardrail_ask_1",
@@ -96,7 +105,9 @@ class FakeOrchestrator:
                             "attempt_number": 1,
                             "tier": "T1",
                             "provider": model_type or "openai",
-                            "model": kwargs.get("model_name") or kwargs.get("model") or "gpt-4o-mini",
+                            "model": kwargs.get("model_name")
+                            or kwargs.get("model")
+                            or "gpt-4o-mini",
                             "validation": "ok",
                             "latency_ms": 10,
                         }
@@ -163,14 +174,33 @@ def fastapi_client(monkeypatch):
     monkeypatch.setenv("API_KEYS", "dev-key-1")
     monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("ALLOW_NON_POSTGRES_DATABASE_URL", "true")
+    rate_limit_service.reset_rate_limit_state()
 
     app = create_app()
     chat_route.API_DB_ENABLED = False
     compare_route.API_DB_ENABLED = False
+    cortex_analysis_route.API_DB_ENABLED = False
     history_route.API_DB_ENABLED = False
+    subscription_reservation = SimpleNamespace(
+        allowed_billing_classes=frozenset({"standard", "advanced"}),
+    )
+    monkeypatch.setattr(
+        chat_route,
+        "_reserve_chat_usage",
+        lambda **_kwargs: subscription_reservation,
+    )
+    monkeypatch.setattr(
+        compare_route,
+        "_reserve_compare_usage",
+        lambda **_kwargs: subscription_reservation,
+    )
+    monkeypatch.setattr(chat_route, "_finalize_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(compare_route, "_finalize_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(chat_route, "_release_subscription_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(compare_route, "_release_subscription_usage", lambda **_kwargs: None)
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
-    session_user_id = "11111111-1111-1111-1111-111111111111"
+    session_user_id = UUID("11111111-1111-1111-1111-111111111111")
     monkeypatch.setattr(
         deps,
         "parse_session",
@@ -339,6 +369,8 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         Column("input_tokens_est", Integer),
         Column("api_key_id", Uuid),
         Column("request_group_id", Uuid),
+        Column("response_revision_root_id", Uuid),
+        Column("response_revision", Integer, nullable=False, default=1),
         Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     )
 
@@ -374,6 +406,45 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         Column("total_tokens", Integer, nullable=False, default=0),
         Column("total_cost", Float, nullable=False, default=0.0),
         PrimaryKeyConstraint("user_id", "usage_date"),
+    )
+
+    Table(
+        "cortex_analysis_runs",
+        metadata,
+        Column("id", Uuid, primary_key=True, nullable=False),
+        Column("user_id", Uuid, nullable=False),
+        Column("session_id", Uuid, nullable=False),
+        Column("request_group_id", Uuid, nullable=False),
+        Column("model", String, nullable=False),
+        Column("source_fingerprint", String, nullable=False),
+        Column("source_snapshot", JSON, nullable=False, default=list),
+        Column("recommended_answer", String, nullable=False),
+        Column("agreements", JSON, nullable=False, default=list),
+        Column("disagreements", JSON, nullable=False, default=list),
+        Column("disagreement_note", String),
+        Column("unique_insights", JSON, nullable=False, default=list),
+        Column("confidence_level", String, nullable=False),
+        Column("confidence_reason", String, nullable=False),
+        Column("verify_items", JSON, nullable=False, default=list),
+        Column("high_stakes_domain", String),
+        Column("combined_response_count", Integer, nullable=False),
+        Column("failed_response_count", Integer, nullable=False, default=0),
+        Column("prompt_tokens", Integer, nullable=False, default=0),
+        Column("cached_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cache_write_tokens", BigInteger, nullable=False, default=0),
+        Column("reasoning_tokens", BigInteger, nullable=False, default=0),
+        Column("completion_tokens", Integer, nullable=False, default=0),
+        Column("total_tokens", Integer, nullable=False, default=0),
+        Column("estimated_cost", Float, nullable=False, default=0.0),
+        Column("pricing_snapshot", JSON, nullable=False, default=dict),
+        Column("pricing_version", String),
+        Column(
+            "analysis_policy_version",
+            String,
+            nullable=False,
+            default="cortex-analysis-v1",
+        ),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     )
 
     Table(
@@ -414,12 +485,220 @@ def _bootstrap_api_db_schema(database_url: str) -> None:
         PrimaryKeyConstraint("routing_decision_id", "attempt_number"),
     )
 
+    Table(
+        "billing_accounts",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("owner_type", String(32), nullable=False),
+        Column("owner_id", Uuid, nullable=False),
+        Column("stripe_customer_id", String(255), unique=True),
+        Column("currency", String(3), nullable=False, default="USD"),
+        Column("country", String(2)),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("owner_type IN ('user', 'organization')"),
+        Index("uq_billing_accounts_owner", "owner_type", "owner_id", unique=True),
+    )
+
+    Table(
+        "subscriptions",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("provider", String(32), nullable=False, default="stripe"),
+        Column("provider_subscription_id", String(255)),
+        Column("provider_price_id", String(255)),
+        Column("plan_code", String(64), nullable=False),
+        Column("status", String(64), nullable=False),
+        Column("current_period_start", DateTime),
+        Column("current_period_end", DateTime),
+        Column("cancel_at_period_end", Boolean, nullable=False, default=False),
+        Column("canceled_at", DateTime),
+        Column("trial_end", DateTime),
+        Column("grace_until", DateTime),
+        Column("latest_invoice_id", String(255)),
+        Column("last_provider_event_at", DateTime),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_subscriptions_provider_id",
+            "provider",
+            "provider_subscription_id",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_periods",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("subscription_id", Uuid),
+        Column("plan_code", String(64), nullable=False),
+        Column("starts_at", DateTime, nullable=False),
+        Column("ends_at", DateTime, nullable=False),
+        Column("status", String(32), nullable=False, default="active"),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("ends_at > starts_at"),
+        Index(
+            "uq_usage_period_account_start",
+            "billing_account_id",
+            "starts_at",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_counters",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("meter_key", String(64), nullable=False),
+        Column("used_quantity", BigInteger, nullable=False, default=0),
+        Column("reserved_quantity", BigInteger, nullable=False, default=0),
+        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        CheckConstraint("used_quantity >= 0 AND reserved_quantity >= 0"),
+        Index(
+            "uq_usage_counter_period_meter",
+            "usage_period_id",
+            "meter_key",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "usage_reservations",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("state", String(32), nullable=False),
+        Column("requested_quantities", JSON, nullable=False),
+        Column("settled_quantities", JSON),
+        Column("release_reason", String(255)),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("settled_at", DateTime),
+        Column("released_at", DateTime),
+        CheckConstraint("state IN ('reserved', 'settled', 'released', 'expired')"),
+        Index(
+            "uq_usage_reservations_request",
+            "billing_account_id",
+            "request_id",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "credit_transactions",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("billing_account_id", Uuid, nullable=False),
+        Column("usage_period_id", Uuid, nullable=False),
+        Column("reservation_id", Uuid),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("item_index", Integer, nullable=False, default=0),
+        Column("item_type", String(32), nullable=False),
+        Column("provider", String(64)),
+        Column("model", String(255)),
+        Column("input_tokens", BigInteger, nullable=False, default=0),
+        Column("normal_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cached_input_tokens", BigInteger, nullable=False, default=0),
+        Column("cache_write_tokens", BigInteger, nullable=False, default=0),
+        Column("reasoning_tokens", BigInteger, nullable=False, default=0),
+        Column("output_tokens", BigInteger, nullable=False, default=0),
+        Column("input_credits", BigInteger, nullable=False, default=0),
+        Column("normal_input_credits", BigInteger, nullable=False, default=0),
+        Column("cached_input_credits", BigInteger, nullable=False, default=0),
+        Column("cache_write_credits", BigInteger, nullable=False, default=0),
+        Column("output_credits", BigInteger, nullable=False, default=0),
+        Column("fixed_credits", BigInteger, nullable=False, default=0),
+        Column("total_credits", BigInteger, nullable=False),
+        Column("uncached_equivalent_credits", BigInteger, nullable=False, default=0),
+        Column("cache_savings_credits", BigInteger, nullable=False, default=0),
+        Column("provider_cost_usd", Float, nullable=False, default=0.0),
+        Column("usage_estimated", Boolean, nullable=False, default=False),
+        Column("pricing_version", String(64), nullable=False),
+        Column("metadata", JSON, nullable=False, default=dict),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_credit_transactions_reservation_item",
+            "reservation_id",
+            "item_index",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "cache_reuse_events",
+        metadata,
+        Column(
+            "id",
+            Uuid,
+            primary_key=True,
+            server_default=text("(lower(hex(randomblob(16))))"),
+        ),
+        Column("user_id", Uuid, nullable=False),
+        Column("request_id", String(255), nullable=False),
+        Column("operation_type", String(64), nullable=False),
+        Column("reused", Boolean, nullable=False),
+        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Index(
+            "uq_cache_reuse_events_user_operation_request",
+            "user_id",
+            "operation_type",
+            "request_id",
+            unique=True,
+        ),
+    )
+
+    Table(
+        "billing_webhook_events",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("provider", String(32), nullable=False, default="stripe"),
+        Column("provider_event_id", String(255), nullable=False),
+        Column("event_type", String(255), nullable=False),
+        Column("payload_hash", String(64), nullable=False),
+        Column("processing_status", String(32), nullable=False),
+        Column("received_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        Column("processed_at", DateTime),
+        Column("error_message", String),
+        CheckConstraint("processing_status IN ('received', 'processed', 'ignored', 'failed')"),
+        Index(
+            "uq_billing_webhook_provider_event",
+            "provider",
+            "provider_event_id",
+            unique=True,
+        ),
+    )
+
     metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(metadata.tables["users"]).values(
+                id=UUID("11111111-1111-1111-1111-111111111111"),
+                email="session-user@example.com",
+                display_name="Session User",
+                is_active=True,
+                auth_provider="session",
+                auth_subject="test-session-user",
+                auth_issuer="cortexai",
+            )
+        )
+    import db.tables as db_tables
+
+    db_tables._tables_cache.update({table.name: table for table in metadata.tables.values()})
     engine.dispose()
 
 
 class DBModeCompareOrchestrator:
-    def ask(self, prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def ask(
+        self, prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         metadata = {}
         if str(kwargs.get("research_mode") or "").strip().lower() == "on":
             metadata = {
@@ -543,24 +822,27 @@ def db_mode_fastapi_client(monkeypatch):
     monkeypatch.delenv("DAILY_CAP_SCOPE", raising=False)
 
     _reset_db_runtime_state(schema_name="main")
+    rate_limit_service.reset_rate_limit_state()
     _bootstrap_api_db_schema(db_url)
 
     old_persistence_db = persistence_service.API_DB_ENABLED
     old_chat_db = chat_route.API_DB_ENABLED
     old_compare_db = compare_route.API_DB_ENABLED
+    old_cortex_analysis_db = cortex_analysis_route.API_DB_ENABLED
     old_history_db = history_route.API_DB_ENABLED
     old_admin_db = admin_route.API_DB_ENABLED
 
     persistence_service.API_DB_ENABLED = True
     chat_route.API_DB_ENABLED = True
     compare_route.API_DB_ENABLED = True
+    cortex_analysis_route.API_DB_ENABLED = True
     history_route.API_DB_ENABLED = True
     admin_route.API_DB_ENABLED = True
 
     app = create_app()
     if hasattr(deps.get_orchestrator, "_instance"):
         delattr(deps.get_orchestrator, "_instance")
-    session_user_id = "11111111-1111-1111-1111-111111111111"
+    session_user_id = UUID("11111111-1111-1111-1111-111111111111")
     monkeypatch.setattr(
         deps,
         "parse_session",
@@ -579,11 +861,103 @@ def db_mode_fastapi_client(monkeypatch):
         persistence_service.API_DB_ENABLED = old_persistence_db
         chat_route.API_DB_ENABLED = old_chat_db
         compare_route.API_DB_ENABLED = old_compare_db
+        cortex_analysis_route.API_DB_ENABLED = old_cortex_analysis_db
         history_route.API_DB_ENABLED = old_history_db
         admin_route.API_DB_ENABLED = old_admin_db
+        rate_limit_service.reset_rate_limit_state()
         _reset_db_runtime_state(schema_name="public")
         with suppress(FileNotFoundError):
             db_file.unlink()
+
+
+@pytest.mark.unit
+def test_cortex_analysis_runs_persist_and_regeneration_marks_them_stale(
+    db_mode_fastapi_client,
+    monkeypatch,
+):
+    client, _ = db_mode_fastapi_client
+    generated = cortex_analysis_service.AnalysisResult(
+        recommended_answer="Use a staged rollout.",
+        agreements=["Both responses favor a staged rollout."],
+        disagreements=[],
+        disagreement_note=None,
+        unique_insights=[],
+        confidence_level="moderate",
+        confidence_reason="The responses align on the main tradeoff.",
+        verify_items=["Confirm the rollout constraint."],
+        high_stakes_domain=None,
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        estimated_cost=0.001,
+    )
+    monkeypatch.setattr(
+        cortex_analysis_service,
+        "analyze_responses",
+        lambda **kwargs: generated,
+    )
+
+    compare = client.post(
+        "/v1/compare",
+        json={
+            "prompt": "Compare rollout approaches",
+            "targets": [
+                {"provider": "openai", "model": "gpt-4o-mini"},
+                {"provider": "gemini", "model": "gemini-2.5-flash"},
+            ],
+            "routing": {"smart_mode": False, "research_mode": False},
+        },
+    )
+    assert compare.status_code == 200
+    compare_payload = compare.json()
+    group_id = compare_payload["request_group_id"]
+    session_id = compare_payload["session_id"]
+
+    first = client.post(f"/v1/compare/{group_id}/analysis", json={})
+    second = client.post(f"/v1/compare/{group_id}/analysis", json={})
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["analysisId"] != second.json()["analysisId"]
+
+    saved = client.get(
+        "/v1/compare/analysis-runs",
+        params={"session_id": session_id},
+    )
+    assert saved.status_code == 200
+    assert len(saved.json()) == 2
+    assert saved.json()[0]["isStale"] is False
+
+    source = compare_payload["responses"][0]
+    regenerated = client.post(
+        "/v1/chat",
+        json={
+            "prompt": "Compare rollout approaches",
+            "provider": source["provider"],
+            "model": source["model"],
+            "routing": {"smart_mode": False, "research_mode": False},
+            "context": {"session_id": session_id, "new_session": False},
+            "regeneration": {"source_request_id": source["request_id"]},
+        },
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["response_version"] == 2
+
+    history = client.get(
+        "/v1/history",
+        params={"session_id": session_id, "limit": 20},
+    )
+    assert history.status_code == 200
+    compare_rows = [item for item in history.json() if item["request_group_id"] == group_id]
+    assert len(compare_rows) == 2
+    assert any(item["response_version"] == 2 for item in compare_rows)
+
+    stale_runs = client.get(
+        "/v1/compare/analysis-runs",
+        params={"request_group_id": group_id},
+    )
+    assert stale_runs.status_code == 200
+    assert len(stale_runs.json()) == 2
+    assert all(item["isStale"] is True for item in stale_runs.json())
 
 
 @pytest.mark.unit
@@ -777,20 +1151,26 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
     monkeypatch.setattr(
         persistence_service,
         "create_llm_response",
-        lambda _db, _llm_request_id, _response: calls["create_llm_response"].append(_llm_request_id),
+        lambda _db, _llm_request_id, _response: calls["create_llm_response"].append(
+            _llm_request_id
+        ),
     )
     monkeypatch.setattr(
         persistence_service,
         "persist_routing_telemetry",
         lambda *_args, **_kwargs: calls["routing"].append(True),
     )
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         persistence_service,
         "upsert_usage_daily",
         lambda _db, **kwargs: calls["usage"].append(kwargs),
     )
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/chat",
@@ -812,12 +1192,14 @@ def test_chat_persists_core_artifacts_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
-def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
+def test_chat_persists_incomplete_when_orchestrator_returns_blank_length_success(
     fastapi_client, monkeypatch
 ):
     client, fake_orch = fastapi_client
 
-    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _blank_success(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id="req_blank_success",
             text="",
@@ -867,10 +1249,16 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
         "create_llm_response",
         lambda _db, _llm_request_id, _response: persisted_responses.append(_response),
     )
-    monkeypatch.setattr(persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(persistence_service, "upsert_usage_daily", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/chat",
@@ -881,16 +1269,17 @@ def test_chat_persists_normalized_error_when_orchestrator_returns_blank_success(
     assert response.status_code == 200
     body = response.json()
     assert body["text"] == ""
-    assert body["finish_reason"] == "error"
-    assert body["error"] is not None
-    assert body["error"]["code"] == "provider_error"
-    assert body["error"]["details"]["finish_reason"] == "length"
+    assert body["finish_reason"] == "length"
+    assert body["error"] is None
+    assert body["completion_status"] == "incomplete"
+    assert body["stop_cause"] == "token_limit"
 
     assert len(persisted_responses) == 1
     persisted = persisted_responses[0]
-    assert persisted.error is not None
-    assert persisted.error.code == "provider_error"
-    assert persisted.finish_reason == "error"
+    assert persisted.error is None
+    assert persisted.finish_reason == "length"
+    assert persisted.metadata["completion_status"] == "incomplete"
+    assert persisted.metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration
@@ -930,15 +1319,21 @@ def test_compare_persists_grouped_rows_and_usage_in_db_mode(fastapi_client, monk
 
     monkeypatch.setattr(persistence_service, "create_llm_request", _capture_llm_req)
     monkeypatch.setattr(persistence_service, "create_llm_response", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "persist_routing_telemetry", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(persistence_service, "save_compare_summary", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_session_timestamp", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         persistence_service,
         "upsert_usage_daily",
         lambda _db, **kwargs: usage_calls.append(kwargs),
     )
-    monkeypatch.setattr(persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        persistence_service, "update_api_key_last_used", lambda *_args, **_kwargs: None
+    )
 
     response = client.post(
         "/v1/compare",
@@ -1160,10 +1555,12 @@ def test_stream_routes_persist_once_in_db_mode(fastapi_client, monkeypatch):
 
 
 @pytest.mark.integration
-def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client, monkeypatch):
+def test_chat_stream_persists_incomplete_for_blank_length_success(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
-    def _blank_success(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _blank_success(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         return UnifiedResponse(
             request_id="req_stream_blank_success",
             text="",
@@ -1204,16 +1601,19 @@ def test_chat_stream_persists_normalized_error_for_blank_success(fastapi_client,
     )
     assert response.status_code == 200
     assert len(persisted) == 1
-    assert persisted[0].error is not None
-    assert persisted[0].error.code == "provider_error"
-    assert persisted[0].finish_reason == "error"
+    assert persisted[0].error is None
+    assert persisted[0].finish_reason == "length"
+    assert persisted[0].metadata["completion_status"] == "incomplete"
+    assert persisted[0].metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration
-def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_client, monkeypatch):
+def test_compare_stream_persists_incomplete_for_blank_length_target(fastapi_client, monkeypatch):
     client, fake_orch = fastapi_client
 
-    def _ask_with_one_blank(prompt: str, model_type: str | None = None, context=None, **kwargs) -> UnifiedResponse:
+    def _ask_with_one_blank(
+        prompt: str, model_type: str | None = None, context=None, **kwargs
+    ) -> UnifiedResponse:
         provider = model_type or "openai"
         model = kwargs.get("model_name") or kwargs.get("model") or "unknown"
         if provider == "openai":
@@ -1277,7 +1677,10 @@ def test_compare_stream_persists_normalized_errors_for_blank_target(fastapi_clie
     assert len(persisted_batches) == 1
     persisted = persisted_batches[0]
     assert len(persisted) == 2
-    assert any(item.error is not None and item.error.code == "provider_error" for item in persisted)
+    incomplete = next(item for item in persisted if item.finish_reason == "length")
+    assert incomplete.error is None
+    assert incomplete.metadata["completion_status"] == "incomplete"
+    assert incomplete.metadata["stop_cause"] == "token_limit"
 
 
 @pytest.mark.integration
@@ -1347,9 +1750,7 @@ def test_non_stream_chat_and_compare_share_one_session_id_in_db_mode(db_mode_fas
         params={"session_id": session_id, "limit": 200},
     )
     assert renamed_history.status_code == 200
-    assert {item["session_title"] for item in renamed_history.json()} == {
-        "Shared rollout plan"
-    }
+    assert {item["session_title"] for item in renamed_history.json()} == {"Shared rollout plan"}
 
 
 @pytest.mark.integration
@@ -1363,10 +1764,12 @@ def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fas
             "prompt": "Stream a shared thread",
             "provider": "openai",
             "model": "gpt-4o-mini",
+            "routing": {"research_mode": True},
         },
     )
     assert chat_response.status_code == 200
     chat_events = [json.loads(line) for line in chat_response.text.splitlines() if line.strip()]
+    chat_card = next(event["response"] for event in chat_events if event.get("type") == "response_done")
     chat_done = next(event for event in chat_events if event.get("type") == "done")
     session_id = chat_done.get("session_id")
     assert session_id
@@ -1383,9 +1786,35 @@ def test_stream_chat_and_compare_share_one_session_id_in_done_events(db_mode_fas
         },
     )
     assert compare_response.status_code == 200
-    compare_events = [json.loads(line) for line in compare_response.text.splitlines() if line.strip()]
+    compare_events = [
+        json.loads(line) for line in compare_response.text.splitlines() if line.strip()
+    ]
+    compare_cards = [
+        event["response"] for event in compare_events if event.get("type") == "response_done"
+    ]
     compare_done = next(event for event in compare_events if event.get("type") == "done")
     assert compare_done["compare"]["session_id"] == session_id
+
+    history_response = client.get(
+        "/v1/history",
+        headers={"X-API-Key": "dev-key-1"},
+        params={"session_id": session_id, "limit": 20},
+    )
+    assert history_response.status_code == 200
+    history_by_request_id = {item["request_id"]: item for item in history_response.json()}
+
+    restored_chat = history_by_request_id[chat_card["request_id"]]
+    assert restored_chat["ai_credits"] == chat_card["ai_credits"]
+    assert restored_chat["credit_usage_estimated"] == chat_card["credit_usage_estimated"]
+    assert restored_chat["research_ai_credits"] == 10_000
+    assert restored_chat["prompt_tokens"] == 2
+    assert restored_chat["completion_tokens"] == 3
+
+    for card in compare_cards:
+        restored_card = history_by_request_id[card["request_id"]]
+        assert restored_card["ai_credits"] == card["ai_credits"]
+        assert restored_card["credit_usage_estimated"] == card["credit_usage_estimated"]
+        assert restored_card["research_ai_credits"] == 0
 
 
 @pytest.mark.integration

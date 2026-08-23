@@ -5,10 +5,11 @@ import {
   clearHistory,
   renameHistorySession,
 } from "../api/history";
+import { fetchCortexAnalysisRuns } from "../api/cortexAnalysis";
 import { buildHistoryThreads } from "../history/historyThreads";
 import { loadActiveSessionId, normalizeSessionId } from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
-import type { HistoryEntry, HistoryThread } from "../types";
+import type { CortexAnalysisRun, HistoryEntry, HistoryThread } from "../types";
 
 interface LoadHistoryOptions {
   sessionId?: string;
@@ -139,28 +140,38 @@ async function restorePersistedActiveTranscript(entries: HistoryEntry[]): Promis
   const activeSessionId = loadActiveSessionId();
   if (!activeSessionId) return;
 
-  const restored = hydrateSessionFromEntries(activeSessionId, entries);
-  if (restored) return;
-
   const sessionEntries = await fetchHistory(500, activeSessionId).catch(() => []);
-  if (sessionEntries.length > 0) {
+  const analysisRuns = await fetchCortexAnalysisRuns({
+    sessionId: activeSessionId,
+  }).catch(() => []);
+  const entriesToRestore =
+    sessionEntries.length > 0
+      ? sessionEntries
+      : entries.filter(
+          (entry) => normalizeSessionId(entry.session_id) === activeSessionId,
+        );
+  if (entriesToRestore.length > 0) {
     const merged = mergeHistoryEntries(entries, sessionEntries);
     useChatStore.getState().setHistory(merged);
-    hydrateSessionFromEntries(activeSessionId, sessionEntries);
+    hydrateSessionFromEntries(activeSessionId, entriesToRestore, analysisRuns);
     return;
   }
 
   useChatStore.getState().setSessionId(null);
 }
 
-function hydrateSessionFromEntries(sessionId: string, entries: HistoryEntry[]): boolean {
+function hydrateSessionFromEntries(
+  sessionId: string,
+  entries: HistoryEntry[],
+  analysisRuns: CortexAnalysisRun[] = [],
+): boolean {
   const matchingEntries = entries.filter(
     (entry) => normalizeSessionId(entry.session_id) === sessionId,
   );
   const thread = buildHistoryThreads(matchingEntries)[0];
   if (!thread) return false;
 
-  useChatStore.getState().hydrateFromHistoryThread(thread);
+  useChatStore.getState().hydrateFromHistoryThread(thread, analysisRuns);
   return true;
 }
 

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary";
 import { logBootDiagnostics } from "./diagnostics/bootDiagnostics";
+import "./styles/cortex-analysis-tokens.css";
 import "./styles/index.css";
 
 logBootDiagnostics();

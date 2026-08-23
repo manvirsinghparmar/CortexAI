@@ -57,6 +57,12 @@ def _prepare_runtime_env() -> tuple[str, int]:
         or "cortex-e2e-dev-login"
     )
     os.environ["APP_ENV"] = "local"
+    # The live suite performs many provider calls through one dedicated owner.
+    # Keep billing enforcement active while preventing test order from
+    # exhausting a real Free/paid period in the shared E2E database.
+    os.environ["BILLING_ENABLED"] = "false"
+    os.environ["DEV_SUBSCRIPTION_PLAN"] = "unrestricted"
+    os.environ["DEV_SUBSCRIPTION_BYPASS_ENABLED"] = "true"
     os.environ["ENABLE_DEV_SESSION_LOGIN"] = "true"
     os.environ["DEV_SESSION_LOGIN_TOKEN"] = dev_session_login_token
     os.environ["FRONTEND_RUNTIME_ENABLE_DEV_SESSION_LOGIN"] = "true"

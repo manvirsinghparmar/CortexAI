@@ -4,6 +4,7 @@ from typing import Any
 
 from google import genai
 
+from config.cache_optimization import cache_friendly_prompt_ordering_enabled
 from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
@@ -84,7 +85,7 @@ class GeminiClient(BaseAIClient):
             # Map roles: user->user, assistant->model
             gemini_role = "model" if role == "assistant" else "user"
             parts: list[dict[str, Any]] = []
-            if content:
+            if content and not cache_friendly_prompt_ordering_enabled():
                 parts.append({"text": content})
 
             if attachments and last_user_index is not None and idx == last_user_index:
@@ -97,6 +98,9 @@ class GeminiClient(BaseAIClient):
                             }
                         }
                     )
+
+            if content and cache_friendly_prompt_ordering_enabled():
+                parts.append({"text": content})
 
             gemini_contents.append({"role": gemini_role, "parts": parts or [{"text": ""}]})
 
@@ -132,9 +136,12 @@ class GeminiClient(BaseAIClient):
         start_time = time.time()
 
         model_name = kwargs.get("model", self.model_name)
+        self._resolve_cache_context(kwargs, provider="gemini", model=model_name)
         temperature = kwargs.get("temperature", 0.7)
         # Keep route-level max_tokens clamp compatible with Gemini's max_output_tokens naming.
         max_output_tokens = kwargs.get("max_output_tokens", kwargs.get("max_tokens", 2048))
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -158,6 +165,10 @@ class GeminiClient(BaseAIClient):
             }
             if system_instruction:
                 config["system_instruction"] = system_instruction
+            if reasoning_mode == "none":
+                config["thinking_config"] = {"thinking_budget": 0}
+            elif reasoning_effort and reasoning_effort != "none":
+                config["thinking_config"] = {"thinking_level": reasoning_effort}
 
             adaptive_retry = None
             try:
@@ -202,15 +213,46 @@ class GeminiClient(BaseAIClient):
             token_usage = TokenUsage()
             if hasattr(response, "usage_metadata"):
                 usage_metadata = response.usage_metadata
+                cached_input_tokens = self._usage_int(
+                    getattr(usage_metadata, "cached_content_token_count", 0)
+                )
+                reasoning_tokens = self._usage_int(
+                    getattr(usage_metadata, "thoughts_token_count", 0)
+                )
+                completion_tokens = self._usage_int(
+                    getattr(usage_metadata, "candidates_token_count", 0)
+                ) + reasoning_tokens
+                prompt_tokens = self._usage_int(
+                    getattr(usage_metadata, "prompt_token_count", 0)
+                )
+                total_tokens = self._usage_int(
+                    getattr(usage_metadata, "total_token_count", 0)
+                )
+                if total_tokens <= 0:
+                    total_tokens = prompt_tokens + completion_tokens
                 token_usage = TokenUsage(
-                    prompt_tokens=getattr(usage_metadata, "prompt_token_count", 0),
-                    completion_tokens=getattr(usage_metadata, "candidates_token_count", 0),
-                    total_tokens=getattr(usage_metadata, "total_token_count", 0),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    reasoning_tokens=reasoning_tokens,
                 )
 
+            served_model = self._served_model(
+                getattr(response, "model_version", model_name), model_name
+            )
+
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("gemini", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -262,18 +304,30 @@ class GeminiClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="gemini",
-                model=model_name,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "models.generate_content", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "models.generate_content",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "models.generate_content"}
+                    else {
+                        "endpoint": "models.generate_content",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:

@@ -30,15 +30,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from db import (  # noqa: E402
+from db import (
     SessionLocal,
     get_api_key_settings,
     get_table,
     get_user_by_api_key,
 )
-from server import rate_limit as rate_limit_service  # noqa: E402
-from server import savings as savings_service  # noqa: E402
-
+from server import rate_limit as rate_limit_service
+from server import savings as savings_service
 
 SUMMARY_COLUMNS = [
     "period_start",
@@ -311,7 +310,8 @@ def _compute_metrics(db_session, scope: TenantScope, period: Period) -> dict[str
                 func.sum(
                     case(
                         (
-                            func.lower(func.coalesce(llm_savings.c.response_status, "success")) != "success",
+                            func.lower(func.coalesce(llm_savings.c.response_status, "success"))
+                            != "success",
                             1,
                         ),
                         else_=0,
@@ -320,7 +320,7 @@ def _compute_metrics(db_session, scope: TenantScope, period: Period) -> dict[str
                 0,
             )
             if "response_status" in savings_cols
-            else literal(0)  # type: ignore[name-defined]
+            else literal(0)
         )
         savings_stmt = select(
             func.coalesce(func.sum(llm_savings.c.baseline_cost), 0.0).label("baseline_cost"),
@@ -366,7 +366,11 @@ def _compute_metrics(db_session, scope: TenantScope, period: Period) -> dict[str
         )
         .where(request_filter)
         .group_by(llm_requests.c.provider, llm_requests.c.model)
-        .order_by(func.count(llm_requests.c.id).desc(), llm_requests.c.provider.asc(), llm_requests.c.model.asc())
+        .order_by(
+            func.count(llm_requests.c.id).desc(),
+            llm_requests.c.provider.asc(),
+            llm_requests.c.model.asc(),
+        )
         .limit(10)
     )
     model_rows = db_session.execute(top_models_stmt).fetchall()
@@ -454,9 +458,7 @@ def _markdown_summary(
         f"{metrics['successful_requests']} / {metrics['failed_requests']}\n\n"
         "## Top Models Used\n\n"
         "| Rank | Provider | Model | Requests | Tokens | Cost | Error Requests | Error Rate |\n"
-        "|---:|---|---|---:|---:|---:|---:|---:|\n"
-        + "\n".join(top_lines)
-        + "\n\n"
+        "|---:|---|---|---:|---:|---:|---:|---:|\n" + "\n".join(top_lines) + "\n\n"
         "## Governance Configuration Snapshot\n\n"
         f"- Baseline active: `{config['baseline_provider']}:{config['baseline_model']}`\n"
         f"- Requests per minute: `{config['requests_per_minute']}`\n"
@@ -564,7 +566,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--user-id", default=None, help="User UUID (fallback scope)")
     parser.add_argument("--month", default=None, help="Month in YYYY-MM (default: current month)")
     parser.add_argument("--out-dir", default="reports/proof_packs", help="Output directory")
-    parser.add_argument("--tenant-label", default=None, help="Optional tenant label for output folder naming")
+    parser.add_argument(
+        "--tenant-label", default=None, help="Optional tenant label for output folder naming"
+    )
     return parser.parse_args(argv)
 
 
@@ -611,7 +615,9 @@ def main(argv: list[str] | None = None) -> int:
         "baseline_model": config["baseline_model"],
         "requests_per_minute": config["requests_per_minute"],
         "daily_cap_scope": config["daily_cap_scope"],
-        "daily_token_cap": config["daily_token_cap"] if config["daily_token_cap"] is not None else "",
+        "daily_token_cap": (
+            config["daily_token_cap"] if config["daily_token_cap"] is not None else ""
+        ),
         "daily_cost_cap": config["daily_cost_cap"] if config["daily_cost_cap"] is not None else "",
         "plan_tier": config["plan_tier"] if config["plan_tier"] is not None else "",
     }

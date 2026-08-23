@@ -12,7 +12,7 @@ const models = [
 ];
 
 describe("CompareSelector", () => {
-  it("renders readable labels, exact model IDs, and provider logos", async () => {
+  it("drills from provider choices into readable model details", async () => {
     const user = userEvent.setup();
     render(
       <CompareSelector
@@ -23,13 +23,24 @@ describe("CompareSelector", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /Compare model 1:/ }));
-    const listbox = screen.getByRole("listbox", { name: "Compare model 1 options" });
+    const listbox = screen.getByRole("listbox", {
+      name: "Compare model 1 options",
+    });
 
     expect(listbox.parentElement).toBe(document.body);
+    expect(listbox).toHaveAttribute("data-picker-view", "providers");
+    expect(within(listbox).getByRole("option", { name: /ChatGPT/ })).toBeVisible();
+    expect(within(listbox).getByRole("option", { name: /Claude/ })).toBeVisible();
+    expect(listbox.querySelectorAll("img").length).toBeGreaterThan(0);
+
+    await user.click(within(listbox).getByRole("option", { name: /ChatGPT/ }));
+    expect(listbox).toHaveAttribute("data-picker-view", "models");
     expect(within(listbox).getByText("GPT-5.1")).toBeInTheDocument();
     expect(within(listbox).getByText("gpt-5.1")).toBeInTheDocument();
+
+    await user.click(within(listbox).getByRole("option", { name: "Back to providers" }));
+    await user.click(within(listbox).getByRole("option", { name: /Claude/ }));
     expect(within(listbox).getByText("Claude Sonnet")).toBeInTheDocument();
-    expect(listbox.querySelectorAll("img").length).toBeGreaterThan(0);
   });
 
   it("renders one decorative connector between each active model", () => {
@@ -42,19 +53,12 @@ describe("CompareSelector", () => {
     );
 
     expect(screen.getAllByTestId("compare-connector")).toHaveLength(1);
-    expect(screen.getByTestId("compare-connector")).toHaveAttribute(
-      "aria-hidden",
-      "true",
-    );
+    expect(screen.getByTestId("compare-connector")).toHaveAttribute("aria-hidden", "true");
 
     rerender(
       <CompareSelector
         models={models}
-        keys={[
-          "openai:gpt-5.1",
-          "claude:claude-sonnet-4-5",
-          "deepseek:deepseek-chat",
-        ]}
+        keys={["openai:gpt-5.1", "claude:claude-sonnet-4-5", "deepseek:deepseek-chat"]}
         onChange={vi.fn()}
       />,
     );
@@ -62,7 +66,7 @@ describe("CompareSelector", () => {
     expect(screen.getAllByTestId("compare-connector")).toHaveLength(2);
   });
 
-  it("selects a model and disables models already used in another slot", async () => {
+  it("selects within a provider and disables models used in another slot", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
@@ -74,11 +78,14 @@ describe("CompareSelector", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /Compare model 1:/ }));
-    const listbox = screen.getByRole("listbox", { name: "Compare model 1 options" });
-    expect(
-      within(listbox).getByRole("option", { name: /Claude Sonnet/ }),
-    ).toBeDisabled();
+    const listbox = screen.getByRole("listbox", {
+      name: "Compare model 1 options",
+    });
+    await user.click(within(listbox).getByRole("option", { name: /Claude/ }));
+    expect(within(listbox).getByRole("option", { name: /Claude Sonnet/ })).toBeDisabled();
 
+    await user.click(within(listbox).getByRole("option", { name: "Back to providers" }));
+    await user.click(within(listbox).getByRole("option", { name: /Gemini/ }));
     await user.click(within(listbox).getByRole("option", { name: /Gemini Flash/ }));
     expect(onChange).toHaveBeenCalledWith(0, "gemini:gemini-2.5-flash");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -114,7 +121,9 @@ describe("CompareSelector", () => {
     const toolbar = screen.getByLabelText("Compare model selectors");
     expect(within(toolbar).getByRole("button", { name: "Improve" })).toBeInTheDocument();
     expect(
-      within(toolbar).getByRole("button", { name: "Add model to comparison" }),
+      within(toolbar).getByRole("button", {
+        name: "Add model to comparison",
+      }),
     ).toBeInTheDocument();
   });
 });
@@ -124,6 +133,7 @@ function model(provider: string, name: string): ModelCatalogItem {
     provider,
     model: name,
     tier: "frontier",
+    billing_class: "advanced",
     input_cost_per_1m: 0,
     output_cost_per_1m: 0,
     context_limit: 128000,

@@ -139,8 +139,8 @@ Symptoms:
 
 Root cause:
 
-The token exchange between the backend and Cognito is failing (usually redirect URI mismatch).  
-When the backend runs behind CloudFront or an ALB without proxy header support enabled, `request.base_url` returns `http://…`.  
+The token exchange between the backend and Cognito is failing (usually redirect URI mismatch).
+When the backend runs behind CloudFront or an ALB without proxy header support enabled, `request.base_url` returns `http://…`.
 The computed `redirect_uri` (`http://…/auth`) does not match the `https://…/auth` registered in the Cognito App Client, so every token exchange fails and the browser is redirected back to the login page immediately.
 
 Remediation:
@@ -267,7 +267,7 @@ Resolver fields to check when search quality looks poor:
 - `country_sent`
 - `domain_rule`
 - `include_domain_count`
-- `source_content_lengths` and `credits_used` on `research.search.success`
+- `source_content_lengths`, `credits_used`, and `credits_estimated` on `research.search.success`
 
 ### Network diagnostics event
 

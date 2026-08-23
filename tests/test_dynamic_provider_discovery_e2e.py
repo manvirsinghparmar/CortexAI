@@ -54,6 +54,12 @@ def _write_catalog_with_new_provider(tmp_path: Path) -> tuple[Path, Path, str]:
                 "context_limit": 128000,
                 "tags": ["balanced", "general"],
                 "enabled": True,
+                "billing_class": "advanced",
+                "access_category": "advanced",
+                "input_credit_multiplier": 2.0,
+                "output_credit_multiplier": 8.0,
+                "credit_usage_label": "High",
+                "credit_pricing_version": "2026-07-29",
             }
         ]
     }
@@ -114,7 +120,9 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     provider_ids = {item["provider"] for item in providers_payload["providers"]}
     assert provider_id in provider_ids
 
-    zai_provider = next(item for item in providers_payload["providers"] if item["provider"] == provider_id)
+    zai_provider = next(
+        item for item in providers_payload["providers"] if item["provider"] == provider_id
+    )
     assert zai_provider["label"] == "Z.AI"
     assert zai_provider["default_model"] == "zai-chat"
     assert zai_provider["enabled_model_count"] >= 1
@@ -124,6 +132,8 @@ def test_new_provider_appears_in_discovery_endpoints(discovery_client):
     models_payload = models_resp.json()
     model_pairs = {(item["provider"], item["model"]) for item in models_payload["models"]}
     assert (provider_id, "zai-chat") in model_pairs
+    zai_model = next(item for item in models_payload["models"] if item["provider"] == provider_id)
+    assert zai_model["billing_class"] == "advanced"
 
     filtered_resp = client.get(
         f"/v1/models?provider={provider_id}",

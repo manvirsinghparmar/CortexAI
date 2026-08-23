@@ -113,21 +113,20 @@ class ModelSelector:
 
     def _coding_preference_rank(self, candidate: ModelCandidate, features: PromptFeatures) -> int:
         """
-        Prefer codex + Claude Sonnet/Opus family for coding prompts.
+        Prefer the current, selectable coding-capable models for coding prompts.
         Lower rank value is better.
         """
         if not self._is_coding_task(features):
             return 999
 
         preferred_order = {
-            ("openai", "gpt-5.4"): 0,
-            ("openai", "gpt-5.2-codex"): 1,
-            ("claude", "claude-sonnet-4-6"): 2,
-            ("claude", "claude-opus-4-6"): 3,
-            ("claude", "claude-sonnet-4-5"): 4,
-            ("claude", "claude-opus-4-5"): 5,
-            ("claude", "claude-sonnet-4"): 6,
-            ("claude", "claude-3-5-sonnet-latest"): 7,
+            ("openai", "gpt-5.6-sol"): 0,
+            ("openai", "gpt-5.4"): 1,
+            ("claude", "claude-opus-5"): 2,
+            ("deepseek", "deepseek-v4-pro"): 3,
+            ("grok", "grok-4.5"): 4,
+            ("gemini", "gemini-3.1-pro-preview"): 5,
+            ("claude", "claude-fable-5"): 6,
         }
         key = (candidate.provider.lower(), candidate.model_name)
         if key in preferred_order:

@@ -1,0 +1,126 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--cx-canvas);
+}
+
+.main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--cx-canvas);
+}
+
+.desktopHeader,
+.mobileHeader {
+  align-items: center;
+  border-bottom: 1px solid var(--cx-hairline-soft);
+  background: color-mix(in srgb, var(--cx-canvas) 94%, transparent);
+}
+
+.desktopHeader {
+  display: flex;
+  min-height: 66px;
+  flex: 0 0 66px;
+  gap: 18px;
+  padding: 0 30px;
+}
+
+.brandButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--cx-ink-900);
+  cursor: pointer;
+  font: 750 15px/1 var(--font-display);
+  padding: 0;
+}
+
+.brandButton img {
+  width: 25px;
+  height: 25px;
+}
+
+.desktopTitle {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+  padding-left: 18px;
+  border-left: 1px solid var(--cx-hairline);
+}
+
+.desktopTitle strong,
+.mobileTitle strong {
+  color: var(--cx-ink-900);
+  font: 700 15px/1.1 var(--font-display);
+}
+
+.desktopTitle span,
+.mobileTitle span {
+  overflow: hidden;
+  color: var(--cx-ink-400);
+  font: 500 11px/1.2 var(--font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileHeader {
+  display: none;
+}
+
+.content {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+@media (max-width: 900px) {
+  .desktopHeader {
+    display: none;
+  }
+
+  .mobileHeader {
+    display: flex;
+    min-height: 68px;
+    flex: 0 0 68px;
+    gap: 11px;
+    padding: 0 14px;
+  }
+
+  .backButton {
+    display: inline-flex;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--cx-hairline);
+    border-radius: 12px;
+    background: var(--cx-surface);
+    color: var(--cx-ink-700);
+    cursor: pointer;
+  }
+
+  .backButton:hover,
+  .backButton:focus-visible {
+    border-color: var(--cx-accent-border);
+    color: var(--cx-accent);
+    outline: none;
+  }
+
+  .mobileTitle {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    gap: 4px;
+  }
+
+  .mobileTitle strong {
+    font-size: 16px;
+  }
+}

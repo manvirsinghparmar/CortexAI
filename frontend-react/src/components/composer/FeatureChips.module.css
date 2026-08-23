@@ -84,6 +84,17 @@
     var(--cx-shadow-sm);
 }
 
+.blocked {
+  border-style: dashed;
+  color: var(--cx-ink-400);
+}
+
+.blocked::after {
+  content: "\1F512";
+  font-size: 9px;
+  line-height: 1;
+}
+
 .active:hover {
   background: var(--cx-feature-active-hover);
   color: var(--cx-feature-active-fg);
@@ -191,6 +202,34 @@
 
   .tooltip {
     max-width: min(180px, calc(100vw - 24px));
+  }
+
+  .tooltipStart {
+    right: 0;
+    left: auto;
+  }
+
+  .tooltipStart::after {
+    right: 14px;
+    left: auto;
+  }
+
+  .tooltipCenter {
+    right: 0;
+    left: auto;
+    transform: translateY(3px);
+  }
+
+  .chip:focus-visible + .tooltipCenter,
+  .tooltipVisible.tooltipCenter {
+    transform: translateY(0);
+  }
+
+}
+
+@media (max-width: 760px) and (hover: hover) {
+  .chipWrap:hover .tooltipCenter {
+    transform: translateY(0);
   }
 }
 

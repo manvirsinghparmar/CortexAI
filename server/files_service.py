@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from fastapi import HTTPException, status
 
 from db import (
     create_uploaded_file,
+    enqueue_file_deletion_job,
     find_active_uploaded_file_by_hash,
     get_uploaded_file_by_id,
     get_uploaded_file_for_user,
@@ -26,9 +28,13 @@ from server.dependencies import AuthResult
 from server import persistence as persistence_service
 from server.object_storage import (
     ObjectStorageConfigurationError,
+    ObjectStorageNotFoundError,
     ObjectStorageOperationError,
     get_object_storage,
 )
+from server.billing.plan_catalog import get_plan_catalog
+from server.billing.subscription_service import resolve_effective_subscription
+from orchestrator.model_registry import ModelRegistry
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +43,17 @@ API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _db_uow = persistence_service.db_uow
 _resolve_api_key_for_request = persistence_service.resolve_api_key_for_request
 _resolve_identity = persistence_service.resolve_identity
+
+
+@dataclass(frozen=True)
+class UploadPolicy:
+    user_id: UUID
+    plan_code: str
+    max_files: int
+    max_file_bytes: int
+    platform_max_files: int
+    platform_max_file_bytes: int
+
 
 DEFAULT_ALLOWED_MIME_TYPES = (
     "image/jpeg",
@@ -68,6 +85,7 @@ CLIENT_SAFE_UPLOAD_ERROR_MESSAGES_BY_CODE = {
     "storage_upload_failed": "This file could not be uploaded right now. Please try again in a moment.",
     "ingestion_failed": "This file could not be uploaded right now. Please try again in a moment.",
     "ingestion_read_failed": "This file could not be uploaded right now. Please try again in a moment.",
+    "attachment_upload_mismatch": "The uploaded file did not match the requested file.",
 }
 
 SENSITIVE_UPLOAD_ERROR_TOKENS = (
@@ -94,6 +112,14 @@ def attachments_enabled() -> bool:
     return _env_bool("ENABLE_ATTACHMENTS", default=False)
 
 
+def direct_upload_enabled() -> bool:
+    return _env_bool("ATTACHMENTS_DIRECT_UPLOAD_ENABLED", default=False)
+
+
+def legacy_proxy_upload_enabled() -> bool:
+    return _env_bool("ATTACHMENTS_LEGACY_PROXY_UPLOAD_ENABLED", default=True)
+
+
 def _parse_positive_int_env(name: str, *, default: int) -> int:
     raw = str(os.getenv(name, "") or "").strip()
     if not raw:
@@ -113,11 +139,7 @@ def _allowed_mime_types() -> set[str]:
     raw = str(os.getenv("ATTACHMENTS_ALLOWED_MIME_TYPES", "") or "").strip()
     if not raw:
         return set(DEFAULT_ALLOWED_MIME_TYPES)
-    parsed = {
-        part.strip().lower()
-        for part in raw.split(",")
-        if part and part.strip()
-    }
+    parsed = {part.strip().lower() for part in raw.split(",") if part and part.strip()}
     return parsed or set(DEFAULT_ALLOWED_MIME_TYPES)
 
 
@@ -152,6 +174,24 @@ def _build_storage_key(
     ]
     # Drop empty fragments so blank prefix still works.
     return "/".join([part for part in key_parts if part])
+
+
+def _build_direct_storage_key(
+    *,
+    key_prefix: str,
+    user_id: UUID,
+    file_id: UUID,
+    filename: str,
+) -> str:
+    date_folder = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+    key_parts = [
+        key_prefix.strip("/"),
+        "users",
+        str(user_id),
+        date_folder,
+        f"{file_id}-{filename}",
+    ]
+    return "/".join(part for part in key_parts if part)
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -216,9 +256,18 @@ def _get_client_safe_upload_error_message(
         return None
 
     lowered = raw.lower()
-    if "payload too large" in lowered or "request entity too large" in lowered or "too large" in lowered:
+    if (
+        "payload too large" in lowered
+        or "request entity too large" in lowered
+        or "too large" in lowered
+    ):
         return "Upload failed. This file is too large."
-    if "unsupported" in lowered or "mime type" in lowered or "file type" in lowered or "media type" in lowered:
+    if (
+        "unsupported" in lowered
+        or "mime type" in lowered
+        or "file type" in lowered
+        or "media type" in lowered
+    ):
         return "Upload failed. This file type is not supported."
     if "timeout" in lowered or "timed out" in lowered:
         return "Upload failed because the request timed out. Please try again."
@@ -245,6 +294,7 @@ def _sanitize_ingestion_meta_for_client(ingestion_meta: Any) -> dict[str, Any]:
         "request_id",
         "traceback",
         "stack",
+        "cached_extracted_text",
     }
     for key, value in ingestion_meta.items():
         key_text = str(key or "").strip().lower()
@@ -261,8 +311,110 @@ def _attachment_ttl_hours() -> int:
     return _parse_positive_int_env("ATTACHMENTS_FILE_TTL_HOURS", default=24 * 7)
 
 
+def _upload_intent_ttl_minutes() -> int:
+    return _parse_positive_int_env("ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES", default=30)
+
+
+def _presign_ttl_seconds() -> int:
+    return _parse_positive_int_env("ATTACHMENTS_PRESIGN_TTL_SECONDS", default=300)
+
+
 def _max_upload_bytes() -> int:
     return _parse_positive_int_env("ATTACHMENTS_MAX_FILE_BYTES", default=20 * 1024 * 1024)
+
+
+def _max_upload_files() -> int:
+    return _parse_positive_int_env("ATTACHMENTS_MAX_FILES_PER_REQUEST", default=5)
+
+
+def resolve_upload_policy(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    provider: str | None = None,
+    model: str | None = None,
+) -> UploadPolicy:
+    """Resolve plan/platform/provider upload ceilings before object storage."""
+
+    _assert_feature_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        effective = resolve_effective_subscription(db_session, resolution.user_id)
+
+    platform_max_files = _max_upload_files()
+    platform_max_bytes = _max_upload_bytes()
+    max_files = min(effective.plan.limits.max_files_per_request, platform_max_files)
+    max_bytes = min(effective.plan.limits.max_file_bytes, platform_max_bytes)
+
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip()
+    if normalized_provider and normalized_model:
+        candidate = ModelRegistry.from_yaml().find_model(normalized_provider, normalized_model)
+        if candidate is not None and candidate.enabled:
+            if (
+                candidate.max_attachments_per_request is not None
+                and candidate.max_attachments_per_request > 0
+            ):
+                max_files = min(max_files, candidate.max_attachments_per_request)
+            if candidate.max_attachment_bytes is not None and candidate.max_attachment_bytes > 0:
+                max_bytes = min(max_bytes, candidate.max_attachment_bytes)
+
+    return UploadPolicy(
+        user_id=resolution.user_id,
+        plan_code=effective.plan.code,
+        max_files=max_files,
+        max_file_bytes=max_bytes,
+        platform_max_files=platform_max_files,
+        platform_max_file_bytes=platform_max_bytes,
+    )
+
+
+def required_plan_for_upload(*, file_count: int, max_file_bytes: int) -> str | None:
+    for plan in get_plan_catalog().list_plans():
+        if (
+            plan.limits.max_files_per_request >= file_count
+            and plan.limits.max_file_bytes >= max_file_bytes
+        ):
+            return plan.code
+    return None
+
+
+def rollback_batch_upload(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    file_id: UUID,
+) -> None:
+    """Best-effort object removal for a newly created partial batch item."""
+
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        row = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+        )
+        if row is None:
+            return
+        storage_key = str(row.get("storage_key") or "").strip()
+        if storage_key:
+            get_object_storage().delete_object(key=storage_key)
+        update_uploaded_file_status(
+            db_session,
+            file_id=file_id,
+            status="deleted",
+            error_code="batch_upload_rolled_back",
+            error_message="Upload batch did not complete.",
+        )
 
 
 def _sync_ingest_timeout_seconds() -> int:
@@ -349,6 +501,9 @@ def _run_sync_ingestion(
                     artifact.get("effective_transform_mode") or "text_only"
                 ),
                 "artifact_meta": dict(artifact_meta) if isinstance(artifact_meta, dict) else {},
+                "cached_extracted_text": str(
+                    artifact.get("extracted_source_text") or artifact.get("extracted_text") or ""
+                ),
             },
         )
         logger.info(
@@ -365,9 +520,11 @@ def _run_sync_ingestion(
                     "effective_transform_mode": str(
                         artifact.get("effective_transform_mode") or "text_only"
                     ),
-                    "chunk_count": int((artifact_meta or {}).get("chunk_count") or 0)
-                    if isinstance(artifact_meta, dict)
-                    else 0,
+                    "chunk_count": (
+                        int((artifact_meta or {}).get("chunk_count") or 0)
+                        if isinstance(artifact_meta, dict)
+                        else 0
+                    ),
                 }
             },
         )
@@ -530,6 +687,36 @@ def _assert_feature_enabled(*, request_id: str | None = None) -> None:
     )
 
 
+def require_direct_upload_enabled(*, request_id: str | None = None) -> None:
+    """Reject direct-upload routes until the rollout flag is enabled."""
+
+    _assert_feature_enabled(request_id=request_id)
+    if direct_upload_enabled():
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "direct_attachment_upload_disabled",
+            "message": "Direct attachment upload is disabled.",
+        },
+    )
+
+
+def require_legacy_proxy_upload_enabled(*, request_id: str | None = None) -> None:
+    """Reject legacy byte-proxy routes after the compatibility flag is disabled."""
+
+    _assert_feature_enabled(request_id=request_id)
+    if legacy_proxy_upload_enabled():
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "legacy_attachment_upload_disabled",
+            "message": "Legacy attachment upload is disabled.",
+        },
+    )
+
+
 def _assert_db_enabled(*, request_id: str | None = None) -> None:
     if API_DB_ENABLED:
         return
@@ -561,9 +748,10 @@ def upload_user_file(
     filename: str,
     mime_type: str,
     payload: bytes,
+    max_file_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Validate, store, and persist attachment metadata for one authenticated user file."""
-    _assert_feature_enabled(request_id=request_id)
+    require_legacy_proxy_upload_enabled(request_id=request_id)
     _assert_db_enabled(request_id=request_id)
 
     logger.info(
@@ -620,7 +808,10 @@ def upload_user_file(
             },
         )
 
-    max_file_bytes = _max_upload_bytes()
+    effective_max_file_bytes = min(
+        _max_upload_bytes(),
+        max_file_bytes if max_file_bytes is not None else _max_upload_bytes(),
+    )
     if not payload:
         logger.warning(
             "Attachment upload rejected: empty payload",
@@ -637,7 +828,7 @@ def upload_user_file(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "empty_file", "message": "Uploaded file is empty."},
         )
-    if len(payload) > max_file_bytes:
+    if len(payload) > effective_max_file_bytes:
         logger.warning(
             "Attachment upload rejected: file too large",
             extra={
@@ -647,7 +838,7 @@ def upload_user_file(
                     "mime_type": normalized_mime,
                     "filename_hash": _hash_for_logs(filename),
                     "size_bytes": len(payload),
-                    "max_file_bytes": max_file_bytes,
+                    "max_file_bytes": effective_max_file_bytes,
                 }
             },
         )
@@ -655,8 +846,8 @@ def upload_user_file(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail={
                 "code": "file_too_large",
-                "message": f"File exceeds ATTACHMENTS_MAX_FILE_BYTES ({max_file_bytes}).",
-                "max_file_bytes": max_file_bytes,
+                "message": f"File exceeds the allowed size ({effective_max_file_bytes} bytes).",
+                "max_file_bytes": effective_max_file_bytes,
             },
         )
 
@@ -856,13 +1047,15 @@ def upload_user_file(
 
             if ingestion_required:
                 if len(payload) <= _sync_ingest_inline_max_bytes():
-                    sync_status, sync_meta, sync_error_code, sync_error_message = _run_sync_ingestion(
-                        payload=payload,
-                        normalized_mime=normalized_mime,
-                        filename=normalized_filename,
-                        base_meta=ingestion_meta,
-                        request_id=request_id,
-                        file_id=uploaded_file_id,
+                    sync_status, sync_meta, sync_error_code, sync_error_message = (
+                        _run_sync_ingestion(
+                            payload=payload,
+                            normalized_mime=normalized_mime,
+                            filename=normalized_filename,
+                            base_meta=ingestion_meta,
+                            request_id=request_id,
+                            file_id=uploaded_file_id,
+                        )
                     )
                     update_uploaded_file_status(
                         db_session,
@@ -891,7 +1084,9 @@ def upload_user_file(
                         {
                             "ingestion_state": "processing",
                             "deferred_reason": "size_exceeds_sync_inline_limit",
-                            "deferred_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "deferred_at": datetime.now(timezone.utc)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
                         },
                     )
                     update_uploaded_file_status(
@@ -950,6 +1145,672 @@ def upload_user_file(
                 }
             },
         )
+        return _serialize_uploaded_file_row(row, deduplicated=False)
+
+
+def _upload_limit_error(
+    *,
+    policy: UploadPolicy,
+    file_count: int,
+    max_file_bytes: int,
+) -> HTTPException:
+    feature = "attachment_count" if file_count > policy.max_files else "attachment_size"
+    current_limit = policy.max_files if feature == "attachment_count" else policy.max_file_bytes
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "feature_not_in_plan",
+            "message": (
+                f"The {policy.plan_code.title()} plan allows up to {policy.max_files} "
+                f"files per request and {policy.max_file_bytes} bytes per file."
+            ),
+            "feature": feature,
+            "current_plan": policy.plan_code,
+            "limit": current_limit,
+            "required": file_count if feature == "attachment_count" else max_file_bytes,
+            "recommended_plan": required_plan_for_upload(
+                file_count=file_count,
+                max_file_bytes=max_file_bytes,
+            ),
+        },
+    )
+
+
+def _validate_direct_upload_files(
+    *,
+    files: list[dict[str, Any]],
+    policy: UploadPolicy,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "empty_file_batch", "message": "Select at least one file."},
+        )
+    if len(files) > policy.max_files:
+        raise _upload_limit_error(policy=policy, file_count=len(files), max_file_bytes=0)
+
+    allowed = _allowed_mime_types()
+    normalized: list[dict[str, Any]] = []
+    for item in files:
+        original_filename = Path(str(item.get("filename") or "").strip()).name[:255]
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        try:
+            size_bytes = int(item.get("size_bytes") or 0)
+        except (TypeError, ValueError):
+            size_bytes = 0
+        if not original_filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_filename", "message": "File name is required."},
+            )
+        if mime_type not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={
+                    "code": "unsupported_file_type",
+                    "message": f"Unsupported MIME type '{mime_type}'.",
+                    "allowed_mime_types": sorted(allowed),
+                },
+            )
+        if size_bytes <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "empty_file", "message": "File size must be greater than zero."},
+            )
+        if size_bytes > policy.max_file_bytes:
+            raise _upload_limit_error(
+                policy=policy,
+                file_count=len(files),
+                max_file_bytes=size_bytes,
+            )
+        normalized.append(
+            {
+                "original_filename": original_filename,
+                "storage_filename": _normalize_filename(original_filename),
+                "mime_type": mime_type,
+                "size_bytes": size_bytes,
+            }
+        )
+
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip()
+    if normalized_provider and normalized_model:
+        candidate = ModelRegistry.from_yaml().find_model(normalized_provider, normalized_model)
+        if candidate is None or not candidate.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "attachment_model_incompatible",
+                    "message": "The selected model is unavailable for attachment upload.",
+                    "provider": normalized_provider,
+                    "model": normalized_model,
+                },
+            )
+        binary_items = [
+            item
+            for item in normalized
+            if item["mime_type"] not in attachments_service.TEXT_EXTRACTABLE_MIME_TYPES
+        ]
+        if binary_items and not candidate.supports_image_input:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "attachment_model_incompatible",
+                    "message": (
+                        f"Selected model '{candidate.provider}:{candidate.model_name}' "
+                        "does not support attachment inputs."
+                    ),
+                    "provider": candidate.provider,
+                    "model": candidate.model_name,
+                },
+            )
+        supported_mime_types = {
+            str(value).strip().lower()
+            for value in (candidate.supported_attachment_mime_types or [])
+            if str(value).strip()
+        }
+        unsupported = sorted(
+            {
+                item["mime_type"]
+                for item in binary_items
+                if item["mime_type"] not in supported_mime_types
+            }
+        )
+        if unsupported:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "attachment_mime_type_incompatible",
+                    "message": (
+                        f"Model '{candidate.provider}:{candidate.model_name}' does not support "
+                        "one or more attachment MIME types."
+                    ),
+                    "unsupported_mime_types": unsupported,
+                    "supported_mime_types": sorted(supported_mime_types),
+                },
+            )
+    return normalized
+
+
+def validate_upload_batch_metadata(
+    *,
+    files: list[dict[str, Any]],
+    policy: UploadPolicy,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Validate a complete legacy/direct batch before storing its first object."""
+
+    return _validate_direct_upload_files(
+        files=files,
+        policy=policy,
+        provider=provider,
+        model=model,
+    )
+
+
+def create_direct_upload_intents(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    files: list[dict[str, Any]],
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Validate a metadata batch, persist upload intents, and issue S3 POST forms."""
+
+    require_direct_upload_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
+    policy = resolve_upload_policy(
+        auth=auth,
+        request_id=request_id,
+        provider=provider,
+        model=model,
+    )
+    prepared = validate_upload_batch_metadata(
+        files=files,
+        policy=policy,
+        provider=provider,
+        model=model,
+    )
+    try:
+        storage = get_object_storage()
+    except ObjectStorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "storage_not_configured",
+                "message": "This file could not be uploaded right now. Please try again in a moment.",
+            },
+        ) from exc
+
+    now_utc = datetime.now(timezone.utc)
+    intent_expires_at = now_utc + timedelta(minutes=_upload_intent_ttl_minutes())
+    presign_ttl = _presign_ttl_seconds()
+    presign_expires_at = now_utc + timedelta(seconds=presign_ttl)
+    results: list[dict[str, Any]] = []
+
+    try:
+        with _db_uow() as db_session:
+            resolution = _resolve_identity(
+                auth=auth,
+                request_id=request_id,
+                db_session=db_session,
+            )
+            if resolution.user_id != policy.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "upload_identity_changed",
+                        "message": "Upload identity changed.",
+                    },
+                )
+
+            for item in prepared:
+                file_id = uuid4()
+                storage_key = _build_direct_storage_key(
+                    key_prefix=storage.key_prefix,
+                    user_id=resolution.user_id,
+                    file_id=file_id,
+                    filename=item["storage_filename"],
+                )
+                create_uploaded_file(
+                    db_session,
+                    file_id=file_id,
+                    user_id=resolution.user_id,
+                    api_key_id=getattr(resolution, "api_key_id", None),
+                    original_filename=item["original_filename"],
+                    mime_type=item["mime_type"],
+                    size_bytes=item["size_bytes"],
+                    sha256=None,
+                    storage_bucket=storage.bucket,
+                    storage_key=storage_key,
+                    status="uploading",
+                    ingestion_meta={"ingestion_state": "awaiting_upload"},
+                    expires_at=intent_expires_at,
+                )
+                post = storage.create_presigned_post(
+                    key=storage_key,
+                    content_type=item["mime_type"],
+                    max_size_bytes=item["size_bytes"],
+                    file_id=str(file_id),
+                    expires_in_seconds=presign_ttl,
+                )
+                row = get_uploaded_file_for_user(
+                    db_session,
+                    user_id=resolution.user_id,
+                    file_id=file_id,
+                    include_deleted=False,
+                )
+                if row is None:
+                    raise RuntimeError("Upload intent row was not found after insert")
+                serialized = _serialize_uploaded_file_row(row, deduplicated=False)
+                serialized["upload"] = {
+                    "url": post.url,
+                    "fields": post.fields,
+                    "expires_at": _iso_or_none(presign_expires_at),
+                }
+                results.append(serialized)
+    except HTTPException:
+        raise
+    except ObjectStorageOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "attachment_upload_authorization_failed",
+                "message": "The upload could not be authorized. Please try again.",
+            },
+        ) from exc
+
+    logger.info(
+        "Direct attachment upload intents created",
+        extra={
+            "extra_fields": {
+                "event": "upload.intent.created",
+                "request_id": request_id,
+                "user_id": str(policy.user_id),
+                "file_count": len(results),
+                "plan_code": policy.plan_code,
+            }
+        },
+    )
+    return results
+
+
+def _coerce_utc_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _mark_direct_upload_failed(*, user_id: UUID, file_id: UUID, error_code: str) -> None:
+    with _db_uow() as db_session:
+        row = get_uploaded_file_for_user(
+            db_session,
+            user_id=user_id,
+            file_id=file_id,
+            include_deleted=False,
+        )
+        if row is not None and str(row.get("status") or "") == "uploading":
+            update_uploaded_file_status(
+                db_session,
+                file_id=file_id,
+                status="failed",
+                error_code=error_code,
+                error_message="Uploaded object verification failed.",
+            )
+
+
+def complete_direct_upload(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    file_id: UUID,
+) -> dict[str, Any]:
+    """Verify the server-owned S3 object and transition an intent into ingestion."""
+
+    require_direct_upload_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        row = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+            include_deleted=True,
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "file_not_found", "message": "Attachment file not found."},
+        )
+
+    current_status = str(row.get("status") or "").strip().lower()
+    if current_status in {"ready", "processing"}:
+        logger.info(
+            "Direct attachment upload completion was already verified",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.idempotent",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "status": current_status,
+                }
+            },
+        )
+        return _serialize_uploaded_file_row(row, deduplicated=False)
+    if current_status != "uploading":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "attachment_upload_invalid_state",
+                "message": "This upload cannot be completed in its current state.",
+            },
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    intent_expiry = _coerce_utc_datetime(row.get("expires_at"))
+    if intent_expiry is not None and intent_expiry <= now_utc:
+        with _db_uow() as db_session:
+            update_uploaded_file_status(db_session, file_id=file_id, status="expired")
+            enqueue_file_deletion_job(db_session, file_id=file_id)
+        logger.warning(
+            "Direct attachment upload completion rejected expired intent",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "intent_expired",
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "attachment_upload_expired", "message": "This upload has expired."},
+        )
+
+    try:
+        storage = get_object_storage()
+    except ObjectStorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "storage_not_configured",
+                "message": "Upload verification is unavailable.",
+            },
+        ) from exc
+    storage_key = str(row.get("storage_key") or "").strip()
+    if storage.bucket != str(row.get("storage_bucket") or "").strip() or not storage_key:
+        _mark_direct_upload_failed(
+            user_id=resolution.user_id,
+            file_id=file_id,
+            error_code="attachment_upload_mismatch",
+        )
+        logger.warning(
+            "Direct attachment upload completion rejected storage target mismatch",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "storage_target_mismatch",
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "attachment_upload_mismatch",
+                "message": "The uploaded file did not match the requested file.",
+            },
+        )
+    try:
+        head = storage.head_object(key=storage_key)
+    except ObjectStorageNotFoundError as exc:
+        logger.info(
+            "Direct attachment upload completion is waiting for the S3 object",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.pending",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "object_not_found",
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "attachment_upload_not_complete",
+                "message": "The file has not finished uploading to storage.",
+            },
+        ) from exc
+    except ObjectStorageOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "attachment_upload_verification_failed",
+                "message": "The upload could not be verified. Please try again.",
+            },
+        ) from exc
+
+    expected_size = int(row.get("size_bytes") or 0)
+    expected_type = str(row.get("mime_type") or "").strip().lower()
+    metadata_file_id = str(head.metadata.get("cortex-file-id") or "").strip()
+    if (
+        head.content_length <= 0
+        or head.content_length != expected_size
+        or head.content_type != expected_type
+        or metadata_file_id != str(file_id)
+    ):
+        _mark_direct_upload_failed(
+            user_id=resolution.user_id,
+            file_id=file_id,
+            error_code="attachment_upload_mismatch",
+        )
+        logger.warning(
+            "Direct attachment upload completion rejected object metadata mismatch",
+            extra={
+                "extra_fields": {
+                    "event": "upload.completion.rejected",
+                    "request_id": request_id,
+                    "user_id": str(resolution.user_id),
+                    "file_id": str(file_id),
+                    "failure_reason": "object_metadata_mismatch",
+                    "expected_size_bytes": expected_size,
+                    "actual_size_bytes": head.content_length,
+                    "expected_content_type": expected_type,
+                    "actual_content_type": head.content_type,
+                    "file_id_metadata_matches": metadata_file_id == str(file_id),
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "attachment_upload_mismatch",
+                "message": "The uploaded file did not match the requested file.",
+            },
+        )
+
+    ingestion_meta = _build_ingestion_meta_base(
+        normalized_mime=expected_type,
+        size_bytes=expected_size,
+    )
+    final_status = "ready"
+    final_error_code: str | None = None
+    final_error_message: str | None = None
+    if bool(ingestion_meta.get("ingestion_required")):
+        if expected_size <= _sync_ingest_inline_max_bytes():
+            try:
+                payload = storage.get_bytes(key=storage_key)
+            except ObjectStorageOperationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "code": "attachment_upload_verification_failed",
+                        "message": "The uploaded file could not be read. Please try again.",
+                    },
+                ) from exc
+            if len(payload) != expected_size:
+                _mark_direct_upload_failed(
+                    user_id=resolution.user_id,
+                    file_id=file_id,
+                    error_code="attachment_upload_mismatch",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "attachment_upload_mismatch",
+                        "message": "The uploaded file did not match the requested file.",
+                    },
+                )
+            final_status, ingestion_meta, final_error_code, final_error_message = (
+                _run_sync_ingestion(
+                    payload=payload,
+                    normalized_mime=expected_type,
+                    filename=str(row.get("original_filename") or "file"),
+                    base_meta=ingestion_meta,
+                    request_id=request_id,
+                    file_id=file_id,
+                )
+            )
+        else:
+            final_status = "processing"
+            ingestion_meta = _merge_ingestion_meta(
+                ingestion_meta,
+                {
+                    "ingestion_state": "processing",
+                    "deferred_reason": "size_exceeds_sync_inline_limit",
+                    "deferred_at": now_utc.isoformat().replace("+00:00", "Z"),
+                },
+            )
+
+    retention_expires_at = now_utc + timedelta(hours=_attachment_ttl_hours())
+    with _db_uow() as db_session:
+        current = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+            include_deleted=True,
+        )
+        if current is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "file_not_found", "message": "Attachment file not found."},
+            )
+        current_status = str(current.get("status") or "").strip().lower()
+        if current_status in {"ready", "processing"}:
+            return _serialize_uploaded_file_row(current, deduplicated=False)
+        if current_status != "uploading":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "attachment_upload_invalid_state",
+                    "message": "This upload cannot be completed in its current state.",
+                },
+            )
+        update_uploaded_file_status(
+            db_session,
+            file_id=file_id,
+            status=final_status,
+            error_code=final_error_code,
+            error_message=(final_error_message[:400] if final_error_message else None),
+            ingestion_meta=ingestion_meta,
+            expires_at=retention_expires_at,
+        )
+        refreshed = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+            include_deleted=False,
+        )
+        if refreshed is None:
+            raise RuntimeError("Completed upload row was not found")
+        result = _serialize_uploaded_file_row(refreshed, deduplicated=False)
+
+    logger.info(
+        "Direct attachment upload completion verified",
+        extra={
+            "extra_fields": {
+                "event": "upload.completion.verified",
+                "request_id": request_id,
+                "user_id": str(resolution.user_id),
+                "file_id": str(file_id),
+                "status": str(result.get("status") or ""),
+                "mime_type": expected_type,
+                "size_bytes": expected_size,
+            }
+        },
+    )
+    return result
+
+
+def delete_user_file(
+    *,
+    auth: AuthResult,
+    request_id: str,
+    file_id: UUID,
+) -> dict[str, Any]:
+    """Make an owned file unusable and queue idempotent object deletion."""
+
+    _assert_feature_enabled(request_id=request_id)
+    _assert_db_enabled(request_id=request_id)
+    with _db_uow() as db_session:
+        resolution = _resolve_identity(
+            auth=auth,
+            request_id=request_id,
+            db_session=db_session,
+        )
+        row = get_uploaded_file_for_user(
+            db_session,
+            user_id=resolution.user_id,
+            file_id=file_id,
+            include_deleted=True,
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "file_not_found", "message": "Attachment file not found."},
+            )
+        current_status = str(row.get("status") or "").strip().lower()
+        if current_status not in {"deleting", "deleted"}:
+            update_uploaded_file_status(
+                db_session,
+                file_id=file_id,
+                status="deleting",
+                error_code=None,
+                error_message=None,
+            )
+            enqueue_file_deletion_job(db_session, file_id=file_id)
+            refreshed = get_uploaded_file_for_user(
+                db_session,
+                user_id=resolution.user_id,
+                file_id=file_id,
+                include_deleted=True,
+            )
+            if refreshed is not None:
+                row = refreshed
         return _serialize_uploaded_file_row(row, deduplicated=False)
 
 

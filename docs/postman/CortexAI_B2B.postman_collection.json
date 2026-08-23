@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CortexAI B2B API (Complete)",
-    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, catalog discovery, file upload/status, chat/compare (sync + streaming), BYOK, history, reporting/exports, optimize, and admin diagnostics. DATABASE_URL is required at API startup. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
+    "description": "Postman collection for CortexAI API-first contract validation: health/runtime diagnostics, browser lifecycle diagnostics, display-safe billing plans/current subscription, effective entitlements, server-owned Stripe Checkout/Portal sessions and webhooks, catalog discovery, legacy and direct-to-S3 file upload/status/deletion, chat/compare (sync + streaming), unified-credit Cortex Analysis runs, BYOK, history, reporting/exports, optimize, and admin diagnostics. Cache-aware accounting preserves the existing credit economy, starts in shadow mode, and exposes cache/read/write audit fields plus informational savings. Fresh Tavily research settles as provider credits used x 5,000 Cortex credits after a 10,000-credit normal-search reservation; cached/reused research is not charged again. DATABASE_URL is required at API startup, and PostgreSQL startup fails early when required billing migrations are missing. Reverse-proxy handling defaults to ENABLE_PROXY_HEADERS=true and TRUSTED_PROXY_IPS=*. Session cookies auto-detect HTTPS for the Secure attribute and default to SESSION_MAX_AGE_SECONDS=604800; Cognito endpoint TLS verification defaults to COGNITO_SSL_VERIFY=true.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -27,7 +27,7 @@
     },
     {
       "key": "chat_model",
-      "value": "gpt-4o-mini"
+      "value": "gpt-5.6-luna"
     },
     {
       "key": "compare_provider",
@@ -35,7 +35,7 @@
     },
     {
       "key": "compare_model",
-      "value": "gemini-2.5-flash-lite"
+      "value": "gemini-3.5-flash-lite"
     },
     {
       "key": "request_group_id",
@@ -67,6 +67,10 @@
     },
     {
       "key": "file_id",
+      "value": ""
+    },
+    {
+      "key": "attachment_upload_url",
       "value": ""
     }
   ],
@@ -182,9 +186,92 @@
                   "  pm.expect(body).to.have.property('baseline');",
                   "  pm.expect(body).to.have.property('rate_limits');",
                   "  pm.expect(body).to.have.property('breakers');",
+                  "  pm.expect(body).to.have.property('plan_tier');",
+                  "  if (body.billing) { pm.expect(body.billing).to.have.property('plan_code'); }",
                   "});",
                   "if (body.user_id) { pm.collectionVariables.set('user_id', body.user_id); }",
                   "if (body.api_key_id) { pm.collectionVariables.set('api_key_id', body.api_key_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/entitlements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/entitlements",
+            "description": "Returns the server-resolved plan, lifecycle state, features, model access categories, server-owned file limits, current period, and unified AI-credit allowance. BILLING_ENABLED=false resolves Free without Stripe."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('entitlements response shape', function () {",
+                  "  pm.expect(body).to.have.property('plan');",
+                  "  pm.expect(body).to.have.property('features');",
+                  "  pm.expect(body).to.have.property('model_access');",
+                  "  pm.expect(body).to.have.property('limits');",
+                  "  pm.expect(body.limits.max_files_per_request).to.be.above(0);",
+                  "  pm.expect(body.limits.max_file_bytes).to.be.above(0);",
+                  "  pm.expect(body).to.have.property('allowances');",
+                  "  pm.expect(body).to.have.property('period');",
+                  "  pm.expect(Object.keys(body.allowances)).to.eql(['ai_credits']);",
+                  "  pm.expect(body.allowances.ai_credits.limit).to.be.above(0);",
+                  "  Object.keys(body.allowances).forEach(function (meter) { pm.expect(body.allowances[meter].remaining).to.be.at.least(0); });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/credits/transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/credits/transactions?limit=20&offset=0",
+            "description": "Returns newest immutable, itemized AI-credit reconciliation rows for the authenticated billing account. Each row includes display-only activity_id grouping and nullable query context for the original user question after storage-policy sanitization."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('credit transactions response shape', function () {",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "  pm.expect(body.limit).to.eql(20);",
+                  "  pm.expect(body.offset).to.eql(0);",
+                  "  if (body.items.length > 0) {",
+                  "    pm.expect(body.items[0].total_credits).to.be.at.least(0);",
+                  "    pm.expect(body.items[0]).to.have.property('activity_id');",
+                  "    pm.expect(body.items[0]).to.have.property('query');",
+                  "    pm.expect(body.items[0]).to.have.property('pricing_version');",
+                  "    pm.expect(body.items[0]).to.have.property('usage_estimated');",
+                  "    pm.expect(body.items[0]).to.have.property('normal_input_tokens');",
+                  "    pm.expect(body.items[0]).to.have.property('cached_input_tokens');",
+                  "    pm.expect(body.items[0]).to.have.property('cache_write_tokens');",
+                  "    pm.expect(body.items[0]).to.have.property('cache_savings_credits');",
+                  "  }",
+                  "});"
                 ]
               }
             }
@@ -217,6 +304,226 @@
                   "  var setCookie = pm.response.headers.get('Set-Cookie') || '';",
                   "  pm.test('sets cortex_session cookie', function () { pm.expect(setCookie).to.include('cortex_session='); });",
                   "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "GET /v1/billing/plans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/billing/plans",
+            "description": "Public display-safe Free/Plus/Pro catalogue. Returns server-owned USD prices, feature/model access, core allowances, and boolean billing_enabled without Stripe Price IDs, Customers, secrets, or provider objects."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.json();",
+                  "pm.test('display-safe plans response shape', function () {",
+                  "  pm.expect(body.currency).to.eql('USD');",
+                  "  pm.expect(body.billing_period).to.eql('monthly');",
+                  "  pm.expect(body.billing_enabled).to.be.a('boolean');",
+                  "  pm.expect(body.plans).to.be.an('array').that.is.not.empty;",
+                  "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('price_id');",
+                  "  pm.expect(JSON.stringify(body).toLowerCase()).not.to.include('customer');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/billing/subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/billing/subscription",
+            "description": "Returns the authenticated user's effective provider-safe plan/status, current period, cancellation state, and manage capability. Provider subscription IDs are never returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects subscription or runtime auth/database requirements', function () { pm.expect([200, 401, 403, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('provider-safe subscription shape', function () {",
+                  "    pm.expect(body.plan_code).to.be.a('string');",
+                  "    pm.expect(body.status).to.be.a('string');",
+                  "    pm.expect(body.can_manage).to.be.a('boolean');",
+                  "    pm.expect(body).not.to.have.property('provider_subscription_id');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/billing/estimate-generation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Estimate a detailed answer\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"}\n  ],\n  \"generation\": {\"profile\": \"auto\"},\n  \"research_enabled\": false\n}"
+            },
+            "url": "{{base_url}}/v1/billing/estimate-generation",
+            "description": "Returns the same per-target generation ceilings and maximum temporary AI-credit hold used by Ask/Compare without creating a reservation. Unsupported/unsafe generation requests return 422."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects estimate, auth, validation, or database requirements', function () { pm.expect([200, 401, 403, 422, 501]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('generation estimate response shape', function () {",
+                  "    pm.expect(body.targets).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(body.estimated_max_ai_credits).to.be.a('number');",
+                  "    pm.expect(body.remaining_ai_credits).to.be.a('number');",
+                  "    pm.expect(body.can_authorize).to.be.a('boolean');",
+                  "    pm.expect(body.temporary_hold_released_after_settlement).to.eql(true);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/billing/checkout-session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan_code\": \"plus\",\n  \"billing_period\": \"monthly\"\n}"
+            },
+            "url": "{{base_url}}/v1/billing/checkout-session",
+            "description": "Creates a server-owned Stripe Checkout URL. Existing provider-live subscribers receive a Portal destination instead. Never add Price, amount, Customer, or redirect fields to this request. Use Stripe test mode; BILLING_ENABLED=false returns 503."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects checkout, customer state, or disabled billing', function () { pm.expect([200, 409, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('hosted billing redirect shape', function () {",
+                  "    pm.expect(body.checkout_url).to.be.a('string');",
+                  "    pm.expect(['checkout', 'portal']).to.include(body.destination);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/billing/portal-session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": "{{base_url}}/v1/billing/portal-session",
+            "description": "Creates a short-lived Portal URL for the persisted Stripe Customer. Customer ID and return URL are server-owned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects portal, missing customer, or disabled billing', function () { pm.expect([200, 409, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('portal response shape', function () { pm.expect(pm.response.json().portal_url).to.be.a('string'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/billing/webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Stripe-Signature",
+                "value": "{{stripe_signature}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_replace_with_captured_test_event\",\n  \"object\": \"event\",\n  \"type\": \"customer.subscription.updated\",\n  \"created\": 0,\n  \"data\": {\n    \"object\": {}\n  }\n}"
+            },
+            "url": "{{base_url}}/v1/billing/webhook",
+            "description": "Stripe-only callback. Replace the body with the exact raw bytes of a captured test-mode event and set stripe_signature to its matching Stripe-Signature header. Never store STRIPE_WEBHOOK_SECRET or a live payload in this collection. Invalid signatures return 400; BILLING_ENABLED=false returns 503."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects valid delivery, invalid signature, payload guard, processing retry, database mode, or disabled billing', function () { pm.expect([200, 400, 413, 500, 501, 503]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('webhook acknowledgement shape', function () { pm.expect(pm.response.json()).to.eql({ received: true }); }); }",
+                  "if (pm.response.code === 400) { pm.test('invalid signature is structured', function () { pm.expect(pm.response.json().detail.code).to.eql('invalid_webhook_signature'); }); }"
                 ]
               }
             }
@@ -266,7 +573,8 @@
                 "value": "Bearer {{bearer_token}}"
               }
             ],
-            "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true"
+            "url": "{{base_url}}/v1/models?provider={{provider_filter}}&enabled_only=true",
+            "description": "Returns selectable catalogue rows from config/model_registry.yaml. Each row includes its subscription billing class, lifecycle, current effective prices, pricing rule/version, and official provider evidence; use enabled_only=false to inspect retained compatibility/history identities. Claude Sonnet 4.6 is advanced (Plus/Pro), while Claude Opus 4.5 and 4.6 are premium (Pro)."
           },
           "event": [
             {
@@ -280,6 +588,19 @@
                   "  pm.expect(body.models).to.be.an('array');",
                   "  pm.expect(body.enabled_only).to.eql(true);",
                   "  if (body.models.length > 0) {",
+                  "    pm.expect(body.models[0].billing_class).to.be.oneOf(['economical', 'standard', 'advanced', 'premium']);",
+                  "    pm.expect(body.models[0].access_category).to.eql(body.models[0].billing_class);",
+                  "    pm.expect(body.models[0].input_credit_multiplier).to.be.above(0);",
+                  "    pm.expect(body.models[0].output_credit_multiplier).to.be.above(0);",
+                  "    pm.expect(body.models[0]).to.have.property('credit_usage_label');",
+                  "    pm.expect(body.models[0]).to.have.property('credit_pricing_version');",
+                  "    pm.expect(body.models[0].selectable).to.eql(true);",
+                  "    pm.expect(body.models[0]).to.have.property('lifecycle_status');",
+                  "    pm.expect(body.models[0]).to.have.property('pricing_model');",
+                  "    pm.expect(body.models[0]).to.have.property('pricing_rule_id');",
+                  "    pm.expect(body.models[0].pricing_source_url).to.match(/^https:\\/\\//);",
+                  "    pm.expect(body.models[0].lifecycle_source_url).to.match(/^https:\\/\\//);",
+                  "    pm.expect(body.models[0]).to.have.property('source_verified_at');",
                   "    pm.expect(body.models[0]).to.have.property('supports_image_input');",
                   "  }",
                   "});"
@@ -327,8 +648,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200, 401, or 404 (attachments disabled)', function () {",
-                  "  pm.expect([200, 401, 404]).to.include(pm.response.code);",
+                  "pm.test('status reflects upload, auth, feature, or subscription outcome', function () {",
+                  "  pm.expect([200, 401, 403, 404, 429, 501]).to.include(pm.response.code);",
                   "});",
                   "if (pm.response.code === 200) {",
                   "  var body = pm.response.json();",
@@ -336,6 +657,146 @@
                   "    pm.expect(body.file_id).to.be.a('string');",
                   "  });",
                   "  pm.collectionVariables.set('file_id', body.file_id);",
+                  "} else if ([403, 429].includes(pm.response.code)) {",
+                  "  var denial = pm.response.json().detail;",
+                  "  pm.test('subscription denial is structured', function () {",
+                  "    pm.expect(denial.code).to.be.a('string');",
+                  "    pm.expect(denial.message).to.be.a('string');",
+                  "    pm.expect(denial.current_plan).to.be.a('string');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/files/upload-batch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "description": "Validates the complete selection against the effective plan, platform safety ceilings, MIME allowlist, and any known provider capability before storing the first object. Upload alone consumes no AI credits.",
+            "url": "{{base_url}}/v1/files/upload-batch"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects batch upload, auth, validation, or subscription outcome', function () {",
+                  "  pm.expect([200, 400, 401, 403, 413, 415, 501, 502]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var body = pm.response.json();",
+                  "  pm.test('batch response returns every uploaded file', function () {",
+                  "    pm.expect(body.files).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(body.files[0].file_id).to.be.a('string');",
+                  "  });",
+                  "  pm.collectionVariables.set('file_id', body.files[0].file_id);",
+                  "} else if (pm.response.code === 403) {",
+                  "  var denial = pm.response.json().detail;",
+                  "  pm.test('plan upload denial is structured', function () {",
+                  "    pm.expect(denial.code).to.eql('feature_not_in_plan');",
+                  "    pm.expect(denial.current_plan).to.be.a('string');",
+                  "    pm.expect(denial.limit).to.be.a('number');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/files/upload-intents",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"files\": [\n    {\n      \"filename\": \"postman-direct-upload.txt\",\n      \"mime_type\": \"text/plain\",\n      \"size_bytes\": 29\n    }\n  ],\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
+            },
+            "description": "Creates an uploading metadata row and a five-minute presigned S3 POST. The browser must submit every returned upload.fields entry unchanged, including optional exact encryption fields, plus the file itself directly to upload.url; Cortex never receives the file bytes. Set ATTACHMENTS_DIRECT_UPLOAD_ENABLED=true for this route.",
+            "url": "{{base_url}}/v1/files/upload-intents"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects direct-upload rollout, auth, or validation', function () {",
+                  "  pm.expect([200, 400, 401, 403, 404, 415, 501, 502]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  var item = pm.response.json().files[0];",
+                  "  pm.test('intent returns an uploading file and constrained POST', function () {",
+                  "    pm.expect(item.status).to.eql('uploading');",
+                  "    pm.expect(item.upload.url).to.match(/^https?:\\/\\//);",
+                  "    pm.expect(item.upload.fields).to.be.an('object');",
+                  "    pm.expect(item.upload.fields['x-amz-meta-cortex-file-id']).to.eql(item.file_id);",
+                  "  });",
+                  "  pm.collectionVariables.set('file_id', item.file_id);",
+                  "  pm.collectionVariables.set('attachment_upload_url', item.upload.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/files/{file_id}/complete",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "description": "Call only after the presigned S3 form succeeds. Cortex performs HEAD against the server-owned bucket/key and verifies exact size, MIME type, and x-amz-meta-cortex-file-id before transitioning to ready or processing. Repeating a successful completion is idempotent.",
+            "url": "{{base_url}}/v1/files/{{file_id}}/complete"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects completion, missing S3 object, expiry, or rollout state', function () {",
+                  "  pm.expect([200, 401, 404, 409, 410, 500, 501, 502]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  pm.expect(pm.response.json().status).to.be.oneOf(['ready', 'processing']);",
                   "}"
                 ]
               }
@@ -367,6 +828,36 @@
               }
             }
           ]
+        },
+        {
+          "name": "DELETE /v1/files/{file_id}",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "description": "Makes an owned attachment unusable immediately and idempotently queues its object for deletion by the attachment cleanup worker.",
+            "url": "{{base_url}}/v1/files/{{file_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status reflects queued deletion, auth, or ownership', function () {",
+                  "  pm.expect([200, 401, 404, 501]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  pm.expect(pm.response.json().status).to.be.oneOf(['deleting', 'deleted']);",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -389,9 +880,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat probe\",\n  \"credit_activity_id\": \"postman-chat-activity\",\n  \"initial_query\": \"Postman B2B e2e chat probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"generation\": {\"profile\": \"auto\"},\n  \"routing\": {\n    \"smart_mode\": false,\n    \"research_mode\": false\n  }\n}"
             },
-            "url": "{{base_url}}/v1/chat"
+            "url": "{{base_url}}/v1/chat",
+            "description": "DB-mode Ask resolves the effective plan and server-owned model billing class, then reserves model/research units before provider execution. Optional credit_activity_id and initial_query are display-only ledger context. Claude thinking, effort, and temperature fields are filtered by the selected model's registry capabilities. Entitlement denial is 403, exhausted monthly allowance is 429, and unsafe billing configuration is 500."
           },
           "event": [
             {
@@ -399,15 +891,31 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var body = pm.response.json();",
                   "pm.test('chat response has request_id/provider/model', function () {",
                   "  pm.expect(body.request_id).to.be.a('string');",
                   "  pm.expect(body.provider).to.be.a('string');",
                   "  pm.expect(body.model).to.be.a('string');",
+                  "  pm.expect(body.requested_model).to.be.a('string');",
+                  "  pm.expect(body.served_model).to.be.a('string');",
+                  "  pm.expect(body.pricing_model).to.be.a('string');",
+                  "  pm.expect(body).to.have.property('pricing_rule_id');",
+                  "  pm.expect(body).to.have.property('pricing_version');",
+                  "  pm.expect(body).to.have.property('pricing_unknown');",
+                  "  pm.expect(['complete', 'incomplete', 'failed']).to.include(body.completion_status);",
+                  "  pm.expect(body.generation_budget.effective_max_output_tokens).to.be.a('number');",
+                  "  pm.expect(body.retry_with_more_room.available).to.be.a('boolean');",
+                  "  pm.expect(body.cache_hit).to.be.a('boolean');",
+                  "  pm.expect(body.cache_hit_ratio).to.be.a('number');",
+                  "  pm.expect(body.cache_savings_ai_credits).to.be.a('number');",
+                  "  pm.expect(body.uncached_equivalent_ai_credits).to.be.a('number');",
                   "});"
                 ]
               }
@@ -434,9 +942,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\"\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B e2e chat stream probe\",\n  \"credit_activity_id\": \"postman-chat-stream-activity\",\n  \"initial_query\": \"Postman B2B e2e chat stream probe\",\n  \"provider\": \"{{chat_provider}}\",\n  \"model\": \"{{chat_model}}\",\n  \"generation\": {\"profile\": \"auto\"}\n}"
             },
-            "url": "{{base_url}}/v1/chat/stream"
+            "url": "{{base_url}}/v1/chat/stream",
+            "description": "Reserves Ask subscription usage before returning the NDJSON stream. Claude thinking, effort, and temperature fields are filtered by the selected model's registry capabilities. Provider failure releases response units; successful model/research usage is finalized before terminal response events."
           },
           "event": [
             {
@@ -444,10 +953,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var text = pm.response.text();",
                   "pm.test('stream includes start and done markers', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"start\\\"');",
@@ -479,9 +991,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B compare probe\",\n  \"credit_activity_id\": \"postman-compare-activity\",\n  \"initial_query\": \"Postman B2B compare probe\",\n  \"generation\": {\"profile\": \"auto\"},\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
-            "url": "{{base_url}}/v1/compare"
+            "url": "{{base_url}}/v1/compare",
+            "description": "Accepts 2-3 explicit targets. Optional credit_activity_id and initial_query are display-only ledger context. Free/Plus allow 2 and Pro allows 3. Claude generation controls are resolved independently per target from registry capabilities. All target classes and research are reserved before providers start; settlement charges only successful targets and performed research."
           },
           "event": [
             {
@@ -489,17 +1002,25 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var body = pm.response.json();",
                   "pm.test('compare has request_group_id + responses', function () {",
                   "  pm.expect(body.request_group_id).to.be.a('string');",
                   "  pm.expect(body.responses).to.be.an('array');",
                   "  pm.expect(body.responses.length).to.be.above(1);",
+                  "  pm.expect(body.responses[0].generation_budget.effective_max_output_tokens).to.be.a('number');",
+                  "  pm.expect(body.total_cache_savings_ai_credits).to.be.a('number');",
+                  "  pm.expect(body.responses[0].cache_hit).to.be.a('boolean');",
+                  "  pm.expect(['complete', 'incomplete', 'failed']).to.include(body.responses[0].completion_status);",
                   "});",
-                  "pm.collectionVariables.set('request_group_id', body.request_group_id);"
+                  "pm.collectionVariables.set('request_group_id', body.request_group_id);",
+                  "pm.collectionVariables.set('session_id', body.session_id);"
                 ]
               }
             }
@@ -525,9 +1046,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
+              "raw": "{\n  \"prompt\": \"Postman B2B compare stream probe\",\n  \"credit_activity_id\": \"postman-compare-stream-activity\",\n  \"initial_query\": \"Postman B2B compare stream probe\",\n  \"generation\": {\"profile\": \"auto\"},\n  \"targets\": [\n    {\"provider\": \"{{chat_provider}}\", \"model\": \"{{chat_model}}\"},\n    {\"provider\": \"{{compare_provider}}\", \"model\": \"{{compare_model}}\"}\n  ]\n}"
             },
-            "url": "{{base_url}}/v1/compare/stream"
+            "url": "{{base_url}}/v1/compare/stream",
+            "description": "Reserves all Compare targets before returning NDJSON. Claude generation controls are resolved independently per target from registry capabilities. Aggregate settlement finalizes successful targets before done and also handles completed partial targets on disconnect/error."
           },
           "event": [
             {
@@ -535,13 +1057,120 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200 or 401', function () {",
-                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('status is success, auth, or structured subscription denial', function () {",
+                  "  pm.expect([200, 401, 402, 403, 429, 500]).to.include(pm.response.code);",
                   "});",
-                  "if (pm.response.code === 401) { return; }",
+                  "if (pm.response.code !== 200) {",
+                  "  if (pm.response.code !== 401) { pm.expect(pm.response.json().detail.code).to.be.a('string'); }",
+                  "  return;",
+                  "}",
                   "var text = pm.response.text();",
                   "pm.test('stream includes done marker', function () {",
                   "  pm.expect(text).to.include('\\\"type\\\": \\\"done\\\"');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /v1/compare/{request_group_id}/analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/{{request_group_id}}/analysis"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201 or auth/provider precondition error', function () {",
+                  "  pm.expect([201, 401, 403, 404, 409, 502, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 201) { return; }",
+                  "var body = pm.response.json();",
+                  "pm.test('Cortex Analysis run is persisted and structured', function () {",
+                  "  pm.expect(body.analysisId).to.be.a('string');",
+                  "  pm.expect(body.requestGroupId).to.eql(pm.collectionVariables.get('request_group_id'));",
+                  "  pm.expect(body.model).to.be.a('string');",
+                  "  pm.expect(body.recommendedAnswer).to.be.a('string');",
+                  "  pm.expect(body.disagreements).to.be.an('array');",
+                  "  body.disagreements.forEach(function (item) { pm.expect(item).to.have.all.keys('who', 'text'); });",
+                  "  pm.expect(body.disagreementNote === null || typeof body.disagreementNote === 'string').to.eql(true);",
+                  "  pm.expect(body.sourceResponses).to.be.an('array');",
+                  "  pm.expect(body.isStale).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/compare/analysis-runs by request group",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/analysis-runs?request_group_id={{request_group_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or auth error', function () {",
+                  "  pm.expect([200, 401, 403, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 200) { return; }",
+                  "var body = pm.response.json();",
+                  "pm.test('all saved runs are returned newest-first', function () {",
+                  "  pm.expect(body).to.be.an('array');",
+                  "  body.forEach(function (run) { pm.expect(run.disagreements).to.be.an('array'); pm.expect(run).to.have.property('disagreementNote'); });",
+                  "  if (body.length > 1) {",
+                  "    pm.expect(Date.parse(body[0].createdAt)).to.be.at.least(Date.parse(body[1].createdAt));",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/compare/analysis-runs by session",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearer_token}}"
+              }
+            ],
+            "url": "{{base_url}}/v1/compare/analysis-runs?session_id={{session_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 or auth error', function () {",
+                  "  pm.expect([200, 401, 403, 503]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code !== 200) { return; }",
+                  "pm.test('session Cortex Analysis history is an array', function () {",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
                   "});"
                 ]
               }
@@ -616,6 +1245,12 @@
                   "      pm.expect(body[0]).to.have.property('session_id');",
                   "      pm.expect(body[0]).to.have.property('session_title');",
                   "      pm.expect(body[0]).to.have.property('request_group_id');",
+                  "      pm.expect(body[0]).to.have.property('prompt_tokens');",
+                  "      pm.expect(body[0]).to.have.property('completion_tokens');",
+                  "      pm.expect(body[0]).to.have.property('ai_credits');",
+                  "      pm.expect(body[0]).to.have.property('credit_usage_estimated');",
+                  "      pm.expect(body[0]).to.have.property('research_ai_credits');",
+                  "      pm.expect(body[0]).to.have.property('research_credit_usage_estimated');",
                   "    });",
                   "  }",
                   "  if (body.length > 0 && body[0].id) { pm.collectionVariables.set('history_entry_id', String(body[0].id)); }",
@@ -1029,7 +1664,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
+              "raw": "{\n  \"prompt\": \"Improve this prompt for clarity and structure.\",\n  \"credit_activity_id\": \"postman-optimize-activity\",\n  \"context_hint\": \"Optional compact recent chat context, capped at 4000 characters.\"\n}"
             },
             "url": "{{base_url}}/v1/optimize"
           },
@@ -1039,15 +1674,24 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status reflects optimize or subscription outcome', function () { pm.expect([200, 403, 429]).to.include(pm.response.code); });",
                   "var body = pm.response.json();",
-                  "pm.test('optimize response schema', function () {",
-                  "  pm.expect(body).to.have.property('original_prompt');",
-                  "  pm.expect(body).to.have.property('optimized_prompt');",
-                  "  pm.expect(body).to.have.property('was_optimized');",
-                  "  pm.expect(body).to.have.property('optimization_status');",
-                  "  pm.expect(body).to.have.property('fallback_reason');",
-                  "});"
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('optimize response schema', function () {",
+                  "    pm.expect(body).to.have.property('original_prompt');",
+                  "    pm.expect(body).to.have.property('optimized_prompt');",
+                  "    pm.expect(body).to.have.property('was_optimized');",
+                  "    pm.expect(body).to.have.property('optimization_status');",
+                  "    pm.expect(body).to.have.property('fallback_reason');",
+                  "    pm.expect(body).to.have.property('optimization_reused');",
+                  "  });",
+                  "} else {",
+                  "  pm.test('subscription denial is structured', function () {",
+                  "    pm.expect(body.detail.code).to.be.a('string');",
+                  "    pm.expect(body.detail.message).to.be.a('string');",
+                  "    pm.expect(body.detail.current_plan).to.be.a('string');",
+                  "  });",
+                  "}"
                 ]
               }
             }

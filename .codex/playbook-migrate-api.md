@@ -46,6 +46,8 @@ If API migration requires schema updates, follow `docs/runbooks/db-migrations.md
 - `python -m pytest -q`
 - `python scripts/release_gate.py`
 - `npm run --prefix e2e test` if frontend/external UX depends on migrated contract.
+- For a user-requested commit, verify the blocking hooks in
+  [ci-commit-gate.md](./ci-commit-gate.md) are installed and do not bypass them.
 
 ## Done Criteria
 

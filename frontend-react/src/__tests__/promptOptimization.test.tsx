@@ -64,6 +64,90 @@ describe("prompt optimization", () => {
     ).toEqual({ prompt: "Make this clearer" });
   });
 
+  it("carries the shared credit activity id into Prompt Optimizer", () => {
+    expect(
+      buildOptimizeRequest({
+        prompt: "Make this clearer",
+        conversationHistory: [],
+        context: { new_session: true },
+        attachments: [],
+        creditActivityId: "activity-one",
+      }),
+    ).toEqual({
+      prompt: "Make this clearer",
+      credit_activity_id: "activity-one",
+    });
+  });
+
+  it("uses one credit activity id and the original question across optimization and Ask", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/v1/optimize") {
+        return new Response(
+          JSON.stringify({
+            original_prompt: "rough prompt",
+            optimized_prompt: "Clear, specific prompt",
+            was_optimized: true,
+            server_optimization_enabled: true,
+            optimization_status: "optimized",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/v1/chat/stream") {
+        return new Response(
+          [
+            JSON.stringify({ type: "start", provider: "openai", model: "gpt-5.1" }),
+            JSON.stringify({
+              type: "response_done",
+              response: {
+                request_id: "response-1",
+                text: "Answer",
+                provider: "openai",
+                model: "gpt-5.1",
+                latency_ms: 10,
+                token_usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+                estimated_cost: 0,
+                finish_reason: "stop",
+                error: null,
+                metadata: {},
+              },
+            }),
+            JSON.stringify({ type: "done", session_id: "session-1" }),
+          ].join("\n"),
+          { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+        );
+      }
+      if (path.startsWith("/v1/history")) {
+        return new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected request: ${path} ${init?.method ?? "GET"}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useChatStore.setState({ optimizeMode: true, prompt: "rough prompt" });
+
+    render(<ChatActions />);
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input) === "/v1/history?limit=500")).toBe(
+        true,
+      );
+    });
+    const optimizeCall = fetchMock.mock.calls.find(([input]) => String(input) === "/v1/optimize");
+    const chatCall = fetchMock.mock.calls.find(([input]) => String(input) === "/v1/chat/stream");
+    const optimizeBody = JSON.parse(String(optimizeCall?.[1]?.body)) as Record<string, unknown>;
+    const chatBody = JSON.parse(String(chatCall?.[1]?.body)) as Record<string, unknown>;
+
+    expect(optimizeBody.credit_activity_id).toBeTruthy();
+    expect(chatBody.credit_activity_id).toBe(optimizeBody.credit_activity_id);
+    expect(chatBody.initial_query).toBe("rough prompt");
+    expect(chatBody.prompt).toBe("Clear, specific prompt");
+  });
+
   it("sends bounded context whenever a thread has history", () => {
     const conversationHistory: ConversationHistoryItem[] = Array.from(
       { length: 12 },

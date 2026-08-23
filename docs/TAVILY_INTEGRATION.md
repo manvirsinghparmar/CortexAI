@@ -35,6 +35,16 @@ Current behavior highlights:
 - Missing provider timestamp values are normalized to server UTC ISO timestamps.
 - Tavily search-option resolution is deterministic and local. It does not call an LLM, does not call Tavily, and does not rewrite the query.
 
+## Credit Settlement
+
+- Research preflight reserves `2 Tavily credits x 5,000 = 10,000 Cortex credits`, matching the normal Advanced Search call.
+- Settlement uses the successful provider response's usage: `Tavily API credits used x 5,000 Cortex credits`.
+- If Tavily omits usage metadata, settlement uses the two-credit Advanced Search fallback and marks the ledger row as estimated.
+- Cache hits and session-state reuse report zero provider credits and add no new research charge.
+- Compare performs one shared retrieval and adds its research charge once, not once per target.
+- A successful Tavily response is settled from its reported usage even when it yields no usable sources. Calls that fail without a usage response add no research charge.
+- Research ledger metadata records `provider_credits_used` and `cortex_credits_per_provider_credit`.
+
 ## Search-Options Resolver
 
 The resolver receives the sanitized search query plus optional locale context and returns Tavily `/search` options.
@@ -87,7 +97,7 @@ Kill switch:
 Operational diagnostics:
 
 - `research.search.resolver` logs the resolver decision without raw query text.
-- `research.search.success` adds `result_count`, `source_content_lengths`, and `credits_used`.
+- `research.search.success` adds `result_count`, `source_content_lengths`, `credits_used`, and `credits_estimated`.
 - Tavily advanced search is treated as `2` API credits when the provider response does not include usage metadata.
 
 ## Validation
@@ -95,6 +105,9 @@ Operational diagnostics:
 Recommended checks:
 
 - `tests/test_tavily_client.py`
+- `tests/test_tavily_service.py`
+- `tests/test_credit_calculator.py`
+- `tests/test_billing_metering.py`
 - `tests/test_tavily_resolver.py`
 - `tests/test_research_pack.py`
 - `tests/test_routing_regression.py`
@@ -106,4 +119,4 @@ Recommended checks:
 
 ---
 
-Last updated: 2026-05-23
+Last updated: 2026-07-31

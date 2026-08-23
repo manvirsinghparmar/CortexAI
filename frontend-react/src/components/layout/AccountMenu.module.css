@@ -35,7 +35,7 @@
   z-index: 30;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 168px;
+  min-width: 210px;
   border: 1px solid var(--cx-hairline);
   border-radius: var(--cx-r-md);
   background: var(--cx-surface);
@@ -142,6 +142,18 @@
 .menuItemAccent:focus-visible {
   border-color: var(--cx-accent);
   background: var(--cx-accent-soft);
+}
+
+.menuItemWarning {
+  border-color: color-mix(in srgb, var(--cx-warn-text) 34%, var(--cx-hairline));
+  background: var(--cx-warn-soft);
+}
+
+.menuItemWarning .menuIcon,
+.menuItemWarning .menuIcon svg,
+.menuItemWarning .menuCopy small,
+.menuItemWarning .menuChevron {
+  color: var(--cx-warn-text);
 }
 
 @media (max-width: 900px) {

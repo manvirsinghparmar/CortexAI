@@ -1,207 +1,1046 @@
+catalog_version: "2026-07-31"
+currency: "USD"
+pricing_unit: "per_1m_tokens"
+
 providers:
   openai:
     defaults:
+      pricing_source_url: "https://developers.openai.com/api/docs/pricing"
+      lifecycle_source_url: "https://developers.openai.com/api/docs/deprecations"
+      source_verified_at: "2026-07-31"
       supports_image_input: true
       supported_attachment_mime_types:
-        [
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-          "image/gif",
-          "application/pdf",
-        ]
+        ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]
       max_attachment_bytes: 20971520
       max_attachments_per_request: 5
     models:
-      - name: "gpt-4.1-nano"
+      - name: "gpt-5.6-luna"
+        display_name: "GPT-5.6 Luna"
+        description: "Lowest-cost GPT-5.6 model for high-volume and latency-sensitive work."
         tier: "T0"
-        input_cost_per_1m: 0.100
-        output_cost_per_1m: 0.400
-        context_limit: 128000
-        tags: ["cheap", "fast", "non_reasoning", "general"]
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 400000
+        max_output_tokens: 128000
+        tags: ["cheap", "fast", "reasoning", "general", "coding"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.6-luna-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-22T00:00:00Z"
+            input: 0.20
+            cached_input: 0.02
+            cache_write: 0.25
+            output: 1.20
+            long_context:
+              threshold_tokens: 272000
+              applies_to_entire_request: true
+              input: 0.40
+              cached_input: 0.04
+              cache_write: 0.50
+              output: 1.80
+
       - name: "gpt-5.4-nano"
+        display_name: "GPT-5.4 Nano"
+        description: "Compact GPT-5.4 model for classification, extraction, and routing."
         tier: "T0"
-        input_cost_per_1m: 0.200
-        output_cost_per_1m: 1.250
-        context_limit: 1000000
-        tags: ["cheap", "fast", "non_reasoning", "general", "long_context"]
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1050000
+        max_output_tokens: 128000
+        tags: ["cheap", "fast", "reasoning", "general", "long_context"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.4-nano-standard-20260731"
+            processing_mode: "standard"
+            input: 0.20
+            cached_input: 0.02
+            output: 1.25
+
       - name: "gpt-4o-mini"
+        display_name: "GPT-4o Mini"
+        description: "Economical multimodal model retained for lightweight vision and chat."
         tier: "T1"
-        input_cost_per_1m: 0.150
-        output_cost_per_1m: 0.600
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
         context_limit: 128000
-        tags: ["cheap", "fast", "balanced", "general"]
+        max_output_tokens: 16384
+        tags: ["cheap", "fast", "balanced", "general", "vision"]
         enabled: true
-      - name: "gpt-4.1-mini"
-        tier: "T1"
-        input_cost_per_1m: 0.400
-        output_cost_per_1m: 1.600
-        context_limit: 128000
-        tags: ["fast", "balanced", "coding", "general"]
-        enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-4o-mini-standard-20260731"
+            processing_mode: "standard"
+            input: 0.15
+            cached_input: 0.075
+            output: 0.60
+
       - name: "gpt-5.4-mini"
+        display_name: "GPT-5.4 Mini"
+        description: "Balanced GPT-5.4 model for everyday reasoning and coding."
         tier: "T2"
-        input_cost_per_1m: 0.750
-        output_cost_per_1m: 4.500
-        context_limit: 1000000
+        billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1050000
+        max_output_tokens: 128000
         tags: ["fast", "reasoning", "coding", "general", "long_context"]
         enabled: true
-      - name: "gpt-5.1"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.4-mini-standard-20260731"
+            processing_mode: "standard"
+            input: 0.75
+            cached_input: 0.075
+            output: 4.50
+
+      - name: "gpt-5.6-terra"
+        display_name: "GPT-5.6 Terra"
+        description: "Balanced GPT-5.6 model for production reasoning, coding, and agentic work."
         tier: "T2"
-        input_cost_per_1m: 1.250
-        output_cost_per_1m: 10.000
-        context_limit: 128000
-        tags: ["strong", "reasoning", "coding", "general", "long_context"]
+        billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 14.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1050000
+        max_output_tokens: 128000
+        tags: ["strong", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.6-terra-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-22T00:00:00Z"
+            input: 2.00
+            cached_input: 0.20
+            cache_write: 2.50
+            output: 12.00
+            long_context:
+              threshold_tokens: 272000
+              applies_to_entire_request: true
+              input: 4.00
+              cached_input: 0.40
+              cache_write: 5.00
+              output: 18.00
+
       - name: "gpt-5.4"
+        display_name: "GPT-5.4"
+        description: "Previous-generation flagship retained as a stable production option."
         tier: "T3"
-        input_cost_per_1m: 2.500
-        output_cost_per_1m: 15.000
-        context_limit: 1000000
+        billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1050000
+        max_output_tokens: 128000
         tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
         enabled: true
-      - name: "gpt-5.2-codex"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.4-standard-20260731"
+            processing_mode: "standard"
+            input: 2.50
+            cached_input: 0.25
+            output: 15.00
+            long_context:
+              threshold_tokens: 272000
+              applies_to_entire_request: true
+              input: 5.00
+              cached_input: 0.50
+              output: 22.50
+
+      - name: "gpt-5.6-sol"
+        aliases: ["gpt-5.6"]
+        display_name: "GPT-5.6 Sol"
+        description: "Most capable GPT-5.6 model for the hardest reasoning and agentic workloads."
         tier: "T3"
-        input_cost_per_1m: 1.750
-        output_cost_per_1m: 14.000
-        context_limit: 128000
-        tags: ["strong", "reasoning", "coding", "production_code", "long_context"]
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1050000
+        max_output_tokens: 128000
+        reasoning_modes: ["none", "standard", "pro"]
+        default_reasoning_mode: "standard"
+        reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["flagship", "reasoning", "coding", "agentic", "accurate", "long_context"]
         enabled: true
-      - name: "gpt-4o"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+        pricing_rules:
+          - id: "openai-gpt-5.6-sol-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-22T00:00:00Z"
+            input: 5.00
+            cached_input: 0.50
+            cache_write: 6.25
+            output: 30.00
+            long_context:
+              threshold_tokens: 272000
+              applies_to_entire_request: true
+              input: 10.00
+              cached_input: 1.00
+              cache_write: 12.50
+              output: 45.00
+
+      - name: "gpt-4.1-nano"
+        display_name: "GPT-4.1 Nano"
+        description: "Compatibility entry scheduled for retirement; new work should use GPT-5.6 Luna."
+        tier: "T0"
+        billing_class: "economical"
+        input_credit_multiplier: 0.25
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 128000
+        max_output_tokens: 32768
+        tags: ["legacy", "cheap", "fast"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "SCHEDULED_FOR_RETIREMENT"
+          retirement_date: "2026-10-23T00:00:00Z"
+          replacement_model: "gpt-5.6-luna"
+          migration_reason: "OpenAI scheduled this model for shutdown."
+        pricing_rules:
+          - id: "openai-gpt-4.1-nano-standard-20260731"
+            processing_mode: "standard"
+            input: 0.10
+            cached_input: 0.025
+            output: 0.40
+
+      - name: "gpt-4.1-mini"
+        display_name: "GPT-4.1 Mini"
+        description: "Compatibility entry retained for existing integrations."
+        tier: "T1"
+        billing_class: "standard"
+        input_credit_multiplier: 1.0
+        output_credit_multiplier: 4.0
+        credit_usage_label: "Low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 32768
+        tags: ["legacy", "coding", "general"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "DEPRECATED"
+          replacement_model: "gpt-5.4-mini"
+          migration_reason: "Retained for compatibility but removed from the curated selector."
+        pricing_rules:
+          - id: "openai-gpt-4.1-mini-standard-20260731"
+            processing_mode: "standard"
+            input: 0.40
+            cached_input: 0.10
+            output: 1.60
+
+      - name: "gpt-5.1"
+        display_name: "GPT-5.1"
+        description: "Compatibility entry retained for existing integrations."
         tier: "T2"
-        input_cost_per_1m: 2.500
-        output_cost_per_1m: 10.000
-        context_limit: 128000
-        tags: ["strong", "accurate", "balanced", "general"]
+        billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 12.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 400000
+        max_output_tokens: 128000
+        tags: ["legacy", "reasoning", "coding"]
         enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "DEPRECATED"
+          replacement_model: "gpt-5.6-terra"
+          migration_reason: "Retained for compatibility but removed from the curated selector."
+        pricing_rules:
+          - id: "openai-gpt-5.1-standard-20260731"
+            processing_mode: "standard"
+            input: 1.25
+            cached_input: 0.125
+            output: 10.00
+
+      - name: "gpt-4o"
+        display_name: "GPT-4o"
+        description: "Compatibility entry retained for existing multimodal integrations."
+        tier: "T2"
+        billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 14.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 128000
+        max_output_tokens: 16384
+        tags: ["legacy", "multimodal", "general"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "DEPRECATED"
+          replacement_model: "gpt-5.4-mini"
+          migration_reason: "Retained for compatibility but removed from the curated selector."
+        pricing_rules:
+          - id: "openai-gpt-4o-standard-20260731"
+            processing_mode: "standard"
+            input: 2.50
+            cached_input: 1.25
+            output: 10.00
+
+      - name: "gpt-5.2-codex"
+        display_name: "GPT-5.2 Codex"
+        description: "Retired compatibility ID that is migrated to GPT-5.6 Sol."
+        tier: "T3"
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 128000
+        max_output_tokens: 128000
+        tags: ["retired", "coding", "agentic"]
+        enabled: true
+        selectable: false
+        release_status: "retired"
+        pricing_model: "gpt-5.6-sol"
+        lifecycle:
+          status: "RETIRED"
+          retirement_date: "2026-07-23T00:00:00Z"
+          replacement_model: "gpt-5.6-sol"
+          migration_reason: "OpenAI removed GPT-5.2 Codex and recommends GPT-5.6 Sol."
+
   gemini:
     defaults:
+      pricing_source_url: "https://ai.google.dev/gemini-api/docs/pricing"
+      lifecycle_source_url: "https://ai.google.dev/gemini-api/docs/deprecations"
+      source_verified_at: "2026-07-31"
       supports_image_input: true
       supported_attachment_mime_types:
-        [
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-          "image/gif",
-          "application/pdf",
-        ]
+        ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]
       max_attachment_bytes: 20971520
       max_attachments_per_request: 5
     models:
-      - name: "gemini-2.5-flash-lite"
+      - name: "gemini-3.5-flash-lite"
+        display_name: "Gemini 3.5 Flash-Lite"
+        description: "Lowest-cost current Gemini model for high-volume workloads."
         tier: "T0"
-        input_cost_per_1m: 0.100
-        output_cost_per_1m: 0.400
-        context_limit: 1000000
-        tags: ["cheap", "fast", "non_reasoning", "general", "long_context"]
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 3.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        tags: ["cheap", "fast", "general", "long_context"]
         enabled: true
-      - name: "gemini-2.5-flash"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "gemini-3.5-flash-lite-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-21T00:00:00Z"
+            input: 0.30
+            cached_input: 0.03
+            output: 2.50
+
+      - name: "gemini-3.6-flash"
+        display_name: "Gemini 3.6 Flash"
+        description: "Current high-throughput Gemini model for fast reasoning and multimodal tasks."
         tier: "T1"
-        input_cost_per_1m: 0.300
-        output_cost_per_1m: 2.500
-        context_limit: 1000000
-        tags: ["fast", "balanced", "general", "long_context"]
+        billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["fast", "reasoning", "multimodal", "general", "long_context"]
         enabled: true
-      - name: "gemini-2.5-pro"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "gemini-3.6-flash-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-21T00:00:00Z"
+            input: 1.50
+            cached_input: 0.15
+            output: 7.50
+
+      - name: "gemini-3.1-pro-preview"
+        display_name: "Gemini 3.1 Pro Preview"
+        description: "Preview flagship for complex reasoning, coding, and large-context work."
         tier: "T3"
-        input_cost_per_1m: 1.250
-        output_cost_per_1m: 10.000
-        context_limit: 1000000
-        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 14.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["preview", "flagship", "reasoning", "coding", "long_context"]
         enabled: true
+        selectable: true
+        release_status: "preview"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "gemini-3.1-pro-preview-standard-20260731"
+            processing_mode: "standard"
+            input: 2.00
+            cached_input: 0.20
+            output: 12.00
+            long_context:
+              threshold_tokens: 200000
+              applies_to_entire_request: true
+              input: 4.00
+              cached_input: 0.40
+              output: 18.00
+
+      - name: "gemini-2.5-flash-lite"
+        display_name: "Gemini 2.5 Flash-Lite"
+        description: "Compatibility model scheduled for retirement."
+        tier: "T0"
+        billing_class: "economical"
+        input_credit_multiplier: 0.25
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        tags: ["legacy", "cheap", "fast"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "SCHEDULED_FOR_RETIREMENT"
+          retirement_date: "2026-10-16T00:00:00Z"
+          replacement_model: "gemini-3.5-flash-lite"
+          migration_reason: "Google scheduled Gemini 2.5 Flash-Lite for shutdown."
+        pricing_rules:
+          - id: "gemini-2.5-flash-lite-standard-20260731"
+            processing_mode: "standard"
+            input: 0.10
+            cached_input: 0.01
+            output: 0.40
+
+      - name: "gemini-2.5-flash"
+        display_name: "Gemini 2.5 Flash"
+        description: "Compatibility model scheduled for retirement."
+        tier: "T1"
+        billing_class: "standard"
+        input_credit_multiplier: 1.0
+        output_credit_multiplier: 6.0
+        credit_usage_label: "Low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        tags: ["legacy", "fast", "general"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "SCHEDULED_FOR_RETIREMENT"
+          retirement_date: "2026-10-16T00:00:00Z"
+          replacement_model: "gemini-3.6-flash"
+          migration_reason: "Google scheduled Gemini 2.5 Flash for shutdown."
+        pricing_rules:
+          - id: "gemini-2.5-flash-standard-20260731"
+            processing_mode: "standard"
+            input: 0.30
+            cached_input: 0.03
+            output: 2.50
+
+      - name: "gemini-2.5-pro"
+        display_name: "Gemini 2.5 Pro"
+        description: "Compatibility model scheduled for retirement."
+        tier: "T3"
+        billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 12.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1048576
+        max_output_tokens: 65536
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["legacy", "reasoning", "coding"]
+        enabled: true
+        selectable: false
+        release_status: "legacy"
+        lifecycle:
+          status: "SCHEDULED_FOR_RETIREMENT"
+          retirement_date: "2026-10-16T00:00:00Z"
+          replacement_model: "gemini-3.1-pro-preview"
+          migration_reason: "Google scheduled Gemini 2.5 Pro for shutdown."
+        pricing_rules:
+          - id: "gemini-2.5-pro-standard-20260731"
+            processing_mode: "standard"
+            input: 1.25
+            cached_input: 0.125
+            output: 10.00
+            long_context:
+              threshold_tokens: 200000
+              applies_to_entire_request: true
+              input: 2.50
+              cached_input: 0.25
+              output: 15.00
+
   deepseek:
     defaults:
+      pricing_source_url: "https://api-docs.deepseek.com/quick_start/pricing/"
+      lifecycle_source_url: "https://api-docs.deepseek.com/news/news260424/"
+      source_verified_at: "2026-07-31"
       supports_image_input: false
       supported_attachment_mime_types: []
       max_attachment_bytes: null
       max_attachments_per_request: 0
     models:
-      - name: "deepseek-chat"
+      - name: "deepseek-v4-flash"
+        display_name: "DeepSeek V4 Flash"
+        description: "Fast DeepSeek V4 model with thinking controlled as a request mode."
         tier: "T1"
-        input_cost_per_1m: 0.280
-        output_cost_per_1m: 0.420
-        context_limit: 128000
-        tags: ["balanced", "general", "cheap"]
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 384000
+        tags: ["fast", "reasoning", "coding", "cheap", "long_context"]
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         enabled: true
-      - name: "deepseek-reasoner"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "deepseek-v4-flash-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-04-24T00:00:00Z"
+            input: 0.14
+            cached_input: 0.0028
+            output: 0.28
+
+      - name: "deepseek-v4-pro"
+        display_name: "DeepSeek V4 Pro"
+        description: "Higher-capability DeepSeek V4 model with thinking controlled as a request mode."
         tier: "T3"
-        input_cost_per_1m: 0.280
-        output_cost_per_1m: 0.420
-        context_limit: 128000
-        tags: ["reasoning", "coding", "cheap", "long_context"]
+        billing_class: "standard"
+        input_credit_multiplier: 1.0
+        output_credit_multiplier: 2.0
+        credit_usage_label: "Low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 384000
+        tags: ["strong", "reasoning", "coding", "cheap", "long_context"]
+        reasoning_modes: ["none", "thinking"]
+        default_reasoning_mode: "thinking"
+        reasoning_efforts: ["high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "deepseek-v4-pro-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-04-24T00:00:00Z"
+            input: 0.435
+            cached_input: 0.003625
+            output: 0.87
+
+      - name: "deepseek-chat"
+        display_name: "DeepSeek Chat"
+        description: "Retired legacy ID migrated by CortexAI to DeepSeek V4 Flash."
+        tier: "T1"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 128000
+        max_output_tokens: 8192
+        tags: ["retired", "compatibility"]
+        enabled: true
+        selectable: false
+        release_status: "retired"
+        pricing_model: "deepseek-v4-flash"
+        lifecycle:
+          status: "RETIRED"
+          retirement_date: "2026-07-24T15:59:00Z"
+          replacement_model: "deepseek-v4-flash"
+          migration_reason: "DeepSeek retired the legacy chat ID."
+
+      - name: "deepseek-reasoner"
+        display_name: "DeepSeek Reasoner"
+        description: "Retired legacy ID migrated by CortexAI to DeepSeek V4 Flash thinking mode."
+        tier: "T3"
+        billing_class: "economical"
+        input_credit_multiplier: 0.5
+        output_credit_multiplier: 1.0
+        credit_usage_label: "Very low"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 128000
+        max_output_tokens: 65536
+        tags: ["retired", "compatibility", "reasoning"]
+        reasoning_modes: ["thinking"]
+        default_reasoning_mode: "thinking"
+        enabled: true
+        selectable: false
+        release_status: "retired"
+        pricing_model: "deepseek-v4-flash"
+        lifecycle:
+          status: "RETIRED"
+          retirement_date: "2026-07-24T15:59:00Z"
+          replacement_model: "deepseek-v4-flash"
+          migration_reason: "DeepSeek retired the legacy reasoner ID; thinking is now a mode."
+
   grok:
     defaults:
+      pricing_source_url: "https://docs.x.ai/developers/pricing"
+      lifecycle_source_url: "https://docs.x.ai/developers/migration/may-15-retirement"
+      source_verified_at: "2026-07-31"
       supports_image_input: true
       supported_attachment_mime_types: ["image/jpeg", "image/png", "image/webp", "image/gif"]
       max_attachment_bytes: 10485760
       max_attachments_per_request: 5
     models:
-      - name: "grok-4-1-fast-non-reasoning"
+      - name: "grok-4.3"
+        display_name: "Grok 4.3"
+        description: "Balanced million-token Grok model with configurable reasoning effort."
         tier: "T1"
-        input_cost_per_1m: 2.000
-        output_cost_per_1m: 5.000
-        context_limit: 2000000
-        tags: ["fast", "non_reasoning", "general", "long_context"]
+        billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 4.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 128000
+        tags: ["fast", "reasoning", "agentic", "long_context"]
+        reasoning_modes: ["none", "low", "medium", "high"]
+        default_reasoning_mode: "none"
         enabled: true
-      - name: "grok-4-1-fast-reasoning"
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "grok-4.3-standard-20260731"
+            processing_mode: "standard"
+            input: 1.25
+            cached_input: 0.20
+            output: 2.50
+            long_context:
+              threshold_tokens: 200000
+              applies_to_entire_request: true
+              input: 2.50
+              cached_input: 0.40
+              output: 5.00
+
+      - name: "grok-4.5"
+        aliases: ["grok-4-latest"]
+        display_name: "Grok 4.5"
+        description: "Flagship Grok model with mandatory reasoning for complex agentic work."
         tier: "T3"
-        input_cost_per_1m: 2.000
-        output_cost_per_1m: 5.000
-        context_limit: 2000000
-        tags: ["fast", "reasoning", "coding", "long_context"]
+        billing_class: "advanced"
+        input_credit_multiplier: 3.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 500000
+        max_output_tokens: 128000
+        tags: ["flagship", "reasoning", "agentic", "coding", "long_context"]
+        reasoning_modes: ["low", "medium", "high"]
+        default_reasoning_mode: "high"
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "grok-4.5-standard-20260731"
+            processing_mode: "standard"
+            input: 2.00
+            cached_input: 0.30
+            output: 6.00
+            long_context:
+              threshold_tokens: 200000
+              applies_to_entire_request: true
+              input: 4.00
+              cached_input: 0.60
+              output: 12.00
+
+      - name: "grok-4-1-fast-non-reasoning"
+        display_name: "Grok 4.1 Fast (non-reasoning)"
+        description: "Retired provider alias that redirects to Grok 4.3 with reasoning disabled."
+        tier: "T1"
+        billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 4.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 2000000
+        max_output_tokens: 128000
+        tags: ["alias", "compatibility"]
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        enabled: true
+        selectable: false
+        release_status: "retired"
+        pricing_model: "grok-4.3"
+        lifecycle:
+          status: "ALIAS_REDIRECTED"
+          retirement_date: "2026-05-15T00:00:00Z"
+          alias_target: "grok-4.3"
+          replacement_model: "grok-4.3"
+          migration_reason: "xAI retired the 4.1 slug and redirects it to Grok 4.3."
+
+      - name: "grok-4-1-fast-reasoning"
+        display_name: "Grok 4.1 Fast (reasoning)"
+        description: "Retired provider alias that redirects to Grok 4.3 with low reasoning."
+        tier: "T3"
+        billing_class: "advanced"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 4.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 2000000
+        max_output_tokens: 128000
+        tags: ["alias", "compatibility", "reasoning"]
+        reasoning_modes: ["low"]
+        default_reasoning_mode: "low"
+        enabled: true
+        selectable: false
+        release_status: "retired"
+        pricing_model: "grok-4.3"
+        lifecycle:
+          status: "ALIAS_REDIRECTED"
+          retirement_date: "2026-05-15T00:00:00Z"
+          alias_target: "grok-4.3"
+          replacement_model: "grok-4.3"
+          migration_reason: "xAI retired the 4.1 slug and redirects it to Grok 4.3."
+
   claude:
     defaults:
+      pricing_source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
+      lifecycle_source_url: "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+      source_verified_at: "2026-07-31"
       supports_image_input: true
       supported_attachment_mime_types:
-        [
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-          "image/gif",
-          "application/pdf",
-        ]
+        ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]
       max_attachment_bytes: 20971520
       max_attachments_per_request: 5
     models:
       - name: "claude-haiku-4-5"
+        aliases: ["claude-haiku-4-5-20251001"]
+        display_name: "Claude Haiku 4.5"
+        description: "Fast, economical Claude model for high-volume work."
         tier: "T1"
-        input_cost_per_1m: 1.000
-        output_cost_per_1m: 5.000
+        billing_class: "standard"
+        input_credit_multiplier: 2.0
+        output_credit_multiplier: 8.0
+        credit_usage_label: "Standard"
+        credit_pricing_version: "2026-07-31"
         context_limit: 200000
-        tags: ["cheap", "fast", "general", "long_context"]
+        max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["cheap", "fast", "general", "coding"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-haiku-4.5-standard-20260731"
+            processing_mode: "standard"
+            input: 1.00
+            cached_input: 0.10
+            cache_write_5m: 1.25
+            cache_write_1h: 2.00
+            output: 5.00
+
+      - name: "claude-sonnet-5"
+        display_name: "Claude Sonnet 5"
+        description: "Current balanced Claude model for coding, reasoning, and agentic workflows."
+        tier: "T2"
+        billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["strong", "reasoning", "coding", "agentic", "long_context"]
+        enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-sonnet-5-promo-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-06-30T00:00:00Z"
+            effective_until: "2026-09-01T00:00:00Z"
+            input: 2.00
+            cached_input: 0.20
+            cache_write_5m: 2.50
+            cache_write_1h: 4.00
+            output: 10.00
+          - id: "claude-sonnet-5-standard-20260901"
+            processing_mode: "standard"
+            effective_from: "2026-09-01T00:00:00Z"
+            input: 3.00
+            cached_input: 0.30
+            cache_write_5m: 3.75
+            cache_write_1h: 6.00
+            output: 15.00
+
+      - name: "claude-opus-5"
+        display_name: "Claude Opus 5"
+        description: "Current Opus model for deep reasoning and long-running agents."
+        tier: "T3"
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "xhigh", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["flagship", "reasoning", "coding", "agentic", "long_context"]
+        enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-opus-5-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-07-24T00:00:00Z"
+            input: 5.00
+            cached_input: 0.50
+            cache_write_5m: 6.25
+            cache_write_1h: 10.00
+            output: 25.00
+
+      - name: "claude-fable-5"
+        display_name: "Claude Fable 5"
+        description: "Most capable widely released Claude model for difficult long-horizon work."
+        tier: "T3"
+        billing_class: "premium"
+        input_credit_multiplier: 10.0
+        output_credit_multiplier: 50.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 1000000
+        max_output_tokens: 128000
+        reasoning_modes: ["adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: false
+        reasoning_counts_against_output: true
+        tags: ["flagship", "reasoning", "coding", "agentic", "accurate", "long_context"]
+        enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-fable-5-standard-20260731"
+            processing_mode: "standard"
+            effective_from: "2026-06-09T00:00:00Z"
+            input: 10.00
+            cached_input: 1.00
+            cache_write_5m: 12.50
+            cache_write_1h: 20.00
+            output: 50.00
+
       - name: "claude-sonnet-4-6"
-        tier: "T3"
-        input_cost_per_1m: 3.000
-        output_cost_per_1m: 15.000
+        display_name: "Claude Sonnet 4.6"
+        description: "Proven high-capability Claude model for coding, reasoning, and long-context work."
+        tier: "T2"
+        billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
         context_limit: 1000000
-        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        max_output_tokens: 64000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["strong", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-sonnet-4.6-standard-20260731"
+            processing_mode: "standard"
+            input: 3.00
+            cached_input: 0.30
+            cache_write_5m: 3.75
+            cache_write_1h: 6.00
+            output: 15.00
+
       - name: "claude-sonnet-4-5"
+        aliases: ["claude-sonnet-4-5-20250929"]
+        display_name: "Claude Sonnet 4.5"
+        description: "Active compatibility model retained for existing integrations."
         tier: "T3"
-        input_cost_per_1m: 3.000
-        output_cost_per_1m: 15.000
+        billing_class: "advanced"
+        input_credit_multiplier: 4.0
+        output_credit_multiplier: 18.0
+        credit_usage_label: "High"
+        credit_pricing_version: "2026-07-31"
         context_limit: 200000
-        tags: ["strong", "reasoning", "coding", "accurate", "long_context"]
+        max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["compatibility", "reasoning", "coding"]
         enabled: true
-      - name: "claude-opus-4-5"
-        tier: "T3"
-        input_cost_per_1m: 5.000
-        output_cost_per_1m: 25.000
-        context_limit: 200000
-        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
-        enabled: true
+        selectable: false
+        release_status: "generally_available"
+        lifecycle:
+          status: "ACTIVE"
+          replacement_model: "claude-sonnet-5"
+          migration_reason: "Claude Sonnet 5 is the current recommended Sonnet generation."
+        pricing_rules:
+          - id: "claude-sonnet-4.5-standard-20260731"
+            processing_mode: "standard"
+            input: 3.00
+            cached_input: 0.30
+            cache_write_5m: 3.75
+            cache_write_1h: 6.00
+            output: 15.00
+
       - name: "claude-opus-4-6"
+        display_name: "Claude Opus 4.6"
+        description: "Powerful Claude model for complex agentic coding and deep reasoning."
         tier: "T3"
-        input_cost_per_1m: 5.000
-        output_cost_per_1m: 25.000
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
         context_limit: 1000000
-        tags: ["flagship", "reasoning", "coding", "accurate", "long_context"]
+        max_output_tokens: 128000
+        reasoning_modes: ["none", "adaptive"]
+        default_reasoning_mode: "adaptive"
+        reasoning_efforts: ["low", "medium", "high", "max"]
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["flagship", "reasoning", "coding", "agentic", "long_context"]
         enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-opus-4.6-standard-20260731"
+            processing_mode: "standard"
+            input: 5.00
+            cached_input: 0.50
+            cache_write_5m: 6.25
+            cache_write_1h: 10.00
+            output: 25.00
+
+      - name: "claude-opus-4-5"
+        aliases: ["claude-opus-4-5-20251101"]
+        display_name: "Claude Opus 4.5"
+        description: "Established Claude Opus model for demanding reasoning and coding workloads."
+        tier: "T3"
+        billing_class: "premium"
+        input_credit_multiplier: 6.0
+        output_credit_multiplier: 30.0
+        credit_usage_label: "Premium"
+        credit_pricing_version: "2026-07-31"
+        context_limit: 200000
+        max_output_tokens: 64000
+        reasoning_modes: ["none"]
+        default_reasoning_mode: "none"
+        reasoning_disable_supported: true
+        reasoning_counts_against_output: true
+        tags: ["flagship", "reasoning", "coding", "agentic"]
+        enabled: true
+        selectable: true
+        release_status: "generally_available"
+        lifecycle: {status: "ACTIVE"}
+        pricing_rules:
+          - id: "claude-opus-4.5-standard-20260731"
+            processing_mode: "standard"
+            input: 5.00
+            cached_input: 0.50
+            cache_write_5m: 6.25
+            cache_write_1h: 10.00
+            output: 25.00
+
 routing_defaults:
   tier_order: ["T0", "T1", "T2", "T3"]
   max_attempts: 3

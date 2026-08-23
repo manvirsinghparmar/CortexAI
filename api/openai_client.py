@@ -1,8 +1,13 @@
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import openai
 
+from config.cache_optimization import (
+    cache_friendly_prompt_ordering_enabled,
+    openai_extended_prompt_cache_enabled,
+    openai_prompt_cache_enabled,
+)
 from models.unified_response import TokenUsage, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
@@ -10,6 +15,9 @@ from utils.logger import get_logger
 from .base_client import BaseAIClient
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from orchestrator.cache_context import CacheContext
 
 
 class OpenAIClient(BaseAIClient):
@@ -63,9 +71,14 @@ class OpenAIClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        cache_context = self._resolve_cache_context(
+            kwargs, provider="openai", model=model
+        )
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
         max_completion_tokens = kwargs.get("max_completion_tokens")
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         response_format = kwargs.get("response_format")
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
@@ -85,6 +98,9 @@ class OpenAIClient(BaseAIClient):
                 max_completion_tokens=max_completion_tokens,
                 response_format=response_format,
                 attachments=binary_attachments,
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
+                cache_context=cache_context,
             )
 
             latency_ms = self._measure_latency(start_time)
@@ -92,6 +108,7 @@ class OpenAIClient(BaseAIClient):
             if endpoint_used == "responses":
                 text = self._extract_responses_text(response)
                 token_usage = self._extract_responses_usage(response)
+                served_model = self._served_model(self._field(response, "model", model), model)
                 finish_reason = self._normalize_finish_reason(
                     self._extract_responses_finish_reason(response),
                     provider="openai",
@@ -102,13 +119,10 @@ class OpenAIClient(BaseAIClient):
                 text = self._extract_chat_completions_text(response)
 
                 # Extract token usage
-                token_usage = TokenUsage(
-                    prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
-                    completion_tokens=(
-                        response.usage.completion_tokens if hasattr(response, "usage") else 0
-                    ),
-                    total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
+                token_usage = self._openai_compatible_token_usage(
+                    response.usage if hasattr(response, "usage") else None
                 )
+                served_model = self._served_model(getattr(response, "model", model), model)
 
                 # Normalize finish reason
                 finish_reason = self._normalize_finish_reason(
@@ -147,12 +161,22 @@ class OpenAIClient(BaseAIClient):
                     }
 
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("openai", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
             metadata = {"endpoint": endpoint_used}
+            metadata["pricing_unknown"] = bool(cost.get("pricing_unknown", False))
             if adaptive_retry:
                 metadata["adaptive_retry"] = adaptive_retry
 
@@ -174,7 +198,7 @@ class OpenAIClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="openai",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
@@ -182,6 +206,11 @@ class OpenAIClient(BaseAIClient):
                 error=None,
                 metadata=metadata,
                 raw=raw,
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:
@@ -216,6 +245,9 @@ class OpenAIClient(BaseAIClient):
         max_completion_tokens: int | None,
         response_format: dict[str, Any] | None,
         attachments: list[dict[str, Any]],
+        reasoning_mode: str,
+        reasoning_effort: str,
+        cache_context: "CacheContext",
     ) -> tuple[Any, str, dict[str, Any] | None]:
         if self._should_use_responses_api_for_model(model, attachments=attachments):
             payload = self._build_responses_payload(
@@ -225,7 +257,10 @@ class OpenAIClient(BaseAIClient):
                 max_tokens=max_tokens,
                 max_completion_tokens=max_completion_tokens,
                 attachments=attachments,
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
             )
+            self._apply_prompt_cache_options(payload, cache_context)
             return self._create_openai_response_with_compat_retries(
                 request_id=request_id,
                 model=model,
@@ -242,10 +277,13 @@ class OpenAIClient(BaseAIClient):
             request_payload["temperature"] = temperature
         if response_format is not None:
             request_payload["response_format"] = response_format
+        if reasoning_effort and reasoning_effort != "none":
+            request_payload["reasoning_effort"] = reasoning_effort
         if max_completion_tokens is not None:
             request_payload["max_completion_tokens"] = max_completion_tokens
         else:
             request_payload["max_tokens"] = max_tokens
+        self._apply_prompt_cache_options(request_payload, cache_context)
 
         try:
             return self.client.chat.completions.create(**request_payload), "chat.completions", None
@@ -282,7 +320,10 @@ class OpenAIClient(BaseAIClient):
                     max_tokens=max_tokens,
                     max_completion_tokens=max_completion_tokens,
                     attachments=attachments,
+                    reasoning_mode=reasoning_mode,
+                    reasoning_effort=reasoning_effort,
                 )
+                self._apply_prompt_cache_options(payload, cache_context)
                 logger.warning(
                     "Retrying OpenAI request with responses API",
                     extra={
@@ -310,6 +351,9 @@ class OpenAIClient(BaseAIClient):
                     "max_tokens",
                     "max_completion_tokens",
                     "response_format",
+                    "reasoning_effort",
+                    "prompt_cache_key",
+                    "prompt_cache_retention",
                 },
             )
             if retry_payload is not None and dropped_param is not None:
@@ -341,7 +385,7 @@ class OpenAIClient(BaseAIClient):
         if attachments:
             return True
         model_norm = (model or "").strip().lower()
-        return "codex" in model_norm
+        return "codex" in model_norm or model_norm.startswith("gpt-5.6")
 
     @staticmethod
     def _should_retry_with_responses_api(exc: Exception) -> bool:
@@ -365,6 +409,8 @@ class OpenAIClient(BaseAIClient):
         max_tokens: int,
         max_completion_tokens: int | None,
         attachments: list[dict[str, Any]],
+        reasoning_mode: str,
+        reasoning_effort: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
@@ -382,7 +428,24 @@ class OpenAIClient(BaseAIClient):
             payload["max_output_tokens"] = max_completion_tokens
         else:
             payload["max_output_tokens"] = max_tokens
+        reasoning: dict[str, Any] = {}
+        if reasoning_effort:
+            reasoning["effort"] = reasoning_effort
+        if reasoning_mode == "pro":
+            reasoning["mode"] = "pro"
+        if reasoning:
+            payload["reasoning"] = reasoning
         return payload
+
+    @staticmethod
+    def _apply_prompt_cache_options(
+        payload: dict[str, Any], cache_context: "CacheContext"
+    ) -> None:
+        if not cache_context.enabled or not openai_prompt_cache_enabled():
+            return
+        payload["prompt_cache_key"] = cache_context.cache_scope_key
+        if openai_extended_prompt_cache_enabled():
+            payload["prompt_cache_retention"] = "24h"
 
     @staticmethod
     def _last_user_message_index(messages: list[dict[str, Any]]) -> int | None:
@@ -414,8 +477,6 @@ class OpenAIClient(BaseAIClient):
             text = cls._normalize_message_text(message)
             if last_user_idx is not None and idx == last_user_idx:
                 content_parts: list[dict[str, Any]] = []
-                if text:
-                    content_parts.append({"type": "text", "text": text})
                 for attachment in attachments:
                     data_uri = (
                         f"data:{attachment['mime_type']};base64,{attachment['data_base64']}"
@@ -423,6 +484,12 @@ class OpenAIClient(BaseAIClient):
                     content_parts.append(
                         {"type": "image_url", "image_url": {"url": data_uri}}
                     )
+                if text:
+                    text_block = {"type": "text", "text": text}
+                    if cache_friendly_prompt_ordering_enabled():
+                        content_parts.append(text_block)
+                    else:
+                        content_parts.insert(0, text_block)
                 out.append({"role": role, "content": content_parts or [{"type": "text", "text": ""}]})
             else:
                 out.append({"role": role, "content": text})
@@ -443,8 +510,9 @@ class OpenAIClient(BaseAIClient):
             text = cls._normalize_message_text(message)
             text_content_type = cls._responses_text_content_type(role)
             content_items: list[dict[str, Any]] = []
-            if text:
-                content_items.append({"type": text_content_type, "text": text})
+            text_block = {"type": text_content_type, "text": text} if text else None
+            if text_block and not cache_friendly_prompt_ordering_enabled():
+                content_items.append(text_block)
 
             if attachments and last_user_idx is not None and idx == last_user_idx:
                 for attachment in attachments:
@@ -460,6 +528,9 @@ class OpenAIClient(BaseAIClient):
                                 "file_data": data_uri,
                             }
                         )
+
+            if text_block and cache_friendly_prompt_ordering_enabled():
+                content_items.append(text_block)
 
             if not content_items:
                 content_items.append({"type": text_content_type, "text": ""})
@@ -489,6 +560,9 @@ class OpenAIClient(BaseAIClient):
                     "max_output_tokens",
                     "max_completion_tokens",
                     "reasoning_effort",
+                    "reasoning",
+                    "prompt_cache_key",
+                    "prompt_cache_retention",
                 },
             )
             if retry_payload is not None and dropped_param is not None:
@@ -569,20 +643,7 @@ class OpenAIClient(BaseAIClient):
     @classmethod
     def _extract_responses_usage(cls, response: Any) -> TokenUsage:
         usage = cls._field(response, "usage")
-        prompt_tokens = int(
-            cls._field(usage, "input_tokens", cls._field(usage, "prompt_tokens", 0)) or 0
-        )
-        completion_tokens = int(
-            cls._field(usage, "output_tokens", cls._field(usage, "completion_tokens", 0)) or 0
-        )
-        total_tokens = int(cls._field(usage, "total_tokens", 0) or 0)
-        if total_tokens <= 0:
-            total_tokens = prompt_tokens + completion_tokens
-        return TokenUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-        )
+        return cls._openai_compatible_token_usage(usage)
 
     @classmethod
     def _extract_responses_finish_reason(cls, response: Any) -> str | None:

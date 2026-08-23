@@ -8,7 +8,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Generator, Iterable
+from typing import Generator, Iterable, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from db import (
     check_usage_limit,
     create_api_key,
+    create_context_snapshot,
     create_llm_request,
     create_llm_response,
     create_request_attachment,
@@ -26,11 +27,13 @@ from db import (
     create_session,
     get_active_session,
     get_api_key_settings,
+    get_compare_response_regeneration_source,
     get_failed_routing_attempts_by_request_group,
     get_session_by_id,
     get_or_create_service_user,
     get_or_create_user_by_cognito,
     get_user_by_api_key,
+    record_cache_reuse_event,
     save_compare_summary,
     save_message,
     update_api_key_last_used,
@@ -42,9 +45,22 @@ from db.session import SessionLocal
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 from server import byok_service
 from server.dependencies import AuthResult
+from server.utils import context_summary_payload
 from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
+from server.billing.enforcement_service import (
+    BillableModelUsage,
+    ReservedRequestUsage,
+    authorize_and_reserve_usage,
+    finalize_reserved_usage,
+    release_reserved_usage,
+)
+from server.billing.metering_service import supplement_usage_reservation
+from server.billing.plan_catalog import get_plan_catalog
+from server.billing.response_credit_service import resolve_response_credit_usage
+from server.billing.entitlement_service import ModelTargetIntent
+from server.billing.subscription_service import resolve_effective_subscription
 from utils.logger import get_logger
 
 API_DB_ENABLED = bool(os.getenv("DATABASE_URL"))
@@ -66,6 +82,16 @@ class RequestAttachmentPersistenceItem:
     transform_mode: str = "auto"
     order_index: int = 0
     resolved_artifact_meta: dict | None = None
+
+
+@dataclass(frozen=True)
+class CompareRegenerationContext:
+    response_revision_root_id: UUID
+    response_revision: int
+    session_id: UUID
+    request_group_id: UUID
+    provider: str
+    model: str
 
 
 @contextmanager
@@ -94,6 +120,43 @@ def env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def persist_context_summary(
+    *,
+    context_request: object | None,
+    user_id: UUID,
+) -> None:
+    """Best-effort persistence for deterministic reusable context summaries."""
+
+    payload = context_summary_payload(context_request)
+    session_id = coerce_uuid(str(getattr(context_request, "session_id", "") or ""))
+    if payload is None or session_id is None:
+        return
+    try:
+        with db_uow() as db_session:
+            create_context_snapshot(
+                db_session,
+                user_id=user_id,
+                session_id=session_id,
+                context_text=payload["context_text"],
+                source_message_range=payload["source_message_range"],
+                source_hash=payload["source_hash"],
+                summary_policy_version=payload["summary_policy_version"],
+            )
+    except Exception:
+        # Context compaction is an optimization and must never block inference.
+        logger.warning(
+            "Context summary persistence unavailable; continuing with compacted context",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "event": "context.summary.persistence_unavailable",
+                    "session_id": str(session_id),
+                    "source_hash_prefix": payload["source_hash"][:12],
+                }
+            },
+        )
 
 
 def coerce_uuid(value: str | None) -> UUID | None:
@@ -207,7 +270,7 @@ def resolve_api_key_for_request(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
-        )
+        ) from exc
 
 
 def _resolve_cognito_for_request_in_session(
@@ -280,6 +343,49 @@ def resolve_identity(
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
+    )
+
+
+def resolve_compare_regeneration_context(
+    *,
+    user_id: UUID,
+    source_request_id: str,
+) -> CompareRegenerationContext:
+    """Validate and resolve an owned Compare response before provider work starts."""
+    with db_uow(commit_on_success=False) as db_session:
+        source = get_compare_response_regeneration_source(
+            db_session,
+            user_id,
+            source_request_id,
+        )
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "compare_response_not_found",
+                "message": "The Compare response to regenerate was not found.",
+            },
+        )
+
+    session_id = coerce_uuid(str(source.get("session_id") or ""))
+    request_group_id = coerce_uuid(str(source.get("request_group_id") or ""))
+    revision_root_id = coerce_uuid(str(source.get("response_revision_root_id") or ""))
+    if session_id is None or request_group_id is None or revision_root_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "compare_response_revision_unavailable",
+                "message": "This Compare response cannot be regenerated in place.",
+            },
+        )
+
+    return CompareRegenerationContext(
+        response_revision_root_id=revision_root_id,
+        response_revision=max(2, int(source.get("response_revision") or 2)),
+        session_id=session_id,
+        request_group_id=request_group_id,
+        provider=str(source.get("provider") or ""),
+        model=str(source.get("model") or ""),
     )
 
 
@@ -398,8 +504,10 @@ def _enforce_usage_caps_in_session(
     if not token_cap_raw and not cost_cap_raw:
         return
 
-    token_cap = _extract_cap_value(token_cap_raw, kind="token")
-    cost_cap = _extract_cap_value(cost_cap_raw, kind="cost")
+    token_cap_value = _extract_cap_value(token_cap_raw, kind="token")
+    cost_cap_value = _extract_cap_value(cost_cap_raw, kind="cost")
+    token_cap = int(token_cap_value) if token_cap_value is not None else None
+    cost_cap = float(cost_cap_value) if cost_cap_value is not None else None
 
     # Default to api_key scope when available; fallback to user scope.
     scope = os.getenv("DAILY_CAP_SCOPE", "api_key").strip().lower()
@@ -479,9 +587,16 @@ def _enforce_usage_caps_in_session(
 def _resolve_requests_per_minute(
     db_session: Session,
     *,
+    user_id: UUID,
     api_key_id: UUID | None,
 ) -> int:
-    rpm = rate_limit_service.default_requests_per_minute()
+    try:
+        rpm = resolve_effective_subscription(
+            db_session,
+            user_id,
+        ).plan.limits.requests_per_minute
+    except Exception:
+        rpm = rate_limit_service.default_requests_per_minute()
     if api_key_id is None:
         return rpm
 
@@ -508,7 +623,11 @@ def _enforce_rate_limit_in_session(
     user_id: UUID,
     api_key_id: UUID | None,
 ) -> None:
-    rpm = _resolve_requests_per_minute(db_session, api_key_id=api_key_id)
+    rpm = _resolve_requests_per_minute(
+        db_session,
+        user_id=user_id,
+        api_key_id=api_key_id,
+    )
     subject = str(api_key_id or user_id)
     rate_limit_service.enforce_rate_limit(
         subject_key=subject,
@@ -608,6 +727,137 @@ def resolve_and_enforce_usage_caps(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Persistence initialization failed: {exc}",
+        ) from exc
+
+
+def reserve_subscription_usage(
+    *,
+    user_id: UUID,
+    request_id: str,
+    operation_type: str,
+    model_targets: Iterable[ModelTargetIntent],
+    research_enabled: bool,
+    smart_routing: bool = False,
+    optimization_enabled: bool = False,
+    attachment_count: int = 0,
+    total_attachment_bytes: int = 0,
+    attachment_sizes: Iterable[int] = (),
+    input_text: str = "",
+    initial_query: str = "",
+    credit_activity_id: str | None = None,
+    max_output_tokens: int | None = None,
+    max_output_tokens_by_target: Mapping[str, int] | None = None,
+    model_attempt_count: int = 1,
+) -> ReservedRequestUsage:
+    """Authorize and atomically reserve subscription usage before provider work."""
+    with db_uow() as db_session:
+        reservation = authorize_and_reserve_usage(
+            db_session,
+            user_id=user_id,
+            request_id=request_id,
+            operation_type=operation_type,
+            model_targets=tuple(model_targets),
+            research_enabled=research_enabled,
+            smart_routing=smart_routing,
+            optimization_enabled=optimization_enabled,
+            attachment_count=attachment_count,
+            total_attachment_bytes=total_attachment_bytes,
+            attachment_sizes=tuple(attachment_sizes),
+            input_text=input_text,
+            initial_query=(
+                None
+                if privacy_service.is_metadata_only()
+                else privacy_service.sanitize_user_message_for_storage(initial_query)
+            ),
+            credit_activity_id=credit_activity_id,
+            max_output_tokens=max_output_tokens,
+            max_output_tokens_by_target=max_output_tokens_by_target,
+            model_attempt_count=model_attempt_count,
+        )
+    from server.billing.reservation_cleanup import register_active_reservation
+
+    register_active_reservation(reservation.reservation_id)
+    return reservation
+
+
+def finalize_subscription_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    successful_targets: Iterable[ModelTargetIntent],
+    model_usages: Iterable[BillableModelUsage] = (),
+    research_provider_credits_used: int,
+    research_usage_estimated: bool = False,
+    optimization_performed: bool = False,
+    file_analysis_performed: bool = False,
+    uploaded_bytes: int = 0,
+    release_reason: str = "provider_failed_before_billable_output",
+) -> None:
+    """Settle successful subscription units and release unused units."""
+    from server.billing.reservation_cleanup import unregister_active_reservation
+
+    try:
+        with db_uow() as db_session:
+            finalize_reserved_usage(
+                db_session,
+                reservation=reservation,
+                successful_targets=tuple(successful_targets),
+                model_usages=tuple(model_usages),
+                research_provider_credits_used=research_provider_credits_used,
+                research_usage_estimated=research_usage_estimated,
+                optimization_performed=optimization_performed,
+                file_analysis_performed=file_analysis_performed,
+                uploaded_bytes=uploaded_bytes,
+                release_reason=release_reason,
+            )
+    finally:
+        unregister_active_reservation(reservation.reservation_id)
+
+
+def release_subscription_usage(
+    *,
+    reservation: ReservedRequestUsage,
+    reason: str,
+) -> None:
+    """Release all units for a request that never reached finalization."""
+    from server.billing.reservation_cleanup import unregister_active_reservation
+
+    try:
+        with db_uow() as db_session:
+            release_reserved_usage(
+                db_session,
+                reservation=reservation,
+                reason=reason,
+            )
+    finally:
+        unregister_active_reservation(reservation.reservation_id)
+
+
+def authorize_smart_fallback(
+    *,
+    reservation: ReservedRequestUsage,
+    provider: str,
+    model: str,
+) -> bool:
+    """Ensure one planned Smart fallback fits the active reservation ceiling."""
+
+    candidate = next(
+        (
+            item
+            for item in reservation.smart_candidates
+            if item.provider == str(provider or "").strip().lower()
+            and item.model == str(model or "").strip()
+        ),
+        None,
+    )
+    if candidate is None:
+        return False
+    plan = get_plan_catalog().require(reservation.current_plan)
+    with db_uow() as db_session:
+        return supplement_usage_reservation(
+            db_session,
+            reservation_id=reservation.reservation_id,
+            target_quantity=candidate.reservation_credits,
+            allowance_limit=plan.allowances.ai_credits,
         )
 
 
@@ -641,7 +891,7 @@ def get_failed_attempts_by_request_group(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed-attempts lookup failed: {exc}",
-        )
+        ) from exc
 
 
 def resolve_runtime_byok_provider_keys(
@@ -767,7 +1017,9 @@ def extract_routing_payload(response: UnifiedResponse) -> tuple[dict, list[dict]
     if not isinstance(routing_metadata, dict):
         return {}, [], {}
 
-    attempt_rows = routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    attempt_rows = (
+        routing_metadata.get("selected_sequence") or routing_metadata.get("attempts") or []
+    )
     if not isinstance(attempt_rows, list):
         attempt_rows = []
 
@@ -783,20 +1035,30 @@ def persist_routing_telemetry(
     llm_request_id: UUID,
     response: UnifiedResponse,
     research_mode: str,
+    *,
+    include_research_charge: bool = True,
 ) -> None:
-    """Persist routing decision + attempts when metadata is present."""
+    """Persist routing telemetry and the exact response-card credit snapshot."""
     routing_metadata, attempt_rows, features = extract_routing_payload(response)
     web_source_items = extract_web_source_items(response)
+    credit_usage = resolve_response_credit_usage(
+        response,
+        include_research_charge=include_research_charge,
+    )
+    base_routing = dict(routing_metadata or {})
+    base_routing.setdefault("mode", "explicit")
+    base_routing.setdefault("attempt_count", max(len(attempt_rows), 1))
+    base_routing.setdefault("fallback_used", False)
+    base_routing["ai_credits"] = credit_usage.ai_credits
+    base_routing["credit_usage_estimated"] = credit_usage.credit_usage_estimated
+    base_routing["research_ai_credits"] = credit_usage.research_ai_credits
+    base_routing["research_credit_usage_estimated"] = (
+        credit_usage.research_credit_usage_estimated
+    )
     if web_source_items:
-        base_routing = dict(routing_metadata or {})
-        base_routing.setdefault("mode", "explicit")
-        base_routing.setdefault("attempt_count", max(len(attempt_rows), 1))
-        base_routing.setdefault("fallback_used", False)
         base_routing["web_source_items"] = web_source_items
         base_routing["web_sources"] = len(web_source_items)
-        routing_metadata = base_routing
-    if not routing_metadata:
-        return
+    routing_metadata = base_routing
 
     (
         routing_metadata,
@@ -809,9 +1071,14 @@ def persist_routing_telemetry(
     )
 
     metadata = response.metadata if isinstance(response.metadata, dict) else {}
-    prompt_category = metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    prompt_category = (
+        metadata.get("prompt_category") or routing_metadata.get("prompt_category") or "unknown"
+    )
     normalized_research_mode = (
-        metadata.get("research_mode") or routing_metadata.get("research_mode") or research_mode or "off"
+        metadata.get("research_mode")
+        or routing_metadata.get("research_mode")
+        or research_mode
+        or "off"
     )
 
     with db_session.begin_nested():
@@ -824,6 +1091,29 @@ def persist_routing_telemetry(
             features=features,
         )
         create_routing_attempts(db_session, routing_decision_id, attempt_rows)
+
+
+def _record_research_reuse_event(
+    db_session: Session,
+    *,
+    user_id: UUID,
+    request_id: str,
+    responses: Sequence[UnifiedResponse],
+) -> None:
+    """Persist one research decision per Ask/Compare operation."""
+
+    for response in responses:
+        metadata = response.metadata if isinstance(response.metadata, dict) else {}
+        if not bool(metadata.get("research_used")):
+            continue
+        record_cache_reuse_event(
+            db_session,
+            user_id=user_id,
+            request_id=request_id,
+            operation_type="research",
+            reused=bool(metadata.get("research_reused")),
+        )
+        return
 
 
 def build_error_response(
@@ -859,31 +1149,31 @@ def _persist_request_attachments(
     db_session: Session,
     *,
     llm_request_id: UUID,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None,
+    attachments: Sequence[object] | None,
 ) -> None:
     """Persist request attachment links for one llm_request row."""
     if not attachments:
         return
 
     for idx, item in enumerate(attachments):
+        file_id: object | None
         if isinstance(item, RequestAttachmentPersistenceItem):
             file_id = item.file_id
             usage_role = item.usage_role
             transform_mode = item.transform_mode
             order_index = int(item.order_index)
             resolved_artifact_meta = (
-                dict(item.resolved_artifact_meta) if isinstance(item.resolved_artifact_meta, dict) else {}
+                dict(item.resolved_artifact_meta)
+                if isinstance(item.resolved_artifact_meta, dict)
+                else {}
             )
         elif isinstance(item, dict):
             file_id = item.get("file_id")
             usage_role = str(item.get("usage_role") or "primary")
             transform_mode = str(item.get("transform_mode") or "auto")
             order_index = int(item.get("order_index", idx))
-            resolved_artifact_meta = (
-                dict(item.get("resolved_artifact_meta"))
-                if isinstance(item.get("resolved_artifact_meta"), dict)
-                else {}
-            )
+            meta_raw = item.get("resolved_artifact_meta")
+            resolved_artifact_meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
         else:
             file_id = getattr(item, "file_id", None)
             usage_role = str(getattr(item, "usage_role", "primary") or "primary")
@@ -917,34 +1207,55 @@ def persist_chat_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
+    attachments: Sequence[object] | None = None,
+    regeneration: CompareRegenerationContext | None = None,
 ) -> str:
     """Persist API chat request/response using the same artifacts as CLI."""
     with db_uow() as db_session:
-        session_id = get_or_create_api_session(
-            db_session,
-            resolution.user_id,
-            requested_session_id,
-            mode="ask",
-            title="API Chat",
-            force_new_session=force_new_session,
-        )
+        if regeneration is not None:
+            session_id = regeneration.session_id
+            if not verify_session_belongs_to_user(
+                db_session,
+                session_id,
+                resolution.user_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Compare session not found",
+                )
+        else:
+            session_id = get_or_create_api_session(
+                db_session,
+                resolution.user_id,
+                requested_session_id,
+                mode="ask",
+                title="API Chat",
+                force_new_session=force_new_session,
+            )
 
         stored_user_message = privacy_service.sanitize_user_message_for_storage(prompt)
-        save_message(db_session, session_id, "user", stored_user_message)
+        if regeneration is None:
+            save_message(db_session, session_id, "user", stored_user_message)
 
         llm_request_id = create_llm_request(
             db_session,
             user_id=resolution.user_id,
             request_id=response.request_id,
-            route_mode="ask",
+            route_mode="compare" if regeneration is not None else "ask",
             provider=response.provider,
-            model=response.model,
+            model=response.requested_model or response.model,
+            requested_model=response.requested_model or response.model,
             prompt=prompt,
             session_id=session_id,
+            request_group_id=(regeneration.request_group_id if regeneration is not None else None),
             api_key_id=resolution.api_key_id,
             store_prompt=True,
             prompt_text_override=stored_user_message,
+            response_revision_root_id=(
+                regeneration.response_revision_root_id if regeneration is not None else None
+            ),
+            response_revision=(regeneration.response_revision if regeneration is not None else 1),
+            generation_budget=dict((response.metadata or {}).get("generation_budget") or {}),
         )
         _persist_request_attachments(
             db_session,
@@ -960,8 +1271,14 @@ def persist_chat_interaction(
             response,
             research_mode="on" if research_mode else "off",
         )
+        _record_research_reuse_event(
+            db_session,
+            user_id=resolution.user_id,
+            request_id=response.request_id,
+            responses=(response,),
+        )
 
-        if not response.is_error and response.text:
+        if regeneration is None and not response.is_error and response.text:
             assistant_text = privacy_service.sanitize_assistant_message_for_storage(response.text)
             save_message(db_session, session_id, "assistant", assistant_text)
 
@@ -1007,7 +1324,7 @@ def persist_compare_interaction(
     requested_session_id: str | None,
     research_mode: bool,
     force_new_session: bool = False,
-    attachments: list[RequestAttachmentPersistenceItem] | list[object] | None = None,
+    attachments: Sequence[object] | None = None,
 ) -> str:
     """Persist compare run artifacts using shared DB tables and request grouping."""
     with db_uow() as db_session:
@@ -1033,13 +1350,15 @@ def persist_compare_interaction(
                 request_id=response.request_id,
                 route_mode="compare",
                 provider=response.provider,
-                model=response.model,
+                model=response.requested_model or response.model,
+                requested_model=response.requested_model or response.model,
                 prompt=prompt,
                 session_id=session_id,
                 request_group_id=group_uuid,
                 api_key_id=resolution.api_key_id,
                 store_prompt=True,
                 prompt_text_override=stored_user_message,
+                generation_budget=dict((response.metadata or {}).get("generation_budget") or {}),
             )
             _persist_request_attachments(
                 db_session,
@@ -1054,6 +1373,7 @@ def persist_compare_interaction(
                 llm_request_id,
                 response,
                 research_mode="on" if research_mode else "off",
+                include_research_charge=False,
             )
             try:
                 savings_service.persist_request_savings(
@@ -1065,6 +1385,13 @@ def persist_compare_interaction(
                 )
             except Exception:
                 logger.exception("Savings persistence failed for compare request")
+
+        _record_research_reuse_event(
+            db_session,
+            user_id=resolution.user_id,
+            request_id=str(request_group_id),
+            responses=responses,
+        )
 
         if responses and any(not r.is_error for r in responses):
             save_compare_summary(

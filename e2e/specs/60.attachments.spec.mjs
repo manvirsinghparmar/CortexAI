@@ -105,7 +105,7 @@ test("file-only send clears composer chips and renders a user file card", async 
     });
 });
 
-test("manual incompatible model with image attachment is blocked client-side", async ({ liveApp }) => {
+test("manual incompatible model rejects image before storage or chat", async ({ liveApp }) => {
     const { page } = liveApp;
     await ensureAttachmentRuntimeEnabled(liveApp);
 
@@ -128,13 +128,15 @@ test("manual incompatible model with image attachment is blocked client-side", a
         mimeType: "image/png",
         buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
     });
-    await waitForSingleAttachmentReady(page);
+
+    await expect(page.getByRole("status", {
+        name: /upload failed, selected model does not support this file type/i,
+    })).toBeVisible();
+    await expect(page.locator(".attachment-chip.is-failed")).toHaveCount(1);
+    await expect(page.locator("#submitBtn")).toBeDisabled();
 
     const requestsBefore = liveApp.network.countByPath("/v1/chat");
     await page.locator("#promptInput").fill("Describe this image.");
-    await page.locator("#submitBtn").click();
 
-    await expect(page.locator("#errorBanner")).toBeVisible();
-    await expect(page.locator("#errorText")).toContainText("does not support the attached files");
     await expect.poll(() => liveApp.network.countByPath("/v1/chat"), { timeout: 5000 }).toBe(requestsBefore);
 });

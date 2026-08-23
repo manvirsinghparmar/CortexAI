@@ -68,7 +68,7 @@ def encrypt_secret(raw_secret: str) -> str:
     plaintext = raw_secret.encode("utf-8")
     nonce = secrets.token_bytes(16)
     stream = _keystream(key, nonce, len(plaintext))
-    ciphertext = bytes(a ^ b for a, b in zip(plaintext, stream))
+    ciphertext = bytes(a ^ b for a, b in zip(plaintext, stream, strict=True))
     tag = hmac.new(key, b"tag:" + nonce + ciphertext, hashlib.sha256).digest()
     payload = base64.urlsafe_b64encode(nonce + ciphertext + tag).decode("ascii")
     return f"{ENC_VERSION}:{payload}"
@@ -92,7 +92,7 @@ def decrypt_secret(token: str) -> str:
     if not hmac.compare_digest(tag, expected):
         raise ValueError("Encrypted secret authentication failed")
     stream = _keystream(key, nonce, len(ciphertext))
-    plaintext = bytes(a ^ b for a, b in zip(ciphertext, stream))
+    plaintext = bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
     return plaintext.decode("utf-8")
 
 
@@ -109,7 +109,12 @@ def set_byok_keys(
     baseline_model: str | None = None,
     requests_per_minute: int | None = None,
 ) -> list[str]:
-    if not provider_keys and baseline_provider is None and baseline_model is None and requests_per_minute is None:
+    if (
+        not provider_keys
+        and baseline_provider is None
+        and baseline_model is None
+        and requests_per_minute is None
+    ):
         return []
 
     _master_key_bytes(required=True)
@@ -132,10 +137,12 @@ def set_byok_keys(
         )
         updated.append(provider_norm)
 
-    if baseline_provider is not None or baseline_model is not None or requests_per_minute is not None:
-        baseline_provider_norm = (
-            validate_provider(baseline_provider) if baseline_provider else None
-        )
+    if (
+        baseline_provider is not None
+        or baseline_model is not None
+        or requests_per_minute is not None
+    ):
+        baseline_provider_norm = validate_provider(baseline_provider) if baseline_provider else None
         upsert_api_key_settings(
             db_session,
             api_key_id=api_key_id,
@@ -161,7 +168,9 @@ def get_byok_status(
                 "configured": True,
                 "key_last4": row.get("key_last4"),
                 "fingerprint_prefix": str(row.get("key_fingerprint") or "")[:12],
-                "updated_at": str(row.get("updated_at")) if row.get("updated_at") is not None else None,
+                "updated_at": (
+                    str(row.get("updated_at")) if row.get("updated_at") is not None else None
+                ),
             }
         )
 
@@ -237,7 +246,10 @@ def resolve_provider_api_keys(
         try:
             resolved[provider] = decrypt_secret(str(encrypted))
         except Exception:
-            logger.exception("Failed to decrypt BYOK provider key", extra={"extra_fields": {"provider": provider}})
+            logger.exception(
+                "Failed to decrypt BYOK provider key",
+                extra={"extra_fields": {"provider": provider}},
+            )
             continue
 
     return resolved

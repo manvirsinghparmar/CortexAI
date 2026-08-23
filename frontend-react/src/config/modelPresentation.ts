@@ -42,7 +42,7 @@ const PROVIDERS: Record<
   },
   grok: {
     label: "Grok",
-    logoUrl: "https://www.google.com/s2/favicons?domain_url=x.ai&sz=64",
+    logoUrl: "https://www.google.com/s2/favicons?domain_url=grok.com&sz=64",
     color: "#1DA1F2",
   },
   claude: {
@@ -115,6 +115,10 @@ function modelDisplayLabel(
 }
 
 function capabilityWord(model: string): string {
+  if (model.includes("fable")) return "Fable";
+  if (model.includes("terra")) return "Terra";
+  if (model.includes("luna")) return "Luna";
+  if (model.includes("sol")) return "Sol";
   if (model.includes("flash")) return "Flash";
   if (model.includes("pro")) return "Pro";
   if (model.includes("mini")) return "Mini";

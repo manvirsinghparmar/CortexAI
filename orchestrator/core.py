@@ -14,8 +14,10 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 
+from config.cache_optimization import cache_friendly_prompt_ordering_enabled
 from api.base_client import BaseAIClient
 from api.client_registry import ClientRegistry
 from models.unified_response import (
@@ -26,6 +28,7 @@ from models.unified_response import (
 )
 from models.user_context import UserContext
 from orchestrator.multi_orchestrator import MultiModelOrchestrator
+from orchestrator.cache_context import stable_context_digest
 from orchestrator.model_registry import ModelRegistry
 from orchestrator.model_selector import ModelSelector, ReliabilityStore
 from orchestrator.prompt_analyzer import PromptAnalyzer
@@ -53,6 +56,10 @@ from tools.web.research_state import (
     ResearchSource,
     ResearchState,
     create_initial_state,
+)
+from tools.web.persistent_research_store import (
+    load_research_state,
+    save_research_state,
 )
 from tools.web.session_state import get_session_store
 from utils.cost_calculator import CostCalculator
@@ -185,11 +192,12 @@ class CortexOrchestrator:
 
     def _normalize_empty_success_response(self, response: UnifiedResponse) -> UnifiedResponse:
         """
-        Convert blank non-error responses into explicit provider errors.
+        Preserve billable length stops; convert other blank successes to errors.
 
         Some providers can return successful envelopes with no assistant text
         (e.g., content filtering, tool-only payloads, or schema edge cases).
-        Treating these as success causes blank UI cards and poor UX.
+        A length stop can mean reasoning exhausted the output allowance, so it
+        remains an incomplete response for the route/UI retry contract.
         """
         if response.is_error:
             return response
@@ -199,6 +207,14 @@ class CortexOrchestrator:
             return response
 
         finish_reason = str(response.finish_reason or "").strip().lower()
+        if finish_reason == "length":
+            metadata = dict(response.metadata or {})
+            metadata.setdefault("completion_status", "incomplete")
+            metadata.setdefault("stop_cause", "token_limit")
+            if int(response.token_usage.reasoning_tokens or 0) > 0:
+                metadata["reasoning_budget_exhausted"] = True
+            return replace(response, metadata=metadata)
+
         blocked_by_filter = finish_reason == "content_filter"
         message = (
             "Provider returned no text because content was filtered."
@@ -249,26 +265,45 @@ class CortexOrchestrator:
         api_key_override: str | None = None,
     ) -> BaseAIClient:
         model_type = (model_type or "").lower().strip()
+        requested_model = str(model_name or "").strip() or None
+        identity = None
+        if requested_model and self._model_registry:
+            identity = self._model_registry.resolve_model_identity(model_type, requested_model)
+        runtime_model = (
+            str(identity.get("runtime_model") or "").strip()
+            if isinstance(identity, dict)
+            else ""
+        ) or requested_model
         key_scope = (
             hashlib.sha256(api_key_override.encode("utf-8")).hexdigest()[:12]
             if api_key_override
             else "env"
         )
-        cache_key = f"{model_type}:{model_name or 'default'}:{key_scope}"
+        cache_key = f"{model_type}:{requested_model or 'default'}:{runtime_model or 'default'}:{key_scope}"
         if cache_key in self._client_cache:
             return self._client_cache[cache_key]
 
         client = self._client_registry.create_client(
             model_type,
-            model_name=model_name,
+            model_name=runtime_model,
             api_key_override=api_key_override,
         )
-        resolved_model = client.model_name or model_name
+        resolved_model = client.model_name or runtime_model
+        if identity is None and resolved_model and self._model_registry:
+            identity = self._model_registry.resolve_model_identity(model_type, resolved_model)
+        client.requested_model_name = requested_model or resolved_model
+        client.model_identity = dict(identity or {})
 
         self._client_cache[cache_key] = client
         logger.info(
             "Initialized client",
-            extra={"extra_fields": {"provider": model_type, "model": resolved_model}},
+            extra={
+                "extra_fields": {
+                    "provider": model_type,
+                    "requested_model": requested_model or resolved_model,
+                    "runtime_model": resolved_model,
+                }
+            },
         )
         return client
 
@@ -314,19 +349,61 @@ Never fabricate numbers, dates, percentages, or citations.
 Never claim you performed web browsing yourself; the system handles retrieval.
 """
 
+        if cache_friendly_prompt_ordering_enabled():
+            system_content = system_content.replace(
+                f"CURRENT DATE: {current_date_text}\n\n",
+                "",
+            )
+
         system_instruction = {"role": "system", "content": system_content}
+        runtime_instruction = {
+            "role": "system",
+            "content": f"DYNAMIC RUNTIME CONTEXT:\nCURRENT DATE: {current_date_text}",
+        }
+        prefix = (
+            [system_instruction, runtime_instruction]
+            if cache_friendly_prompt_ordering_enabled()
+            else [system_instruction]
+        )
 
         if context and context.conversation_history:
             msgs = context.get_messages()
             msgs.append({"role": "user", "content": prompt})
-            return [system_instruction, *msgs]
-        return [system_instruction, {"role": "user", "content": prompt}]
+            return [*prefix, *msgs]
+        return [*prefix, {"role": "user", "content": prompt}]
+
+    @staticmethod
+    def _inject_reference_context(
+        messages: list[dict[str, str]], content: str
+    ) -> list[dict[str, str]]:
+        reference = {"role": "system", "content": content}
+        if cache_friendly_prompt_ordering_enabled() and messages:
+            return [messages[0], reference, *messages[1:]]
+        return [reference, *messages]
+
+    def _cache_scope(
+        self,
+        *,
+        context: UserContext | None,
+        messages: list[dict[str, str]],
+        mode: str,
+    ) -> dict[str, str]:
+        scope_id = self._get_session_id(context, messages)
+        stable_messages = messages[:-1] if messages else []
+        return {
+            "scope_id": scope_id,
+            "mode": mode,
+            "stable_context_hash": stable_context_digest(stable_messages),
+            "retention_policy": "ephemeral",
+        }
 
     @staticmethod
     def _empty_research_metadata(error: str | None = None) -> dict[str, Any]:
         return {
             "research_used": False,
             "research_reused": False,
+            "research_provider_credits_used": 0,
+            "research_provider_credits_estimated": False,
             "research_topic": None,
             "research_error": error,
             "sources": [],
@@ -461,8 +538,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if session_id not in self._research_states:
                 # Get TTL from env, default to 900 seconds (15 minutes)
                 ttl_seconds = int(os.getenv("RESEARCH_TTL_SECONDS", "900"))
-                self._research_states[session_id] = create_initial_state(
-                    session_id=session_id, mode=research_mode, ttl_seconds=ttl_seconds
+                persisted = load_research_state(session_id)
+                self._research_states[session_id] = (
+                    persisted
+                    if persisted is not None and not persisted.is_expired()
+                    else create_initial_state(
+                        session_id=session_id,
+                        mode=research_mode,
+                        ttl_seconds=ttl_seconds,
+                    )
                 )
             else:
                 # Update mode if it changed
@@ -511,6 +595,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": None,
                 "sources": [],
@@ -523,17 +609,31 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         if should_reuse:
             # Inject previous research
-            injected_messages = [{"role": "system", "content": state.injected_text}, *messages]
+            injected_messages = self._inject_reference_context(messages, state.injected_text)
 
             # Update last_used_at
             updated_state = state.with_update(last_used_at=datetime.now(timezone.utc).isoformat())
             with self._research_lock:
                 self._research_states[session_id] = updated_state
+            save_research_state(updated_state)
+            logger.info(
+                "Reused research context",
+                extra={
+                    "extra_fields": {
+                        "event": "research.reused",
+                        "operation_type": "research",
+                        "provider": "tavily",
+                        "credits": 0,
+                    }
+                },
+            )
 
             # Build metadata
             metadata = {
                 "research_used": True,
                 "research_reused": True,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": state.topic if state.topic else None,
                 "research_error": None,
                 "sources": [
@@ -554,6 +654,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": None,
                 "sources": [],
@@ -564,6 +666,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": "service_not_configured",
                 "sources": [],
@@ -598,6 +702,8 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": 0,
+                "research_provider_credits_estimated": False,
                 "research_topic": None,
                 "research_error": "invalid_query",
                 "sources": [],
@@ -642,21 +748,30 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 session_id=session_id,
                 mode=research_mode,
                 ttl_seconds=state.ttl_seconds,
+                provider_credits_consumed=max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
             )
 
             # Store new state (thread-safe)
             with self._research_lock:
                 self._research_states[session_id] = new_state
+            save_research_state(new_state)
 
             # Inject research
-            injected_messages = [
-                {"role": "system", "content": research_ctx.injected_text},
-                *messages,
-            ]
+            injected_messages = self._inject_reference_context(
+                messages, research_ctx.injected_text
+            )
 
             metadata = {
                 "research_used": True,
-                "research_reused": False,
+                "research_reused": bool(research_ctx.cache_hit),
+                "research_provider_credits_used": max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
+                "research_provider_credits_estimated": bool(
+                    getattr(research_ctx, "provider_credits_estimated", False)
+                ),
                 "research_topic": topic,
                 "research_error": None,
                 "sources": [
@@ -664,6 +779,18 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     for s in sources
                 ],
             }
+            if bool(research_ctx.cache_hit):
+                logger.info(
+                    "Reused research context",
+                    extra={
+                        "extra_fields": {
+                            "event": "research.reused",
+                            "operation_type": "research",
+                            "provider": "tavily",
+                            "credits": 0,
+                        }
+                    },
+                )
             return injected_messages, metadata
         else:
             # Search failed
@@ -671,6 +798,12 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             return messages, {
                 "research_used": False,
                 "research_reused": False,
+                "research_provider_credits_used": max(
+                    0, int(getattr(research_ctx, "provider_credits_used", 0) or 0)
+                ),
+                "research_provider_credits_estimated": bool(
+                    getattr(research_ctx, "provider_credits_estimated", False)
+                ),
                 "research_topic": None,
                 "research_error": research_ctx.error,
                 "sources": [],
@@ -908,25 +1041,30 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
         return response
 
-    def _build_routing_constraints(
-        self, raw: dict[str, Any] | None
-    ) -> RoutingConstraints | None:
+    def _build_routing_constraints(self, raw: dict[str, Any] | None) -> RoutingConstraints | None:
         if not raw:
             return None
         allowed_providers = raw.get("allowed_providers") or raw.get("allow_providers")
         if isinstance(allowed_providers, str):
             allowed_providers = [allowed_providers]
+        allowed_billing_classes = raw.get("allowed_billing_classes")
+        if isinstance(allowed_billing_classes, str):
+            allowed_billing_classes = [allowed_billing_classes]
+        allowed_models = raw.get("allowed_models")
+        if isinstance(allowed_models, str):
+            allowed_models = [allowed_models]
 
         return RoutingConstraints(
             max_cost_usd=raw.get("max_cost_usd"),
             max_total_latency_ms=raw.get("max_total_latency_ms"),
             preferred_provider=raw.get("preferred_provider"),
             allowed_providers=allowed_providers,
+            allowed_billing_classes=allowed_billing_classes,
+            allowed_models=allowed_models,
             min_context_limit=raw.get("min_context_limit"),
             json_only=bool(raw.get("json_only", False)),
             strict_format=bool(raw.get("strict_format", False)),
         )
-
 
     def available_providers(
         self,
@@ -970,6 +1108,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             allowed_providers=available,
             preferred_provider=preferred_provider,
         )
+
     def _resolve_forced_tier(self, routing_mode: str) -> Tier | None:
         if routing_mode == "cheap":
             return Tier.T0
@@ -1018,6 +1157,63 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             logger.exception("preview_smart_target() failed")
             return None
 
+    def plan_smart_targets(
+        self,
+        *,
+        prompt: str,
+        context: UserContext | None = None,
+        routing_mode: str = "smart",
+        routing_constraints: dict[str, Any] | None = None,
+        provider_api_keys: dict[str, str] | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the ordered provider/model plan without invoking providers."""
+
+        if not self._smart_router or not self._model_registry or not self._selector:
+            return ()
+        constraints = self._build_routing_constraints(routing_constraints)
+        constraints = self._constrain_to_routable_providers(
+            constraints,
+            provider_api_keys=provider_api_keys,
+        )
+        if constraints.allowed_providers == []:
+            return ()
+        features, tier, ordered, _metadata = self._smart_router.route_once_plan(
+            prompt=prompt,
+            context=context,
+            routing_mode=(routing_mode or "smart").lower().strip() or "smart",
+            constraints=constraints,
+            runtime_messages=None,
+        )
+        planned: list[ModelCandidate] = list(ordered)
+        tier_order = [
+            Tier(value)
+            for value in self._model_registry.routing_defaults().get(
+                "tier_order",
+                ["T0", "T1", "T2", "T3"],
+            )
+        ]
+        initial_index = tier_order.index(tier)
+        fallback_tiers = [
+            *reversed(tier_order[:initial_index]),
+            *tier_order[initial_index + 1 :],
+        ]
+        for fallback_tier in fallback_tiers:
+            candidates = self._model_registry.get_candidates(fallback_tier, constraints)
+            if not candidates:
+                continue
+            selection = self._selector.select(features, candidates, constraints)
+            planned.extend([selection.primary_candidate, *selection.fallback_candidates])
+
+        result: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in planned:
+            key = (candidate.provider, candidate.model_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return tuple(result)
+
     def _validate_explicit_model_selection(
         self, model_type: str | None, model_name: str | None
     ) -> tuple[bool, str]:
@@ -1038,6 +1234,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 f"Model '{model_name}' for provider '{model_type}' is currently disabled",
             )
         return True, ""
+
+    def model_billing_class(self, provider: str, model: str) -> str | None:
+        """Return the server-owned subscription class for one enabled model."""
+        if not self._model_registry:
+            return None
+        candidate = self._model_registry.find_model(provider, model)
+        if candidate is None or not candidate.enabled:
+            return None
+        return candidate.billing_class.value
 
     def _invoke_candidate(
         self,
@@ -1068,6 +1273,13 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             )
             response = client.get_completion(messages=messages, **kwargs)
             response = self._normalize_empty_success_response(response)
+            response = replace(
+                response,
+                metadata={
+                    **(response.metadata or {}),
+                    "provider_cost_owner": "customer" if override_key else "cortex",
+                },
+            )
             circuit_breaker.record_response(response)
             return response
         except Exception as e:
@@ -1086,10 +1298,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             kind = str(details.get("kind") or "").strip()
             safe_message = get_client_safe_provider_error_message(response.error)
             kind_fragment = f" kind={kind}" if kind else ""
-            return (
-                f"provider_error:{response.error.code}"
-                f"{kind_fragment} message={safe_message}"
-            )
+            return f"provider_error:{response.error.code}" f"{kind_fragment} message={safe_message}"
 
         reason_map = {
             "refusal": "model_refused_request_or_system_instruction_conflict",
@@ -1117,9 +1326,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
     ) -> None:
         status = "success" if validation_ok else "failed"
         why_worked = (
-            "response_passed_validator_checks_and_returned_usable_output"
-            if validation_ok
-            else None
+            "response_passed_validator_checks_and_returned_usable_output" if validation_ok else None
         )
         why_failed = (
             None if validation_ok else self._explain_attempt_failure(response, validation_reason)
@@ -1130,6 +1337,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             "tier": tier.value,
             "provider": candidate.provider,
             "model": candidate.model_name,
+            "billing_class": candidate.billing_class.value,
             "validation": validation_reason,
             "latency_ms": response.latency_ms,
             "status": status,
@@ -1152,6 +1360,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             "attempt_number": attempt_number,
             "provider": candidate.provider,
             "model": candidate.model_name,
+            "billing_class": candidate.billing_class.value,
             "tier": tier.value,
             "status": status,
             "why_selected": (plan_entry or {}).get(
@@ -1185,6 +1394,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
         routing_mode: str,
         routing_constraints: RoutingConstraints | None,
         provider_api_keys: dict[str, str] | None = None,
+        candidate_authorizer: Callable[[str, str], bool] | None = None,
         **kwargs,
     ) -> UnifiedResponse:
         if not self._smart_router or not self._model_registry or not self._validator:
@@ -1266,6 +1476,32 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 continue
 
             candidate = current_candidates.pop(0)
+            if candidate_authorizer is not None:
+                try:
+                    authorized = candidate_authorizer(
+                        candidate.provider,
+                        candidate.model_name,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Smart candidate credit authorization failed",
+                        extra={
+                            "extra_fields": {
+                                "provider": candidate.provider,
+                                "model": candidate.model_name,
+                            }
+                        },
+                    )
+                    authorized = False
+                if not authorized:
+                    routing_md.setdefault("credit_exclusions", []).append(
+                        {
+                            "provider": candidate.provider,
+                            "model": candidate.model_name,
+                            "reason": "supplemental_reservation_denied",
+                        }
+                    )
+                    continue
             resp = self._invoke_candidate(
                 candidate,
                 messages,
@@ -1314,7 +1550,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if routing_md.get("selected_sequence"):
                 latest_selected = routing_md["selected_sequence"][-1]
                 latest_selected["next_action"] = (
-                    decision.action.value if hasattr(decision.action, "value") else str(decision.action)
+                    decision.action.value
+                    if hasattr(decision.action, "value")
+                    else str(decision.action)
                 )
                 latest_selected["next_action_reason"] = decision.reason
 
@@ -1376,6 +1614,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
             if not isinstance(provider_api_keys, dict):
                 provider_api_keys = {}
+            candidate_authorizer = kwargs.pop("_smart_candidate_authorizer", None)
             prepared_messages = kwargs.pop("_prepared_messages", None)
             prepared_research_metadata = kwargs.pop("_prepared_research_metadata", None)
             prepared_opt_metadata = kwargs.pop("_prepared_opt_metadata", None)
@@ -1384,9 +1623,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             if prepared_messages is not None:
                 optimized_prompt = str(prepared_prompt or prompt)
                 opt_metadata = (
-                    prepared_opt_metadata
-                    if isinstance(prepared_opt_metadata, dict)
-                    else {}
+                    prepared_opt_metadata if isinstance(prepared_opt_metadata, dict) else {}
                 )
                 messages = [dict(message) for message in prepared_messages]
                 research_metadata = (
@@ -1404,6 +1641,11 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 messages = prepared_turn["messages"]
                 research_metadata = prepared_turn["research_metadata"]
                 opt_metadata = prepared_turn["optimization_metadata"]
+
+            kwargs.setdefault(
+                "_cache_scope",
+                self._cache_scope(context=context, messages=messages, mode="ask"),
+            )
 
             routing_mode_norm = (routing_mode or "").lower().strip()
             # Only use smart routing when explicitly requested.
@@ -1441,6 +1683,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
                 resp = self._normalize_empty_success_response(resp)
+                resp = replace(
+                    resp,
+                    metadata={
+                        **(resp.metadata or {}),
+                        "provider_cost_owner": (
+                            "customer" if provider_api_keys.get(provider_norm) else "cortex"
+                        ),
+                    },
+                )
                 record_direct_circuit = True
                 md = resp.metadata or {}
                 md["routing"] = {
@@ -1476,6 +1727,9 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     routing_mode=routing_mode_norm,
                     routing_constraints=constraints,
                     provider_api_keys=provider_api_keys,
+                    candidate_authorizer=(
+                        candidate_authorizer if callable(candidate_authorizer) else None
+                    ),
                     **kwargs,
                 )
             else:
@@ -1516,6 +1770,15 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 )
                 resp = client.get_completion(messages=messages, **kwargs)
                 resp = self._normalize_empty_success_response(resp)
+                resp = replace(
+                    resp,
+                    metadata={
+                        **(resp.metadata or {}),
+                        "provider_cost_owner": (
+                            "customer" if provider_api_keys.get(provider_norm) else "cortex"
+                        ),
+                    },
+                )
                 record_direct_circuit = True
 
             # Merge research and optimization metadata into response
@@ -1563,9 +1826,38 @@ Never claim you performed web browsing yourself; the system handles retrieval.
     ) -> MultiUnifiedResponse:
         request_group_id = request_group_id or str(uuid.uuid4())
         responses: list[UnifiedResponse] = []
+        research_metadata: dict[str, Any] = {
+            "research_used": False,
+            "research_reused": False,
+            "research_provider_credits_used": 0,
+            "research_provider_credits_estimated": False,
+            "research_topic": None,
+            "research_error": "not_performed",
+            "sources": [],
+        }
         provider_api_keys = kwargs.pop("provider_api_keys", {}) or {}
         if not isinstance(provider_api_keys, dict):
             provider_api_keys = {}
+        per_client_generation = kwargs.pop("_per_client_generation", {}) or {}
+        if not isinstance(per_client_generation, dict):
+            per_client_generation = {}
+
+        def with_turn_metadata(response: UnifiedResponse) -> UnifiedResponse:
+            normalized = self._normalize_empty_success_response(response)
+            metadata = normalized.metadata or {}
+            return replace(
+                normalized,
+                metadata={
+                    **metadata,
+                    **research_metadata,
+                    "research_mode": research_mode,
+                    "provider_cost_owner": (
+                        "customer"
+                        if provider_api_keys.get(response.provider.lower())
+                        else "cortex"
+                    ),
+                },
+            )
 
         try:
             # Optimize prompt if enabled (ONCE for all models - fair comparison)
@@ -1590,10 +1882,17 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 research_metadata = {
                     "research_used": False,
                     "research_reused": False,
+                    "research_provider_credits_used": 0,
+                    "research_provider_credits_estimated": False,
                     "research_topic": None,
                     "research_error": "service_not_configured",
                     "sources": [],
                 }
+
+            kwargs.setdefault(
+                "_cache_scope",
+                self._cache_scope(context=context, messages=messages, mode="compare"),
+            )
 
             clients: list[BaseAIClient] = []
 
@@ -1644,6 +1943,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
 
             # If we have no valid clients, still return a MultiUnifiedResponse (no exceptions)
             if not clients:
+                responses = [with_turn_metadata(response) for response in responses]
                 if token_tracker:
                     for r in responses:
                         token_tracker.update(r)
@@ -1656,6 +1956,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                 timeout_s=timeout_s,
                 request_group_id=request_group_id,
                 messages=messages,  # Pass research-injected messages to all models
+                _per_client_generation=per_client_generation,
                 **kwargs,
             )
 
@@ -1666,10 +1967,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
             research_used = research_metadata.get("research_used", False)
             updated_responses = []
             for resp in responses:
-                normalized_resp = self._normalize_empty_success_response(resp)
-                md = normalized_resp.metadata or {}
-                merged_md = {**md, **research_metadata, "research_mode": research_mode}
-                resp_with_metadata = replace(normalized_resp, metadata=merged_md)
+                resp_with_metadata = with_turn_metadata(resp)
                 # Check for browse disclaimer if research was used or explicitly requested
                 resp_checked = resp_with_metadata
                 if self._enable_browse_disclaimer_check:
@@ -1699,6 +1997,7 @@ Never claim you performed web browsing yourself; the system handles retrieval.
                     code="unknown",
                 )
             )
+            responses = [with_turn_metadata(response) for response in responses]
             if token_tracker:
                 for r in responses:
                     token_tracker.update(r)

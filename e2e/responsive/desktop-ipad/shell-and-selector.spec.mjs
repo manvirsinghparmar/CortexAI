@@ -5,6 +5,10 @@ import {
     test,
 } from "../fixtures/responsive-e2e.mjs";
 
+function toNdjson(events) {
+    return events.map(event => `${JSON.stringify(event)}\n`).join("");
+}
+
 test("desktop uses the sidebar and top mode navigation", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -359,6 +363,81 @@ test("Improve keeps response cards hidden until optimization resolves", async ({
     await expect(pendingTurn).toContainText("Optimized browser answer.");
 });
 
+test("Cortex-managed Auto budget preserves incomplete output for retry", async ({ responsiveApp }) => {
+    const { page } = responsiveApp;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const requestBodies = [];
+    await page.route("**/v1/chat/stream", async route => {
+        const body = JSON.parse(route.request().postData() || "{}");
+        requestBodies.push(body);
+        const retry = requestBodies.length > 1;
+        const text = retry ? "Completed answer with more room." : "Partial answer kept for the user.";
+        const profile = retry ? "deep" : "auto";
+        await route.fulfill({
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+            body: toNdjson([
+                { type: "start", mode: "single", provider: "openai", model: "gpt-5.1" },
+                { type: "line", text },
+                {
+                    type: "response_done",
+                    response: {
+                        request_id: retry ? "retry-budget-request" : "initial-budget-request",
+                        provider: "openai",
+                        model: "gpt-5.1",
+                        text,
+                        finish_reason: retry ? "stop" : "length",
+                        completion_status: retry ? "complete" : "incomplete",
+                        stop_cause: retry ? "natural" : "token_limit",
+                        generation_budget: {
+                            profile,
+                            requested_max_output_tokens: retry ? 12288 : 8192,
+                            effective_max_output_tokens: retry ? 12288 : 8192,
+                            requested_reasoning_mode: "auto",
+                            effective_reasoning_mode: "standard",
+                            requested_reasoning_effort: "auto",
+                            effective_reasoning_effort: retry ? "high" : "medium",
+                            reasoning_disable_supported: true,
+                            reasoning_counts_against_output: true,
+                            policy_version: "generation-budget-v3",
+                        },
+                        retry_with_more_room: {
+                            available: !retry,
+                            recommended_profile: retry ? null : "deep",
+                        },
+                        latency_ms: 300,
+                        estimated_cost: 0.001,
+                        token_usage: {
+                            prompt_tokens: 10,
+                            completion_tokens: retry ? 20 : 8192,
+                            total_tokens: retry ? 30 : 8202,
+                        },
+                        web_source_items: [],
+                    },
+                },
+                { type: "done", session_id: "generation-budget-session" },
+            ]),
+        });
+    });
+
+    const smart = page.getByRole("switch", { name: "Smart routing" });
+    if ((await smart.getAttribute("aria-checked")) === "true") await smart.click();
+    await expect(page.getByRole("combobox", { name: "Answer depth" })).toHaveCount(0);
+
+    await page.locator("#promptInput").fill("Explain the provider budget contract");
+    await page.locator("#submitBtn").click();
+
+    await expect(page.getByText("Partial answer kept for the user.")).toBeVisible();
+    await expect(page.getByText("Response stopped at its token limit.")).toBeVisible();
+    expect(requestBodies[0].generation).toEqual({ profile: "auto" });
+
+    await page.getByRole("button", { name: "Retry with more room" }).click();
+    await expect.poll(() => requestBodies.length).toBe(2);
+    expect(requestBodies[1].generation).toEqual({ profile: "deep" });
+    await expect(page.getByText("Completed answer with more room.")).toBeVisible();
+});
+
 test("desktop Compare picker remains visible and selectable", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -386,23 +465,37 @@ test("desktop Compare picker remains visible and selectable", async ({ responsiv
     const select = page.locator("#compareModel2");
     const currentValue = await select.inputValue();
     const target = await select.locator("option:not(:disabled)").evaluateAll(
-        (options, selectedValue) =>
-            options.find(option => option.value !== selectedValue)?.value ?? "",
+        (options, selectedValue) => {
+            const option = options.find(candidate => candidate.value !== selectedValue);
+            if (!option) return null;
+            const separator = option.value.indexOf(":");
+            return {
+                value: option.value,
+                provider: separator >= 0 ? option.value.slice(0, separator) : "",
+            };
+        },
         currentValue,
     );
-    expect(target).not.toBe("");
+    expect(target).not.toBeNull();
 
     await page.getByRole("button", { name: /Compare model 2:/ }).click();
     const listbox = page.getByRole("listbox", { name: "Compare model 2 options" });
     await expect(listbox).toBeVisible();
-    await listbox.locator(`[role="option"]`).evaluateAll(
-        (options, value) => {
-            const targetOption = options.find(option => option.title?.includes(value.split(":").at(-1)));
-            targetOption?.click();
-        },
-        target,
-    );
-    await expect(select).toHaveValue(target);
+    await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+    await expect(listbox).toHaveAttribute("data-picker-interaction", "hover");
+    const providerOption = listbox.locator(`[data-provider-key="${target.provider}"]`);
+    await providerOption.hover();
+    await expect(listbox).toHaveAttribute("data-picker-view", "models");
+    await expect(listbox.getByRole("group", { name: "Providers" })).toBeVisible();
+    await expect(listbox.locator(`[data-model-key="${target.value}"]`)).toBeVisible();
+
+    await page.mouse.move(2, 2);
+    await expect(listbox).toHaveAttribute("data-picker-view", "providers");
+
+    await providerOption.hover();
+    await expect(listbox).toHaveAttribute("data-picker-view", "models");
+    await listbox.locator(`[data-model-key="${target.value}"]`).click();
+    await expect(select).toHaveValue(target.value);
 });
 
 test("iPad landscape keeps the desktop workspace usable", async ({ responsiveApp }) => {

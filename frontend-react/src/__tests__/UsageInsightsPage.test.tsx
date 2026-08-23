@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageInsightsPage } from "../pages/UsageInsightsPage";
 import { useChatStore } from "../store/chatStore";
-import type { UsageSummary } from "../types";
+import type { EntitlementsResponse, UsageSummary } from "../types";
 
 interface MockUsageState {
   summary: UsageSummary | null;
@@ -38,6 +38,9 @@ const hookMocks = vi.hoisted(() => ({
   login: vi.fn(),
   logout: vi.fn(),
   toggleTheme: vi.fn(),
+  subscriptionState: {
+    current: { entitlements: null as EntitlementsResponse | null },
+  },
 }));
 
 vi.mock("../hooks/useUsageSummary", () => ({
@@ -74,6 +77,10 @@ vi.mock("../hooks/useChat", () => ({
   useChat: () => ({ cancel: hookMocks.cancel }),
 }));
 
+vi.mock("../hooks/useSubscription", () => ({
+  useSubscription: () => hookMocks.subscriptionState.current,
+}));
+
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ theme: "light", toggleTheme: hookMocks.toggleTheme }),
 }));
@@ -88,6 +95,7 @@ describe("UsageInsightsPage states", () => {
     };
     hookMocks.usageParams.current = {};
     hookMocks.exportUsageCsv.mockResolvedValue(new Blob(["date,tokens\n"], { type: "text/csv" }));
+    hookMocks.subscriptionState.current = { entitlements: null };
     resetStore();
   });
 
@@ -128,6 +136,24 @@ describe("UsageInsightsPage states", () => {
     expect(
       screen.getByLabelText("AVG COST / REQ $0.0091 $12.16 total spend"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps credit balance and activity out of the usage analytics page", () => {
+    hookMocks.subscriptionState.current = { entitlements: entitlementFixture() };
+    hookMocks.usageState.current = {
+      summary: usageSummary(),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    };
+
+    renderPage();
+
+    expect(screen.queryByRole("heading", { name: "AI credit balance" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Recent credit activity" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Models that replied" })).toBeInTheDocument();
   });
 
   it("renders the model leaderboard with Smart routing metadata and provider logos", () => {
@@ -267,6 +293,7 @@ describe("UsageInsightsPage states", () => {
       error: null,
       reload: vi.fn(),
     };
+    hookMocks.subscriptionState.current = { entitlements: entitlementFixture("plus") };
 
     try {
       renderPage();
@@ -457,6 +484,50 @@ function expectedTrailingPeriod(days: number) {
   return {
     from: toIsoDate(from),
     to: toIsoDate(to),
+  };
+}
+
+function entitlementFixture(planCode: "free" | "plus" = "free"): EntitlementsResponse {
+  const isPaid = planCode === "plus";
+  const counter = (used: number, limit: number) => ({
+    used,
+    reserved: 0,
+    limit,
+    remaining: limit - used,
+  });
+  return {
+    plan: {
+      code: planCode,
+      display_name: isPaid ? "Plus" : "Free",
+      status: isPaid ? "active" : "free",
+      source: isPaid ? "stripe" : "default",
+      renews_at: "2026-08-19T00:00:00Z",
+      cancel_at_period_end: false,
+      grace_until: null,
+    },
+    features: {
+      compare_enabled: true,
+      max_compare_models: 2,
+      research_enabled: true,
+      prompt_improvement_enabled: true,
+      file_analysis_enabled: true,
+      usage_export_enabled: isPaid,
+      saved_history_enabled: true,
+      models_catalog_enabled: true,
+    },
+    model_access: {
+      allowed_billing_classes: isPaid
+        ? ["economical", "standard", "advanced"]
+        : ["economical", "standard"],
+    },
+    limits: {
+      max_files_per_request: isPaid ? 3 : 1,
+      max_file_bytes: isPaid ? 20_000_000 : 10_000_000,
+    },
+    allowances: {
+      ai_credits: counter(isPaid ? 124_000 : 10_000, isPaid ? 1_000_000 : 100_000),
+    },
+    period: { starts_at: "2026-07-19T00:00:00Z", ends_at: "2026-08-19T00:00:00Z" },
   };
 }
 

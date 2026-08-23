@@ -170,6 +170,28 @@ describe("Sidebar", () => {
     expect(onNavigateModels).toHaveBeenCalledTimes(1);
   });
 
+  it("marks AI credits active and routes the sidebar AI credits item", async () => {
+    const user = userEvent.setup();
+    const onNavigateCredits = vi.fn();
+
+    render(
+      <Sidebar
+        onSelectThread={vi.fn()}
+        activeView="credits"
+        onNavigateCredits={onNavigateCredits}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "AI credits" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("button", { name: "Usage" })).not.toHaveAttribute("aria-current");
+
+    await user.click(screen.getByRole("button", { name: "AI credits" }));
+    expect(onNavigateCredits).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the signed-in session footer as status instead of a sign-out action", async () => {
     const user = userEvent.setup();
     useChatStore.setState({

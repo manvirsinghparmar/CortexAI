@@ -8,6 +8,7 @@ vi.mock("../pages/UsageInsightsPage", () => ({
   UsageInsightsPage: () => <div>Usage route</div>,
 }));
 vi.mock("../pages/PricingPage", () => ({ PricingPage: () => <div>Pricing route</div> }));
+vi.mock("../pages/LandingPage", () => ({ LandingPage: () => <div>Landing route</div> }));
 vi.mock("../pages/BillingPage", () => ({ BillingPage: () => <div>Billing route</div> }));
 
 import { App } from "../App";
@@ -15,6 +16,12 @@ import { App } from "../App";
 describe("subscription routes", () => {
   beforeEach(() => window.history.replaceState({}, "", "/"));
   afterEach(cleanup);
+
+  it("routes /home to the marketing landing page", () => {
+    window.history.replaceState({}, "", "/home");
+    render(<App />);
+    expect(screen.getByText("Landing route")).toBeInTheDocument();
+  });
 
   it("routes /pricing to the consumer plan catalogue", () => {
     window.history.replaceState({}, "", "/pricing");

@@ -98,7 +98,7 @@ function AllowanceItem({
 
 function formatQuantity(value: number, meter: SubscriptionMeterKey): string {
   void meter;
-  return new Intl.NumberFormat().format(value);
+  return new Intl.NumberFormat("en-US").format(value);
 }
 
 function formatDate(value: string): string {

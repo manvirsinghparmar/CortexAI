@@ -17,6 +17,19 @@
     />
   </head>
   <body>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("cortex-theme");
+          if (theme === "dark" || theme === "light") {
+            document.documentElement.setAttribute("data-theme", theme);
+            document.documentElement.style.colorScheme = theme;
+          }
+        } catch (error) {
+          /* Theme still defaults to light when storage is unavailable. */
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script src="/runtime-config.js"></script>
     <script type="module" src="/src/main.tsx"></script>

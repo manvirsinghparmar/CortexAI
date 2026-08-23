@@ -1,0 +1,23 @@
+.track {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  pointer-events: none;
+  background: transparent;
+}
+
+.bar {
+  height: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--cx-accent), color-mix(in srgb, var(--cx-accent) 55%, #fff));
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track {
+    display: none;
+  }
+}

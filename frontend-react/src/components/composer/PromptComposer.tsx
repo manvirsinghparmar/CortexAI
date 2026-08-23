@@ -315,7 +315,7 @@ function allowanceLabel(
 ): string | undefined {
   const allowance = entitlements?.allowances.ai_credits;
   return allowance
-    ? `${new Intl.NumberFormat().format(allowance.remaining)} credits left`
+    ? `${new Intl.NumberFormat("en-US").format(allowance.remaining)} credits left`
     : undefined;
 }
 

@@ -1,0 +1,238 @@
+.section {
+  padding: 6rem 1.5rem;
+  background-color: var(--cx-canvas);
+}
+
+.container {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  max-width: 780px;
+  margin: 0 auto 3.5rem;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-family: var(--cx-font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--cx-accent);
+  margin-bottom: 0.75rem;
+}
+
+.title {
+  font-family: var(--cx-font-display);
+  font-size: 2.25rem;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--cx-ink-900);
+  margin: 0 0 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .title {
+    font-size: 3rem;
+  }
+}
+
+.subtitle {
+  font-family: var(--cx-font-ui);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--cx-ink-600);
+  margin: 0;
+}
+
+/* Security Pillars */
+.pillarsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-bottom: 3.5rem;
+}
+
+@media (min-width: 640px) {
+  .pillarsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .pillarsGrid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.pillarCard {
+  background-color: var(--cx-surface);
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-card);
+  padding: 1.75rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--cx-shadow-sm);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.pillarCard:hover {
+  transform: translateY(-3px);
+  border-color: var(--cx-accent-border);
+}
+
+.pillarBadge {
+  font-family: var(--cx-font-mono);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--cx-accent);
+  background-color: var(--cx-accent-soft);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  align-self: flex-start;
+  margin-bottom: 1rem;
+}
+
+.pillarTitle {
+  font-family: var(--cx-font-ui);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--cx-ink-900);
+  margin: 0 0 0.5rem;
+}
+
+.pillarDesc {
+  font-family: var(--cx-font-ui);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--cx-ink-600);
+  margin: 0;
+}
+
+/* Providers Bar */
+.providersBar {
+  background-color: var(--cx-surface);
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-card);
+  padding: 1.75rem;
+  margin-bottom: 3.5rem;
+  box-shadow: var(--cx-shadow-sm);
+}
+
+.providersBarHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--cx-font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--cx-ink-500);
+  margin-bottom: 1.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.providersGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .providersGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .providersGrid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+.providerStatusItem {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background-color: var(--cx-canvas);
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-md);
+}
+
+.providerStatusItem strong {
+  display: block;
+  font-family: var(--cx-font-ui);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--cx-ink-900);
+}
+
+.providerStatusItem span {
+  display: block;
+  font-family: var(--cx-font-mono);
+  font-size: 0.6875rem;
+  color: var(--cx-success-text);
+}
+
+/* Testimonials */
+.testimonialsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .testimonialsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.testimonialCard {
+  background-color: var(--cx-surface);
+  border: 1px solid var(--cx-hairline);
+  border-radius: var(--cx-r-card);
+  padding: 2rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-shadow: var(--cx-shadow-sm);
+}
+
+.quoteIcon {
+  font-family: var(--cx-font-display);
+  font-size: 3rem;
+  line-height: 1;
+  color: var(--cx-accent);
+  opacity: 0.4;
+  margin-bottom: 0.25rem;
+}
+
+.quoteText {
+  font-family: var(--cx-font-ui);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--cx-ink-700);
+  margin: 0 0 1.5rem;
+  flex: 1;
+  font-style: italic;
+}
+
+.authorMeta strong {
+  display: block;
+  font-family: var(--cx-font-ui);
+  font-size: 0.875rem;
+  color: var(--cx-ink-900);
+}
+
+.authorMeta span {
+  display: block;
+  font-family: var(--cx-font-ui);
+  font-size: 0.75rem;
+  color: var(--cx-ink-500);
+}

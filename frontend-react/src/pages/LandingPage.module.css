@@ -1,0 +1,49 @@
+.pageContainer {
+  position: relative;
+  background-color: var(--cx-canvas);
+  color: var(--cx-ink-900);
+  min-height: 100vh;
+  overflow-x: hidden;
+  --mouse-x: -1000px;
+  --mouse-y: -1000px;
+}
+
+.scrollProgressBar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--cx-accent) 0%, #a855f7 50%, #ec4899 100%);
+  transform-origin: 0 50%;
+  z-index: 1100;
+  pointer-events: none;
+  transition: transform 0.08s linear;
+}
+
+.spotlightOverlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: radial-gradient(
+    650px circle at var(--mouse-x) var(--mouse-y),
+    rgba(91, 91, 214, 0.06),
+    transparent 80%
+  );
+  transition: opacity 0.3s ease;
+}
+
+:global([data-theme="dark"]) .spotlightOverlay {
+  background: radial-gradient(
+    700px circle at var(--mouse-x) var(--mouse-y),
+    rgba(139, 139, 240, 0.08),
+    transparent 80%
+  );
+}
+
+@media (hover: none) or (pointer: coarse) {
+  .spotlightOverlay {
+    display: none;
+  }
+}

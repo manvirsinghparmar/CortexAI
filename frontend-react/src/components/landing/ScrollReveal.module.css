@@ -1,0 +1,43 @@
+.revealBase {
+  transition-property: opacity, transform;
+  transition-duration: 0.7s;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.fadeUp {
+  opacity: 0;
+  transform: translateY(28px);
+}
+
+.fadeIn {
+  opacity: 0;
+}
+
+.slideLeft {
+  opacity: 0;
+  transform: translateX(-32px);
+}
+
+.slideRight {
+  opacity: 0;
+  transform: translateX(32px);
+}
+
+.zoomIn {
+  opacity: 0;
+  transform: scale(0.94);
+}
+
+.visible {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .revealBase {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}

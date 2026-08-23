@@ -13,10 +13,18 @@ import type {
   BillingPlansResponse,
   BillingSubscriptionResponse,
   EntitlementsResponse,
-  PublicBillingPlan,
   SubscriptionPlanCode,
-  SubscriptionStatus,
 } from "../types";
+import {
+  isCancelled,
+  isPaymentPastDue,
+  resolvePlanAction,
+} from "../subscription/planActions";
+import {
+  formatPrice,
+  planFeatures,
+  planSummary,
+} from "../subscription/planPresentation";
 import styles from "./PricingPage.module.css";
 
 interface PricingPageContentProps {
@@ -33,13 +41,6 @@ interface PricingPageContentProps {
   onCheckout: (planCode: SubscriptionPlanCode) => void;
   onPortal: () => void;
   onClearError: () => void;
-}
-
-interface PlanAction {
-  label: string;
-  disabled: boolean;
-  kind: "primary" | "secondary";
-  onClick?: () => void;
 }
 
 export function PricingPage() {
@@ -256,114 +257,4 @@ function CheckoutNotice({ status }: { status: CheckoutConfirmationStatus }) {
       {copy}
     </div>
   );
-}
-
-function resolvePlanAction({
-  plan,
-  currentPlanCode,
-  currentStatus,
-  billingEnabled,
-  canManage,
-  loggedIn,
-  authEnabled,
-  action,
-  onLogin,
-  onCheckout,
-  onPortal,
-}: {
-  plan: PublicBillingPlan;
-  currentPlanCode: SubscriptionPlanCode | null;
-  currentStatus?: SubscriptionStatus;
-  billingEnabled: boolean;
-  canManage: boolean;
-  loggedIn: boolean;
-  authEnabled: boolean;
-  action: HostedBillingAction;
-  onLogin: () => void;
-  onCheckout: (planCode: SubscriptionPlanCode) => void;
-  onPortal: () => void;
-}): PlanAction {
-  if (!billingEnabled) return { label: "Unavailable", disabled: true, kind: "secondary" };
-  if (!loggedIn) {
-    return {
-      label: "Sign in to choose",
-      disabled: !authEnabled,
-      kind: plan.recommended ? "primary" : "secondary",
-      onClick: authEnabled ? onLogin : undefined,
-    };
-  }
-  if (isPaymentPastDue(currentStatus)) {
-    return {
-      label: "Update payment",
-      disabled: action !== null || !canManage,
-      kind: "primary",
-      onClick: canManage ? onPortal : undefined,
-    };
-  }
-  if (currentPlanCode === plan.code && plan.code === "free") {
-    return { label: "Current plan", disabled: true, kind: "secondary" };
-  }
-  if (currentPlanCode && currentPlanCode !== "free") {
-    if (!canManage) {
-      return {
-        label: currentPlanCode === plan.code ? "Current plan" : "Unavailable",
-        disabled: true,
-        kind: "secondary",
-      };
-    }
-    return {
-      label: currentPlanCode === plan.code ? "Manage current plan" : "Manage plan",
-      disabled: action !== null,
-      kind: currentPlanCode === plan.code ? "primary" : "secondary",
-      onClick: onPortal,
-    };
-  }
-  if (plan.code === "free") {
-    return { label: "Current plan", disabled: true, kind: "secondary" };
-  }
-  return {
-    label: "Upgrade",
-    disabled: action !== null,
-    kind: plan.recommended ? "primary" : "secondary",
-    onClick: () => onCheckout(plan.code),
-  };
-}
-
-function planFeatures(plan: PublicBillingPlan): string[] {
-  const allowances = plan.allowances;
-  const classes = plan.features.allowed_billing_classes;
-  return [
-    `${formatCount(allowances.ai_credits)} AI credits per month`,
-    `Compare up to ${plan.features.max_compare_models} models`,
-    "Advanced Web Search draws from AI credits",
-    "Improve Prompt draws from AI credits",
-    "File upload is free; model processing uses AI credits",
-    classes.includes("premium")
-      ? "Premium model access"
-      : classes.includes("advanced")
-        ? "Advanced model access"
-        : "Economical and selected standard models",
-  ];
-}
-
-function planSummary(code: SubscriptionPlanCode): string {
-  if (code === "plus") return "For regular research and creation";
-  if (code === "pro") return "For high-volume and premium-model work";
-  return "For trying CortexAI and occasional work";
-}
-
-function formatPrice(value: number): string {
-  return value === 0 ? "$0" : `$${value.toFixed(2)}`;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-function isPaymentPastDue(status?: SubscriptionStatus): boolean {
-  return status === "past_due" || status === "unpaid" || status === "incomplete";
-}
-
-function isCancelled(status?: SubscriptionStatus): boolean {
-  return status === "canceled" || status === "incomplete_expired";
 }

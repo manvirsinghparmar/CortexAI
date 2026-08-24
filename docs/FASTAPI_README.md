@@ -176,16 +176,41 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 
 Every Work lookup is authenticated and joined through the owning Work session.
 Starting a run accepts `Idempotency-Key`; the ID is the idempotency key within the
-user's Work history. SSE emits persisted events in sequence, accepts either the
+user's Work history. React stores the newly created session before starting its
+first run, reuses that session after a structured start denial, and shows only
+run-backed Work sessions in the sidebar; zero-run shells remain outside visible
+history. The activity rail omits unlabeled internal progress events, animates
+only the latest visible activity while the run is nonterminal, and renders no
+active indicators after a terminal outcome; completed runs show every plan step
+done. SSE emits persisted events in sequence, accepts either the
 `after_sequence` query or `Last-Event-ID`, sends heartbeat events without
 advancing the durable cursor, and can reconstruct the current state after a
-process or browser reconnect. Provider thinking and raw secret values are never
-included in the public event payload.
+process or browser reconnect. When a run status becomes terminal ahead of the
+browser's current event sequence, React fetches and merges the remaining events
+before stopping the stream so the final written outcome appears without a page
+refresh. Provider thinking and raw secret values are never included in the
+public event payload.
 
 The master feature flag is `CORTEX_WORK_ENABLED`. A disabled environment returns
 404 for Work operations and omits Work navigation through `/runtime-config.js`.
 The full provider, MCP, OAuth, AWS, rollout, rollback, and troubleshooting
 contract is in `docs/runbooks/cortex-work.md`.
+
+The default Work ceiling is 1,000,000 AI credits ($1.00), clamped to the
+effective plan limit. Managed Agents enforces the provider session budget and
+pauses it at `budget_reached`; reconciliation never emits timer-driven
+`user.interrupt` events. Reused provider sessions receive a cumulative cap
+extension for the newly reserved run. If the prior turn is budget-paused, that
+budget update resumes it without sending a concurrent follow-up message.
+Built-in file/search reads are automatic, while bash/write/edit and sensitive
+or mutating connector actions retain approval enforcement.
+
+Work billing prices normal input, cache-read input, cache-write input, output,
+active runtime, and web searches from their independent cumulative deltas. It
+also converts the provider's cumulative USD `list_cost` delta to AI credits and
+uses it as a minimum settlement floor when the reconstructed component charge
+is lower. Non-USD or malformed provider cost snapshots fail reconciliation so
+the reservation remains open for investigation rather than being underbilled.
 
 - `GET /health`
 - `GET /health/runtime`

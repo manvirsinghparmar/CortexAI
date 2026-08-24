@@ -773,7 +773,8 @@ def create_work_tool_call(
     )
     if provider_call_id:
         statement = statement.on_conflict_do_nothing(
-            index_elements=[calls.c.work_run_id, calls.c.provider_call_id]
+            index_elements=[calls.c.work_run_id, calls.c.provider_call_id],
+            index_where=calls.c.provider_call_id.is_not(None),
         )
     call = db.execute(statement.returning(calls)).first()
     if call is not None:

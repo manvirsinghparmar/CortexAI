@@ -64,6 +64,14 @@ class AgentProvider(Protocol):
 
     def list_events(self, session_id: str) -> list[ProviderEvent]: ...
 
+    def extend_budget(
+        self,
+        session_id: str,
+        additional_credit_budget: int,
+        *,
+        current_usage: Mapping[str, object],
+    ) -> None: ...
+
     def interrupt(self, session_id: str) -> None: ...
 
     def confirm_tool(

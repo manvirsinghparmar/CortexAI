@@ -18,6 +18,7 @@ from sqlalchemy import (
     Uuid,
     create_engine,
     func,
+    text as sql_text,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
@@ -178,6 +179,8 @@ def work_db(monkeypatch):
             "work_run_id",
             "provider_call_id",
             unique=True,
+            sqlite_where=sql_text("provider_call_id IS NOT NULL"),
+            postgresql_where=sql_text("provider_call_id IS NOT NULL"),
         ),
     )
     work_approvals = Table(

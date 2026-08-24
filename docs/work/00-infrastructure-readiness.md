@@ -110,7 +110,7 @@ Alert on provider authentication/configuration failure, oldest active run over t
 | CloudFront/ALB/nginx closes SSE | PostgreSQL ordered events | Browser reconnects; tune heartbeat/edge timeouts from logs, not by extending run ownership |
 | Anthropic returns transient error/rate limit | Persisted run/provider IDs and retry metadata | Bounded backoff; keep run recoverable and surface normalized status |
 | Approval times out or is denied | Approval/tool-call rows | On the next reconciliation, record the terminal tool decision and deny the provider tool request |
-| Credit budget is exhausted | Billing reservation/ledger + run budget snapshot | Interrupt remote session, persist `credit_limit_reached`, settle actual usage, release remainder |
+| Credit budget is exhausted | Billing reservation/ledger + run budget snapshot | Let the provider-enforced cap pause the session, persist `credit_limit_reached`, settle actual usage, release remainder; never emit polling interrupts |
 | Artifact import fails | Provider file reference + Work run-file row | Retry idempotently; never expose provider URL or mark the artifact ready early |
 | Deployment rollback | Feature flag + additive schema | Disable Work and deploy previous app; retain rows for audit/reconciliation |
 

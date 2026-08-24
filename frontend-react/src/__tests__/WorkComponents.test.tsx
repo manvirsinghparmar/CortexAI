@@ -8,7 +8,13 @@ import { WorkRail } from "../components/work/WorkRail";
 import { WorkStatusPill } from "../components/work/WorkStatusPill";
 import { useWorkStore } from "../store/workStore";
 import type { AttachmentUploadTask } from "../store/attachmentUploadStore";
-import type { WorkApproval as Approval, WorkArtifact, WorkEvent, WorkRun } from "../types";
+import type {
+  WorkApproval as Approval,
+  WorkArtifact,
+  WorkEvent,
+  WorkRun,
+  WorkSession,
+} from "../types";
 
 afterEach(cleanup);
 
@@ -20,6 +26,23 @@ beforeEach(() => {
 });
 
 describe("Cortex Work components", () => {
+  it("starts substantive Work tasks with a one-dollar Pro budget ceiling", () => {
+    expect(useWorkStore.getState().maxCreditBudget).toBe(1_000_000);
+  });
+
+  it("retains a newly created session so a rejected run can retry without another history row", async () => {
+    const session = workSession();
+    const createSession = vi.fn().mockResolvedValue(session);
+
+    const first = await useWorkStore.getState().ensureSession(createSession);
+    const retry = await useWorkStore.getState().ensureSession(createSession);
+
+    expect(first).toBe(session);
+    expect(retry).toBe(session);
+    expect(useWorkStore.getState().session).toBe(session);
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
   it("maps durable states to user-facing status labels", () => {
     const { rerender } = render(<WorkStatusPill status="waiting_for_approval" />);
     expect(screen.getByText("Needs approval")).toBeInTheDocument();
@@ -97,11 +120,55 @@ describe("Cortex Work components", () => {
     expect(screen.getByText("No connected tools")).toBeInTheDocument();
   });
 
+  it("settles every activity marker and plan step when Work is completed", () => {
+    const { container } = render(
+      <WorkRail
+        run={run({ status: "completed", completed_at: "2026-08-20T00:01:00Z" })}
+        events={[
+          event(1, "planning", "Creating a plan"),
+          event(2, "progress", null),
+          event(3, "progress", "Usage updated"),
+          event(4, "run_completed", "Work completed"),
+        ]}
+        connections={[]}
+        enabledConnectionIds={[]}
+      />,
+    );
+
+    expect(screen.getByText("3 of 3")).toBeInTheDocument();
+    expect(container.querySelector('[data-activity-state="active"]')).toBeNull();
+    expect(container.querySelectorAll('[data-activity-state="done"]')).toHaveLength(3);
+    expect(screen.queryByText("progress")).not.toBeInTheDocument();
+  });
+
+  it("spins only the newest visible activity while Work is running", () => {
+    const { container } = render(
+      <WorkRail
+        run={run()}
+        events={[
+          event(1, "planning", "Creating a plan"),
+          event(2, "progress", "Reading files"),
+          event(3, "progress", null),
+          event(4, "progress", "Writing the report"),
+        ]}
+        connections={[]}
+        enabledConnectionIds={[]}
+      />,
+    );
+
+    const activeMarkers = container.querySelectorAll('[data-activity-state="active"]');
+    expect(activeMarkers).toHaveLength(1);
+    expect(activeMarkers[0]?.closest("li")).toHaveTextContent("Writing the report");
+    expect(screen.queryByText(/^progress$/)).not.toBeInTheDocument();
+  });
+
   it("submits a goal with Enter and toggles web access", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const onWebChange = vi.fn();
-    render(<WorkComposer {...composerProps({ value: "Build the report", onSubmit, onWebChange })} />);
+    render(
+      <WorkComposer {...composerProps({ value: "Build the report", onSubmit, onWebChange })} />,
+    );
     await user.type(screen.getByRole("textbox", { name: "Work goal" }), "{Enter}");
     expect(onSubmit).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Web" }));
@@ -158,7 +225,7 @@ function approval(overrides: Partial<Approval> = {}): Approval {
   };
 }
 
-function run(): WorkRun {
+function run(overrides: Partial<WorkRun> = {}): WorkRun {
   return {
     id: "run-1",
     work_session_id: "session-1",
@@ -178,10 +245,24 @@ function run(): WorkRun {
     completed_at: null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-20T00:00:00Z",
+    ...overrides,
   };
 }
 
-function event(sequence: number, type: string, displayMessage: string): WorkEvent {
+function workSession(): WorkSession {
+  return {
+    id: "session-1",
+    session_id: "history-session-1",
+    title: "Build the report",
+    status: "idle",
+    agent_provider: "fake",
+    created_at: "2026-08-20T00:00:00Z",
+    updated_at: "2026-08-20T00:00:00Z",
+    latest_run_status: null,
+  };
+}
+
+function event(sequence: number, type: string, displayMessage: string | null): WorkEvent {
   return {
     id: `event-${sequence}`,
     sequence,
@@ -209,7 +290,7 @@ function composerProps(overrides: Record<string, unknown> = {}) {
     onAddMcp: vi.fn().mockResolvedValue(undefined),
     webEnabled: false,
     onWebChange: vi.fn(),
-    maxCreditBudget: 100_000,
+    maxCreditBudget: 1_000_000,
     maxPlanBudget: 250_000,
     onBudgetChange: vi.fn(),
     ...overrides,

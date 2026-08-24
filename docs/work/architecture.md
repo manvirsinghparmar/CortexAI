@@ -29,6 +29,9 @@ The authoritative state is split deliberately:
 3. `POST /v1/work/sessions/{id}/runs` validates auth, ownership, entitlement,
    active-run/connection/file limits, web rollout, and the requested credit
    ceiling. `Idempotency-Key` is the idempotency key.
+   React retains the session created in step 2 before requesting this run, so a
+   structured denial can retry in place. The sidebar displays only sessions
+   with a run and does not present a zero-run shell as executed work.
 4. A short DB transaction reserves the maximum credits, creates the run and
    initial event, attaches files, and snapshots selected connections. It closes
    before any external I/O.
@@ -39,23 +42,40 @@ The authoritative state is split deliberately:
 6. `GET /stream` first replays `work_events` after `Last-Event-ID`, then claims a
    short PostgreSQL reconciliation lease, fetches provider events/usage, and
    appends normalized idempotent events. SSE comments keep the edge connection
-   alive but do not alter the durable event sequence.
+   alive but do not alter the durable event sequence. If a status refresh sees
+   a terminal run before React has consumed the corresponding stream events,
+   React fetches and merges every event after its current sequence before it
+   closes the stream.
 7. Tool-use events create high-signal audit rows. READ is confirmed silently.
    Unknown and sensitive actions become a persisted inline approval. WRITE can
    use an exact saved tool+connection grant for this Work session; destructive,
    external communication, financial, and deployment actions always ask.
-8. Completion settles the run's cumulative usage delta, including normal/cache
-   token pricing, Managed Agent active time, and web searches. Unused reserved
-   credits are released by the existing billing service.
+8. Completion settles independent cumulative deltas for normal input, cache
+   reads, cache writes, output, Managed Agent active time, and web searches.
+   The provider's USD `list_cost` delta is an additional settlement floor, so a
+   provider pricing change or reconstruction gap cannot silently underbill.
+   Malformed/non-USD provider cost data leaves the reservation open for
+   investigation. Unused reserved credits are released by the existing billing
+   service.
 9. When artifact rollout is enabled, output files are listed, validated,
    downloaded server-side, stored through Cortex object storage, and registered
    as owned `uploaded_files` plus `work_run_files(role=artifact)` rows.
 10. Open/download links call an authenticated Cortex route that checks both run
     and file ownership and returns `private, no-store` bytes.
 
+The browser activity rail is a projection of these durable events, not a raw
+provider trace. It hides unlabeled internal progress events, allows only the
+latest visible event to animate while the run is nonterminal, and settles every
+visible marker plus all plan steps when the run completes.
+
 A follow-up creates a new Work run under the same Work session and uses the
 same provider session when available. Billing uses the prior cumulative usage
-snapshot as the baseline so earlier tokens/runtime are not charged twice.
+snapshot as the baseline so earlier tokens/runtime are not charged twice. The
+new reservation is also added to the provider session's cumulative list-cost
+cap. Provider event IDs observed before the new run are baselined so prior
+terminal events cannot complete the follow-up. When the earlier turn stopped at
+`budget_reached`, updating the provider budget resumes that turn automatically;
+Cortex does not race it with a new `user.message`.
 
 ## Provider-neutral events
 
@@ -72,8 +92,12 @@ duplicate provider delivery is a no-op.
 
 ## Approval protocol
 
-- The server classifies, persists, and decides approvals; provider policy is
-  configured `always_ask` so it cannot bypass Cortex.
+- Built-in `read`, `glob`, `grep`, and enabled `web_search`/`web_fetch` use
+  provider `always_allow`; they are read-only within the explicitly mounted or
+  enabled task surface and do not pause the session.
+- Built-in `bash`, `write`, and `edit` inherit provider `always_ask`. MCP tools
+  also default to `always_ask`; Cortex classifies each request, silently
+  confirms READ, and persists/requests approval for writes and sensitive work.
 - Approval lookup joins approval -> run -> Work session -> user.
 - A pending row is changed with a compare-and-set update. A replay gets 409.
 - Pending approvals older than `CORTEX_WORK_APPROVAL_TIMEOUT_SECONDS` expire on
@@ -91,12 +115,12 @@ duplicate provider delivery is a no-op.
 
 | Failure | User-visible behavior | Recovery source |
 |---|---|---|
-| Browser/SSE disconnect | Status pauses locally; reconnect catches up | ordered PostgreSQL events |
+| Browser/SSE disconnect or terminal status ahead of the stream cursor | React catches up before closing or on reconnect | ordered PostgreSQL events |
 | API restart/deploy | Browser reconnects; run keeps executing remotely | provider session ID + DB lease |
 | Provider session missing | normalized recoverable error; a later run creates a replacement and remounts inputs | Cortex files + Work session |
 | Duplicate start | original run is returned; conflicting reuse is 409 | request ID constraint |
 | Tool approval wait | inline card; no side effect before confirmation | approval/tool-call rows |
-| Budget reached | remote session interrupted; status becomes Budget reached | run ceiling + usage snapshot |
+| Budget reached | provider pauses itself; status becomes Budget reached without a client interrupt | run ceiling + usage snapshot |
 | Artifact import error | completed outcome remains; deliverable is withheld | provider output + idempotent import |
 | Feature rollback | Work navigation disappears and routes reject new control operations | server feature flag |
 

@@ -38,6 +38,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_INTERRUPTIBLE_PROVIDER_SESSION_STATUSES = frozenset({"running", "rescheduling"})
 
 
 def require_work_enabled(config: WorkConfig | None = None) -> WorkConfig:
@@ -386,10 +387,24 @@ def start_work_run(
         reuse_provider_session = (
             bool(provider_session_id) and prior_capabilities == capability_snapshot
         )
+        resume_budget_pause = False
         if reuse_provider_session and provider_session_id:
-            baseline = dict(agent.get_session(provider_session_id).usage)
+            provider_session = agent.get_session(provider_session_id)
+            baseline = dict(provider_session.usage)
+            prior_provider_events = agent.list_events(provider_session_id)
+            configuration["provider_event_baseline_ids"] = [
+                event.id for event in prior_provider_events
+            ]
+            resume_budget_pause = (
+                _latest_provider_stop_reason(prior_provider_events) == "budget_reached"
+            )
             for resource in resources:
                 agent.add_resource(provider_session_id, resource)
+            agent.extend_budget(
+                provider_session_id,
+                budget,
+                current_usage=baseline,
+            )
         else:
             with persistence_service.db_uow(commit_on_success=False) as db:
                 persisted_files = repository.list_work_session_files(
@@ -437,7 +452,10 @@ def start_work_run(
             )
             provider_session_id = created_session.id
             baseline = dict(created_session.usage)
-        agent.send_instruction(provider_session_id, instruction)
+        if not resume_budget_pause:
+            agent.send_instruction(provider_session_id, instruction)
+        else:
+            configuration["resumed_from_budget_pause"] = True
     except Exception as exc:
         logger.exception(
             "Work provider start failed",
@@ -581,6 +599,10 @@ def _settle_work_billing(db: Any, run: Mapping[str, object], usage: WorkCreditUs
             "managed_active_seconds": usage.active_seconds,
             "managed_web_credits": usage.web_credits,
             "managed_web_searches": usage.web_searches,
+            "managed_component_credits": usage.component_credits,
+            "managed_provider_floor_credits": usage.provider_floor_credits,
+            "managed_reported_provider_cost_usd": usage.reported_provider_cost_usd,
+            "managed_reconstructed_provider_cost_usd": usage.reconstructed_provider_cost_usd,
             "calculated_credits": usage.total_credits,
             "unbilled_credits": max(0, usage.total_credits - billed),
         },
@@ -617,6 +639,37 @@ def _has_saved_write_grant(
     grants = policy.get("allowed_write_tools", []) if isinstance(policy, Mapping) else []
     expected = {"connection_id": str(connection_id), "tool_name": tool_name}
     return any(isinstance(item, Mapping) and dict(item) == expected for item in grants)
+
+
+def _provider_session_is_interruptible(provider_status: object) -> bool:
+    return str(provider_status or "").strip().lower() in _INTERRUPTIBLE_PROVIDER_SESSION_STATUSES
+
+
+def _latest_provider_stop_reason(provider_events: Sequence[Any]) -> str | None:
+    for event in reversed(provider_events):
+        if str(event.payload.get("provider_type") or "") == "session.status_idle":
+            return event.stop_reason
+    return None
+
+
+def _provider_events_for_run(
+    provider_events: Sequence[Any], run: Mapping[str, object]
+) -> list[Any]:
+    snapshot = run.get("configuration_snapshot")
+    configuration = snapshot if isinstance(snapshot, Mapping) else {}
+    baseline_raw = configuration.get("provider_event_baseline_ids")
+    baseline_values = baseline_raw if isinstance(baseline_raw, list) else []
+    baseline_ids = {str(value) for value in baseline_values if isinstance(value, (str, int))}
+    return [event for event in provider_events if event.id not in baseline_ids]
+
+
+def _provider_confirmed_tool_ids(provider_events: Sequence[Any]) -> set[str]:
+    return {
+        str(event.payload.get("tool_use_id"))
+        for event in provider_events
+        if str(event.payload.get("provider_type") or "") == "user.tool_confirmation"
+        and event.payload.get("tool_use_id")
+    }
 
 
 def reconcile_work_run(
@@ -659,17 +712,19 @@ def reconcile_work_run(
             "The managed agent session is unavailable.",
         )
     try:
-        provider_events = agent.list_events(provider_session_id)
+        provider_events = _provider_events_for_run(
+            agent.list_events(provider_session_id),
+            run,
+        )
         provider_session = agent.get_session(provider_session_id)
         usage = _usage_for_run(run, provider_session.usage, resolved)
         budget_reached = usage.total_credits >= int(run["max_credit_budget"])
-        if budget_reached:
-            agent.interrupt(provider_session_id)
         terminal_status: str | None = "budget_exhausted" if budget_reached else None
         stop_reason: str | None = "credit_limit_reached" if budget_reached else None
         expired_confirmations: list[tuple[UUID, str]] = []
         with persistence_service.db_uow() as db:
             provider_by_id = {event.id: event for event in provider_events}
+            provider_confirmed_tool_ids = _provider_confirmed_tool_ids(provider_events)
             current_work_session = repository.get_work_session(db, work_session_id) or work_session
             auto_confirm: list[str] = []
             auto_deny: list[str] = []
@@ -734,6 +789,8 @@ def reconcile_work_run(
                     approval_ids: list[str] = []
                     blocking = event_payload.get("blocking_event_ids")
                     for blocking_id in blocking if isinstance(blocking, list) else []:
+                        if str(blocking_id) in provider_confirmed_tool_ids:
+                            continue
                         tool_event = provider_by_id.get(str(blocking_id))
                         if tool_event is None:
                             continue
@@ -899,6 +956,9 @@ def reconcile_work_run(
                 provider_cost_snapshot={
                     "provider": agent.name,
                     "estimated_provider_cost_usd": usage.provider_cost_usd,
+                    "reported_provider_cost_usd": usage.reported_provider_cost_usd,
+                    "reconstructed_provider_cost_usd": usage.reconstructed_provider_cost_usd,
+                    "provider_floor_credits": usage.provider_floor_credits,
                 },
                 stop_reason=stop_reason,
                 completed=terminal,
@@ -1065,7 +1125,9 @@ def cancel_work_run(
         work_session.get("provider_session_id") or run.get("provider_run_id") or ""
     )
     if provider_session_id:
-        agent.interrupt(provider_session_id)
+        provider_session = agent.get_session(provider_session_id)
+        if _provider_session_is_interruptible(provider_session.status):
+            agent.interrupt(provider_session_id)
     # Reconcile first to capture provider usage, then force cancellation if the provider has not emitted it yet.
     try:
         reconcile_work_run(user_id=user_id, work_run_id=work_run_id, provider=agent, config=config)

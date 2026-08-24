@@ -21,6 +21,31 @@ from server.work.provider import (
 from server.work.security import redact_mapping
 
 _MANAGED_AGENTS_BETA = ["managed-agents-2026-04-01"]
+_CORTEX_CREDITS_PER_PROVIDER_CENT = 10_000
+
+
+def _provider_budget_cents(credit_budget: int) -> int:
+    """Round a Cortex-credit ceiling up to Anthropic's whole-cent budget unit."""
+
+    return max(
+        1,
+        (int(credit_budget) + _CORTEX_CREDITS_PER_PROVIDER_CENT - 1)
+        // _CORTEX_CREDITS_PER_PROVIDER_CENT,
+    )
+
+
+def _provider_list_cost_cents(usage: Mapping[str, object]) -> int:
+    raw = usage.get("list_cost")
+    if raw is None:
+        return 0
+    value = _dump(raw)
+    currency = str(value.get("currency") or "USD").upper()
+    if currency != "USD":
+        raise RuntimeError(f"Unsupported Managed Agent usage currency: {currency}")
+    try:
+        return max(0, int(str(value.get("amount") or "0")))
+    except ValueError as exc:
+        raise RuntimeError("Managed Agent usage returned an invalid list cost") from exc
 
 
 def _dump(value: Any) -> dict[str, Any]:
@@ -118,6 +143,13 @@ def normalize_anthropic_event(event: Any) -> ProviderEvent:
         tool_use_id = data.get("tool_use_id")
         if tool_use_id:
             payload["tool_use_id"] = str(tool_use_id)
+    elif provider_type == "user.tool_confirmation":
+        tool_use_id = data.get("tool_use_id")
+        if tool_use_id:
+            payload["tool_use_id"] = str(tool_use_id)
+        result = str(data.get("result") or "").strip().lower()
+        if result in {"allow", "deny"}:
+            payload["result"] = result
     elif provider_type == "session.status_running":
         normalized_type = "progress"
         display = "Work is running"
@@ -174,7 +206,9 @@ class AnthropicManagedAgentProvider(AgentProvider):
             client = Anthropic()
         if not hasattr(getattr(client, "beta", None), "sessions"):
             raise RuntimeError("The installed Anthropic SDK does not support Managed Agents")
-        self._client = client
+        # Keep the beta SDK surface isolated behind the typed AgentProvider protocol.
+        # Managed Agents evolves faster than the generated SDK type declarations.
+        self._client: Any = client
         self._config = config
 
     def create_session(
@@ -200,15 +234,22 @@ class AnthropicManagedAgentProvider(AgentProvider):
                     "permission_policy": {"type": "always_ask"},
                 },
                 "configs": [
+                    *[
+                        {
+                            "name": name,
+                            "permission_policy": {"type": "always_allow"},
+                        }
+                        for name in ("read", "glob", "grep")
+                    ],
                     {
                         "name": "web_search",
                         "enabled": web_enabled,
-                        "permission_policy": {"type": "always_ask"},
+                        "permission_policy": {"type": "always_allow"},
                     },
                     {
                         "name": "web_fetch",
                         "enabled": web_enabled,
-                        "permission_policy": {"type": "always_ask"},
+                        "permission_policy": {"type": "always_allow"},
                     },
                 ],
             }
@@ -247,7 +288,7 @@ class AnthropicManagedAgentProvider(AgentProvider):
             ]
         if vault_ids:
             kwargs["vault_ids"] = list(vault_ids)
-        provider_budget_cents = max_credit_budget // 10_000
+        provider_budget_cents = _provider_budget_cents(max_credit_budget)
         if provider_budget_cents > 0:
             kwargs["budget"] = {
                 "type": "limit",
@@ -280,10 +321,32 @@ class AnthropicManagedAgentProvider(AgentProvider):
 
     def list_events(self, session_id: str) -> list[ProviderEvent]:
         page = self._client.beta.sessions.events.list(
-            session_id, order="asc", limit=100, betas=_MANAGED_AGENTS_BETA
+            session_id, order="asc", limit=1000, betas=_MANAGED_AGENTS_BETA
         )
         data = list(page) if hasattr(page, "__iter__") else getattr(page, "data", page)
         return [normalize_anthropic_event(event) for event in data]
+
+    def extend_budget(
+        self,
+        session_id: str,
+        additional_credit_budget: int,
+        *,
+        current_usage: Mapping[str, object],
+    ) -> None:
+        max_list_cost_cents = _provider_list_cost_cents(current_usage) + _provider_budget_cents(
+            additional_credit_budget
+        )
+        self._client.beta.sessions.update(
+            session_id,
+            budget={
+                "type": "limit",
+                "max_list_cost": {
+                    "amount": str(max_list_cost_cents),
+                    "currency": "USD",
+                },
+            },
+            betas=_MANAGED_AGENTS_BETA,
+        )
 
     def interrupt(self, session_id: str) -> None:
         self._client.beta.sessions.events.send(

@@ -6,6 +6,7 @@ It only reflects the schema into SQLAlchemy Table objects for querying.
 """
 
 import os
+from threading import Lock
 
 from sqlalchemy import MetaData, Table
 
@@ -25,6 +26,7 @@ metadata = MetaData()
 
 # Table cache for lazy loading
 _tables_cache: dict[str, Table] = {}
+_tables_lock = Lock()
 
 # All table names in the database
 TABLE_NAMES = [
@@ -120,14 +122,20 @@ def get_table(name: str) -> Table:
         )
 
     if name not in _tables_cache:
-        try:
-            _tables_cache[name] = reflect_table(name)
-        except Exception:
-            logger.error(
-                f"Failed to reflect table {name}. "
-                f"Ensure DATABASE_URL is correct and table exists in PostgreSQL."
-            )
-            raise
+        # Work routes can request the same lazily reflected table from both the
+        # event-loop thread and asyncio.to_thread workers. SQLAlchemy registers
+        # a Table with MetaData before autoload has populated all columns, so a
+        # concurrent constructor can otherwise observe that partial object.
+        with _tables_lock:
+            if name not in _tables_cache:
+                try:
+                    _tables_cache[name] = reflect_table(name)
+                except Exception:
+                    logger.error(
+                        f"Failed to reflect table {name}. "
+                        f"Ensure DATABASE_URL is correct and table exists in PostgreSQL."
+                    )
+                    raise
 
     return _tables_cache[name]
 

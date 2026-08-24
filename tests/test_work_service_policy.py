@@ -9,6 +9,8 @@ import pytest
 
 from server.work.config import WorkConfig
 from server.work import service
+from server.work.billing import calculate_work_credit_usage
+from server.work.provider import ProviderEvent
 
 
 def _config(**overrides: object) -> WorkConfig:
@@ -22,7 +24,7 @@ def _config(**overrides: object) -> WorkConfig:
         agent_id="agent-1",
         environment_id="environment-1",
         billing_model="claude-haiku-4-5",
-        default_credit_budget=100_000,
+        default_credit_budget=1_000_000,
         event_sync_interval_seconds=1,
         sse_heartbeat_seconds=15,
         approval_timeout_seconds=3600,
@@ -66,7 +68,7 @@ def test_free_is_denied_and_plus_budget_boundaries_are_enforced(monkeypatch):
 
     monkeypatch.setattr(service, "resolve_effective_subscription", lambda *_: _effective(work=True))
     _, default_budget = service._plan_and_budget(object(), uuid4(), None, _config())
-    assert default_budget == 100_000
+    assert default_budget == 250_000
     with pytest.raises(HTTPException) as too_large:
         service._plan_and_budget(object(), uuid4(), 250_001, _config())
     assert too_large.value.status_code == 422
@@ -135,3 +137,117 @@ def test_saved_write_policy_is_exactly_scoped_and_sensitive_actions_still_ask():
     )
     assert service.classify_action("open_pull_request") == "WRITE"
     assert service.classify_action("merge_pull_request") == "DESTRUCTIVE"
+
+
+def test_provider_interrupt_and_followup_event_guards():
+    assert service._provider_session_is_interruptible("running")
+    assert service._provider_session_is_interruptible("rescheduling")
+    assert not service._provider_session_is_interruptible("idle")
+    assert not service._provider_session_is_interruptible("terminated")
+
+    old = ProviderEvent(
+        id="old-budget",
+        type="budget_exhausted",
+        display_message="Budget reached",
+        payload={"provider_type": "session.status_idle"},
+        terminal_status="budget_exhausted",
+        stop_reason="budget_reached",
+    )
+    new = ProviderEvent(
+        id="new-progress",
+        type="progress",
+        display_message="Work resumed",
+        payload={"provider_type": "session.status_running"},
+    )
+    assert service._latest_provider_stop_reason([old]) == "budget_reached"
+    filtered = service._provider_events_for_run(
+        [old, new],
+        {"configuration_snapshot": {"provider_event_baseline_ids": [old.id]}},
+    )
+    assert filtered == [new]
+
+    confirmation = ProviderEvent(
+        id="confirmation-1",
+        type="progress",
+        display_message=None,
+        payload={
+            "provider_type": "user.tool_confirmation",
+            "tool_use_id": "tool-1",
+            "result": "allow",
+        },
+    )
+    assert service._provider_confirmed_tool_ids([old, confirmation]) == {"tool-1"}
+
+
+def test_work_settlement_persists_full_cache_partition_and_provider_floor(monkeypatch):
+    usage = calculate_work_credit_usage(
+        {
+            "list_cost": {"amount": "20", "currency": "USD"},
+            "input_tokens": 30,
+            "output_tokens": 7_668,
+            "active_seconds": 184.073,
+            "cache_creation": {"ephemeral_5m_input_tokens": 29_115},
+            "cache_read_input_tokens": 244_569,
+        },
+        {"list_cost": {"amount": "0", "currency": "USD"}},
+        model="claude-sonnet-5",
+    )
+    reservation_id = uuid4()
+    work_session_id = uuid4()
+    user_id = uuid4()
+    transaction: dict[str, object] = {}
+    settlement = SimpleNamespace(
+        billed_quantity=usage.total_credits,
+        reservation=SimpleNamespace(
+            id=reservation_id,
+            billing_account_id=uuid4(),
+            usage_period_id=uuid4(),
+        ),
+    )
+    monkeypatch.setattr(
+        service.repository,
+        "get_work_session",
+        lambda *_: {"user_id": user_id},
+    )
+    monkeypatch.setattr(
+        service,
+        "resolve_effective_subscription",
+        lambda *_: SimpleNamespace(
+            plan=SimpleNamespace(allowances=SimpleNamespace(ai_credits=1_000_000))
+        ),
+    )
+    monkeypatch.setattr(
+        service, "settle_usage_with_supplement", lambda *_args, **_kwargs: settlement
+    )
+    monkeypatch.setattr(
+        service.billing_repository,
+        "create_credit_transaction",
+        lambda _db, **kwargs: transaction.update(kwargs),
+    )
+
+    billed = service._settle_work_billing(
+        object(),
+        {
+            "billing_reservation_id": reservation_id,
+            "work_session_id": work_session_id,
+            "request_id": "work-cache-incident",
+            "instruction": "Analyze this repository",
+        },
+        usage,
+    )
+
+    assert billed == 385_636
+    assert transaction["input_tokens"] == 273_714
+    assert transaction["normal_input_tokens"] == 30
+    assert transaction["cached_input_tokens"] == 244_569
+    assert transaction["cache_write_tokens"] == 29_115
+    assert transaction["input_credits"] == 243_523
+    assert transaction["output_credits"] == 138_024
+    assert transaction["fixed_credits"] == 4_089
+    assert transaction["total_credits"] == 385_636
+    assert transaction["provider_cost_usd"] == pytest.approx(0.2025301889)
+    metadata = transaction["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["managed_component_credits"] == 385_636
+    assert metadata["managed_provider_floor_credits"] == 200_000
+    assert metadata["managed_reported_provider_cost_usd"] == pytest.approx(0.20)

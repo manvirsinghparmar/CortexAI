@@ -38,6 +38,35 @@ approval unless the user explicitly saved the exact tool + connection grant
 for the current Work session. Destructive, deployment, financial, and external
 communication actions always interrupt for approval.
 
+Work defaults to a 1,000,000-credit ($1.00) run ceiling and clamps that value to
+the effective plan maximum. Anthropic enforces the corresponding session budget
+and pauses at `budget_reached`; Cortex does not send polling interrupts. A later
+run extends the reused provider session cap by its newly reserved budget, and a
+budget-paused turn resumes from the provider budget update without a competing
+`user.message`. Built-in `read`, `glob`, `grep`, and enabled web reads run
+without confirmation. `bash`, `write`, `edit`, MCP writes, and every sensitive
+action retain the applicable approval gate.
+
+Work settlement treats Managed Agent normal input, cache reads, and cache
+writes as independent cumulative usage partitions; follow-ups subtract the
+prior provider snapshot from each partition. The reconstructed model, active
+runtime, and web-search charge is compared with Anthropic's cumulative USD
+`list_cost` delta, and the greater value is the settlement floor. Invalid
+currency or cost data stops reconciliation instead of silently underbilling.
+
+React remembers a newly created Work session before it requests the first run,
+so a rejected start can be retried without creating another session. The
+sidebar treats Work history as run-backed and omits session shells whose first
+run never passed validation, entitlement, or credit reservation.
+
+The Work activity rail is a user-facing history, not a raw provider trace. It
+omits unlabeled internal progress telemetry and animates only the latest visible
+activity while a run is nonterminal. Terminal runs render every retained event
+as settled, and a completed run marks all plan steps done. If status
+reconciliation reaches a terminal state ahead of the browser's stream cursor,
+React fetches and merges the remaining durable events before closing the stream
+so the final written outcome appears without a page refresh.
+
 Before enabling it, apply
 `db/migrations/20260820_add_cortex_work_mode.sql` and complete
 [the Work rollout runbook](docs/runbooks/cortex-work.md). The architecture and

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "../components/layout/Sidebar";
 import { useChatStore } from "../store/chatStore";
-import type { HistoryEntry, HistoryThread } from "../types";
+import type { HistoryEntry, HistoryThread, WorkSession } from "../types";
 
 describe("Sidebar", () => {
   afterEach(() => {
@@ -409,7 +409,48 @@ describe("Sidebar", () => {
       screen.getByText(older.toLocaleDateString(undefined, { month: "short", day: "numeric" })),
     ).toBeInTheDocument();
   });
+
+  it("shows completed Work history once and hides zero-run session shells", () => {
+    const onSelectWorkSession = vi.fn();
+    const title = "Prepare the regression strategy";
+    const workSessions: WorkSession[] = [
+      workSession({ id: "empty-1", session_id: "history-empty-1", title }),
+      workSession({ id: "empty-2", session_id: "history-empty-2", title }),
+      workSession({
+        id: "completed-1",
+        session_id: "history-completed-1",
+        title,
+        status: "completed",
+        latest_run_status: "completed",
+      }),
+    ];
+
+    render(
+      <Sidebar
+        onSelectThread={vi.fn()}
+        workSessions={workSessions}
+        onSelectWorkSession={onSelectWorkSession}
+      />,
+    );
+
+    const entries = screen.getAllByRole("button", { name: `${title}. Work, completed` });
+    expect(entries).toHaveLength(1);
+  });
 });
+
+function workSession(overrides: Partial<WorkSession> = {}): WorkSession {
+  return {
+    id: "work-session",
+    session_id: "history-session",
+    title: "Work task",
+    status: "idle",
+    agent_provider: "fake",
+    created_at: "2026-08-20T00:00:00Z",
+    updated_at: "2026-08-20T00:00:00Z",
+    latest_run_status: null,
+    ...overrides,
+  };
+}
 
 function historyEntries(): HistoryEntry[] {
   return [

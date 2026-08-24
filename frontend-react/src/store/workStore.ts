@@ -26,6 +26,7 @@ interface WorkStoreState {
   error: string | null;
   setSessions: (sessions: WorkSession[]) => void;
   setSession: (session: WorkSession | null) => void;
+  ensureSession: (createSession: () => Promise<WorkSession>) => Promise<WorkSession>;
   setRun: (run: WorkRun | null) => void;
   replaceEvents: (events: WorkEvent[]) => void;
   appendEvent: (event: WorkEvent) => void;
@@ -42,7 +43,7 @@ interface WorkStoreState {
   resetWorkspace: () => void;
 }
 
-export const useWorkStore = create<WorkStoreState>((set) => ({
+export const useWorkStore = create<WorkStoreState>((set, get) => ({
   sessions: [],
   session: null,
   run: null,
@@ -53,12 +54,19 @@ export const useWorkStore = create<WorkStoreState>((set) => ({
   connections: [],
   enabledConnectionIds: [],
   webEnabled: false,
-  maxCreditBudget: 100_000,
+  maxCreditBudget: 1_000_000,
   loading: false,
   streaming: false,
   error: null,
   setSessions: (sessions) => set({ sessions }),
   setSession: (session) => set({ session }),
+  ensureSession: async (createSession) => {
+    const existing = get().session;
+    if (existing) return existing;
+    const session = await createSession();
+    set({ session });
+    return session;
+  },
   setRun: (run) => set({ run }),
   replaceEvents: (events) => set({ events: dedupeEvents(events) }),
   appendEvent: (event) =>

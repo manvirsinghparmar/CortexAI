@@ -67,6 +67,19 @@ The existing `DATABASE_URL`, billing/Stripe settings, attachment/S3 settings,
 Cognito/session settings, `MASTER_KEY`, proxy settings, and logging settings
 remain authoritative.
 
+`CORTEX_WORK_DEFAULT_CREDIT_BUDGET` defaults to 1,000,000 credits ($1.00)
+and is clamped to the effective plan maximum. The provider accepts whole US
+cents, so non-cent credit ceilings are rounded up. Each reused session extends
+its cumulative provider cap by the newly reserved run budget. A
+`budget_reached` session resumes when that cap is updated; do not send a
+simultaneous `user.message` or a `user.interrupt`.
+
+Built-in `read`, `glob`, `grep`, and enabled web reads are `always_allow`.
+Built-in `bash`, `write`, and `edit` remain `always_ask`. MCP remains
+default-deny/ask at the provider boundary, with Cortex auto-confirming only
+classified READ operations and preserving approval for writes and sensitive
+actions.
+
 For each verified connector key (`GITHUB`, `GOOGLE_DRIVE`, `GMAIL`, `SLACK`,
 `JIRA`, `NOTION`, `MICROSOFT_365`) configure:
 
@@ -116,11 +129,22 @@ Use a signed internal account. Never use the fake provider in production.
 7. Complete the task, open/download an artifact, and verify a second user gets
    404 for the same run/file/approval IDs.
 8. Compare reservation, ledger, run `actual_credits`, cumulative provider usage,
-   runtime/web cost, and released remainder.
+   runtime/web cost, provider `list_cost`, and released remainder. Verify cache
+   reads/writes are not capped by the provider's normal `input_tokens` value and
+   that settled credits are at least the USD `list_cost` delta converted at
+   1,000,000 credits per dollar.
 9. Start a follow-up in the same Work session and verify earlier usage is not
    billed again.
 10. Cancel an active run and verify remote interruption, durable cancelled state,
     actual-use settlement, and released reservation.
+11. Force a structured first-run denial, correct it, and retry without leaving
+    the page. Confirm the retry reuses the same Work session and the sidebar
+    shows only the session that has a run, not the zero-run shell.
+12. During a run, confirm only the latest visible activity animates. After
+    completion, confirm no Activity spinner remains, unlabeled provider
+    telemetry is absent, Plan reads `3 of 3`, and the final written outcome is
+    visible before any page refresh. Refresh once and verify the outcome remains
+    unchanged.
 
 ## Monitoring and alerts
 
@@ -157,6 +181,21 @@ credentials, or secret values.
 - reservation remains open: reopen the run to reconcile, inspect provider usage,
   and then use the existing stale reservation maintenance path only after the
   provider state is understood.
+- provider-cost drift or settlement failure: compare the run's reconstructed
+  cost, reported `list_cost`, provider-floor credits, component credits, and
+  final ledger charge. Non-USD, negative, or malformed `list_cost` snapshots
+  intentionally fail closed; retain the reservation and provider evidence for
+  investigation rather than manually forcing a zero-cost settlement.
+- `there is no unique or exclusion constraint matching the ON CONFLICT
+  specification` for `work_tool_calls`: verify the deployed repository targets
+  the partial `uq_work_tool_calls_provider_call` index with the matching
+  `provider_call_id IS NOT NULL` predicate. After deploying the corrected API,
+  reopen the existing run so reconciliation imports the remote events and
+  settles its reservation; do not submit the same instruction again.
+- repeated `user.interrupt` events near `CORTEX_WORK_SYNC_INTERVAL_SECONDS`:
+  stop the affected client version. Normal SSE reconciliation never interrupts
+  for budget enforcement, and explicit cancellation sends one only while the
+  provider session is `running` or `rescheduling`.
 
 ## Rollback
 

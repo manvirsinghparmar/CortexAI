@@ -72,7 +72,7 @@ def load_work_config() -> WorkConfig:
         agent_id=str(os.getenv("ANTHROPIC_MANAGED_AGENT_ID", "") or "").strip() or None,
         environment_id=str(os.getenv("ANTHROPIC_MANAGED_ENVIRONMENT_ID", "") or "").strip() or None,
         billing_model=str(os.getenv("ANTHROPIC_MANAGED_BILLING_MODEL", "") or "").strip() or None,
-        default_credit_budget=_positive_int("CORTEX_WORK_DEFAULT_CREDIT_BUDGET", 100_000),
+        default_credit_budget=_positive_int("CORTEX_WORK_DEFAULT_CREDIT_BUDGET", 1_000_000),
         event_sync_interval_seconds=_positive_int("CORTEX_WORK_SYNC_INTERVAL_SECONDS", 2),
         sse_heartbeat_seconds=_positive_int("CORTEX_WORK_SSE_HEARTBEAT_SECONDS", 15),
         approval_timeout_seconds=_positive_int("CORTEX_WORK_APPROVAL_TIMEOUT_SECONDS", 86_400),

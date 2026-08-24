@@ -233,8 +233,10 @@ export function Sidebar({
   const askActive = activeView === "chat" && mode === "single";
   const compareActive = activeView === "chat" && mode === "compare";
   const workActive = activeView === "work";
-  const visibleWorkSessions = workSessions.filter((item) =>
-    (item.title || "New work").toLowerCase().includes(historySearch.trim().toLowerCase()),
+  const visibleWorkSessions = workSessions.filter(
+    (item) =>
+      item.latest_run_status !== null &&
+      (item.title || "New work").toLowerCase().includes(historySearch.trim().toLowerCase()),
   );
   const handleNew = onNew ?? startNewChat;
 

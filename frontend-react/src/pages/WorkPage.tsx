@@ -68,7 +68,7 @@ export function WorkPage() {
   const { theme, toggleTheme } = useTheme();
   const runtimeWorkEnabled = getRuntimeConfig().workEnabled !== false;
   const planWorkEnabled = subscription.entitlements?.features.work_enabled ?? false;
-  const maxPlanBudget = subscription.entitlements?.limits.max_work_credit_budget || 250_000;
+  const maxPlanBudget = subscription.entitlements?.limits.max_work_credit_budget || 1_000_000;
   const [instruction, setInstruction] = useState("");
   const [workUploadIds, setWorkUploadIds] = useState<string[]>([]);
   const [approvalBusy, setApprovalBusy] = useState(false);
@@ -151,6 +151,20 @@ export function WorkPage() {
     streamAbortRef.current = controller;
     useWorkStore.getState().setStreaming(true);
     const after = useWorkStore.getState().events.at(-1)?.sequence ?? 0;
+    const finishTerminalSync = async (terminalRun: WorkRun, afterSequence: number) => {
+      const [remainingEvents, artifacts] = await Promise.all([
+        getWorkEvents(run.id, afterSequence),
+        listWorkArtifacts(run.id),
+      ]);
+      const state = useWorkStore.getState();
+      for (const remainingEvent of remainingEvents.items) {
+        state.appendEvent(remainingEvent);
+      }
+      state.setRun(terminalRun);
+      state.setArtifacts(artifacts);
+      state.setApproval(await pendingApprovalFromEvents(remainingEvents.items));
+      await refreshSessions();
+    };
     void streamWorkEvents(
       run.id,
       after,
@@ -163,14 +177,16 @@ export function WorkPage() {
           useWorkStore.getState().setArtifacts(await listWorkArtifacts(run.id));
         }
         if (isTerminalEvent(event)) {
-          useWorkStore.getState().setRun(await getWorkRun(run.id));
-          useWorkStore.getState().setArtifacts(await listWorkArtifacts(run.id));
-          await refreshSessions();
+          await finishTerminalSync(await getWorkRun(run.id), event.sequence);
           return true;
         }
         const refreshed = await getWorkRun(run.id);
+        if (TERMINAL_STATUSES.has(refreshed.status)) {
+          await finishTerminalSync(refreshed, event.sequence);
+          return true;
+        }
         useWorkStore.getState().setRun(refreshed);
-        return TERMINAL_STATUSES.has(refreshed.status);
+        return false;
       },
       controller.signal,
     ).catch((error: unknown) => {
@@ -184,7 +200,7 @@ export function WorkPage() {
   useEffect(() => {
     const state = useWorkStore.getState();
     if (state.maxCreditBudget > maxPlanBudget) {
-      state.setMaxCreditBudget(Math.min(100_000, maxPlanBudget));
+      state.setMaxCreditBudget(Math.min(1_000_000, maxPlanBudget));
     }
   }, [maxPlanBudget]);
 
@@ -199,12 +215,14 @@ export function WorkPage() {
       navigate("/pricing");
       return;
     }
-    if (!instruction.trim() || active) return;
-    store.setError(null);
-    store.setLoading(true);
+    const state = useWorkStore.getState();
+    if (!instruction.trim() || active || state.loading) return;
+    state.setError(null);
+    state.setLoading(true);
     try {
-      let session = store.session;
-      if (!session) session = await createWorkSession(instruction.trim().slice(0, 120));
+      const session = await useWorkStore.getState().ensureSession(
+        () => createWorkSession(instruction.trim().slice(0, 120)),
+      );
       const payload = {
         instruction: instruction.trim(),
         input_file_ids: uploadTasks.filter((task) => task.state === "ready" && task.fileId).map((task) => task.fileId!),
@@ -216,7 +234,6 @@ export function WorkPage() {
       const run = store.run
         ? await sendWorkInstruction(session.id, payload, requestId)
         : await startWorkRun(session.id, payload, requestId);
-      store.setSession(session);
       store.setRun(run);
       store.replaceEvents([]);
       store.setArtifacts([]);

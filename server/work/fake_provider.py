@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import BinaryIO, Sequence
+from typing import BinaryIO, Mapping, Sequence
 from uuid import uuid4
 
 from server.work.provider import (
@@ -87,6 +87,15 @@ class FakeAgentProvider:
         events = self.sessions[session_id]["events"]
         assert isinstance(events, list)
         return list(events)
+
+    def extend_budget(
+        self,
+        session_id: str,
+        additional_credit_budget: int,
+        *,
+        current_usage: Mapping[str, object],
+    ) -> None:
+        return None
 
     def interrupt(self, session_id: str) -> None:
         state = self.sessions[session_id]

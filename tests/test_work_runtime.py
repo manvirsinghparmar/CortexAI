@@ -25,7 +25,7 @@ def _config() -> WorkConfig:
         agent_id="agent_123",
         environment_id="environment_123",
         billing_model="claude-haiku-4-5",
-        default_credit_budget=100_000,
+        default_credit_budget=1_000_000,
         event_sync_interval_seconds=1,
         sse_heartbeat_seconds=15,
         approval_timeout_seconds=3600,
@@ -81,6 +81,22 @@ def test_anthropic_idle_events_map_approval_budget_and_completion():
     assert complete.terminal_status == "completed"
 
 
+def test_anthropic_tool_confirmation_retains_replay_identity():
+    confirmation = normalize_anthropic_event(
+        {
+            "id": "confirmation-1",
+            "type": "user.tool_confirmation",
+            "tool_use_id": "tool-1",
+            "result": "allow",
+        }
+    )
+    assert confirmation.payload == {
+        "provider_type": "user.tool_confirmation",
+        "tool_use_id": "tool-1",
+        "result": "allow",
+    }
+
+
 def test_usage_delta_prevents_followup_double_charge_and_counts_runtime_web():
     baseline = {
         "input_tokens": 1_000,
@@ -103,6 +119,115 @@ def test_usage_delta_prevents_followup_double_charge_and_counts_runtime_web():
     assert usage.web_credits == 20_000
     assert usage.total_credits == usage.model_credits + 21_000
     assert usage.provider_cost_usd > 0.02
+
+
+def test_work_billing_counts_managed_agent_cache_partitions_independently():
+    usage = calculate_work_credit_usage(
+        {
+            "list_cost": {"amount": "20", "currency": "USD"},
+            "input_tokens": 30,
+            "output_tokens": 7_668,
+            "active_seconds": 184.073,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 29_115,
+                "ephemeral_1h_input_tokens": 0,
+            },
+            "cache_read_input_tokens": 244_569,
+            "server_tool_use": {
+                "web_fetch_requests": 0,
+                "web_search_requests": 0,
+            },
+        },
+        {
+            "list_cost": {"amount": "0", "currency": "USD"},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "active_seconds": 0,
+            "cache_read_input_tokens": 0,
+            "server_tool_use": {
+                "web_fetch_requests": 0,
+                "web_search_requests": 0,
+            },
+        },
+        model="claude-sonnet-5",
+    )
+
+    assert usage.prompt_tokens == 273_714
+    assert usage.cached_input_tokens == 244_569
+    assert usage.cache_write_tokens == 29_115
+    assert usage.input_credits == 243_523
+    assert usage.output_credits == 138_024
+    assert usage.model_credits == 381_547
+    assert usage.runtime_credits == 4_089
+    assert usage.component_credits == 385_636
+    assert usage.provider_floor_credits == 200_000
+    assert usage.total_credits == 385_636
+    assert usage.reported_provider_cost_usd == pytest.approx(0.20)
+    assert usage.reconstructed_provider_cost_usd == pytest.approx(0.2025301889)
+    assert usage.provider_cost_usd == pytest.approx(0.2025301889)
+
+
+def test_work_billing_uses_cache_deltas_and_provider_cost_floor_for_followups():
+    baseline = {
+        "list_cost": {"amount": "20", "currency": "USD"},
+        "input_tokens": 30,
+        "output_tokens": 7_668,
+        "active_seconds": 184.073,
+        "cache_creation": {"ephemeral_5m_input_tokens": 29_115},
+        "cache_read_input_tokens": 244_569,
+    }
+    current = {
+        "list_cost": {"amount": "21", "currency": "USD"},
+        "input_tokens": 35,
+        "output_tokens": 8_000,
+        "active_seconds": 190,
+        "cache_creation": {"ephemeral_5m_input_tokens": 30_000},
+        "cache_read_input_tokens": 250_000,
+    }
+
+    usage = calculate_work_credit_usage(current, baseline, model="claude-sonnet-5")
+
+    assert usage.prompt_tokens == 6_321
+    assert usage.cached_input_tokens == 5_431
+    assert usage.cache_write_tokens == 885
+    assert usage.output_tokens == 332
+    assert usage.active_seconds == 6
+    assert usage.component_credits == 12_728
+    assert usage.provider_floor_credits == 10_000
+    assert usage.total_credits == 12_728
+    assert usage.reported_provider_cost_usd == pytest.approx(0.01)
+    assert usage.reconstructed_provider_cost_usd == pytest.approx(0.0067620333)
+    assert usage.provider_cost_usd == pytest.approx(0.01)
+
+
+def test_work_billing_never_falls_below_reported_provider_list_cost():
+    usage = calculate_work_credit_usage(
+        {"list_cost": {"amount": "5", "currency": "USD"}},
+        {"list_cost": {"amount": "0", "currency": "USD"}},
+        model="claude-sonnet-5",
+    )
+
+    assert usage.component_credits == 0
+    assert usage.provider_floor_credits == 50_000
+    assert usage.total_credits == 50_000
+    assert usage.provider_cost_usd == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize(
+    "list_cost",
+    [
+        {"amount": "not-cents", "currency": "USD"},
+        {"amount": -1, "currency": "USD"},
+        {"amount": 1, "currency": "EUR"},
+    ],
+)
+def test_work_billing_rejects_invalid_reported_provider_list_cost(list_cost):
+    with pytest.raises(ValueError, match="Managed Agent"):
+        calculate_work_credit_usage(
+            {"list_cost": list_cost},
+            {},
+            model="claude-sonnet-5",
+        )
 
 
 def test_remote_mcp_ssrf_and_action_classification(monkeypatch):
@@ -154,6 +279,10 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_and_mcp(
         def retrieve(self, session_id, **kwargs):
             return {"id": session_id, "status": "running", "usage": {}}
 
+        def update(self, session_id, **kwargs):
+            calls["update"] = (session_id, kwargs)
+            return {"id": session_id, "status": "running", "usage": {}}
+
     client = SimpleNamespace(
         beta=SimpleNamespace(sessions=Sessions(), files=SimpleNamespace(list=lambda **_kwargs: [])),
         files=SimpleNamespace(
@@ -188,7 +317,25 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_and_mcp(
     ]
     builtins = agent["tools"][0]
     assert builtins["default_config"]["permission_policy"] == {"type": "always_ask"}
-    assert all(config["enabled"] is False for config in builtins["configs"])
+    builtin_configs = {config["name"]: config for config in builtins["configs"]}
+    for name in ("read", "glob", "grep"):
+        assert builtin_configs[name]["permission_policy"] == {"type": "always_allow"}
+    for name in ("web_search", "web_fetch"):
+        assert builtin_configs[name]["enabled"] is False
+        assert builtin_configs[name]["permission_policy"] == {"type": "always_allow"}
+    provider.list_events("session-1")
+    assert calls["list"][1]["limit"] == 1000
+    provider.extend_budget(
+        "session-1",
+        25_000,
+        current_usage={"list_cost": {"amount": "12", "currency": "USD"}},
+    )
+    updated = calls["update"]
+    assert updated[0] == "session-1"
+    assert updated[1]["budget"] == {
+        "type": "limit",
+        "max_list_cost": {"amount": "15", "currency": "USD"},
+    }
     provider.confirm_tool("session-1", "tool-1", allow=False, deny_message="No")
     sent = calls["send"]
     assert sent[1]["events"][0]["type"] == "user.tool_confirmation"

@@ -1708,7 +1708,7 @@
               { "key": "Content-Type", "value": "application/json" },
               { "key": "Idempotency-Key", "value": "{{$guid}}" }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Analyze the attached source and prepare a concise report.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 25000\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Analyze the attached source and prepare a concise report.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 250000\n}" },
             "url": "{{base_url}}/v1/work/sessions/{{work_session_id}}/runs"
           },
           "event": [{
@@ -1759,7 +1759,7 @@
               { "key": "Content-Type", "value": "application/json" },
               { "key": "Idempotency-Key", "value": "{{$guid}}" }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Refine the outcome into an executive summary.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 25000\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Refine the outcome into an executive summary.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 250000\n}" },
             "url": "{{base_url}}/v1/work/sessions/{{work_session_id}}/instructions"
           }
         },

@@ -81,6 +81,7 @@ psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
 psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
+psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260829_add_work_web_output_and_model_identity.sql
 ```
 
 The `20260727` script alters `llm_requests`, so the migration connection must
@@ -95,6 +96,11 @@ must be applied before `CORTEX_WORK_ENABLED=true`; Work schema preflight fails
 startup when the flag is enabled and a required table/column is absent. Rollback
 is the feature flag and prior application build. Retain the additive tables for
 billing/approval audit and provider-session recovery.
+
+`20260829_add_work_web_output_and_model_identity.sql` adds the server-owned Work
+output ceiling and one-time enforcement markers, actual provider/Agent/billing
+identity, and the `output_limit_reached` status. Apply it after the base Work
+migration and before deploying an API that enables Work schema preflight.
 
 ### Direct-S3 attachment lifecycle migration
 

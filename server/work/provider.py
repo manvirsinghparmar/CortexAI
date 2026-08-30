@@ -24,6 +24,12 @@ class ProviderSession:
     id: str
     status: str
     usage: Mapping[str, object] = field(default_factory=dict)
+    model_id: str | None = None
+    agent_id: str | None = None
+    agent_version: int | None = None
+    effort: str | None = None
+    speed: str | None = None
+    additional_model_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class ProviderArtifact:
     filename: str
     mime_type: str | None
     size_bytes: int | None
+    downloadable: bool = True
 
 
 class AgentProvider(Protocol):
@@ -63,6 +70,14 @@ class AgentProvider(Protocol):
     def get_session(self, session_id: str) -> ProviderSession: ...
 
     def list_events(self, session_id: str) -> list[ProviderEvent]: ...
+
+    def update_session_tools(
+        self,
+        session_id: str,
+        *,
+        mcp_servers: Sequence[ProviderMcpServer],
+        web_enabled: bool,
+    ) -> None: ...
 
     def extend_budget(
         self,

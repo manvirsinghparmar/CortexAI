@@ -8,7 +8,6 @@ import {
   createToolConnection,
   createWorkSession,
   decideWorkApproval,
-  getLatestWorkRun,
   getWorkApproval,
   getWorkEvents,
   getWorkRun,
@@ -16,6 +15,7 @@ import {
   listToolCatalog,
   listToolConnections,
   listWorkArtifacts,
+  listWorkRuns,
   listWorkSessions,
   sendWorkInstruction,
   startWorkRun,
@@ -37,18 +37,18 @@ import { useAuth } from "../hooks/useAuth";
 import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { useAttachmentUploadStore } from "../store/attachmentUploadStore";
-import { useWorkStore } from "../store/workStore";
+import { useWorkStore, type WorkRunHistoryItem } from "../store/workStore";
 import {
   beginAttachmentUploads,
   removeAttachmentUpload,
   retryAttachmentUpload,
 } from "../uploads/attachmentUploadQueue";
 import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
-import type { WorkEvent, WorkRun, WorkSession } from "../types";
+import type { WorkArtifact, WorkEvent, WorkRun, WorkSession } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
 import styles from "../components/work/Work.module.css";
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "budget_exhausted"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "budget_exhausted", "output_limit_reached"]);
 const EXAMPLES = [
   "Analyze these files and create a report",
   "Research this topic and prepare a summary",
@@ -100,16 +100,20 @@ export function WorkPage() {
     useWorkStore.getState().setConnections(connections);
   }, [planWorkEnabled, runtimeWorkEnabled, workspaceReady]);
 
-  const hydrateRun = useCallback(async (run: WorkRun) => {
+  const fetchRunHistoryItem = useCallback(async (run: WorkRun): Promise<WorkRunHistoryItem> => {
     const [eventResponse, artifacts] = await Promise.all([
       getWorkEvents(run.id),
       listWorkArtifacts(run.id),
     ]);
+    return { run, events: eventResponse.items, artifacts };
+  }, []);
+
+  const activateHistoryItem = useCallback(async (item: WorkRunHistoryItem) => {
     const state = useWorkStore.getState();
-    state.setRun(run);
-    state.replaceEvents(eventResponse.items);
-    state.setArtifacts(artifacts);
-    state.setApproval(await pendingApprovalFromEvents(eventResponse.items));
+    state.setRun(item.run);
+    state.replaceEvents(item.events);
+    state.setArtifacts(item.artifacts);
+    state.setApproval(await pendingApprovalFromEvents(item.events));
   }, []);
 
   useEffect(() => {
@@ -126,14 +130,19 @@ export function WorkPage() {
         const session = await getWorkSession(workSessionId);
         if (cancelled) return;
         useWorkStore.getState().setSession(session);
-        try {
-          const run = await getLatestWorkRun(workSessionId);
-          if (!cancelled) await hydrateRun(run);
-        } catch (error) {
-          if (!(error instanceof ApiClientError && error.status === 404)) throw error;
+        const runs = await listWorkRuns(workSessionId);
+        if (cancelled) return;
+        const history = await Promise.all(runs.map(fetchRunHistoryItem));
+        if (cancelled) return;
+        useWorkStore.getState().setHistory(history);
+        const latest = history.at(-1);
+        if (latest) {
+          await activateHistoryItem(latest);
+        } else {
           useWorkStore.getState().setRun(null);
           useWorkStore.getState().replaceEvents([]);
           useWorkStore.getState().setArtifacts([]);
+          useWorkStore.getState().setApproval(null);
         }
       })
       .catch((error: unknown) => {
@@ -143,7 +152,7 @@ export function WorkPage() {
         if (!cancelled) useWorkStore.getState().setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [hydrateRun, refreshSessions, refreshTools, runtimeWorkEnabled, workSessionId, workspaceReady]);
+  }, [activateHistoryItem, fetchRunHistoryItem, refreshSessions, refreshTools, runtimeWorkEnabled, workSessionId, workspaceReady]);
 
   useEffect(() => {
     const run = useWorkStore.getState().run;
@@ -165,6 +174,12 @@ export function WorkPage() {
       state.setRun(terminalRun);
       state.setArtifacts(artifacts);
       state.setApproval(await pendingApprovalFromEvents(remainingEvents.items));
+      const finalState = useWorkStore.getState();
+      finalState.upsertHistoryItem({
+        run: terminalRun,
+        events: finalState.events,
+        artifacts,
+      });
       await refreshSessions();
     };
     void streamWorkEvents(
@@ -207,10 +222,7 @@ export function WorkPage() {
   }, [maxPlanBudget]);
 
   const active = Boolean(store.run && !TERMINAL_STATUSES.has(store.run.status));
-  const resultText = useMemo(
-    () => [...store.events].reverse().find((event) => event.type === "agent_message")?.display_message,
-    [store.events],
-  );
+  const resultText = useMemo(() => latestAgentMessage(store.events), [store.events]);
 
   const handleStart = async () => {
     if (!planWorkEnabled) {
@@ -228,21 +240,30 @@ export function WorkPage() {
       const session = await useWorkStore.getState().ensureSession(
         () => createWorkSession(submittedInstruction.slice(0, 120)),
       );
+      const submitState = useWorkStore.getState();
       const payload = {
         instruction: submittedInstruction,
         input_file_ids: uploadTasks.filter((task) => task.state === "ready" && task.fileId).map((task) => task.fileId!),
-        enabled_connection_ids: store.enabledConnectionIds,
-        web_enabled: store.webEnabled,
-        max_credit_budget: store.maxCreditBudget,
+        enabled_connection_ids: submitState.enabledConnectionIds,
+        web_mode: submitState.webMode,
+        max_credit_budget: submitState.maxCreditBudget,
       };
       const requestId = makeRequestId("work-ui");
-      const run = store.run
+      if (submitState.run) {
+        submitState.upsertHistoryItem({
+          run: submitState.run,
+          events: submitState.events,
+          artifacts: submitState.artifacts,
+        });
+      }
+      const run = submitState.run
         ? await sendWorkInstruction(session.id, payload, requestId)
         : await startWorkRun(session.id, payload, requestId);
-      store.setRun(run);
-      store.replaceEvents([]);
-      store.setArtifacts([]);
-      store.setApproval(null);
+      submitState.setRun(run);
+      submitState.replaceEvents([]);
+      submitState.setArtifacts([]);
+      submitState.setApproval(null);
+      submitState.upsertHistoryItem({ run, events: [], artifacts: [] });
       setInstruction("");
       for (const id of workUploadIds) useAttachmentUploadStore.getState().removeTask(id);
       setWorkUploadIds([]);
@@ -260,7 +281,13 @@ export function WorkPage() {
     if (!store.run) return;
     store.setLoading(true);
     try {
-      store.setRun(await cancelWorkRun(store.run.id));
+      const cancelledRun = await cancelWorkRun(store.run.id);
+      store.setRun(cancelledRun);
+      store.upsertHistoryItem({
+        run: cancelledRun,
+        events: useWorkStore.getState().events,
+        artifacts: useWorkStore.getState().artifacts,
+      });
       await refreshSessions();
     } catch (error) {
       store.setError(errorMessage(error));
@@ -391,19 +418,20 @@ export function WorkPage() {
           <WorkSessionView
             session={store.session}
             run={store.run}
+            history={store.history}
             resultText={resultText}
             onCancel={() => void handleCancel()}
             approval={store.approval ? <WorkApproval approval={store.approval} busy={approvalBusy} onApprove={(remember) => void handleApproval("approve", remember)} onDeny={() => void handleApproval("deny")} /> : null}
-            artifacts={<WorkArtifacts runId={store.run.id} artifacts={store.artifacts} />}
+            artifacts={store.artifacts}
             rail={<WorkRail run={store.run} events={store.events} connections={store.connections} enabledConnectionIds={store.enabledConnectionIds} />}
-            composer={<WorkComposer value={instruction} onChange={setInstruction} onSubmit={() => void handleStart()} onFiles={(files) => void handleFiles(files)} onRemoveFile={(id) => void removeAttachmentUpload(id).then(() => setWorkUploadIds((items) => items.filter((item) => item !== id)))} onRetryFile={(id) => void retryAttachmentUpload(id)} tasks={uploadTasks} connections={store.connections} catalog={store.toolCatalog} enabledConnectionIds={store.enabledConnectionIds} onToggleConnection={store.toggleConnection} onConnect={(key) => void handleConnect(key)} onAddMcp={handleAddMcp} webEnabled={store.webEnabled} onWebChange={store.setWebEnabled} maxCreditBudget={store.maxCreditBudget} maxPlanBudget={maxPlanBudget} onBudgetChange={store.setMaxCreditBudget} busy={store.loading} disabled={active} followup />}
+            composer={<WorkComposer value={instruction} onChange={setInstruction} onSubmit={() => void handleStart()} onFiles={(files) => void handleFiles(files)} onRemoveFile={(id) => void removeAttachmentUpload(id).then(() => setWorkUploadIds((items) => items.filter((item) => item !== id)))} onRetryFile={(id) => void retryAttachmentUpload(id)} tasks={uploadTasks} connections={store.connections} catalog={store.toolCatalog} enabledConnectionIds={store.enabledConnectionIds} onToggleConnection={store.toggleConnection} onConnect={(key) => void handleConnect(key)} onAddMcp={handleAddMcp} webMode={store.webMode} onWebModeChange={store.setWebMode} maxCreditBudget={store.maxCreditBudget} maxPlanBudget={maxPlanBudget} onBudgetChange={store.setMaxCreditBudget} busy={store.loading} disabled={active} followup />}
           />
         ) : (
           <WorkLanding
             instruction={instruction}
             onInstruction={setInstruction}
             onExample={setInstruction}
-            composer={<WorkComposer value={instruction} onChange={setInstruction} onSubmit={() => void handleStart()} onFiles={(files) => void handleFiles(files)} onRemoveFile={(id) => void removeAttachmentUpload(id).then(() => setWorkUploadIds((items) => items.filter((item) => item !== id)))} onRetryFile={(id) => void retryAttachmentUpload(id)} tasks={uploadTasks} connections={store.connections} catalog={store.toolCatalog} enabledConnectionIds={store.enabledConnectionIds} onToggleConnection={store.toggleConnection} onConnect={(key) => void handleConnect(key)} onAddMcp={handleAddMcp} webEnabled={store.webEnabled} onWebChange={store.setWebEnabled} maxCreditBudget={store.maxCreditBudget} maxPlanBudget={maxPlanBudget} onBudgetChange={store.setMaxCreditBudget} busy={store.loading} />}
+            composer={<WorkComposer value={instruction} onChange={setInstruction} onSubmit={() => void handleStart()} onFiles={(files) => void handleFiles(files)} onRemoveFile={(id) => void removeAttachmentUpload(id).then(() => setWorkUploadIds((items) => items.filter((item) => item !== id)))} onRetryFile={(id) => void retryAttachmentUpload(id)} tasks={uploadTasks} connections={store.connections} catalog={store.toolCatalog} enabledConnectionIds={store.enabledConnectionIds} onToggleConnection={store.toggleConnection} onConnect={(key) => void handleConnect(key)} onAddMcp={handleAddMcp} webMode={store.webMode} onWebModeChange={store.setWebMode} maxCreditBudget={store.maxCreditBudget} maxPlanBudget={maxPlanBudget} onBudgetChange={store.setMaxCreditBudget} busy={store.loading} />}
           />
         )}
         {store.error && <div className={styles.errorBanner} role="alert"><span>{store.error}</span><button type="button" onClick={() => store.setError(null)}>Dismiss</button></div>}
@@ -440,18 +468,28 @@ function WorkStartingView({ instruction }: { instruction: string }) {
   );
 }
 
-function WorkSessionView({ session, run, resultText, onCancel, approval, artifacts, rail, composer }: { session: WorkSession | null; run: WorkRun; resultText?: string | null; onCancel: () => void; approval: React.ReactNode; artifacts: React.ReactNode; rail: React.ReactNode; composer: React.ReactNode }) {
+function WorkSessionView({ session, run, history, resultText, onCancel, approval, artifacts, rail, composer }: { session: WorkSession | null; run: WorkRun; history: WorkRunHistoryItem[]; resultText?: string | null; onCancel: () => void; approval: React.ReactNode; artifacts: WorkArtifact[]; rail: React.ReactNode; composer: React.ReactNode }) {
   const terminal = TERMINAL_STATUSES.has(run.status);
-  return <div className={styles.workArea}><header className={styles.taskHeader}><div><h1 title={session?.title || run.instruction}>{session?.title || run.instruction}</h1><p>{run.started_at ? `Started ${formatRelative(run.started_at)}` : "Preparing"} · {run.actual_credits.toLocaleString()} credits</p></div><div className={styles.taskHeaderActions}><WorkStatusPill status={run.status} />{!terminal && <button type="button" className={styles.stopButton} onClick={onCancel}><CortexIcon name="stop" size={15} /> Stop</button>}</div></header><div className={styles.workColumns}><section className={styles.stream}><div className={styles.streamInner}>{!terminal && <p className={styles.narration}>{narration(run.status)}</p>}{approval}{terminal && <ResultHeader run={run} resultText={resultText} />}{artifacts}<div className={styles.mobileRail}>{rail}</div>{!terminal && <button type="button" className={styles.mobileStop} onClick={onCancel}><CortexIcon name="stop" size={15} /> Stop work</button>}</div>{terminal && <div className={styles.composerDock}>{composer}</div>}</section><div className={styles.desktopRail}>{rail}</div></div></div>;
+  const previous = history.filter((item) => item.run.id !== run.id);
+  return <div className={styles.workArea}><header className={styles.taskHeader}><div><h1 title={session?.title || run.instruction}>{session?.title || run.instruction}</h1><p>{run.started_at ? `Started ${formatRelative(run.started_at)}` : "Preparing"} · {run.actual_credits.toLocaleString()} credits</p></div><div className={styles.taskHeaderActions}><WorkStatusPill status={run.status} />{!terminal && <button type="button" className={styles.stopButton} onClick={onCancel}><CortexIcon name="stop" size={15} /> Stop</button>}</div></header><div className={styles.workColumns}><section className={styles.stream}><div className={styles.streamInner}><div className={styles.transcript} aria-label="Work conversation">{previous.map((item) => <WorkTurn key={item.run.id} run={item.run} events={item.events} artifacts={item.artifacts} />)}<WorkTurn run={run} events={[]} artifacts={artifacts} resultText={resultText} current approval={approval} rail={rail} /></div>{!terminal && <button type="button" className={styles.mobileStop} onClick={onCancel}><CortexIcon name="stop" size={15} /> Stop work</button>}</div>{terminal && <div className={styles.composerDock}>{composer}</div>}</section><div className={styles.desktopRail}>{rail}</div></div></div>;
+}
+
+function WorkTurn({ run, events, artifacts, resultText, current = false, approval = null, rail = null }: { run: WorkRun; events: WorkEvent[]; artifacts: WorkArtifact[]; resultText?: string | null; current?: boolean; approval?: React.ReactNode; rail?: React.ReactNode }) {
+  const terminal = TERMINAL_STATUSES.has(run.status);
+  const visibleResult = resultText ?? latestAgentMessage(events);
+  return <article className={styles.workTurn} data-work-run-id={run.id} data-current={current || undefined}><div className={styles.turnPrompt}><span>You asked</span><p>{run.instruction}</p></div>{current && !terminal && <p className={styles.narration}>{narration(run.status)}</p>}{current && approval}{terminal && <ResultHeader run={run} resultText={visibleResult} />}<WorkArtifacts runId={run.id} artifacts={artifacts} />{current && <div className={styles.mobileRail}>{rail}</div>}</article>;
 }
 
 function ResultHeader({ run, resultText }: { run: WorkRun; resultText?: string | null }) {
   const completed = run.status === "completed";
-  const label = completed ? "Work completed" : run.status === "budget_exhausted" ? "Budget reached" : run.status === "cancelled" ? "Work stopped" : "Work failed";
-  return <article className={styles.result}><div className={styles.resultMeta}><span className={completed ? styles.resultMarkSuccess : styles.resultMarkWarn}><CortexIcon name={completed ? "check" : "alert"} size={15} /></span><strong>{label}</strong><span>·</span><span>{run.actual_credits.toLocaleString()} credits</span></div><h2>{run.instruction.slice(0, 120)}</h2>{resultText ? <div className={styles.resultBody}><ReactMarkdown remarkPlugins={[remarkGfm]}>{resultText}</ReactMarkdown></div> : <p>{run.error_message || (completed ? "Cortex completed the requested work." : "The work ended before a final written outcome was produced.")}</p>}</article>;
+  const label = completed ? "Work completed" : run.status === "budget_exhausted" ? "Budget reached" : run.status === "output_limit_reached" ? "Output limit reached" : run.status === "cancelled" ? "Work stopped" : "Work failed";
+  return <div className={styles.result}><div className={styles.resultMeta}><span className={completed ? styles.resultMarkSuccess : styles.resultMarkWarn}><CortexIcon name={completed ? "check" : "alert"} size={15} /></span><strong>{label}</strong><span>·</span><span>{run.actual_credits.toLocaleString()} credits</span></div>{resultText ? <div className={styles.resultBody}><ReactMarkdown remarkPlugins={[remarkGfm]}>{resultText}</ReactMarkdown></div> : <p>{run.error_message || (completed ? "Cortex completed the requested work." : "The work ended before a final written outcome was produced.")}</p>}</div>;
 }
 
 function CenteredMessage({ children }: { children: React.ReactNode }) { return <div className={styles.centeredMessage}>{children}</div>; }
+function latestAgentMessage(events: WorkEvent[]): string | null {
+  return [...events].reverse().find((event) => event.type === "agent_message")?.display_message ?? null;
+}
 function narration(status: string): string { if (status === "waiting_for_approval") return "I need your approval before I can continue with the next action."; if (status === "created" || status === "planning") return "Here’s how I’ll approach this. I’ll start on the first step now — you can change the goal any time."; return "I’m carrying out the plan and recording each verifiable action as it completes."; }
 async function pendingApprovalFromEvents(events: WorkEvent[]) {
   const ids = [...events]
@@ -464,6 +502,6 @@ async function pendingApprovalFromEvents(events: WorkEvent[]) {
   }
   return null;
 }
-function isTerminalEvent(event: WorkEvent): boolean { return ["run_completed", "run_failed", "run_cancelled", "budget_exhausted"].includes(event.type); }
+function isTerminalEvent(event: WorkEvent): boolean { return ["run_completed", "run_failed", "run_cancelled", "budget_exhausted", "output_limit_reached"].includes(event.type); }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "Cortex Work could not complete that request."; }
 function formatRelative(value: string): string { const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return "moments ago"; const minutes = Math.floor(seconds / 60); return `${minutes} min ago`; }

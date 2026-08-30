@@ -156,6 +156,7 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
 
 - `POST /v1/work/sessions` and `GET /v1/work/sessions`
 - `GET /v1/work/sessions/{work_session_id}`
+- `GET /v1/work/sessions/{work_session_id}/runs`
 - `GET /v1/work/sessions/{work_session_id}/runs/latest`
 - `POST /v1/work/sessions/{work_session_id}/runs`
 - `POST /v1/work/sessions/{work_session_id}/instructions`
@@ -199,6 +200,27 @@ before stopping the stream so the final written outcome appears without a page
 refresh. Provider thinking and raw secret values are never included in the
 public event payload.
 
+`GET /v1/work/sessions/{work_session_id}/runs` returns every owned run in
+chronological order. React hydrates each run's durable events and artifacts and
+renders a session transcript, so sending an instruction appends a turn without
+removing earlier prompts, outcomes, or deliverables. Web/MCP selection changes
+are applied to the existing provider session to retain context. When immutable
+provider vault resources require a replacement session, the backend supplies a
+bounded PostgreSQL-backed transcript of prior visible turns with the new
+instruction.
+
+Artifact listing for a terminal run performs a best-effort idempotent import
+retry before returning Cortex-owned files. Import uses the provider session ID
+recorded on that run, skips input/non-downloadable files, and isolates each
+provider output so one failed download or storage write does not suppress the
+other deliverables.
+
+The run request accepts `web_mode: "auto" | "on" | "off"` and defaults to
+`auto`. The backend resolves `auto` from the instruction's current-information
+intent, persists both requested and effective Web state, and remains the
+authority even if browser state changes while a session is being created.
+Legacy `web_enabled` booleans remain accepted as explicit On/Off requests.
+
 The master feature flag is `CORTEX_WORK_ENABLED`. A disabled environment returns
 404 for Work operations and omits Work navigation through `/runtime-config.js`.
 The full provider, MCP, OAuth, AWS, rollout, rollback, and troubleshooting
@@ -213,12 +235,23 @@ budget update resumes it without sending a concurrent follow-up message.
 Built-in file/search reads are automatic, while bash/write/edit and sensitive
 or mutating connector actions retain approval enforcement.
 
+Separately, each run defaults to a 40,000 output-token ceiling. The always-on
+lease-based reconciler requests concise finalization at 32,000 and interrupts
+at 40,000, recording `output_limit_reached` after the provider stops. This
+worker also reconciles active runs when no browser SSE request is connected.
+Provider usage is sampled, so the recorded total may include a bounded amount
+produced between snapshots.
+
 Work billing prices normal input, cache-read input, cache-write input, output,
 active runtime, and web searches from their independent cumulative deltas. It
 also converts the provider's cumulative USD `list_cost` delta to AI credits and
 uses it as a minimum settlement floor when the reconstructed component charge
 is lower. Non-USD or malformed provider cost snapshots fail reconciliation so
 the reservation remains open for investigation rather than being underbilled.
+The pricing model is resolved from the retrieved Managed Agent session's Agent
+snapshot and persisted with provider model and Agent identity. There is no
+runtime `ANTHROPIC_MANAGED_BILLING_MODEL` fallback; missing, unknown, or
+multi-model identity fails closed before the task is sent or settled.
 
 - `GET /health`
 - `GET /health/runtime`
@@ -791,6 +824,7 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260829_add_work_web_output_and_model_identity.sql
 ```
 
 The first Cortex Analysis migration adds Compare response revision metadata and

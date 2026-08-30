@@ -7,11 +7,19 @@ import type {
   WorkEvent,
   WorkRun,
   WorkSession,
+  WorkWebMode,
 } from "../types";
+
+export interface WorkRunHistoryItem {
+  run: WorkRun;
+  events: WorkEvent[];
+  artifacts: WorkArtifact[];
+}
 
 interface WorkStoreState {
   sessions: WorkSession[];
   session: WorkSession | null;
+  history: WorkRunHistoryItem[];
   run: WorkRun | null;
   events: WorkEvent[];
   artifacts: WorkArtifact[];
@@ -19,13 +27,15 @@ interface WorkStoreState {
   toolCatalog: ToolCatalogItem[];
   connections: ToolConnection[];
   enabledConnectionIds: string[];
-  webEnabled: boolean;
+  webMode: WorkWebMode;
   maxCreditBudget: number;
   loading: boolean;
   streaming: boolean;
   error: string | null;
   setSessions: (sessions: WorkSession[]) => void;
   setSession: (session: WorkSession | null) => void;
+  setHistory: (items: WorkRunHistoryItem[]) => void;
+  upsertHistoryItem: (item: WorkRunHistoryItem) => void;
   ensureSession: (createSession: () => Promise<WorkSession>) => Promise<WorkSession>;
   setRun: (run: WorkRun | null) => void;
   replaceEvents: (events: WorkEvent[]) => void;
@@ -35,7 +45,7 @@ interface WorkStoreState {
   setToolCatalog: (items: ToolCatalogItem[]) => void;
   setConnections: (items: ToolConnection[]) => void;
   toggleConnection: (id: string) => void;
-  setWebEnabled: (enabled: boolean) => void;
+  setWebMode: (mode: WorkWebMode) => void;
   setMaxCreditBudget: (value: number) => void;
   setLoading: (loading: boolean) => void;
   setStreaming: (streaming: boolean) => void;
@@ -46,6 +56,7 @@ interface WorkStoreState {
 export const useWorkStore = create<WorkStoreState>((set, get) => ({
   sessions: [],
   session: null,
+  history: [],
   run: null,
   events: [],
   artifacts: [],
@@ -53,13 +64,21 @@ export const useWorkStore = create<WorkStoreState>((set, get) => ({
   toolCatalog: [],
   connections: [],
   enabledConnectionIds: [],
-  webEnabled: false,
+  webMode: "auto",
   maxCreditBudget: 1_000_000,
   loading: false,
   streaming: false,
   error: null,
   setSessions: (sessions) => set({ sessions }),
   setSession: (session) => set({ session }),
+  setHistory: (history) => set({ history: sortHistory(history) }),
+  upsertHistoryItem: (item) =>
+    set((state) => ({
+      history: sortHistory([
+        ...state.history.filter((existing) => existing.run.id !== item.run.id),
+        item,
+      ]),
+    })),
   ensureSession: async (createSession) => {
     const existing = get().session;
     if (existing) return existing;
@@ -81,7 +100,7 @@ export const useWorkStore = create<WorkStoreState>((set, get) => ({
         ? state.enabledConnectionIds.filter((value) => value !== id)
         : [...state.enabledConnectionIds, id],
     })),
-  setWebEnabled: (webEnabled) => set({ webEnabled }),
+  setWebMode: (webMode) => set({ webMode }),
   setMaxCreditBudget: (maxCreditBudget) => set({ maxCreditBudget }),
   setLoading: (loading) => set({ loading }),
   setStreaming: (streaming) => set({ streaming }),
@@ -89,11 +108,13 @@ export const useWorkStore = create<WorkStoreState>((set, get) => ({
   resetWorkspace: () =>
     set({
       session: null,
+      history: [],
       run: null,
       events: [],
       artifacts: [],
       approval: null,
       enabledConnectionIds: [],
+      webMode: "auto",
       streaming: false,
       error: null,
     }),
@@ -102,5 +123,12 @@ export const useWorkStore = create<WorkStoreState>((set, get) => ({
 function dedupeEvents(events: WorkEvent[]): WorkEvent[] {
   return [...new Map(events.map((event) => [event.sequence, event])).values()].sort(
     (left, right) => left.sequence - right.sequence,
+  );
+}
+
+function sortHistory(items: WorkRunHistoryItem[]): WorkRunHistoryItem[] {
+  return [...items].sort(
+    (left, right) =>
+      new Date(left.run.created_at).getTime() - new Date(right.run.created_at).getTime(),
   );
 }

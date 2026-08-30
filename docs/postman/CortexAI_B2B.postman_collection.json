@@ -1667,7 +1667,7 @@
     },
     {
       "name": "CortexAI Work and Tools",
-      "description": "Requires signed-session/Cognito identity, CORTEX_WORK_ENABLED=true, the 20260820 migration, and a Plus/Pro entitlement. Live runs additionally require configured Managed Agent resources.",
+      "description": "Requires signed-session/Cognito identity, CORTEX_WORK_ENABLED=true, the 20260820 migration, and a Plus/Pro entitlement. Live runs additionally require configured Managed Agent resources. Work session history is chronological and keeps earlier prompts, outcomes, and deliverables visible after follow-up instructions.",
       "item": [
         {
           "name": "POST /v1/work/sessions",
@@ -1701,6 +1701,25 @@
           }
         },
         {
+          "name": "GET /v1/work/sessions/{id}/runs",
+          "request": {
+            "method": "GET",
+            "description": "Returns every owned run in chronological order so a client can rebuild the complete Work transcript, including earlier outcomes and deliverables.",
+            "header": [{ "key": "Authorization", "value": "Bearer {{bearer_token}}" }],
+            "url": "{{base_url}}/v1/work/sessions/{{work_session_id}}/runs"
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "pm.test('run history is chronological', function () { pm.expect(pm.response.code).to.eql(200); const rows = pm.response.json(); for (let i = 1; i < rows.length; i += 1) { pm.expect(new Date(rows[i - 1].created_at).getTime()).to.be.at.most(new Date(rows[i].created_at).getTime()); } });",
+                "if (pm.response.code === 200 && pm.response.json().length) { pm.collectionVariables.set('work_run_id', pm.response.json()[pm.response.json().length - 1].id); }"
+              ]
+            }
+          }]
+        },
+        {
           "name": "POST /v1/work/sessions/{id}/runs",
           "request": {
             "method": "POST",
@@ -1709,7 +1728,7 @@
               { "key": "Content-Type", "value": "application/json" },
               { "key": "Idempotency-Key", "value": "{{$guid}}" }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Analyze the attached source and prepare a concise report.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 250000\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Analyze the attached source and prepare a concise report.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_mode\": \"auto\",\n  \"max_credit_budget\": 250000\n}" },
             "url": "{{base_url}}/v1/work/sessions/{{work_session_id}}/runs"
           },
           "event": [{
@@ -1760,7 +1779,7 @@
               { "key": "Content-Type", "value": "application/json" },
               { "key": "Idempotency-Key", "value": "{{$guid}}" }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Refine the outcome into an executive summary.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_enabled\": false,\n  \"max_credit_budget\": 250000\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"instruction\": \"Refine the outcome into an executive summary.\",\n  \"input_file_ids\": [],\n  \"enabled_connection_ids\": [],\n  \"web_mode\": \"auto\",\n  \"max_credit_budget\": 250000\n}" },
             "url": "{{base_url}}/v1/work/sessions/{{work_session_id}}/instructions"
           }
         },
@@ -1776,6 +1795,7 @@
           "name": "GET /v1/work/runs/{id}/artifacts",
           "request": {
             "method": "GET",
+            "description": "Returns Cortex-owned deliverables. For terminal runs, this request first retries any missing provider outputs idempotently from the provider session recorded on the originating run; one failed file does not suppress other valid deliverables.",
             "header": [{ "key": "Authorization", "value": "Bearer {{bearer_token}}" }],
             "url": "{{base_url}}/v1/work/runs/{{work_run_id}}/artifacts"
           },

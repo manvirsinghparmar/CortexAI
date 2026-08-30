@@ -8,7 +8,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { AttachmentUploadTask } from "../../store/attachmentUploadStore";
-import type { ToolCatalogItem, ToolConnection } from "../../types";
+import type { ToolCatalogItem, ToolConnection, WorkWebMode } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./Work.module.css";
 
@@ -31,8 +31,8 @@ interface WorkComposerProps {
   onToggleConnection: (id: string) => void;
   onConnect: (connectorKey: string) => void;
   onAddMcp: (name: string, url: string) => Promise<void>;
-  webEnabled: boolean;
-  onWebChange: (enabled: boolean) => void;
+  webMode: WorkWebMode;
+  onWebModeChange: (mode: WorkWebMode) => void;
   maxCreditBudget: number;
   maxPlanBudget: number;
   onBudgetChange: (value: number) => void;
@@ -55,8 +55,8 @@ export function WorkComposer({
   onToggleConnection,
   onConnect,
   onAddMcp,
-  webEnabled,
-  onWebChange,
+  webMode,
+  onWebModeChange,
   maxCreditBudget,
   maxPlanBudget,
   onBudgetChange,
@@ -77,6 +77,8 @@ export function WorkComposer({
   const ready = tasks.every((task) => task.state === "ready" || task.state === "cancelled");
   const canSubmit = Boolean(value.trim()) && ready && !busy && !disabled;
   const connectedCount = enabledConnectionIds.length;
+  const currentInformationPrompt = looksLikeCurrentInformation(value);
+  const webLabel = webMode === "auto" ? "Auto" : webMode === "on" ? "On" : "Off";
 
   const updateToolsPopoverPosition = useCallback(() => {
     const button = toolsButtonRef.current;
@@ -194,8 +196,8 @@ export function WorkComposer({
           <button type="button" className={styles.workChip} onClick={() => inputRef.current?.click()} disabled={disabled}>
             <CortexIcon name="attach" size={15} /> Files {tasks.length > 0 && <b>{tasks.length}</b>}
           </button>
-          <button type="button" className={`${styles.workChip} ${webEnabled ? styles.workChipActive : ""}`} onClick={() => onWebChange(!webEnabled)} disabled={disabled} aria-pressed={webEnabled}>
-            <CortexIcon name="web" size={15} /> Web
+          <button type="button" className={`${styles.workChip} ${webMode !== "off" ? styles.workChipActive : ""}`} onClick={() => onWebModeChange(nextWebMode(webMode))} disabled={disabled} aria-label={`Web access: ${webLabel}. Activate to change mode.`}>
+            <CortexIcon name="web" size={15} /> Web · {webLabel}{webMode === "on" && " ✓"}
           </button>
           <div className={styles.popoverAnchor}>
             <button ref={toolsButtonRef} type="button" className={`${styles.workChip} ${connectedCount ? styles.workChipActive : ""}`} onClick={() => { setToolsOpen((open) => !open); setSettingsOpen(false); }} aria-haspopup="dialog" aria-expanded={toolsOpen} disabled={disabled}>
@@ -259,8 +261,23 @@ export function WorkComposer({
           </button>
         </div>
       </div>
+      {webMode === "off" && currentInformationPrompt && (
+        <p className={styles.webWarning} role="status">
+          This request appears to need current information, but Web is explicitly off.
+        </p>
+      )}
     </div>
   );
+}
+
+function nextWebMode(mode: WorkWebMode): WorkWebMode {
+  if (mode === "auto") return "on";
+  if (mode === "on") return "off";
+  return "auto";
+}
+
+function looksLikeCurrentInformation(value: string): boolean {
+  return /\b(latest|recent|today|current|up[ -]to[ -]date|this (?:week|month|year)|opening hours?|business hours?|ticket prices?|live (?:price|availability|status|schedule)|weather(?: forecast)?|source links?|verify (?:online|on the web|with sources))\b/i.test(value);
 }
 
 function formatBudget(value: number): string {

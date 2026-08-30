@@ -34,8 +34,11 @@ class WorkConfig:
     provider: str
     agent_id: str | None
     environment_id: str | None
-    billing_model: str | None
     default_credit_budget: int
+    default_output_token_limit: int
+    output_finalize_token_threshold: int
+    reconciler_enabled: bool
+    reconciler_interval_seconds: int
     event_sync_interval_seconds: int
     sse_heartbeat_seconds: int
     approval_timeout_seconds: int
@@ -52,15 +55,13 @@ class WorkConfig:
             missing.append("ANTHROPIC_MANAGED_ENVIRONMENT_ID")
         if not os.getenv("ANTHROPIC_API_KEY"):
             missing.append("ANTHROPIC_API_KEY")
-        if not self.billing_model:
-            missing.append("ANTHROPIC_MANAGED_BILLING_MODEL")
         if missing:
             raise ValueError("Cortex Work provider configuration is missing: " + ", ".join(missing))
 
 
 @lru_cache(maxsize=1)
 def load_work_config() -> WorkConfig:
-    return WorkConfig(
+    config = WorkConfig(
         enabled=_bool("CORTEX_WORK_ENABLED"),
         mcp_enabled=_bool("CORTEX_WORK_MCP_ENABLED"),
         action_tools_enabled=_bool("CORTEX_WORK_ACTION_TOOLS_ENABLED"),
@@ -71,9 +72,18 @@ def load_work_config() -> WorkConfig:
         .lower(),
         agent_id=str(os.getenv("ANTHROPIC_MANAGED_AGENT_ID", "") or "").strip() or None,
         environment_id=str(os.getenv("ANTHROPIC_MANAGED_ENVIRONMENT_ID", "") or "").strip() or None,
-        billing_model=str(os.getenv("ANTHROPIC_MANAGED_BILLING_MODEL", "") or "").strip() or None,
         default_credit_budget=_positive_int("CORTEX_WORK_DEFAULT_CREDIT_BUDGET", 1_000_000),
+        default_output_token_limit=_positive_int("CORTEX_WORK_DEFAULT_OUTPUT_TOKENS", 40_000),
+        output_finalize_token_threshold=_positive_int("CORTEX_WORK_OUTPUT_FINALIZE_TOKENS", 32_000),
+        reconciler_enabled=_bool("CORTEX_WORK_RECONCILER_ENABLED", default=True),
+        reconciler_interval_seconds=_positive_int("CORTEX_WORK_RECONCILER_INTERVAL_SECONDS", 2),
         event_sync_interval_seconds=_positive_int("CORTEX_WORK_SYNC_INTERVAL_SECONDS", 2),
         sse_heartbeat_seconds=_positive_int("CORTEX_WORK_SSE_HEARTBEAT_SECONDS", 15),
         approval_timeout_seconds=_positive_int("CORTEX_WORK_APPROVAL_TIMEOUT_SECONDS", 86_400),
     )
+    if config.output_finalize_token_threshold >= config.default_output_token_limit:
+        raise ValueError(
+            "CORTEX_WORK_OUTPUT_FINALIZE_TOKENS must be lower than "
+            "CORTEX_WORK_DEFAULT_OUTPUT_TOKENS"
+        )
+    return config

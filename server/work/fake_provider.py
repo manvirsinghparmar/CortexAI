@@ -32,8 +32,22 @@ class FakeAgentProvider:
         max_credit_budget: int,
     ) -> ProviderSession:
         session_id = f"fake_session_{uuid4().hex}"
-        self.sessions[session_id] = {"status": "idle", "events": [], "resources": list(resources)}
-        return ProviderSession(id=session_id, status="idle")
+        self.sessions[session_id] = {
+            "status": "idle",
+            "events": [],
+            "resources": list(resources),
+            "mcp_servers": list(mcp_servers),
+            "web_enabled": web_enabled,
+        }
+        return ProviderSession(
+            id=session_id,
+            status="idle",
+            model_id="claude-haiku-4-5",
+            agent_id="fake-agent",
+            agent_version=1,
+            effort="high",
+            speed="standard",
+        )
 
     def send_instruction(self, session_id: str, instruction: str) -> None:
         state = self.sessions[session_id]
@@ -81,12 +95,34 @@ class FakeAgentProvider:
 
     def get_session(self, session_id: str) -> ProviderSession:
         state = self.sessions[session_id]
-        return ProviderSession(id=session_id, status=str(state["status"]), usage={})
+        raw_usage = state.get("usage")
+        usage = dict(raw_usage) if isinstance(raw_usage, Mapping) else {}
+        return ProviderSession(
+            id=session_id,
+            status=str(state["status"]),
+            usage=usage,
+            model_id="claude-haiku-4-5",
+            agent_id="fake-agent",
+            agent_version=1,
+            effort="high",
+            speed="standard",
+        )
 
     def list_events(self, session_id: str) -> list[ProviderEvent]:
         events = self.sessions[session_id]["events"]
         assert isinstance(events, list)
         return list(events)
+
+    def update_session_tools(
+        self,
+        session_id: str,
+        *,
+        mcp_servers: Sequence[ProviderMcpServer],
+        web_enabled: bool,
+    ) -> None:
+        state = self.sessions[session_id]
+        state["mcp_servers"] = list(mcp_servers)
+        state["web_enabled"] = web_enabled
 
     def extend_budget(
         self,

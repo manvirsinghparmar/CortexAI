@@ -25,7 +25,7 @@ CortexAI is a multi-provider orchestration gateway for OpenAI, Gemini, DeepSeek,
 
 CortexAI Work is a separate durable task surface at `/work`; it does not reuse
 the Ask/Compare turn reducer. Paid users can start a Work session with files,
-an explicit AI-credit ceiling, optional web access, and selected tool
+an explicit AI-credit ceiling, server-resolved Web Auto/On/Off access, and selected tool
 connections. The backend reserves the ceiling, creates or reuses an Anthropic
 Managed Agent session, persists provider-neutral events, resumes through SSE
 with `Last-Event-ID`, imports validated artifacts into private Cortex object
@@ -47,12 +47,31 @@ budget-paused turn resumes from the provider budget update without a competing
 without confirmation. `bash`, `write`, `edit`, MCP writes, and every sensitive
 action retain the applicable approval gate.
 
+Every run also receives a server-owned 40,000 output-token ceiling. At 32,000
+output tokens Cortex asks the Agent to stop exploring and finalize the best
+available deliverable; at 40,000 it interrupts the remote session and records
+the distinct `output_limit_reached` outcome. A PostgreSQL-lease background
+reconciler applies this policy and completes usage, artifact, and billing sync
+even when the browser is closed. The observed total can exceed the threshold by
+tokens produced between provider usage snapshots, but it cannot continue as an
+unbounded browser-owned run.
+
+Work Web defaults to `Auto`. The backend—not the browser—classifies prompts that
+need current information and enables the provider Web tools only for those
+runs. `On` always requests Web and `Off` never mounts it; choosing `Off` for a
+current-information prompt shows a warning but remains an explicit user choice.
+
 Work settlement treats Managed Agent normal input, cache reads, and cache
 writes as independent cumulative usage partitions; follow-ups subtract the
 prior provider snapshot from each partition. The reconstructed model, active
 runtime, and web-search charge is compared with Anthropic's cumulative USD
 `list_cost` delta, and the greater value is the settlement floor. Invalid
 currency or cost data stops reconciliation instead of silently underbilling.
+The billing model is the model ID in the retrieved Anthropic session's resolved
+Agent snapshot. Cortex persists the provider model, canonical pricing model,
+Agent ID/version, and source on each run; an unknown or multi-model snapshot
+fails closed instead of falling back to a separate billing-model environment
+variable.
 
 React remembers a newly created Work session before it requests the first run,
 so a rejected start can be retried without creating another session. The
@@ -67,6 +86,16 @@ the Managed Agent boundary. Multiline prompts and invisible Unicode control or
 format characters therefore cannot prevent provider-session creation, and an
 existing failed session with an older unsafe title can be retried in place.
 
+Opening a Work session now hydrates every durable run through
+`GET /v1/work/sessions/{id}/runs` and renders the prompts, final responses, and
+deliverables as one chronological transcript. Submitting a follow-up appends a
+new turn instead of replacing the previous result, so an earlier security
+analysis and its files remain visible and downloadable in the same task.
+Changing Web or MCP selections updates the existing Managed Agent session so
+its conversational context is retained. A provider session is replaced only
+when its immutable vault-resource set changes; that fallback prepends a bounded
+transcript of prior user instructions and visible outcomes from PostgreSQL.
+
 The Work activity rail is a user-facing history, not a raw provider trace. It
 omits unlabeled internal progress telemetry and animates only the latest visible
 activity while a run is nonterminal. Terminal runs render every retained event
@@ -75,8 +104,15 @@ reconciliation reaches a terminal state ahead of the browser's stream cursor,
 React fetches and merges the remaining durable events before closing the stream
 so the final written outcome appears without a page refresh.
 
+Artifact import is idempotent per provider file and tied to the provider
+session recorded on the originating run. Input and non-downloadable provider
+files are skipped, one failed output cannot block the remaining deliverables,
+and listing artifacts for a terminal run retries any files that could not be
+copied into private Cortex object storage during completion.
+
 Before enabling it, apply
-`db/migrations/20260820_add_cortex_work_mode.sql` and complete
+`db/migrations/20260820_add_cortex_work_mode.sql`, then
+`db/migrations/20260829_add_work_web_output_and_model_identity.sql`, and complete
 [the Work rollout runbook](docs/runbooks/cortex-work.md). The architecture and
 recovery contract are documented in [docs/work/architecture.md](docs/work/architecture.md);
 the evidence-based infrastructure gate is
@@ -1177,9 +1213,10 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260804_add_
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260807_add_cache_aware_credit_accounting.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260811_add_direct_s3_attachment_upload.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260829_add_work_web_output_and_model_identity.sql
 ```
 
-- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; `20260804` adds generation-budget/reasoning audit fields plus normalized completion status; `20260807` adds cache-aware ledger columns, reusable optimizer/research/Cortex/context-summary persistence, and the `cache_reuse_events` telemetry table; `20260811` permits checksum-free upload intents and adds `uploading`/`deleting` attachment states; and `20260820` adds durable Work sessions/runs/events, files, tool connections/calls, approvals, OAuth state, and reconciliation leases. The scripts are additive/idempotent. Alteration scripts require ownership of the affected tables. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, generation-budget, and cache-accounting columns before provider traffic; when direct upload or Work is enabled it also validates the corresponding additive schema.
+- `20260718` creates the billing foundation; `20260727` adds Compare revisions and append-only Cortex runs; `20260729` creates the immutable `credit_transactions` ledger and unified `ai_credits` contract; `20260730` adds reservation heartbeats; `20260731` adds model/pricing audit evidence; `20260802` adds Cortex disagreement attribution; `20260804` adds generation-budget/reasoning audit fields plus normalized completion status; `20260807` adds cache-aware ledger columns, reusable optimizer/research/Cortex/context-summary persistence, and the `cache_reuse_events` telemetry table; `20260811` permits checksum-free upload intents and adds `uploading`/`deleting` attachment states; `20260820` adds durable Work sessions/runs/events, files, tool connections/calls, approvals, OAuth state, and reconciliation leases; and `20260829` adds Work Web/output/model-identity audit fields plus the output-limit terminal status. The scripts are additive/idempotent. Alteration scripts require ownership of the affected tables. Restart the API after apply. PostgreSQL startup validates the required billing, pricing-audit, Cortex, generation-budget, and cache-accounting columns before provider traffic; when direct upload or Work is enabled it also validates the corresponding additive schema.
 
 ## Release Gate
 

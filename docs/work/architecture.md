@@ -29,7 +29,9 @@ The authoritative state is split deliberately:
    line, with Unicode control/format characters removed, before persistence.
 3. `POST /v1/work/sessions/{id}/runs` validates auth, ownership, entitlement,
    active-run/connection/file limits, web rollout, and the requested credit
-   ceiling. `Idempotency-Key` is the idempotency key.
+   ceiling. The request's `web_mode` is `auto`, `on`, or `off`; the backend
+   resolves Auto from current-information intent and snapshots both the
+   requested and effective state. `Idempotency-Key` is the idempotency key.
    React retains the session created in step 2 before requesting this run, so a
    structured denial can retry in place. The sidebar displays only sessions
    with a run and does not present a zero-run shell as executed work. React
@@ -40,17 +42,25 @@ The authoritative state is split deliberately:
    initial event, attaches files, and snapshots selected connections. It closes
    before any external I/O.
 5. The provider adapter uploads input bytes server-side, creates or reuses the
-   remote session, mounts all prior session resources after provider-session
-   recovery, applies the provider budget, mounts MCP/vaults, and sends the user
-   instruction. It defensively normalizes the title again before remote session
+   remote session, retrieves its resolved Agent snapshot, mounts all prior
+   session resources after provider-session recovery, applies the provider
+   budget, updates Web/MCP tools in place, and sends the user instruction. A
+   session is replaced only when its immutable vault-resource set changes; the
+   replacement receives a bounded PostgreSQL-backed transcript of prior user
+   instructions and visible outcomes before the current instruction. It
+   defensively normalizes the title again before remote session
    creation so a retry also repairs sessions stored before title normalization.
+   The snapshot's model and Agent ID/version are persisted before the task is
+   sent. Billing canonicalizes that model through the Cortex registry and fails
+   closed if identity is missing, unknown, or contains multiple models.
 6. `GET /stream` first replays `work_events` after `Last-Event-ID`, then claims a
    short PostgreSQL reconciliation lease, fetches provider events/usage, and
    appends normalized idempotent events. SSE comments keep the edge connection
    alive but do not alter the durable event sequence. If a status refresh sees
    a terminal run before React has consumed the corresponding stream events,
    React fetches and merges every event after its current sequence before it
-   closes the stream.
+   closes the stream. The same lease-protected reconciliation also runs in an
+   application background worker, so browser presence is never required.
 7. Tool-use events create high-signal audit rows. READ is confirmed silently.
    Unknown and sensitive actions become a persisted inline approval. WRITE can
    use an exact saved tool+connection grant for this Work session; destructive,
@@ -61,10 +71,17 @@ The authoritative state is split deliberately:
    provider pricing change or reconstruction gap cannot silently underbill.
    Malformed/non-USD provider cost data leaves the reservation open for
    investigation. Unused reserved credits are released by the existing billing
-   service.
-9. When artifact rollout is enabled, output files are listed, validated,
-   downloaded server-side, stored through Cortex object storage, and registered
-   as owned `uploaded_files` plus `work_run_files(role=artifact)` rows.
+   service. At 32,000 run-output tokens the reconciler sends a one-time
+   finalization instruction. At the server-owned 40,000 ceiling it sends a
+   one-time provider interrupt and records `output_limit_reached` after the
+   remote run stops. Provider snapshots are sampled, so the terminal observed
+   total can be above the threshold by output produced between polls.
+9. When artifact rollout is enabled, output files are listed from the provider
+   session recorded on the originating run, validated, downloaded server-side,
+   stored through Cortex object storage, and registered as owned
+   `uploaded_files` plus `work_run_files(role=artifact)` rows. Input and
+   non-downloadable entries are skipped, failures are isolated per file, and a
+   terminal run's artifact-list request retries missing imports idempotently.
 10. Open/download links call an authenticated Cortex route that checks both run
     and file ownership and returns `private, no-store` bytes.
 
@@ -73,8 +90,15 @@ provider trace. It hides unlabeled internal progress events, allows only the
 latest visible event to animate while the run is nonterminal, and settles every
 visible marker plus all plan steps when the run completes.
 
+The browser also loads all runs with `GET /v1/work/sessions/{id}/runs` and
+hydrates each run's events and artifacts. The session surface is therefore a
+chronological transcript: a follow-up appends a new prompt/outcome while prior
+results and deliverables remain visible on desktop and mobile.
+
 A follow-up creates a new Work run under the same Work session and uses the
-same provider session when available. Billing uses the prior cumulative usage
+same provider session when available. Web/MCP tool changes update that session
+instead of replacing it; only incompatible vault-resource changes force a new
+provider session and bounded visible-transcript replay. Billing uses the prior cumulative usage
 snapshot as the baseline so earlier tokens/runtime are not charged twice. The
 new reservation is also added to the provider session's cumulative list-cost
 cap. Provider event IDs observed before the new run are baselined so prior
@@ -87,7 +111,8 @@ Cortex does not race it with a new `user.message`.
 Public event payloads are stable Cortex contracts: `run_created`, `planning`,
 `plan_created`, `progress`, `tool_started`, `tool_completed`,
 `approval_required`, `approval_resolved`, `file_created`, `run_completed`,
-`run_failed`, and `budget_exhausted`. They contain display copy and bounded,
+`run_failed`, `budget_exhausted`, `output_finalizing`, and
+`output_limit_reached`. They contain display copy and bounded,
 redacted summaries. Provider thinking, raw tool output, credentials, cookies,
 tokens, and authorization headers are excluded.
 
@@ -122,11 +147,12 @@ duplicate provider delivery is a no-op.
 |---|---|---|
 | Browser/SSE disconnect or terminal status ahead of the stream cursor | React catches up before closing or on reconnect | ordered PostgreSQL events |
 | API restart/deploy | Browser reconnects; run keeps executing remotely | provider session ID + DB lease |
-| Provider session missing | normalized recoverable error; a later run creates a replacement and remounts inputs | Cortex files + Work session |
+| Provider session missing or immutable vault set changed | a later run creates a replacement, remounts inputs, and replays bounded visible context | Cortex files + Work session runs/events |
 | Duplicate start | original run is returned; conflicting reuse is 409 | request ID constraint |
 | Tool approval wait | inline card; no side effect before confirmation | approval/tool-call rows |
 | Budget reached | provider pauses itself; status becomes Budget reached without a client interrupt | run ceiling + usage snapshot |
-| Artifact import error | completed outcome remains; deliverable is withheld | provider output + idempotent import |
+| Output limit reached | Agent is asked to finalize at 32K; provider is interrupted at 40K and the distinct partial-result status is retained | background reconciler + usage snapshot |
+| Artifact import error | completed outcome remains; successful files stay visible and terminal artifact listing retries missing files | originating provider session + idempotent per-file import |
 | Feature rollback | Work navigation disappears and routes reject new control operations | server feature flag |
 
 No DB transaction is held while waiting on Anthropic, MCP, OAuth, S3, or SSE.
@@ -134,11 +160,13 @@ No single API process is the run owner. A user who returns later triggers
 reconciliation and can recover the remote outcome even when no browser remained
 connected during execution.
 
-V1 does not run an always-on Cortex reconciliation worker: provider execution
-continues remotely, but Cortex event import, approval expiry, artifact import,
-and final credit settlement occur when an authenticated run/event/stream request
-triggers reconciliation. Remembered WRITE grants are stored and enforced, but a
-dedicated settings UI/API for reviewing and revoking them is not yet included.
+The application runs an always-on lease-based Cortex reconciliation worker by
+default. Provider execution remains remote, while Cortex imports events,
+expires approvals, enforces the output ceiling, imports artifacts, and settles
+credits without an authenticated browser request. Multiple API processes may
+run the loop because PostgreSQL leases serialize each run. Remembered WRITE
+grants are stored and enforced, but a dedicated settings UI/API for reviewing
+and revoking them is not yet included.
 
 ## Security and retention
 
@@ -164,7 +192,8 @@ records needed for billing, approval audit, and incident investigation.
 - Provider boundary: `server/work/provider.py`,
   `server/work/anthropic_provider.py`
 - Persistence: `db/work_repository.py`, `db/tables.py`,
-  `db/migrations/20260820_add_cortex_work_mode.sql`
+  `db/migrations/20260820_add_cortex_work_mode.sql`,
+  `db/migrations/20260829_add_work_web_output_and_model_identity.sql`
 - Plans: `config/subscription_plans.yaml`
 - Operations: `docs/runbooks/cortex-work.md`,
   `docs/work/00-infrastructure-readiness.md`

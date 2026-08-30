@@ -47,6 +47,7 @@ def test_postgres_startup_fails_before_serving_when_billing_schema_is_missing(
     from server.billing import schema_preflight
 
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused:unused@localhost/unused")
+    monkeypatch.setenv("CORTEX_WORK_ENABLED", "false")
     monkeypatch.setenv("ENABLE_ATTACHMENTS_CLEANUP_WORKER", "false")
     monkeypatch.setenv("ENABLE_BILLING_RESERVATION_CLEANUP_WORKER", "false")
     monkeypatch.setattr(
@@ -70,6 +71,7 @@ def test_postgres_startup_runs_one_reservation_cleanup_cycle(monkeypatch):
 
     cleanup_calls: list[int] = []
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused:unused@localhost/unused")
+    monkeypatch.setenv("CORTEX_WORK_ENABLED", "false")
     monkeypatch.setenv("ENABLE_ATTACHMENTS_CLEANUP_WORKER", "false")
     monkeypatch.setenv("ENABLE_BILLING_RESERVATION_CLEANUP_WORKER", "true")
     monkeypatch.setenv("BILLING_RESERVATION_STALE_AFTER_SECONDS", "1800")

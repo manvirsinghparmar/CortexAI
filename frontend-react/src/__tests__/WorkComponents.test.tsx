@@ -115,7 +115,11 @@ describe("Cortex Work components", () => {
     );
     expect(screen.getByText("1 of 3")).toBeInTheDocument();
     expect(screen.getByText("Reading files")).toBeInTheDocument();
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25000");
+    expect(screen.getByRole("progressbar", { name: "Work credit usage" })).toHaveAttribute(
+      "aria-valuenow",
+      "25000",
+    );
+    expect(screen.getByText(/Provider model · Claude Haiku 4.5/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Tools/ }));
     expect(screen.getByText("No connected tools")).toBeInTheDocument();
   });
@@ -165,14 +169,29 @@ describe("Cortex Work components", () => {
   it("submits a goal with Enter and toggles web access", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    const onWebChange = vi.fn();
+    const onWebModeChange = vi.fn();
     render(
-      <WorkComposer {...composerProps({ value: "Build the report", onSubmit, onWebChange })} />,
+      <WorkComposer {...composerProps({ value: "Build the report", onSubmit, onWebModeChange })} />,
     );
     await user.type(screen.getByRole("textbox", { name: "Work goal" }), "{Enter}");
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Web" }));
-    expect(onWebChange).toHaveBeenCalledWith(true);
+    await user.click(screen.getByRole("button", { name: /Web access: Auto/ }));
+    expect(onWebModeChange).toHaveBeenCalledWith("on");
+  });
+
+  it("warns when Web is explicitly off for a current-information request", () => {
+    render(
+      <WorkComposer
+        {...composerProps({
+          value: "Build an itinerary with current opening hours and ticket prices",
+          webMode: "off",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText("This request appears to need current information, but Web is explicitly off."),
+    ).toBeInTheDocument();
   });
 
   it("blocks submission until every attachment is ready", () => {
@@ -234,8 +253,17 @@ function run(overrides: Partial<WorkRun> = {}): WorkRun {
     status: "running",
     provider: "fake",
     max_credit_budget: 100_000,
+    max_output_tokens: 40_000,
+    actual_output_tokens: 12_000,
     reserved_credits: 100_000,
     actual_credits: 25_000,
+    provider_model_id: "claude-haiku-4-5",
+    billing_model_id: "claude-haiku-4-5",
+    billing_model_source: "fake_session_agent_snapshot",
+    provider_agent_id: "fake-agent",
+    provider_agent_version: 1,
+    output_finalize_requested_at: null,
+    output_limit_interrupt_requested_at: null,
     configuration_snapshot: { web_enabled: false },
     usage_snapshot: {},
     stop_reason: null,
@@ -288,8 +316,8 @@ function composerProps(overrides: Record<string, unknown> = {}) {
     onToggleConnection: vi.fn(),
     onConnect: vi.fn(),
     onAddMcp: vi.fn().mockResolvedValue(undefined),
-    webEnabled: false,
-    onWebChange: vi.fn(),
+    webMode: "auto" as const,
+    onWebModeChange: vi.fn(),
     maxCreditBudget: 1_000_000,
     maxPlanBudget: 250_000,
     onBudgetChange: vi.fn(),

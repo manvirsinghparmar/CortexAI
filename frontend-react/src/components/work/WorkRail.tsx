@@ -12,7 +12,13 @@ interface WorkRailProps {
 
 export function WorkRail({ run, events, connections, enabledConnectionIds }: WorkRailProps) {
   const complete = run.status === "completed";
-  const terminal = ["completed", "failed", "cancelled", "budget_exhausted"].includes(run.status);
+  const terminal = ["completed", "failed", "cancelled", "budget_exhausted", "output_limit_reached"].includes(run.status);
+  const effectiveWebEnabled = Boolean(
+    run.configuration_snapshot.effective_web_enabled ?? run.configuration_snapshot.web_enabled,
+  );
+  const requestedWebMode = String(run.configuration_snapshot.requested_web_mode || "off");
+  const maxOutputTokens = run.max_output_tokens || 40_000;
+  const actualOutputTokens = run.actual_output_tokens || 0;
   const activityEvents = events.filter(isUserFacingEvent).slice(-8);
   const latestActivity = activityEvents.at(-1);
   const activeEventId =
@@ -82,9 +88,9 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
       </RailSection>
       <RailSection title="Tools" meta={`${activeConnections.length} connected`}>
         <ul className={styles.toolSummary}>
-          {Boolean(run.configuration_snapshot.web_enabled) && (
+          {effectiveWebEnabled && (
             <li>
-              <CortexIcon name="web" size={14} /> Web
+              <CortexIcon name="web" size={14} /> Web{requestedWebMode === "auto" ? " · Auto" : " · On"}
             </li>
           )}
           {activeConnections.map((connection) => (
@@ -92,12 +98,22 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
               <CortexIcon name="tools" size={14} /> {connection.display_name}
             </li>
           ))}
-          {!run.configuration_snapshot.web_enabled && activeConnections.length === 0 && (
+          {!effectiveWebEnabled && activeConnections.length === 0 && (
             <li>No connected tools</li>
           )}
         </ul>
       </RailSection>
       <RailSection title="Credits" meta={`${run.actual_credits.toLocaleString()} used`} defaultOpen>
+        {run.provider_model_id && (
+          <p className={styles.usageIdentity} title={run.provider_model_id}>
+            <CortexIcon name="sparkle" size={14} /> Provider model · {formatModel(run.provider_model_id)}
+          </p>
+        )}
+        {run.billing_model_id && run.billing_model_id !== run.provider_model_id && (
+          <p className={styles.usageIdentity} title={run.billing_model_id}>
+            Pricing model · {formatModel(run.billing_model_id)}
+          </p>
+        )}
         <div className={styles.budgetFigure}>
           <strong>{run.actual_credits.toLocaleString()}</strong>
           <span>/ {run.max_credit_budget.toLocaleString()} max</span>
@@ -105,6 +121,7 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
         <div
           className={styles.budgetTrack}
           role="progressbar"
+          aria-label="Work credit usage"
           aria-valuemin={0}
           aria-valuemax={run.max_credit_budget}
           aria-valuenow={Math.min(run.actual_credits, run.max_credit_budget)}
@@ -114,6 +131,22 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
               width: `${Math.min(100, (run.actual_credits / run.max_credit_budget) * 100)}%`,
             }}
           />
+        </div>
+      </RailSection>
+      <RailSection title="Output" meta={`${actualOutputTokens.toLocaleString()} tokens`} defaultOpen>
+        <div className={styles.budgetFigure}>
+          <strong>{actualOutputTokens.toLocaleString()}</strong>
+          <span>/ {maxOutputTokens.toLocaleString()} max</span>
+        </div>
+        <div
+          className={styles.budgetTrack}
+          role="progressbar"
+          aria-label="Work output token usage"
+          aria-valuemin={0}
+          aria-valuemax={maxOutputTokens}
+          aria-valuenow={Math.min(actualOutputTokens, maxOutputTokens)}
+        >
+          <span style={{ width: `${Math.min(100, (actualOutputTokens / maxOutputTokens) * 100)}%` }} />
         </div>
       </RailSection>
     </aside>
@@ -161,4 +194,12 @@ function isActiveEvent(type: string): boolean {
 
 function isUserFacingEvent(event: WorkEvent): boolean {
   return event.type !== "progress" || Boolean(event.display_message?.trim());
+}
+
+function formatModel(model: string): string {
+  return model
+    .replace(/^claude-/, "Claude ")
+    .replaceAll("-", " ")
+    .replace(/ (\d) (\d)(?: \d{8})?$/, " $1.$2")
+    .replace(/\b\w/g, (value) => value.toUpperCase());
 }

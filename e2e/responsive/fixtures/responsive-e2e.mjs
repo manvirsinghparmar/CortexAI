@@ -41,9 +41,14 @@ export const test = base.extend({
             directUploadSequence: 0,
             workSessions: [],
             workRun: null,
+            workRuns: [],
+            workRunSequence: 0,
             workStartDelayMs: 0,
+            workStartPayload: null,
             workEvents: [],
+            workEventsByRun: new Map(),
             workArtifacts: [],
+            workArtifactsByRun: new Map(),
             workApproval: null,
             workConnections: [],
         };
@@ -235,9 +240,14 @@ async function installResponsiveRoutes(page, state) {
         }
         const workSessionLatest = url.pathname.match(/^\/v1\/work\/sessions\/([^/]+)\/runs\/latest$/);
         if (workSessionLatest && method === "GET") {
-            return state.workRun
-                ? json(route, state.workRun)
+            const latest = state.workRuns.at(-1) || state.workRun;
+            return latest
+                ? json(route, latest)
                 : json(route, { detail: { code: "work_run_not_found", message: "No run" } }, 404);
+        }
+        const workSessionRuns = url.pathname.match(/^\/v1\/work\/sessions\/([^/]+)\/runs$/);
+        if (workSessionRuns && method === "GET") {
+            return json(route, state.workRuns.length > 0 ? state.workRuns : state.workRun ? [state.workRun] : []);
         }
         const workSession = url.pathname.match(/^\/v1\/work\/sessions\/([^/]+)$/);
         if (workSession && method === "GET") {
@@ -247,12 +257,18 @@ async function installResponsiveRoutes(page, state) {
         const workStart = url.pathname.match(/^\/v1\/work\/sessions\/([^/]+)\/(runs|instructions)$/);
         if (workStart && method === "POST") {
             const payload = request.postDataJSON();
+            state.workStartPayload = payload;
             const session = state.workSessions.find(item => item.id === workStart[1]) || makeWorkSession(payload.instruction.slice(0, 120));
             if (!state.workSessions.some(item => item.id === session.id)) state.workSessions.unshift(session);
             if (state.workStartDelayMs > 0) {
                 await new Promise(resolve => setTimeout(resolve, state.workStartDelayMs));
             }
-            state.workRun = makeWorkRun(session.id, payload.instruction, "running");
+            state.workRunSequence += 1;
+            state.workRun = {
+                ...makeWorkRun(session.id, payload.instruction, "running", payload.web_mode),
+                id: `work-run-${state.workRunSequence}`,
+                request_id: `responsive-work-request-${state.workRunSequence}`,
+            };
             state.workEvents = [
                 makeWorkEvent(1, "run_created", "Work run created"),
                 makeWorkEvent(2, "planning", "Creating a plan"),
@@ -263,35 +279,58 @@ async function installResponsiveRoutes(page, state) {
                 filename: "work-report.pdf", mime_type: "application/pdf", size_bytes: 4096,
                 artifact_type: "report", metadata: {}, created_at: "2026-08-20T12:04:00Z",
             }];
+            state.workRuns = [
+                ...state.workRuns.filter(run => run.id !== state.workRun.id),
+                state.workRun,
+            ];
+            state.workEventsByRun.set(state.workRun.id, state.workEvents);
+            state.workArtifactsByRun.set(state.workRun.id, state.workArtifacts);
             return json(route, state.workRun, 202);
         }
         const workRunEvents = url.pathname.match(/^\/v1\/work\/runs\/([^/]+)\/events$/);
         if (workRunEvents && method === "GET") {
             const after = Number(url.searchParams.get("after_sequence") || 0);
-            const items = state.workEvents.filter(event => event.sequence > after);
+            const events = state.workEventsByRun.get(workRunEvents[1])
+                || (state.workRun?.id === workRunEvents[1] ? state.workEvents : []);
+            const items = events.filter(event => event.sequence > after);
             return json(route, { items, latest_sequence: items.at(-1)?.sequence ?? after });
         }
         const workRunStream = url.pathname.match(/^\/v1\/work\/runs\/([^/]+)\/stream$/);
         if (workRunStream && method === "GET") {
-            if (state.workRun?.status === "running") {
-                state.workRun = { ...state.workRun, status: "completed", actual_credits: 18400, completed_at: "2026-08-20T12:04:00Z", updated_at: "2026-08-20T12:04:00Z" };
-                const terminal = state.workEvents.at(-1);
+            const runId = workRunStream[1];
+            const streamedRun = state.workRuns.find(run => run.id === runId)
+                || (state.workRun?.id === runId ? state.workRun : null);
+            if (streamedRun?.status === "running") {
+                const completedRun = { ...streamedRun, status: "completed", actual_credits: 18400, completed_at: "2026-08-20T12:04:00Z", updated_at: "2026-08-20T12:04:00Z" };
+                state.workRuns = state.workRuns.map(run => run.id === runId ? completedRun : run);
+                if (state.workRun?.id === runId) state.workRun = completedRun;
+                const events = state.workEventsByRun.get(runId) || state.workEvents;
+                const terminal = events.at(-1);
                 return route.fulfill({ status: 200, contentType: "text/event-stream", body: `id: ${terminal.sequence}\nevent: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n` });
             }
             return route.fulfill({ status: 200, contentType: "text/event-stream", body: ": heartbeat\n\n" });
         }
         const workArtifacts = url.pathname.match(/^\/v1\/work\/runs\/([^/]+)\/artifacts$/);
         if (workArtifacts && method === "GET") {
-            return json(route, state.workArtifacts);
+            return json(
+                route,
+                state.workArtifactsByRun.get(workArtifacts[1])
+                    || (state.workRun?.id === workArtifacts[1] ? state.workArtifacts : []),
+            );
         }
         const workRunCancel = url.pathname.match(/^\/v1\/work\/runs\/([^/]+)\/cancel$/);
         if (workRunCancel && method === "POST") {
-            state.workRun = { ...state.workRun, status: "cancelled", completed_at: "2026-08-20T12:03:00Z" };
-            return json(route, state.workRun);
+            const existing = state.workRuns.find(run => run.id === workRunCancel[1]) || state.workRun;
+            const cancelledRun = { ...existing, status: "cancelled", completed_at: "2026-08-20T12:03:00Z" };
+            state.workRuns = state.workRuns.map(run => run.id === workRunCancel[1] ? cancelledRun : run);
+            if (state.workRun?.id === workRunCancel[1]) state.workRun = cancelledRun;
+            return json(route, cancelledRun);
         }
         const workRun = url.pathname.match(/^\/v1\/work\/runs\/([^/]+)$/);
         if (workRun && method === "GET") {
-            return state.workRun ? json(route, state.workRun) : json(route, { detail: "Not found" }, 404);
+            const found = state.workRuns.find(run => run.id === workRun[1])
+                || (state.workRun?.id === workRun[1] ? state.workRun : null);
+            return found ? json(route, found) : json(route, { detail: "Not found" }, 404);
         }
         const workApproval = url.pathname.match(/^\/v1\/work\/approvals\/([^/]+)$/);
         if (workApproval && method === "GET") {
@@ -818,7 +857,7 @@ function makeWorkSession(title = "Postman Work task") {
     };
 }
 
-function makeWorkRun(workSessionId, instruction, status = "running") {
+function makeWorkRun(workSessionId, instruction, status = "running", webMode = "auto") {
     return {
         id: "work-run-1",
         work_session_id: workSessionId,
@@ -827,9 +866,22 @@ function makeWorkRun(workSessionId, instruction, status = "running") {
         status,
         provider: "fake",
         max_credit_budget: 100000,
+        max_output_tokens: 40000,
+        actual_output_tokens: status === "completed" ? 12000 : 6400,
         reserved_credits: 100000,
         actual_credits: status === "completed" ? 18400 : 6400,
-        configuration_snapshot: { web_enabled: false, enabled_connection_ids: [] },
+        provider_model_id: "claude-haiku-4-5",
+        billing_model_id: "claude-haiku-4-5",
+        billing_model_source: "fake_session_agent_snapshot",
+        provider_agent_id: "fake-agent",
+        provider_agent_version: 1,
+        output_finalize_requested_at: null,
+        output_limit_interrupt_requested_at: null,
+        configuration_snapshot: {
+            requested_web_mode: webMode || "auto",
+            effective_web_enabled: false,
+            enabled_connection_ids: [],
+        },
         usage_snapshot: {},
         stop_reason: null,
         error_code: null,

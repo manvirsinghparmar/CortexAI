@@ -8,13 +8,14 @@ import type {
   WorkEventsResponse,
   WorkRun,
   WorkSession,
+  WorkWebMode,
 } from "../types";
 
 export interface StartWorkRunInput {
   instruction: string;
   input_file_ids: string[];
   enabled_connection_ids: string[];
-  web_enabled: boolean;
+  web_mode: WorkWebMode;
   max_credit_budget: number;
 }
 
@@ -40,6 +41,10 @@ export function getWorkSession(id: string, signal?: AbortSignal): Promise<WorkSe
 
 export function getLatestWorkRun(sessionId: string, signal?: AbortSignal): Promise<WorkRun> {
   return get(`/v1/work/sessions/${encodeURIComponent(sessionId)}/runs/latest`, signal);
+}
+
+export function listWorkRuns(sessionId: string, signal?: AbortSignal): Promise<WorkRun[]> {
+  return get(`/v1/work/sessions/${encodeURIComponent(sessionId)}/runs`, signal);
 }
 
 export function startWorkRun(

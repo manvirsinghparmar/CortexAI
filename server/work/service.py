@@ -28,10 +28,17 @@ from server.billing.metering_service import (
 )
 from server.billing.subscription_service import resolve_effective_subscription
 from server.object_storage import get_object_storage
-from server.work.billing import WorkCreditUsage, calculate_work_credit_usage
+from server.work.billing import (
+    WorkBillingIdentityError,
+    WorkCreditUsage,
+    calculate_work_credit_usage,
+    resolve_work_billing_model,
+)
 from server.work.config import WorkConfig, load_work_config
 from server.work.errors import work_http_error
-from server.work.provider import AgentProvider, ProviderMcpServer, ProviderResource
+from server.work.output_policy import resolve_output_guardrail
+from server.work.prompt_policy import resolve_work_web_mode
+from server.work.provider import AgentProvider, ProviderMcpServer, ProviderResource, ProviderSession
 from server.work.registry import get_agent_provider
 from server.work.security import classify_action
 from utils.logger import get_logger
@@ -39,6 +46,8 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 _INTERRUPTIBLE_PROVIDER_SESSION_STATUSES = frozenset({"running", "rescheduling"})
+_MAX_PROVIDER_CONTINUATION_RUNS = 6
+_MAX_PROVIDER_CONTINUATION_CHARS = 12_000
 
 
 def require_work_enabled(config: WorkConfig | None = None) -> WorkConfig:
@@ -74,6 +83,89 @@ def _string_list(value: object) -> list[str]:
 
 def _mapping_or_empty(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _can_reuse_provider_session(
+    provider_session_id: str,
+    prior_capabilities: object,
+    current_connection_ids: Sequence[str],
+    current_vault_ids: Sequence[str],
+) -> bool:
+    if not provider_session_id or not isinstance(prior_capabilities, Mapping):
+        return False
+    if "vault_ids" not in prior_capabilities:
+        # Older capability snapshots did not record vault IDs. Reuse only when
+        # the complete connection set is unchanged, because a removed legacy
+        # connection may have mounted a vault that cannot be detached in place.
+        return sorted(_string_list(prior_capabilities.get("connection_ids"))) == sorted(
+            str(value) for value in current_connection_ids
+        )
+    prior_vault_ids = sorted(_string_list(prior_capabilities.get("vault_ids")))
+    return prior_vault_ids == sorted(str(value) for value in current_vault_ids)
+
+
+def _provider_continuation_context(
+    *,
+    user_id: UUID,
+    work_session_id: UUID,
+    current_run_id: UUID,
+) -> tuple[str, list[str]]:
+    """Build a bounded visible-result transcript when a provider session must be replaced."""
+
+    with persistence_service.db_uow(commit_on_success=False) as db:
+        prior_runs = [
+            row
+            for row in repository.list_work_runs_for_session(db, work_session_id, user_id)
+            if row["id"] != current_run_id
+        ][-_MAX_PROVIDER_CONTINUATION_RUNS:]
+        rendered: list[tuple[str, str]] = []
+        for run in reversed(prior_runs):
+            events = repository.list_work_events_after_sequence(
+                db,
+                run["id"],
+                user_id,
+                after_sequence=0,
+                limit=1_000_000,
+            )
+            response = next(
+                (
+                    str(event.get("display_message") or "").strip()
+                    for event in reversed(events)
+                    if event.get("event_type") == "agent_message"
+                    and str(event.get("display_message") or "").strip()
+                ),
+                "",
+            )
+            artifacts = repository.list_work_run_files(
+                db,
+                run["id"],
+                user_id,
+                role="artifact",
+            )
+            artifact_names = ", ".join(str(item["original_filename"]) for item in artifacts)
+            parts = [
+                f"Previous user instruction:\n{str(run['instruction']).strip()}",
+                f"Previous run status: {run['status']}",
+            ]
+            if response:
+                parts.append(f"Previous Cortex result:\n{response}")
+            if artifact_names:
+                parts.append(f"Saved Cortex artifacts: {artifact_names}")
+            rendered.append((str(run["id"]), "\n".join(parts)))
+
+    selected: list[tuple[str, str]] = []
+    remaining = _MAX_PROVIDER_CONTINUATION_CHARS
+    for run_id, block in rendered:
+        if len(block) > remaining:
+            if selected:
+                break
+            block = block[-remaining:]
+        selected.append((run_id, block))
+        remaining -= len(block) + 2
+        if remaining <= 0:
+            break
+    selected.reverse()
+    return "\n\n".join(block for _, block in selected), [run_id for run_id, _ in selected]
 
 
 def _plan_and_budget(db: Any, user_id: UUID, requested_budget: int | None, config: WorkConfig):
@@ -229,6 +321,27 @@ def _load_connections(
     return rows
 
 
+def _provider_billing_identity(
+    provider_session: ProviderSession, *, provider_name: str
+) -> dict[str, object]:
+    reported_model = str(provider_session.model_id or "").strip()
+    if not reported_model:
+        raise WorkBillingIdentityError("The Managed Agent session did not expose agent.model.id")
+    if provider_session.additional_model_ids:
+        raise WorkBillingIdentityError(
+            "Cortex Work cannot component-bill a multi-model Managed Agent session"
+        )
+    return {
+        "provider_model_id": reported_model,
+        "billing_model_id": resolve_work_billing_model(reported_model),
+        "billing_model_source": f"{provider_name}_session_agent_snapshot",
+        "provider_agent_id": provider_session.agent_id,
+        "provider_agent_version": provider_session.agent_version,
+        "provider_model_effort": provider_session.effort,
+        "provider_model_speed": provider_session.speed,
+    }
+
+
 def start_work_run(
     *,
     user_id: UUID,
@@ -237,12 +350,14 @@ def start_work_run(
     instruction: str,
     input_file_ids: Sequence[UUID],
     enabled_connection_ids: Sequence[UUID],
-    web_enabled: bool,
+    web_mode: str,
     max_credit_budget: int | None,
     provider: AgentProvider | None = None,
     config: WorkConfig | None = None,
 ) -> dict[str, Any]:
     resolved = require_work_enabled(config)
+    web_decision = resolve_work_web_mode(instruction, web_mode)
+    web_enabled = web_decision.effective_enabled
     if web_enabled and not resolved.web_enabled:
         raise work_http_error(
             status.HTTP_403_FORBIDDEN, "work_web_disabled", "Web access is not enabled for Work."
@@ -293,10 +408,14 @@ def start_work_run(
             ) from exc
         configuration = {
             "web_enabled": web_enabled,
+            "requested_web_mode": web_decision.requested_mode,
+            "effective_web_enabled": web_enabled,
+            "web_current_information": web_decision.current_information,
+            "web_resolution_reason": web_decision.reason,
+            "web_policy_version": "work-web-v1",
             "input_file_ids": [str(value) for value in input_file_ids],
             "enabled_connection_ids": [str(value) for value in enabled_connection_ids],
             "plan_code": effective.plan.code,
-            "billing_model": resolved.billing_model,
             "provider_usage_baseline": {},
         }
         run, created = repository.create_work_run(
@@ -306,6 +425,7 @@ def start_work_run(
             instruction=instruction,
             provider=agent.name,
             max_credit_budget=budget,
+            max_output_tokens=resolved.default_output_token_limit,
             reserved_credits=budget,
             billing_reservation_id=reservation.id,
             configuration_snapshot=configuration,
@@ -352,6 +472,8 @@ def start_work_run(
 
     provider_session_id = str(work_session.get("provider_session_id") or "").strip()
     resources: list[ProviderResource] = []
+    continuation_context = ""
+    continuation_run_ids: list[str] = []
     try:
         storage = get_object_storage() if files else None
         for file_row in files:
@@ -375,8 +497,24 @@ def start_work_run(
                     metadata={"mount_path": resource.mount_path},
                 )
 
+        mcp_servers = [
+            ProviderMcpServer(
+                name=f"cortex_{str(row['id']).replace('-', '')[:16]}",
+                url=str(row["server_url"]),
+                enabled_tools=tuple(
+                    str(item) for item in (row.get("metadata") or {}).get("enabled_tools", [])
+                ),
+            )
+            for row in connections
+            if row.get("connection_type") == "mcp_remote" and row.get("server_url")
+        ]
+        vault_ids = [
+            str(row["provider_vault_id"]) for row in connections if row.get("provider_vault_id")
+        ]
+        connection_ids = sorted(str(row["id"]) for row in connections)
         capability_snapshot = {
-            "connection_ids": sorted(str(row["id"]) for row in connections),
+            "connection_ids": connection_ids,
+            "vault_ids": sorted(vault_ids),
             "web_enabled": web_enabled,
         }
         prior_capabilities = (
@@ -384,8 +522,11 @@ def start_work_run(
             if isinstance(work_session.get("metadata"), Mapping)
             else None
         )
-        reuse_provider_session = (
-            bool(provider_session_id) and prior_capabilities == capability_snapshot
+        reuse_provider_session = _can_reuse_provider_session(
+            provider_session_id,
+            prior_capabilities,
+            connection_ids,
+            vault_ids,
         )
         resume_budget_pause = False
         if reuse_provider_session and provider_session_id:
@@ -400,6 +541,11 @@ def start_work_run(
             )
             for resource in resources:
                 agent.add_resource(provider_session_id, resource)
+            agent.update_session_tools(
+                provider_session_id,
+                mcp_servers=mcp_servers,
+                web_enabled=web_enabled,
+            )
             agent.extend_budget(
                 provider_session_id,
                 budget,
@@ -427,36 +573,79 @@ def start_work_run(
                     for file_row, resource in zip(files, resources, strict=True)
                 }
             )
-            mcp_servers = [
-                ProviderMcpServer(
-                    name=f"cortex_{str(row['id']).replace('-', '')[:16]}",
-                    url=str(row["server_url"]),
-                    enabled_tools=tuple(
-                        str(item) for item in (row.get("metadata") or {}).get("enabled_tools", [])
-                    ),
-                )
-                for row in connections
-                if row.get("connection_type") == "mcp_remote" and row.get("server_url")
-            ]
             created_session = agent.create_session(
                 title=str(work_session.get("title") or instruction)[:200],
                 resources=list(resources_by_file.values()),
                 mcp_servers=mcp_servers,
-                vault_ids=[
-                    str(row["provider_vault_id"])
-                    for row in connections
-                    if row.get("provider_vault_id")
-                ],
+                vault_ids=vault_ids,
                 web_enabled=web_enabled,
                 max_credit_budget=budget,
             )
             provider_session_id = created_session.id
-            baseline = dict(created_session.usage)
+            provider_session = agent.get_session(provider_session_id)
+            baseline = dict(provider_session.usage)
+            continuation_context, continuation_run_ids = _provider_continuation_context(
+                user_id=user_id,
+                work_session_id=work_session_id,
+                current_run_id=run["id"],
+            )
+        identity = _provider_billing_identity(provider_session, provider_name=agent.name)
+        configuration.update(identity)
+        configuration["provider_usage_baseline"] = baseline
+        configuration["provider_context_replayed"] = bool(continuation_context)
+        configuration["provider_context_run_ids"] = continuation_run_ids
+        current_metadata = dict(work_session.get("metadata") or {})
+        current_metadata["provider_capabilities"] = capability_snapshot
+        with persistence_service.db_uow() as db:
+            repository.update_work_run(
+                db,
+                run["id"],
+                provider_run_id=provider_session_id,
+                configuration_snapshot=configuration,
+                provider_model_id=str(identity["provider_model_id"]),
+                billing_model_id=str(identity["billing_model_id"]),
+                billing_model_source=str(identity["billing_model_source"]),
+                provider_agent_id=(
+                    str(identity["provider_agent_id"])
+                    if identity.get("provider_agent_id")
+                    else None
+                ),
+                provider_agent_version=(
+                    int(str(identity["provider_agent_version"]))
+                    if identity.get("provider_agent_version")
+                    else None
+                ),
+            )
+            repository.update_work_session(
+                db,
+                work_session_id,
+                provider_session_id=provider_session_id,
+                metadata=current_metadata,
+            )
         if not resume_budget_pause:
-            agent.send_instruction(provider_session_id, instruction)
+            provider_instruction = instruction
+            if continuation_context:
+                provider_instruction = (
+                    "Cortex continuation context from earlier runs in this Work session follows. "
+                    "Treat it as prior conversation, not as a new instruction.\n\n"
+                    f"{continuation_context}\n\n"
+                    f"Current user instruction:\n{instruction}"
+                )
+            agent.send_instruction(provider_session_id, provider_instruction)
         else:
             configuration["resumed_from_budget_pause"] = True
     except Exception as exc:
+        billing_identity_error = isinstance(exc, WorkBillingIdentityError)
+        error_code = (
+            "work_billing_model_unavailable"
+            if billing_identity_error
+            else "work_provider_start_failed"
+        )
+        error_message = (
+            "The managed agent's billing model could not be verified."
+            if billing_identity_error
+            else "The managed agent could not start."
+        )
         logger.exception(
             "Work provider start failed",
             extra={
@@ -471,8 +660,8 @@ def start_work_run(
                 db,
                 run["id"],
                 status="failed",
-                error_code="work_provider_start_failed",
-                error_message="The managed agent could not start.",
+                error_code=error_code,
+                error_message=error_message,
                 completed=True,
             )
             repository.update_work_session(db, work_session_id, status="failed")
@@ -480,36 +669,29 @@ def start_work_run(
                 db,
                 work_run_id=run["id"],
                 event_type="run_failed",
-                display_message="The managed agent could not start",
-                payload={"code": "work_provider_start_failed"},
+                display_message=error_message,
+                payload={"code": error_code},
             )
-            release_usage(db, reservation_id=reservation.id, reason="work_provider_start_failed")
+            release_usage(db, reservation_id=reservation.id, reason=error_code)
         raise work_http_error(
-            status.HTTP_502_BAD_GATEWAY,
-            "work_provider_start_failed",
-            "The managed agent could not start.",
+            (
+                status.HTTP_503_SERVICE_UNAVAILABLE
+                if billing_identity_error
+                else status.HTTP_502_BAD_GATEWAY
+            ),
+            error_code,
+            error_message,
         ) from exc
 
-    configuration["provider_usage_baseline"] = baseline
     with persistence_service.db_uow() as db:
-        # Preserve the original immutable request snapshot while adding the observed baseline.
-        from db.tables import get_table
-        from sqlalchemy import func, update
-
-        work_runs = get_table("work_runs")
-        db.execute(
-            update(work_runs)
-            .where(work_runs.c.id == run["id"])
-            .values(
-                configuration_snapshot=configuration,
-                status="running",
-                provider_run_id=provider_session_id,
-                started_at=func.now(),
-                updated_at=func.now(),
-            )
+        repository.update_work_run(
+            db,
+            run["id"],
+            status="running",
+            provider_run_id=provider_session_id,
+            configuration_snapshot=configuration,
+            started=True,
         )
-        current_metadata = dict(work_session.get("metadata") or {})
-        current_metadata["provider_capabilities"] = capability_snapshot
         repository.update_work_session(
             db,
             work_session_id,
@@ -528,13 +710,13 @@ def start_work_run(
 
 
 def _usage_for_run(
-    run: Mapping[str, object], current_usage: Mapping[str, object], config: WorkConfig
+    run: Mapping[str, object], current_usage: Mapping[str, object]
 ) -> WorkCreditUsage:
     snapshot = run.get("configuration_snapshot")
     config_snapshot = snapshot if isinstance(snapshot, Mapping) else {}
     baseline_raw = config_snapshot.get("provider_usage_baseline")
     baseline = baseline_raw if isinstance(baseline_raw, Mapping) else {}
-    model = str(config_snapshot.get("billing_model") or config.billing_model or "")
+    model = str(run.get("billing_model_id") or config_snapshot.get("billing_model_id") or "")
     return calculate_work_credit_usage(current_usage, baseline, model=model)
 
 
@@ -595,6 +777,11 @@ def _settle_work_billing(db: Any, run: Mapping[str, object], usage: WorkCreditUs
             "initial_query": privacy_service.sanitize_user_message_for_storage(
                 str(run["instruction"])
             )[:500],
+            "provider_model_id": run.get("provider_model_id"),
+            "billing_model_id": run.get("billing_model_id"),
+            "billing_model_source": run.get("billing_model_source"),
+            "provider_agent_id": run.get("provider_agent_id"),
+            "provider_agent_version": run.get("provider_agent_version"),
             "managed_runtime_credits": usage.runtime_credits,
             "managed_active_seconds": usage.active_seconds,
             "managed_web_credits": usage.web_credits,
@@ -717,12 +904,99 @@ def reconcile_work_run(
             run,
         )
         provider_session = agent.get_session(provider_session_id)
-        usage = _usage_for_run(run, provider_session.usage, resolved)
+        identity = _provider_billing_identity(provider_session, provider_name=agent.name)
+        existing_provider_model = str(run.get("provider_model_id") or "").strip()
+        if existing_provider_model and existing_provider_model != identity["provider_model_id"]:
+            raise WorkBillingIdentityError(
+                "The Managed Agent session model changed after the Work run started"
+            )
+        if not existing_provider_model or not run.get("billing_model_id"):
+            configuration = dict(run.get("configuration_snapshot") or {})
+            configuration.update(identity)
+            with persistence_service.db_uow() as db:
+                repository.update_work_run(
+                    db,
+                    work_run_id,
+                    configuration_snapshot=configuration,
+                    provider_model_id=str(identity["provider_model_id"]),
+                    billing_model_id=str(identity["billing_model_id"]),
+                    billing_model_source=str(identity["billing_model_source"]),
+                    provider_agent_id=(
+                        str(identity["provider_agent_id"])
+                        if identity.get("provider_agent_id")
+                        else None
+                    ),
+                    provider_agent_version=(
+                        int(str(identity["provider_agent_version"]))
+                        if identity.get("provider_agent_version")
+                        else None
+                    ),
+                )
+            run = {
+                **run,
+                **identity,
+                "configuration_snapshot": configuration,
+            }
+        usage = _usage_for_run(run, provider_session.usage)
+        max_output_tokens = max(1, int(run.get("max_output_tokens") or 40_000))
+        finalize_threshold = min(
+            resolved.output_finalize_token_threshold,
+            max_output_tokens - 1,
+        )
+        provider_interruptible = _provider_session_is_interruptible(provider_session.status)
+        output_guardrail = resolve_output_guardrail(
+            output_tokens=usage.output_tokens,
+            max_output_tokens=max_output_tokens,
+            finalize_threshold=finalize_threshold,
+            provider_interruptible=provider_interruptible,
+            finalize_already_requested=bool(run.get("output_finalize_requested_at")),
+            interrupt_already_requested=bool(run.get("output_limit_interrupt_requested_at")),
+        )
+        output_limit_reached = output_guardrail.limit_reached
+        send_output_interrupt = output_guardrail.interrupt
+        send_finalize_instruction = output_guardrail.finalize
         budget_reached = usage.total_credits >= int(run["max_credit_budget"])
+        if budget_reached:
+            send_output_interrupt = False
         terminal_status: str | None = "budget_exhausted" if budget_reached else None
         stop_reason: str | None = "credit_limit_reached" if budget_reached else None
         expired_confirmations: list[tuple[UUID, str]] = []
         with persistence_service.db_uow() as db:
+            if send_finalize_instruction:
+                repository.update_work_run(
+                    db,
+                    work_run_id,
+                    output_finalize_requested=True,
+                )
+                repository.append_work_event(
+                    db,
+                    work_run_id=work_run_id,
+                    event_type="output_finalizing",
+                    display_message="Preparing the final deliverable",
+                    payload={
+                        "output_tokens": usage.output_tokens,
+                        "max_output_tokens": max_output_tokens,
+                    },
+                    provider_event_id=f"output-finalize:{work_run_id}",
+                )
+            if send_output_interrupt:
+                repository.update_work_run(
+                    db,
+                    work_run_id,
+                    stop_reason="output_limit_interrupt_requested",
+                    output_limit_interrupt_requested=True,
+                )
+                repository.append_work_event(
+                    db,
+                    work_run_id=work_run_id,
+                    event_type="output_limit_interrupt_requested",
+                    display_message="Output limit reached; stopping Work",
+                    payload={
+                        "output_tokens": usage.output_tokens,
+                        "max_output_tokens": max_output_tokens,
+                    },
+                    provider_event_id=f"output-interrupt:{work_run_id}",
+                )
             provider_by_id = {event.id: event for event in provider_events}
             provider_confirmed_tool_ids = _provider_confirmed_tool_ids(provider_events)
             current_work_session = repository.get_work_session(db, work_session_id) or work_session
@@ -923,6 +1197,13 @@ def reconcile_work_run(
                 if event.terminal_status:
                     terminal_status = event.terminal_status
                     stop_reason = event.stop_reason
+            provider_terminal_seen = any(event.terminal_status for event in provider_events)
+            if output_limit_reached and (not provider_interruptible or provider_terminal_seen):
+                terminal_status = "output_limit_reached"
+                stop_reason = "output_token_limit_reached"
+            elif send_output_interrupt and not budget_reached:
+                terminal_status = None
+                stop_reason = "output_limit_interrupt_requested"
             current_status = terminal_status or (
                 "running" if provider_session.status == "running" else str(run["status"])
             )
@@ -938,12 +1219,20 @@ def reconcile_work_run(
                         event_type=(
                             "budget_exhausted"
                             if terminal_status == "budget_exhausted"
-                            else f"run_{terminal_status}"
+                            else (
+                                "output_limit_reached"
+                                if terminal_status == "output_limit_reached"
+                                else f"run_{terminal_status}"
+                            )
                         ),
                         display_message=(
                             "Credit budget reached"
                             if terminal_status == "budget_exhausted"
-                            else None
+                            else (
+                                "Output limit reached"
+                                if terminal_status == "output_limit_reached"
+                                else None
+                            )
                         ),
                         payload={"stop_reason": stop_reason},
                     )
@@ -952,6 +1241,7 @@ def reconcile_work_run(
                 work_run_id,
                 status=current_status,
                 actual_credits=actual,
+                actual_output_tokens=usage.output_tokens,
                 usage_snapshot=dict(provider_session.usage),
                 provider_cost_snapshot={
                     "provider": agent.name,
@@ -959,6 +1249,13 @@ def reconcile_work_run(
                     "reported_provider_cost_usd": usage.reported_provider_cost_usd,
                     "reconstructed_provider_cost_usd": usage.reconstructed_provider_cost_usd,
                     "provider_floor_credits": usage.provider_floor_credits,
+                    "provider_model_id": identity["provider_model_id"],
+                    "billing_model_id": identity["billing_model_id"],
+                    "billing_model_source": identity["billing_model_source"],
+                    "provider_agent_id": identity.get("provider_agent_id"),
+                    "provider_agent_version": identity.get("provider_agent_version"),
+                    "provider_model_effort": identity.get("provider_model_effort"),
+                    "provider_model_speed": identity.get("provider_model_speed"),
                 },
                 stop_reason=stop_reason,
                 completed=terminal,
@@ -968,7 +1265,7 @@ def reconcile_work_run(
                 work_session_id,
                 status=(
                     "completed"
-                    if current_status == "completed"
+                    if current_status in {"completed", "output_limit_reached"}
                     else (
                         current_status
                         if current_status in {"failed", "cancelled", "waiting_for_approval"}
@@ -978,6 +1275,57 @@ def reconcile_work_run(
             )
             repository.release_sync_lease(db, work_run_id=work_run_id, lease_owner=lease_owner)
             result = updated or run
+        if send_finalize_instruction:
+            try:
+                agent.send_instruction(
+                    provider_session_id,
+                    "Cortex output guardrail: stop optional exploration now, finish the "
+                    "strongest deliverable possible from verified work, save intended output "
+                    "files, and concisely report anything unfinished.",
+                )
+                logger.info(
+                    "Work output finalization requested",
+                    extra={
+                        "extra_fields": {
+                            "event": "work.output_limit.finalize_requested",
+                            "work_run_id": str(work_run_id),
+                            "output_tokens": usage.output_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    },
+                )
+            except Exception:
+                with persistence_service.db_uow() as db:
+                    repository.clear_work_output_finalize_request(db, work_run_id)
+                logger.exception(
+                    "Work output finalization request failed",
+                    extra={
+                        "extra_fields": {
+                            "event": "work.output_limit.finalize_failed",
+                            "work_run_id": str(work_run_id),
+                        }
+                    },
+                )
+        if send_output_interrupt:
+            try:
+                agent.interrupt(provider_session_id)
+                auto_confirm.clear()
+                auto_deny.clear()
+                logger.info(
+                    "Work output limit interrupt sent",
+                    extra={
+                        "extra_fields": {
+                            "event": "work.output_limit.interrupt_sent",
+                            "work_run_id": str(work_run_id),
+                            "output_tokens": usage.output_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    },
+                )
+            except Exception:
+                with persistence_service.db_uow() as db:
+                    repository.clear_work_output_interrupt_request(db, work_run_id)
+                raise
         for tool_use_id in auto_confirm:
             try:
                 agent.confirm_tool(
@@ -1179,9 +1527,14 @@ def import_work_artifacts(
         if work_session is None:
             raise work_http_error(409, "work_session_missing", "The Work session is unavailable.")
         effective = resolve_effective_subscription(db, user_id)
-        input_rows = repository.list_work_run_files(db, work_run_id, user_id, role="input")
+        input_rows = repository.list_work_session_files(
+            db,
+            UUID(str(run["work_session_id"])),
+            user_id,
+            role="input",
+        )
     provider_session_id = str(
-        work_session.get("provider_session_id") or run.get("provider_run_id") or ""
+        run.get("provider_run_id") or work_session.get("provider_session_id") or ""
     )
     if not provider_session_id:
         return []
@@ -1192,108 +1545,126 @@ def import_work_artifacts(
     storage = get_object_storage()
     imported: list[dict[str, Any]] = []
     for artifact in agent.list_artifacts(provider_session_id):
-        if artifact.id in input_provider_ids:
+        if artifact.id in input_provider_ids or not artifact.downloadable:
             continue
-        with persistence_service.db_uow(commit_on_success=False) as db:
-            if (
-                repository.find_work_artifact_by_provider_file(
-                    db, user_id=user_id, provider_file_id=artifact.id
-                )
-                is not None
-            ):
-                continue
-        filename = PurePosixPath(str(artifact.filename or "artifact").replace("\\", "/")).name
-        filename = _SAFE_FILENAME.sub("_", filename).strip("._")[:180]
-        if not filename or filename in {".", ".."}:
-            logger.warning("Rejected unsafe Work artifact filename")
-            continue
-        if artifact.size_bytes is not None and (
-            artifact.size_bytes <= 0 or artifact.size_bytes > max_size
-        ):
-            logger.warning(
-                "Rejected oversized Work artifact",
-                extra={"extra_fields": {"size_bytes": artifact.size_bytes}},
-            )
-            continue
-        payload = agent.download_artifact(artifact.id)
-        if not payload or len(payload) > max_size:
-            logger.warning(
-                "Rejected invalid Work artifact payload",
-                extra={"extra_fields": {"size_bytes": len(payload)}},
-            )
-            continue
-        mime_type = str(
-            artifact.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        ).lower()
-        file_id = uuid4()
-        today = datetime.now(UTC)
-        key = "/".join(
-            part
-            for part in (
-                storage.key_prefix,
-                "users",
-                str(user_id),
-                "work",
-                f"{today:%Y/%m/%d}",
-                str(file_id),
-                filename,
-            )
-            if part
-        )
-        storage.put_bytes(
-            key=key,
-            payload=payload,
-            content_type=mime_type,
-            metadata={"cortex-file-id": str(file_id), "work-run-id": str(work_run_id)},
-        )
         try:
-            with persistence_service.db_uow() as db:
-                expires = today + timedelta(
-                    hours=max(1, int(os.getenv("ATTACHMENTS_FILE_TTL_HOURS", "168")))
+            with persistence_service.db_uow(commit_on_success=False) as db:
+                if (
+                    repository.find_work_artifact_by_provider_file(
+                        db, user_id=user_id, provider_file_id=artifact.id
+                    )
+                    is not None
+                ):
+                    continue
+            filename = PurePosixPath(str(artifact.filename or "artifact").replace("\\", "/")).name
+            filename = _SAFE_FILENAME.sub("_", filename).strip("._")[:180]
+            if not filename or filename in {".", ".."}:
+                logger.warning("Rejected unsafe Work artifact filename")
+                continue
+            if artifact.size_bytes is not None and (
+                artifact.size_bytes <= 0 or artifact.size_bytes > max_size
+            ):
+                logger.warning(
+                    "Rejected oversized Work artifact",
+                    extra={"extra_fields": {"size_bytes": artifact.size_bytes}},
                 )
-                create_uploaded_file(
-                    db,
-                    file_id=file_id,
-                    user_id=user_id,
-                    original_filename=filename,
-                    mime_type=mime_type,
-                    size_bytes=len(payload),
-                    sha256=hashlib.sha256(payload).hexdigest(),
-                    storage_bucket=storage.bucket,
-                    storage_key=key,
-                    status="ready",
-                    ingestion_meta={"source": "work_artifact", "work_run_id": str(work_run_id)},
-                    expires_at=expires,
+                continue
+            payload = agent.download_artifact(artifact.id)
+            if not payload or len(payload) > max_size:
+                logger.warning(
+                    "Rejected invalid Work artifact payload",
+                    extra={"extra_fields": {"size_bytes": len(payload)}},
                 )
-                linked, _ = repository.attach_work_file(
-                    db,
-                    work_run_id=work_run_id,
-                    user_id=user_id,
-                    file_id=file_id,
-                    role="artifact",
-                    source="agent",
-                    provider_file_id=artifact.id,
-                    artifact_type=mime_type,
-                    metadata={"imported_from_managed_session": True},
+                continue
+            mime_type = str(
+                artifact.mime_type
+                or mimetypes.guess_type(filename)[0]
+                or "application/octet-stream"
+            ).lower()
+            file_id = uuid4()
+            today = datetime.now(UTC)
+            key = "/".join(
+                part
+                for part in (
+                    storage.key_prefix,
+                    "users",
+                    str(user_id),
+                    "work",
+                    f"{today:%Y/%m/%d}",
+                    str(file_id),
+                    filename,
                 )
-                repository.append_work_event(
-                    db,
-                    work_run_id=work_run_id,
-                    event_type="artifact_created",
-                    display_message=f"Created {filename}",
-                    payload={
-                        "file_id": str(file_id),
-                        "filename": filename,
-                        "mime_type": mime_type,
-                        "size_bytes": len(payload),
-                    },
-                    provider_event_id=f"artifact:{artifact.id}",
-                )
-                imported.append(linked)
-        except Exception:
+                if part
+            )
+            storage.put_bytes(
+                key=key,
+                payload=payload,
+                content_type=mime_type,
+                metadata={"cortex-file-id": str(file_id), "work-run-id": str(work_run_id)},
+            )
             try:
-                storage.delete_object(key=key)
+                with persistence_service.db_uow() as db:
+                    expires = today + timedelta(
+                        hours=max(1, int(os.getenv("ATTACHMENTS_FILE_TTL_HOURS", "168")))
+                    )
+                    create_uploaded_file(
+                        db,
+                        file_id=file_id,
+                        user_id=user_id,
+                        original_filename=filename,
+                        mime_type=mime_type,
+                        size_bytes=len(payload),
+                        sha256=hashlib.sha256(payload).hexdigest(),
+                        storage_bucket=storage.bucket,
+                        storage_key=key,
+                        status="ready",
+                        ingestion_meta={
+                            "source": "work_artifact",
+                            "work_run_id": str(work_run_id),
+                        },
+                        expires_at=expires,
+                    )
+                    linked, _ = repository.attach_work_file(
+                        db,
+                        work_run_id=work_run_id,
+                        user_id=user_id,
+                        file_id=file_id,
+                        role="artifact",
+                        source="agent",
+                        provider_file_id=artifact.id,
+                        artifact_type=mime_type,
+                        metadata={"imported_from_managed_session": True},
+                    )
+                    repository.append_work_event(
+                        db,
+                        work_run_id=work_run_id,
+                        event_type="artifact_created",
+                        display_message=f"Created {filename}",
+                        payload={
+                            "file_id": str(file_id),
+                            "filename": filename,
+                            "mime_type": mime_type,
+                            "size_bytes": len(payload),
+                        },
+                        provider_event_id=f"artifact:{artifact.id}",
+                    )
+                    imported.append(linked)
             except Exception:
-                logger.exception("Failed to remove orphaned Work artifact object")
-            raise
+                try:
+                    storage.delete_object(key=key)
+                except Exception:
+                    logger.exception("Failed to remove orphaned Work artifact object")
+                raise
+        except Exception:
+            logger.exception(
+                "Work artifact import item failed",
+                extra={
+                    "extra_fields": {
+                        "event": "work.artifact.import.item_failed",
+                        "work_run_id": str(work_run_id),
+                        "filename": str(artifact.filename or "artifact")[:180],
+                    }
+                },
+            )
+            continue
     return imported

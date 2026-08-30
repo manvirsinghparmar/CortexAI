@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 from db.tables import get_table
 
 ACTIVE_RUN_STATUSES = frozenset({"created", "planning", "running", "waiting_for_approval"})
-TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "budget_exhausted"})
+TERMINAL_RUN_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "budget_exhausted", "output_limit_reached"}
+)
 
 
 def _row(result: Any) -> dict[str, Any] | None:
@@ -134,6 +136,7 @@ def create_work_run(
     instruction: str,
     provider: str,
     max_credit_budget: int,
+    max_output_tokens: int,
     reserved_credits: int = 0,
     billing_reservation_id: UUID | None = None,
     configuration_snapshot: Mapping[str, object] | None = None,
@@ -146,6 +149,7 @@ def create_work_run(
         "status": "created",
         "provider": provider,
         "max_credit_budget": max_credit_budget,
+        "max_output_tokens": max_output_tokens,
         "reserved_credits": reserved_credits,
         "billing_reservation_id": billing_reservation_id,
         "configuration_snapshot": dict(configuration_snapshot or {}),
@@ -230,6 +234,25 @@ def count_active_work_runs(db: Session, user_id: UUID) -> int:
     return int(db.execute(stmt).scalar_one())
 
 
+def list_reconcilable_work_runs(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
+    runs = get_table("work_runs")
+    work_sessions = get_table("work_sessions")
+    stmt = (
+        select(runs.c.id, work_sessions.c.user_id)
+        .join(work_sessions, work_sessions.c.id == runs.c.work_session_id)
+        .where(
+            runs.c.status.in_(ACTIVE_RUN_STATUSES),
+            or_(
+                runs.c.provider_run_id.is_not(None),
+                work_sessions.c.provider_session_id.is_not(None),
+            ),
+        )
+        .order_by(runs.c.updated_at)
+        .limit(max(1, limit))
+    )
+    return [dict(item._mapping) for item in db.execute(stmt)]
+
+
 def update_work_run(
     db: Session,
     work_run_id: UUID,
@@ -238,7 +261,16 @@ def update_work_run(
     provider_run_id: str | None = None,
     reserved_credits: int | None = None,
     actual_credits: int | None = None,
+    actual_output_tokens: int | None = None,
+    provider_model_id: str | None = None,
+    billing_model_id: str | None = None,
+    billing_model_source: str | None = None,
+    provider_agent_id: str | None = None,
+    provider_agent_version: int | None = None,
+    output_finalize_requested: bool = False,
+    output_limit_interrupt_requested: bool = False,
     billing_reservation_id: UUID | None = None,
+    configuration_snapshot: Mapping[str, object] | None = None,
     usage_snapshot: Mapping[str, object] | None = None,
     provider_cost_snapshot: Mapping[str, object] | None = None,
     provider_cursor: str | None = None,
@@ -255,7 +287,16 @@ def update_work_run(
         "provider_run_id": provider_run_id,
         "reserved_credits": reserved_credits,
         "actual_credits": actual_credits,
+        "actual_output_tokens": actual_output_tokens,
+        "provider_model_id": provider_model_id,
+        "billing_model_id": billing_model_id,
+        "billing_model_source": billing_model_source,
+        "provider_agent_id": provider_agent_id,
+        "provider_agent_version": provider_agent_version,
         "billing_reservation_id": billing_reservation_id,
+        "configuration_snapshot": (
+            dict(configuration_snapshot) if configuration_snapshot is not None else None
+        ),
         "usage_snapshot": dict(usage_snapshot) if usage_snapshot is not None else None,
         "provider_cost_snapshot": (
             dict(provider_cost_snapshot) if provider_cost_snapshot is not None else None
@@ -271,10 +312,36 @@ def update_work_run(
         values["started_at"] = func.coalesce(table.c.started_at, func.now())
     if completed:
         values["completed_at"] = func.coalesce(table.c.completed_at, func.now())
+    if output_finalize_requested:
+        values["output_finalize_requested_at"] = func.coalesce(
+            table.c.output_finalize_requested_at, func.now()
+        )
+    if output_limit_interrupt_requested:
+        values["output_limit_interrupt_requested_at"] = func.coalesce(
+            table.c.output_limit_interrupt_requested_at, func.now()
+        )
     result = db.execute(
         update(table).where(table.c.id == work_run_id).values(**values).returning(table)
     ).first()
     return _row(result)
+
+
+def clear_work_output_interrupt_request(db: Session, work_run_id: UUID) -> None:
+    table = get_table("work_runs")
+    db.execute(
+        update(table)
+        .where(table.c.id == work_run_id)
+        .values(output_limit_interrupt_requested_at=None, updated_at=func.now())
+    )
+
+
+def clear_work_output_finalize_request(db: Session, work_run_id: UUID) -> None:
+    table = get_table("work_runs")
+    db.execute(
+        update(table)
+        .where(table.c.id == work_run_id)
+        .values(output_finalize_requested_at=None, updated_at=func.now())
+    )
 
 
 def append_work_event(

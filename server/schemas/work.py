@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from server.work.security import normalize_work_title
 
@@ -22,6 +22,7 @@ WorkRunStatus = Literal[
     "failed",
     "cancelled",
     "budget_exhausted",
+    "output_limit_reached",
 ]
 
 
@@ -49,8 +50,24 @@ class WorkRunCreateDTO(BaseModel):
     instruction: str = Field(min_length=1, max_length=100_000)
     input_file_ids: list[UUID] = Field(default_factory=list, max_length=20)
     enabled_connection_ids: list[UUID] = Field(default_factory=list, max_length=20)
-    web_enabled: bool = False
+    web_mode: Literal["auto", "on", "off"] = "auto"
+    web_enabled: bool | None = None
     max_credit_budget: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_web_setting(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        supplied_mode = normalized.get("web_mode")
+        if supplied_mode is None and "web_enabled" in normalized:
+            normalized["web_mode"] = "on" if bool(normalized.get("web_enabled")) else "off"
+        elif supplied_mode is not None and normalized.get("web_enabled") is not None:
+            expected = "on" if bool(normalized["web_enabled"]) else "off"
+            if supplied_mode != expected:
+                raise ValueError("web_mode conflicts with legacy web_enabled")
+        return normalized
 
     @field_validator("instruction")
     @classmethod
@@ -76,8 +93,17 @@ class WorkRunDTO(BaseModel):
     status: WorkRunStatus
     provider: str
     max_credit_budget: int
+    max_output_tokens: int
+    actual_output_tokens: int
     reserved_credits: int
     actual_credits: int
+    provider_model_id: str | None = None
+    billing_model_id: str | None = None
+    billing_model_source: str | None = None
+    provider_agent_id: str | None = None
+    provider_agent_version: int | None = None
+    output_finalize_requested_at: datetime | None = None
+    output_limit_interrupt_requested_at: datetime | None = None
     configuration_snapshot: dict[str, Any] = Field(default_factory=dict)
     usage_snapshot: dict[str, Any] = Field(default_factory=dict)
     stop_reason: str | None = None

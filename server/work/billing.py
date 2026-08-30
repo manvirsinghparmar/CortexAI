@@ -16,6 +16,10 @@ ANTHROPIC_WEB_SEARCH_USD = Decimal("0.01")
 USD_CENTS_PER_DOLLAR = Decimal("100")
 
 
+class WorkBillingIdentityError(ValueError):
+    """The provider session did not expose one supported billing identity."""
+
+
 def _int(mapping: Mapping[str, object], key: str) -> int:
     raw = mapping.get(key, 0)
     if not isinstance(raw, (str, int, float, bool)):
@@ -85,8 +89,11 @@ def calculate_work_credit_usage(
 ) -> WorkCreditUsage:
     candidate = ModelRegistry.from_yaml().find_model("claude", model)
     if candidate is None or not candidate.enabled:
-        raise ValueError(f"Managed Agent billing model is absent or disabled: {model}")
+        raise WorkBillingIdentityError(
+            f"Managed Agent billing model is absent or disabled: {model}"
+        )
 
+    canonical_model = candidate.model_name
     cache_current = _nested(current, "cache_creation")
     cache_baseline = _nested(baseline, "cache_creation")
     normal_input = _delta(_int(current, "input_tokens"), _int(baseline, "input_tokens"))
@@ -165,5 +172,16 @@ def calculate_work_credit_usage(
         reported_provider_cost_usd=float(reported_provider_cost_usd),
         provider_floor_credits=provider_floor_credits,
         component_credits=component_credits,
-        model=model,
+        model=canonical_model,
     )
+
+
+def resolve_work_billing_model(model: str) -> str:
+    """Return the canonical enabled registry model for a provider-reported ID."""
+
+    candidate = ModelRegistry.from_yaml().find_model("claude", str(model or "").strip())
+    if candidate is None or not candidate.enabled:
+        raise WorkBillingIdentityError(
+            f"Managed Agent billing model is absent or disabled: {model}"
+        )
+    return candidate.model_name

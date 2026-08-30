@@ -10,7 +10,7 @@ from server.work.anthropic_provider import (
     normalize_anthropic_event,
 )
 from server.work.billing import calculate_work_credit_usage
-from server.work.config import WorkConfig
+from server.work.config import WorkConfig, load_work_config
 from server.work.provider import ProviderMcpServer, ProviderResource
 from server.work.security import classify_action, redact_mapping, validate_remote_https_url
 
@@ -25,8 +25,11 @@ def _config() -> WorkConfig:
         provider="fake",
         agent_id="agent_123",
         environment_id="environment_123",
-        billing_model="claude-haiku-4-5",
         default_credit_budget=1_000_000,
+        default_output_token_limit=40_000,
+        output_finalize_token_threshold=32_000,
+        reconciler_enabled=True,
+        reconciler_interval_seconds=2,
         event_sync_interval_seconds=1,
         sse_heartbeat_seconds=15,
         approval_timeout_seconds=3600,
@@ -96,6 +99,25 @@ def test_anthropic_tool_confirmation_retains_replay_identity():
         "tool_use_id": "tool-1",
         "result": "allow",
     }
+
+
+def test_work_runtime_uses_session_model_without_a_billing_model_environment(monkeypatch):
+    monkeypatch.setenv("CORTEX_WORK_AGENT_PROVIDER", "anthropic_managed_agents")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_MANAGED_AGENT_ID", "agent-1")
+    monkeypatch.setenv("ANTHROPIC_MANAGED_ENVIRONMENT_ID", "environment-1")
+    monkeypatch.delenv("ANTHROPIC_MANAGED_BILLING_MODEL", raising=False)
+    monkeypatch.delenv("CORTEX_WORK_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("CORTEX_WORK_OUTPUT_FINALIZE_TOKENS", raising=False)
+    load_work_config.cache_clear()
+    try:
+        config = load_work_config()
+        config.validate_provider()
+        assert config.default_output_token_limit == 40_000
+        assert config.output_finalize_token_threshold == 32_000
+        assert not hasattr(config, "billing_model")
+    finally:
+        load_work_config.cache_clear()
 
 
 def test_usage_delta_prevents_followup_double_charge_and_counts_runtime_web():
@@ -282,17 +304,60 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_mcp_and_
 
         def create(self, **kwargs):
             calls["create"] = kwargs
-            return {"id": "session-1", "status": "idle", "usage": {}}
+            return {
+                "id": "session-1",
+                "status": "idle",
+                "usage": {},
+                "agent": {
+                    "id": "agent-1",
+                    "version": 7,
+                    "model": {
+                        "id": "claude-haiku-4-5-20251001",
+                        "effort": {"type": "high"},
+                        "speed": "standard",
+                    },
+                },
+            }
 
         def retrieve(self, session_id, **kwargs):
-            return {"id": session_id, "status": "running", "usage": {}}
+            return {
+                "id": session_id,
+                "status": "running",
+                "usage": {},
+                "agent": {
+                    "id": "agent-1",
+                    "version": 7,
+                    "model": {"id": "claude-haiku-4-5-20251001"},
+                },
+            }
 
         def update(self, session_id, **kwargs):
             calls["update"] = (session_id, kwargs)
             return {"id": session_id, "status": "running", "usage": {}}
 
     client = SimpleNamespace(
-        beta=SimpleNamespace(sessions=Sessions(), files=SimpleNamespace(list=lambda **_kwargs: [])),
+        beta=SimpleNamespace(
+            sessions=Sessions(),
+            files=SimpleNamespace(
+                list=lambda **_kwargs: [
+                    {
+                        "id": "artifact-1",
+                        "filename": "report.md",
+                        "mime_type": "text/markdown",
+                        "size_bytes": 12,
+                        "downloadable": True,
+                    },
+                    {
+                        "id": "input-1",
+                        "filename": "input.txt",
+                        "mime_type": "text/plain",
+                        "size_bytes": 4,
+                        "downloadable": False,
+                    },
+                ],
+                download=lambda _id, **_kwargs: b"artifact data",
+            ),
+        ),
         files=SimpleNamespace(
             upload=lambda **_kwargs: {"id": "file-1"}, download=lambda _id: b"data"
         ),
@@ -307,6 +372,11 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_mcp_and_
         max_credit_budget=100_000,
     )
     assert created.id == "session-1"
+    assert created.model_id == "claude-haiku-4-5-20251001"
+    assert created.agent_id == "agent-1"
+    assert created.agent_version == 7
+    assert created.effort == "high"
+    assert created.speed == "standard"
     request = calls["create"]
     assert isinstance(request, dict)
     assert request["title"] == "Prepare report for the team"
@@ -334,6 +404,15 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_mcp_and_
         assert builtin_configs[name]["permission_policy"] == {"type": "always_allow"}
     provider.list_events("session-1")
     assert calls["list"][1]["limit"] == 1000
+    provider.update_session_tools(
+        "session-1",
+        mcp_servers=[],
+        web_enabled=True,
+    )
+    tool_update = calls["update"]
+    assert tool_update[0] == "session-1"
+    assert set(tool_update[1]["agent"]) == {"mcp_servers", "tools"}
+    assert tool_update[1]["agent"]["tools"][0]["configs"][-1]["enabled"] is True
     provider.extend_budget(
         "session-1",
         25_000,
@@ -348,3 +427,9 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_mcp_and_
     provider.confirm_tool("session-1", "tool-1", allow=False, deny_message="No")
     sent = calls["send"]
     assert sent[1]["events"][0]["type"] == "user.tool_confirmation"
+    artifacts = provider.list_artifacts("session-1")
+    assert [(item.id, item.downloadable) for item in artifacts] == [
+        ("artifact-1", True),
+        ("input-1", False),
+    ]
+    assert provider.download_artifact("artifact-1") == b"artifact data"

@@ -72,8 +72,17 @@ def work_db(monkeypatch):
         Column("provider_run_id", String(255)),
         Column("provider_cursor", String(255)),
         Column("max_credit_budget", BigInteger, nullable=False),
+        Column("max_output_tokens", BigInteger, nullable=False, default=40_000),
+        Column("actual_output_tokens", BigInteger, nullable=False, default=0),
         Column("reserved_credits", BigInteger, nullable=False, default=0),
         Column("actual_credits", BigInteger, nullable=False, default=0),
+        Column("provider_model_id", String(255)),
+        Column("billing_model_id", String(255)),
+        Column("billing_model_source", String(255)),
+        Column("provider_agent_id", String(255)),
+        Column("provider_agent_version", BigInteger),
+        Column("output_finalize_requested_at", DateTime(timezone=True)),
+        Column("output_limit_interrupt_requested_at", DateTime(timezone=True)),
         Column("billing_reservation_id", Uuid),
         Column("configuration_snapshot", JSON, nullable=False, default=dict),
         Column("usage_snapshot", JSON, nullable=False, default=dict),
@@ -279,6 +288,7 @@ def _run(db, work_session_id, request_id="work-request"):
         instruction="Prepare the report",
         provider="fake",
         max_credit_budget=100_000,
+        max_output_tokens=40_000,
         reserved_credits=100_000,
     )[0]
 
@@ -308,6 +318,7 @@ def test_duplicate_request_id_returns_the_original_run(work_db):
         instruction="Prepare the report",
         provider="fake",
         max_credit_budget=25_000,
+        max_output_tokens=40_000,
     )
     repeated, repeated_created = repository.create_work_run(
         db,
@@ -316,6 +327,7 @@ def test_duplicate_request_id_returns_the_original_run(work_db):
         instruction="Prepare the report",
         provider="fake",
         max_credit_budget=25_000,
+        max_output_tokens=40_000,
     )
     assert created is True
     assert repeated_created is False
@@ -656,3 +668,34 @@ def test_sync_lease_allows_one_owner_until_release(work_db):
     assert repository.claim_sync_lease(db, work_run_id=run["id"], lease_owner="worker-b") is False
     repository.release_sync_lease(db, work_run_id=run["id"], lease_owner="worker-a")
     assert repository.claim_sync_lease(db, work_run_id=run["id"], lease_owner="worker-b") is True
+
+
+def test_failed_output_guardrail_requests_can_be_retried(work_db):
+    db, tables = work_db
+    _, session = _owned_session(db, tables)
+    run = _run(db, session["id"], request_id="guardrail-retry")
+    repository.update_work_run(
+        db,
+        run["id"],
+        output_finalize_requested=True,
+        output_limit_interrupt_requested=True,
+    )
+
+    repository.clear_work_output_finalize_request(db, run["id"])
+    repository.clear_work_output_interrupt_request(db, run["id"])
+
+    cleared = repository.get_work_run(db, run["id"])
+    assert cleared is not None
+    assert cleared["output_finalize_requested_at"] is None
+    assert cleared["output_limit_interrupt_requested_at"] is None
+
+
+def test_background_reconciliation_waits_for_a_persisted_provider_session(work_db):
+    db, tables = work_db
+    user_id, session = _owned_session(db, tables)
+    run = _run(db, session["id"], request_id="reconciler-ready")
+    assert repository.list_reconcilable_work_runs(db) == []
+
+    repository.update_work_run(db, run["id"], provider_run_id="provider-session-1")
+
+    assert repository.list_reconcilable_work_runs(db) == [{"id": run["id"], "user_id": user_id}]

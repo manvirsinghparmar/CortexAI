@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkPage } from "../pages/WorkPage";
 import { useWorkStore } from "../store/workStore";
-import type { WorkEvent, WorkRun, WorkSession } from "../types";
+import type { WorkArtifact, WorkEvent, WorkRun, WorkSession } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
   beginToolOAuth: vi.fn(),
@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   listToolCatalog: vi.fn(),
   listToolConnections: vi.fn(),
   listWorkArtifacts: vi.fn(),
+  listWorkRuns: vi.fn(),
   listWorkSessions: vi.fn(),
   sendWorkInstruction: vi.fn(),
   startWorkRun: vi.fn(),
@@ -89,7 +90,11 @@ vi.mock("../components/work/WorkComposer", () => ({
   ),
 }));
 vi.mock("../components/work/WorkRail", () => ({ WorkRail: () => null }));
-vi.mock("../components/work/WorkArtifacts", () => ({ WorkArtifacts: () => null }));
+vi.mock("../components/work/WorkArtifacts", () => ({
+  WorkArtifacts: ({ artifacts }: { artifacts: WorkArtifact[] }) => (
+    <div>{artifacts.map((artifact) => <span key={artifact.id}>{artifact.filename}</span>)}</div>
+  ),
+}));
 vi.mock("../components/work/WorkApproval", () => ({ WorkApproval: () => null }));
 
 describe("WorkPage terminal event synchronization", () => {
@@ -103,6 +108,7 @@ describe("WorkPage terminal event synchronization", () => {
 
     apiMocks.getWorkSession.mockResolvedValue(workSession());
     apiMocks.getLatestWorkRun.mockResolvedValue(workRun());
+    apiMocks.listWorkRuns.mockResolvedValue([workRun()]);
     apiMocks.createWorkSession.mockResolvedValue(
       workSession({ status: "idle", latest_run_status: null }),
     );
@@ -186,6 +192,7 @@ describe("WorkPage terminal event synchronization", () => {
 
     const goal = await screen.findByRole("textbox", { name: "Work goal" });
     fireEvent.change(goal, { target: { value: "Prepare a launch report" } });
+    useWorkStore.getState().setWebMode("on");
     fireEvent.click(screen.getByRole("button", { name: "Start work" }));
 
     const starting = await screen.findByRole("status", { name: "Starting work" });
@@ -200,9 +207,57 @@ describe("WorkPage terminal event synchronization", () => {
     });
     expect(apiMocks.startWorkRun).toHaveBeenCalledWith(
       "work-session-1",
-      expect.objectContaining({ instruction: "Prepare a launch report" }),
+      expect.objectContaining({ instruction: "Prepare a launch report", web_mode: "on" }),
       expect.stringMatching(/^work-ui-/),
     );
+  });
+
+  it("keeps earlier prompts, results, and deliverables visible after a follow-up", async () => {
+    const original = workRun({
+      id: "run-security",
+      instruction: "Analyze the application security concerns",
+      status: "completed",
+      completed_at: "2026-08-24T22:04:00Z",
+      created_at: "2026-08-24T22:00:04Z",
+      updated_at: "2026-08-24T22:04:00Z",
+    });
+    const followup = workRun({
+      id: "run-deliverables",
+      instruction: "Where are the deliverables? I do not see them.",
+      status: "completed",
+      completed_at: "2026-08-24T23:04:00Z",
+      created_at: "2026-08-24T23:00:04Z",
+      updated_at: "2026-08-24T23:04:00Z",
+    });
+    apiMocks.getWorkSession.mockResolvedValue(
+      workSession({ status: "idle", latest_run_status: "completed" }),
+    );
+    apiMocks.listWorkRuns.mockResolvedValue([original, followup]);
+    apiMocks.getWorkEvents.mockImplementation(async (runId: string) => ({
+      items: runId === original.id
+        ? [workEvent(10, "agent_message", "Security review complete with six findings.")]
+        : [workEvent(20, "agent_message", "The deliverables remain attached above.")],
+      latest_sequence: runId === original.id ? 10 : 20,
+    }));
+    apiMocks.listWorkArtifacts.mockImplementation(async (runId: string) => (
+      runId === original.id
+        ? [workArtifact("security-report", "SECURITY_ANALYSIS_REPORT.md")]
+        : []
+    ));
+
+    render(
+      <MemoryRouter initialEntries={["/work/work-session-1"]}>
+        <Routes>
+          <Route path="/work/:workSessionId" element={<WorkPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Analyze the application security concerns")).toBeInTheDocument();
+    expect(screen.getByText("Security review complete with six findings.")).toBeInTheDocument();
+    expect(screen.getByText("SECURITY_ANALYSIS_REPORT.md")).toBeInTheDocument();
+    expect(screen.getByText("Where are the deliverables? I do not see them.")).toBeInTheDocument();
+    expect(screen.getByText("The deliverables remain attached above.")).toBeInTheDocument();
   });
 });
 
@@ -229,9 +284,18 @@ function workRun(overrides: Partial<WorkRun> = {}): WorkRun {
     status: "running",
     provider: "fake",
     max_credit_budget: 1_000_000,
+    max_output_tokens: 40_000,
+    actual_output_tokens: 12_000,
     reserved_credits: 1_000_000,
     actual_credits: 39_651,
-    configuration_snapshot: { web_enabled: false },
+    provider_model_id: "claude-haiku-4-5",
+    billing_model_id: "claude-haiku-4-5",
+    billing_model_source: "fake_session_agent_snapshot",
+    provider_agent_id: "fake-agent",
+    provider_agent_version: 1,
+    output_finalize_requested_at: null,
+    output_limit_interrupt_requested_at: null,
+    configuration_snapshot: { requested_web_mode: "auto", effective_web_enabled: false },
     usage_snapshot: {},
     stop_reason: null,
     error_code: null,
@@ -252,6 +316,21 @@ function workEvent(sequence: number, type: string, displayMessage: string): Work
     display_message: displayMessage,
     payload: {},
     created_at: "2026-08-24T23:00:13Z",
+  };
+}
+
+function workArtifact(id: string, filename: string): WorkArtifact {
+  return {
+    id,
+    file_id: `${id}-file`,
+    role: "artifact",
+    source: "agent",
+    filename,
+    mime_type: "text/markdown",
+    size_bytes: 4096,
+    artifact_type: "report",
+    metadata: {},
+    created_at: "2026-08-24T22:04:00Z",
   };
 }
 

@@ -66,7 +66,7 @@ def _session_dto(row: dict, *, title: str | None = None) -> WorkSessionDTO:
 
 
 def _run_dto(row: dict) -> WorkRunDTO:
-    return WorkRunDTO(**{key: row.get(key) for key in WorkRunDTO.model_fields})
+    return WorkRunDTO.model_validate({key: row.get(key) for key in WorkRunDTO.model_fields})
 
 
 def _event_dto(row: dict) -> WorkEventDTO:
@@ -125,6 +125,20 @@ async def get_latest_run(
     return _run_dto(rows[-1])
 
 
+@router.get("/sessions/{work_session_id}/runs", response_model=list[WorkRunDTO])
+async def list_runs(
+    work_session_id: UUID,
+    request: Request,
+    auth: AuthResult = Depends(get_auth),
+):
+    user_id = _identity(request, auth)
+    with persistence_service.db_uow(commit_on_success=False) as db:
+        if repository.get_work_session_for_user(db, work_session_id, user_id) is None:
+            raise work_http_error(404, "work_session_not_found", "Work session not found.")
+        rows = repository.list_work_runs_for_session(db, work_session_id, user_id)
+    return [_run_dto(row) for row in rows]
+
+
 @router.post(
     "/sessions/{work_session_id}/runs",
     response_model=WorkRunDTO,
@@ -147,7 +161,7 @@ async def start_run(
         instruction=body.instruction,
         input_file_ids=body.input_file_ids,
         enabled_connection_ids=body.enabled_connection_ids,
-        web_enabled=body.web_enabled,
+        web_mode=body.web_mode,
         max_credit_budget=body.max_credit_budget,
     )
     return _run_dto(row)
@@ -282,8 +296,29 @@ async def cancel_run(run_id: UUID, request: Request, auth: AuthResult = Depends(
 async def run_artifacts(run_id: UUID, request: Request, auth: AuthResult = Depends(get_auth)):
     user_id = _identity(request, auth)
     with persistence_service.db_uow(commit_on_success=False) as db:
-        if repository.get_work_run_for_user(db, run_id, user_id) is None:
+        run = repository.get_work_run_for_user(db, run_id, user_id)
+        if run is None:
             raise work_http_error(404, "work_run_not_found", "Work run not found.")
+    config = load_work_config()
+    if run["status"] in repository.TERMINAL_RUN_STATUSES and config.artifact_import_enabled:
+        try:
+            await asyncio.to_thread(
+                service.import_work_artifacts,
+                user_id=user_id,
+                work_run_id=run_id,
+            )
+        except Exception:
+            logger.warning(
+                "Work artifact retry unavailable",
+                extra={
+                    "extra_fields": {
+                        "event": "work.artifact.retry.failed",
+                        "work_run_id": str(run_id),
+                    }
+                },
+                exc_info=True,
+            )
+    with persistence_service.db_uow(commit_on_success=False) as db:
         rows = repository.list_work_run_files(db, run_id, user_id, role="artifact")
     return [
         WorkRunFileDTO(

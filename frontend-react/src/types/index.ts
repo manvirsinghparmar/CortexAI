@@ -701,7 +701,10 @@ export type WorkRunStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "output_limit_reached";
+
+export type WorkWebMode = "auto" | "on" | "off";
 
 export interface WorkSession {
   id: string;
@@ -722,8 +725,17 @@ export interface WorkRun {
   status: WorkRunStatus;
   provider: string;
   max_credit_budget: number;
+  max_output_tokens: number;
+  actual_output_tokens: number;
   reserved_credits: number;
   actual_credits: number;
+  provider_model_id: string | null;
+  billing_model_id: string | null;
+  billing_model_source: string | null;
+  provider_agent_id: string | null;
+  provider_agent_version: number | null;
+  output_finalize_requested_at: string | null;
+  output_limit_interrupt_requested_at: string | null;
   configuration_snapshot: Record<string, unknown>;
   usage_snapshot: Record<string, unknown>;
   stop_reason: string | null;

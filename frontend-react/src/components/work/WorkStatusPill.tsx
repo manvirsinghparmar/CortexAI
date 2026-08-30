@@ -11,6 +11,7 @@ const LABELS: Record<string, string> = {
   failed: "Failed",
   cancelled: "Stopped",
   budget_exhausted: "Budget reached",
+  output_limit_reached: "Output limit reached",
   idle: "Ready",
 };
 

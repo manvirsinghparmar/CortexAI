@@ -63,6 +63,13 @@ def _dump(value: Any) -> dict[str, Any]:
         "input",
         "stop_reason",
         "usage",
+        "agent",
+        "model",
+        "version",
+        "effort",
+        "speed",
+        "multiagent",
+        "agents",
         "filename",
         "mime_type",
         "size_bytes",
@@ -74,6 +81,69 @@ def _dump(value: Any) -> dict[str, Any]:
         if hasattr(value, name):
             result[name] = getattr(value, name)
     return result
+
+
+def _optional_positive_int(value: object) -> int | None:
+    parsed = _optional_non_negative_int(value)
+    return parsed if parsed and parsed > 0 else None
+
+
+def _setting_name(value: object) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    data = _dump(value)
+    return str(data.get("type") or data.get("id") or "").strip() or None
+
+
+def _session_identity(data: Mapping[str, object]) -> dict[str, object]:
+    agent = _dump(data.get("agent")) if data.get("agent") is not None else {}
+    model_value = agent.get("model")
+    model = _dump(model_value) if model_value is not None else {}
+    model_id = str(
+        model.get("id") or (model_value if isinstance(model_value, str) else "") or ""
+    ).strip()
+    additional: list[str] = []
+    multiagent = _dump(agent.get("multiagent")) if agent.get("multiagent") is not None else {}
+    roster = multiagent.get("agents")
+    if isinstance(roster, (list, tuple)):
+        for item in roster:
+            item_data = _dump(item)
+            nested_model = item_data.get("model")
+            nested = _dump(nested_model) if nested_model is not None else {}
+            nested_id = str(
+                nested.get("id") or (nested_model if isinstance(nested_model, str) else "") or ""
+            ).strip()
+            if nested_id and nested_id != model_id and nested_id not in additional:
+                additional.append(nested_id)
+    return {
+        "model_id": model_id or None,
+        "agent_id": str(agent.get("id") or "").strip() or None,
+        "agent_version": _optional_positive_int(agent.get("version")),
+        "effort": _setting_name(model.get("effort")),
+        "speed": _setting_name(model.get("speed")),
+        "additional_model_ids": tuple(additional),
+    }
+
+
+def _provider_session(data: Mapping[str, object], *, default_status: str) -> ProviderSession:
+    identity = _session_identity(data)
+    return ProviderSession(
+        id=str(data["id"]),
+        status=str(data.get("status") or default_status),
+        usage=_dump(data.get("usage")) if data.get("usage") is not None else {},
+        model_id=identity["model_id"] if isinstance(identity["model_id"], str) else None,
+        agent_id=identity["agent_id"] if isinstance(identity["agent_id"], str) else None,
+        agent_version=(
+            identity["agent_version"] if isinstance(identity["agent_version"], int) else None
+        ),
+        effort=identity["effort"] if isinstance(identity["effort"], str) else None,
+        speed=identity["speed"] if isinstance(identity["speed"], str) else None,
+        additional_model_ids=(
+            identity["additional_model_ids"]
+            if isinstance(identity["additional_model_ids"], tuple)
+            else ()
+        ),
+    )
 
 
 def _content_text(content: object) -> str | None:
@@ -193,6 +263,69 @@ def normalize_anthropic_event(event: Any) -> ProviderEvent:
     )
 
 
+def _agent_override(
+    *,
+    agent_id: str | None,
+    mcp_servers: Sequence[ProviderMcpServer],
+    web_enabled: bool,
+) -> dict[str, object]:
+    toolsets: list[dict[str, object]] = [
+        {
+            "type": "agent_toolset_20260401",
+            "default_config": {
+                "enabled": True,
+                "permission_policy": {"type": "always_ask"},
+            },
+            "configs": [
+                *[
+                    {
+                        "name": name,
+                        "permission_policy": {"type": "always_allow"},
+                    }
+                    for name in ("read", "glob", "grep")
+                ],
+                {
+                    "name": "web_search",
+                    "enabled": web_enabled,
+                    "permission_policy": {"type": "always_allow"},
+                },
+                {
+                    "name": "web_fetch",
+                    "enabled": web_enabled,
+                    "permission_policy": {"type": "always_allow"},
+                },
+            ],
+        }
+    ]
+    for item in mcp_servers:
+        toolset: dict[str, object] = {
+            "type": "mcp_toolset",
+            "mcp_server_name": item.name,
+            "default_config": {
+                "enabled": not bool(item.enabled_tools),
+                "permission_policy": {"type": "always_ask"},
+            },
+        }
+        if item.enabled_tools:
+            toolset["configs"] = [
+                {
+                    "name": name,
+                    "enabled": True,
+                    "permission_policy": {"type": "always_ask"},
+                }
+                for name in item.enabled_tools
+            ]
+        toolsets.append(toolset)
+    return {
+        "type": "agent_with_overrides",
+        "id": agent_id,
+        "mcp_servers": [
+            {"type": "url", "name": item.name, "url": item.url} for item in mcp_servers
+        ],
+        "tools": toolsets,
+    }
+
+
 class AnthropicManagedAgentProvider(AgentProvider):
     name = "anthropic_managed_agents"
 
@@ -227,61 +360,11 @@ class AnthropicManagedAgentProvider(AgentProvider):
             "environment_id": self._config.environment_id,
             "title": provider_title,
         }
-        toolsets: list[dict[str, object]] = [
-            {
-                "type": "agent_toolset_20260401",
-                "default_config": {
-                    "enabled": True,
-                    "permission_policy": {"type": "always_ask"},
-                },
-                "configs": [
-                    *[
-                        {
-                            "name": name,
-                            "permission_policy": {"type": "always_allow"},
-                        }
-                        for name in ("read", "glob", "grep")
-                    ],
-                    {
-                        "name": "web_search",
-                        "enabled": web_enabled,
-                        "permission_policy": {"type": "always_allow"},
-                    },
-                    {
-                        "name": "web_fetch",
-                        "enabled": web_enabled,
-                        "permission_policy": {"type": "always_allow"},
-                    },
-                ],
-            }
-        ]
-        for item in mcp_servers:
-            toolset: dict[str, object] = {
-                "type": "mcp_toolset",
-                "mcp_server_name": item.name,
-                "default_config": {
-                    "enabled": not bool(item.enabled_tools),
-                    "permission_policy": {"type": "always_ask"},
-                },
-            }
-            if item.enabled_tools:
-                toolset["configs"] = [
-                    {
-                        "name": name,
-                        "enabled": True,
-                        "permission_policy": {"type": "always_ask"},
-                    }
-                    for name in item.enabled_tools
-                ]
-            toolsets.append(toolset)
-        kwargs["agent"] = {
-            "type": "agent_with_overrides",
-            "id": self._config.agent_id,
-            "mcp_servers": [
-                {"type": "url", "name": item.name, "url": item.url} for item in mcp_servers
-            ],
-            "tools": toolsets,
-        }
+        kwargs["agent"] = _agent_override(
+            agent_id=self._config.agent_id,
+            mcp_servers=mcp_servers,
+            web_enabled=web_enabled,
+        )
         if resources:
             kwargs["resources"] = [
                 {"type": "file", "file_id": item.provider_file_id, "mount_path": item.mount_path}
@@ -298,11 +381,7 @@ class AnthropicManagedAgentProvider(AgentProvider):
         kwargs["betas"] = _MANAGED_AGENTS_BETA
         created = self._client.beta.sessions.create(**kwargs)
         data = _dump(created)
-        return ProviderSession(
-            id=str(data["id"]),
-            status=str(data.get("status") or "idle"),
-            usage=_dump(data.get("usage")) if data.get("usage") is not None else {},
-        )
+        return _provider_session(data, default_status="idle")
 
     def send_instruction(self, session_id: str, instruction: str) -> None:
         self._client.beta.sessions.events.send(
@@ -314,11 +393,7 @@ class AnthropicManagedAgentProvider(AgentProvider):
     def get_session(self, session_id: str) -> ProviderSession:
         result = self._client.beta.sessions.retrieve(session_id, betas=_MANAGED_AGENTS_BETA)
         data = _dump(result)
-        return ProviderSession(
-            id=str(data["id"]),
-            status=str(data.get("status") or "unknown"),
-            usage=_dump(data.get("usage")) if data.get("usage") is not None else {},
-        )
+        return _provider_session(data, default_status="unknown")
 
     def list_events(self, session_id: str) -> list[ProviderEvent]:
         page = self._client.beta.sessions.events.list(
@@ -326,6 +401,29 @@ class AnthropicManagedAgentProvider(AgentProvider):
         )
         data = list(page) if hasattr(page, "__iter__") else getattr(page, "data", page)
         return [normalize_anthropic_event(event) for event in data]
+
+    def update_session_tools(
+        self,
+        session_id: str,
+        *,
+        mcp_servers: Sequence[ProviderMcpServer],
+        web_enabled: bool,
+    ) -> None:
+        override = _agent_override(
+            agent_id=self._config.agent_id,
+            mcp_servers=mcp_servers,
+            web_enabled=web_enabled,
+        )
+        self._client.beta.sessions.update(
+            session_id,
+            # Session updates accept only full-replacement tools and MCP arrays;
+            # the create-only agent identity/type fields must not be sent.
+            agent={
+                "mcp_servers": override["mcp_servers"],
+                "tools": override["tools"],
+            },
+            betas=_MANAGED_AGENTS_BETA,
+        )
 
     def extend_budget(
         self,
@@ -398,12 +496,13 @@ class AnthropicManagedAgentProvider(AgentProvider):
                     filename=str(data.get("filename") or "artifact"),
                     mime_type=(str(data["mime_type"]) if data.get("mime_type") else None),
                     size_bytes=_optional_non_negative_int(data.get("size_bytes")),
+                    downloadable=bool(data.get("downloadable", True)),
                 )
             )
         return artifacts
 
     def download_artifact(self, file_id: str) -> bytes:
-        content = self._client.files.download(file_id)
+        content = self._client.beta.files.download(file_id, betas=_MANAGED_AGENTS_BETA)
         if hasattr(content, "read"):
             return bytes(content.read())
         raw = getattr(content, "content", content)

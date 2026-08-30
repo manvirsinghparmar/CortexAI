@@ -14,6 +14,7 @@ Anthropic configuration; unresolved items are enumerated in
    ```powershell
    $env:MIGRATION_DATABASE_URL = 'postgresql+psycopg://...'
    psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260820_add_cortex_work_mode.sql
+   psql "$env:MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/20260829_add_work_web_output_and_model_identity.sql
    ```
 
 3. Verify the schema:
@@ -27,6 +28,10 @@ Anthropic configuration; unresolved items are enumerated in
    SELECT pg_get_constraintdef(oid)
    FROM pg_constraint
    WHERE conname IN ('ck_sessions_mode', 'ck_work_runs_status');
+   SELECT max_output_tokens, actual_output_tokens, provider_model_id,
+          billing_model_id, provider_agent_id, provider_agent_version
+   FROM public.work_runs
+   LIMIT 0;
    ```
 
 4. Create the Anthropic Managed Agent and environment. Record resource names,
@@ -52,8 +57,11 @@ Required for production Work:
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_MANAGED_AGENT_ID`
 - `ANTHROPIC_MANAGED_ENVIRONMENT_ID`
-- `ANTHROPIC_MANAGED_BILLING_MODEL`
 - `CORTEX_WORK_DEFAULT_CREDIT_BUDGET`
+- `CORTEX_WORK_DEFAULT_OUTPUT_TOKENS`
+- `CORTEX_WORK_OUTPUT_FINALIZE_TOKENS`
+- `CORTEX_WORK_RECONCILER_ENABLED`
+- `CORTEX_WORK_RECONCILER_INTERVAL_SECONDS`
 - `CORTEX_WORK_SYNC_INTERVAL_SECONDS`
 - `CORTEX_WORK_SSE_HEARTBEAT_SECONDS`
 - `CORTEX_WORK_APPROVAL_TIMEOUT_SECONDS`
@@ -73,6 +81,27 @@ cents, so non-cent credit ceilings are rounded up. Each reused session extends
 its cumulative provider cap by the newly reserved run budget. A
 `budget_reached` session resumes when that cap is updated; do not send a
 simultaneous `user.message` or a `user.interrupt`.
+
+`CORTEX_WORK_DEFAULT_OUTPUT_TOKENS` defaults to 40,000 and is server-owned;
+clients cannot raise it. `CORTEX_WORK_OUTPUT_FINALIZE_TOKENS` defaults to 32,000
+and must remain below the hard ceiling. The reconciler sends one finalization
+instruction at the soft threshold, sends one provider interrupt at the hard
+threshold, and persists `output_limit_reached` after the provider stops. Usage
+is sampled, so the recorded total can include output generated between polls.
+Keep `CORTEX_WORK_RECONCILER_ENABLED=true` in production so this policy,
+approval expiry, artifacts, and settlement do not depend on an open browser.
+
+The Cortex runtime does not accept a billing-model environment variable. It
+retrieves the Managed Agent session, persists the resolved Agent model plus
+Agent ID/version, and canonicalizes that model through
+`config/model_registry.yaml`. Missing, unknown, or multi-model identity fails
+closed. `ANTHROPIC_MANAGED_AGENT_MODEL` is only a provisioning input for the
+repository's `config/work_agent.yaml` template; it is not billing authority.
+
+Run requests use `web_mode=auto|on|off` and default to Auto. The backend detects
+current-information intent for Auto and snapshots both requested and effective
+Web state. The global `CORTEX_WORK_WEB_ENABLED` flag remains the deployment kill
+switch for any run that resolves to Web On.
 
 Built-in `read`, `glob`, `grep`, and enabled web reads are `always_allow`.
 Built-in `bash`, `write`, and `edit` remain `always_ask`. MCP remains
@@ -105,7 +134,9 @@ requires a reviewed Secrets Manager ARN plus a Managed Agent provider vault ID.
    Run a Plus and Pro file-only task. Free must receive `work_not_in_plan`.
 4. Enable artifact import; validate PDF/text/spreadsheet deliverables, private
    download ownership, invalid MIME/oversize rejection, and S3 cleanup.
-5. Enable web for internal Pro; verify budget settlement includes web requests.
+5. Enable web for internal Pro; verify Auto enables current-information prompts,
+   leaves file-only prompts off, explicit On/Off wins, and settlement includes
+   web requests.
 6. Enable MCP and one read-only verified connector. Verify SSRF rejection,
    OAuth state replay rejection, connection ownership, tool discovery, audit,
    and disconnect/reconnect.
@@ -152,6 +183,24 @@ Use a signed internal account. Never use the fake provider in production.
     telemetry is absent, Plan reads `3 of 3`, and the final written outcome is
     visible before any page refresh. Refresh once and verify the outcome remains
     unchanged.
+15. Close every browser while a run is active. Verify the background reconciler
+    continues event/usage synchronization and settles the terminal run.
+16. Drive a controlled run above 32,000 output tokens and verify one
+    `output_finalizing` event. Drive it to 40,000 and verify one interrupt, the
+    `output_limit_reached` status, retained partial deliverables, and released
+    unused credits.
+17. Verify the run exposes the actual provider model and Agent ID/version from
+    the session snapshot and that settlement uses that canonical registry model.
+18. Complete a run with a visible outcome and deliverable, then submit a
+    follow-up in the same Work session. On desktop and mobile, confirm the first
+    prompt, response, and file remain above the follow-up after reload. Toggle
+    Web or an MCP connection for the follow-up and verify the provider session
+    ID is retained and the Agent can reference the earlier outcome.
+19. Make one provider output temporarily unavailable or stop the configured
+    object-storage endpoint during completion. Restore it, request
+    `GET /v1/work/runs/{run_id}/artifacts`, and verify import retries from that
+    run's original provider session. One bad/non-downloadable file must not
+    prevent other valid deliverables from appearing.
 
 ## Monitoring and alerts
 
@@ -171,8 +220,14 @@ credentials, or secret values.
 ## Troubleshooting
 
 - `work_disabled` (404): master flag is false or the deployment did not reload.
-- `work_provider_not_configured` (503): provider IDs, billing model, or API key
-  is missing; validate secret injection without printing values.
+- `work_provider_not_configured` (503): provider IDs or API key is missing;
+  validate secret injection without printing values.
+- `work_billing_model_unavailable` (503): the retrieved session Agent snapshot
+  has no usable single model or the model is not enabled in the registry. Fix
+  the actual Anthropic Agent/version; do not add a local billing override.
+- `output_limit_reached`: the run stopped at the configured output ceiling.
+  Preserve its partial result/artifacts and start a focused follow-up if more
+  work is needed instead of raising the cap ad hoc.
 - `work_provider_start_failed` accompanied by provider detail `title: must not
   contain Unicode control or format characters`: deploy the title-normalization
   fix and retry the existing Work session. New and previously stored titles are
@@ -187,8 +242,12 @@ credentials, or secret values.
   initialize/tools-list support, OAuth/vault configuration, and egress policy.
 - approval remains pending: inspect provider session ID, tool-call provider ID,
   other queued approvals, and normalized confirmation error logs.
-- completed with no deliverable: inspect artifact flag, provider output listing,
-  MIME/size checks, S3/KMS rights, and `work.artifact.import.failed` logs.
+- completed with no deliverable: inspect the artifact flag, the originating
+  run's provider output listing, MIME/size checks, and S3/KMS rights. For local
+  MinIO, verify `ATTACHMENTS_S3_ENDPOINT_URL` is reachable. Re-request the
+  artifact list after storage recovers and inspect
+  `work.artifact.import.item_failed` / `work.artifact.retry.failed` logs; one
+  provider-file failure should not block the rest.
 - reservation remains open: reopen the run to reconcile, inspect provider usage,
   and then use the existing stale reservation maintenance path only after the
   provider state is understood.

@@ -68,7 +68,7 @@ Anthropic Managed Agents is an external HTTPS API; confirm outbound TCP 443/DNS 
 
 ## 8. Database implications
 
-- Apply the additive Work migration before the application deploy. It expands the `sessions.mode` constraint and creates Work sessions, runs, ordered events, run files, tool connections, run connections, tool calls, approvals, OAuth state, and synchronization leases.
+- Apply both additive Work migrations before the application deploy. The base migration expands the `sessions.mode` constraint and creates Work sessions, runs, ordered events, run files, tool connections, run connections, tool calls, approvals, OAuth state, and synchronization leases. The 2026-08-29 migration adds server-owned output ceilings, finalization/interrupt markers, resolved provider/Agent/billing identity, and the `output_limit_reached` status.
 - Unique request/provider event constraints make retries idempotent. Ordered event sequence is allocated in a short row-locked transaction.
 - No transaction spans an Anthropic, MCP, OAuth, or S3 call. Active-run reconciliation is lease-based in PostgreSQL so multiple Uvicorn processes cannot become authoritative owners.
 - Size indexes for user/session history, active runs, event replay, pending approvals, and connector ownership. Monitor autovacuum, connection-pool saturation, lock waits, and event-table growth. Establish an event-retention/archive decision before production volume, without deleting records required for billing/audit.
@@ -90,8 +90,8 @@ The repository CI builds/tests images but has no production deployment job. The 
 
 Add structured Work event families and dashboards for:
 
-- run creation, provider-session creation, status transitions, terminal status, age, and active runs by plan;
-- reconciliation claims, lease contention, provider poll/stream/webhook failures, duplicate provider events, event replay lag, and SSE reconnects/disconnects;
+- run creation, provider-session creation, requested/effective Web mode, resolved provider/billing model identity, status transitions, terminal status, age, and active runs by plan;
+- reconciliation claims, background-cycle lag, lease contention, provider poll/stream/webhook failures, duplicate provider events, event replay lag, output-finalize/interrupt counts, output-ceiling overshoot, and SSE reconnects/disconnects;
 - approval requested/approved/denied/expired latency and blocked action attempts;
 - connector health, OAuth failures, SSRF/allowlist denials, MCP/action-tool calls, and redacted error classes;
 - reserved/settled/released credits, budget utilization, credit-limit stops, provider/runtime/token usage, and reconciliation drift;

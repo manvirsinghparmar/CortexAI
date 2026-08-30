@@ -15,6 +15,13 @@ vi.mock("../hooks/useAuth", () => ({
   }),
 }));
 
+async function expandLearnMore() {
+  const user = userEvent.setup();
+  const toggle = screen.getByRole("button", { name: /see architecture, live demo/i });
+  await user.click(toggle);
+  return user;
+}
+
 describe("LandingPage", () => {
   it("renders hero headline, value proposition, and key CTA buttons", () => {
     render(
@@ -35,26 +42,38 @@ describe("LandingPage", () => {
     expect(screen.getByRole("button", { name: "Explore Plans ($0 – $12.99)" })).toBeInTheDocument();
   });
 
-  it("renders why cortex problem vs solution pillars", () => {
+  it("renders the condensed why-cortex key features", () => {
     render(
       <BrowserRouter>
         <LandingPage />
       </BrowserRouter>,
     );
 
-    expect(screen.getByText("WHY CORTEXAI MATTERS")).toBeInTheDocument();
-    expect(screen.getByText("Subscription Sprawl & Idling Costs")).toBeInTheDocument();
-    expect(screen.getByText("One Unified AI Credit Wallet")).toBeInTheDocument();
-    expect(screen.getAllByText("Autonomous Smart Routing (T0–T3)")[0]).toBeInTheDocument();
-    expect(screen.getByText("Side-by-Side Compare & Synthesis")).toBeInTheDocument();
+    expect(screen.getByText("WHY CORTEXAI")).toBeInTheDocument();
+    expect(screen.getByText("One Wallet, Every Model")).toBeInTheDocument();
+    expect(screen.getByText("Routes to the Right Model")).toBeInTheDocument();
+    expect(screen.getByText("Compare, Don't Guess")).toBeInTheDocument();
   });
 
-  it("renders architecture pipeline steps", () => {
+  it("hides architecture, demo, full feature list, and trust content behind Learn More", () => {
     render(
       <BrowserRouter>
         <LandingPage />
       </BrowserRouter>,
     );
+
+    expect(screen.queryByText("ARCHITECTURE & FLOW")).not.toBeInTheDocument();
+    expect(screen.queryByText("TRUST, SECURITY & RELIABILITY")).not.toBeInTheDocument();
+  });
+
+  it("renders architecture pipeline steps after expanding Learn More", async () => {
+    render(
+      <BrowserRouter>
+        <LandingPage />
+      </BrowserRouter>,
+    );
+
+    await expandLearnMore();
 
     expect(screen.getByText("ARCHITECTURE & FLOW")).toBeInTheDocument();
     expect(screen.getByText("Ingest & Optional Prompt Rewrite")).toBeInTheDocument();
@@ -93,13 +112,14 @@ describe("LandingPage", () => {
     expect(screen.getByText("$10.39")).toBeInTheDocument();
   });
 
-  it("switches demo scenarios in the interactive compare simulator", async () => {
-    const user = userEvent.setup();
+  it("switches demo scenarios in the interactive compare simulator after expanding Learn More", async () => {
     render(
       <BrowserRouter>
         <LandingPage />
       </BrowserRouter>,
     );
+
+    const user = await expandLearnMore();
 
     const dataTab = screen.getByRole("tab", { name: /Recursive CTE & Window Retention/i });
     await user.click(dataTab);
@@ -109,12 +129,14 @@ describe("LandingPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders trust section and provider status", () => {
+  it("renders trust section and provider status after expanding Learn More", async () => {
     render(
       <BrowserRouter>
         <LandingPage />
       </BrowserRouter>,
     );
+
+    await expandLearnMore();
 
     expect(screen.getByText("TRUST, SECURITY & RELIABILITY")).toBeInTheDocument();
     expect(screen.getByText("BYOK Tenant Key Security")).toBeInTheDocument();

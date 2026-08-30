@@ -167,26 +167,6 @@
   border-color: var(--cx-ink-400);
 }
 
-.tertiaryCta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.85rem 1.25rem;
-  font-family: var(--cx-font-ui);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--cx-accent);
-  background-color: var(--cx-accent-soft);
-  border: 1px solid var(--cx-accent-border);
-  border-radius: var(--cx-r-lg);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.tertiaryCta:hover {
-  background-color: var(--cx-accent-border);
-}
-
 .providersRibbon {
   display: flex;
   flex-direction: column;
@@ -233,11 +213,6 @@
 .providerName {
   font-weight: 600;
   color: var(--cx-ink-900);
-}
-
-.providerModels {
-  color: var(--cx-ink-400);
-  font-size: 0.75rem;
 }
 
 /* Visual Mockup Card */

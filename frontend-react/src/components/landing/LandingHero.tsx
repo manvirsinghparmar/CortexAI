@@ -6,11 +6,11 @@ import { ScrollReveal } from "./ScrollReveal";
 import styles from "./LandingHero.module.css";
 
 const PROVIDERS = [
-  { provider: "openai" as const, name: "OpenAI", models: "GPT-5.4 / 4o" },
-  { provider: "claude" as const, name: "Claude", models: "Sonnet 4.6 / Opus" },
-  { provider: "gemini" as const, name: "Gemini", models: "3.5 Pro / Flash" },
-  { provider: "deepseek" as const, name: "DeepSeek", models: "V4 Flash / Reasoner" },
-  { provider: "grok" as const, name: "Grok", models: "Grok 3" },
+  { provider: "openai" as const, name: "OpenAI" },
+  { provider: "claude" as const, name: "Claude" },
+  { provider: "gemini" as const, name: "Gemini" },
+  { provider: "deepseek" as const, name: "DeepSeek" },
+  { provider: "grok" as const, name: "Grok" },
 ];
 
 const HERO_EXAMPLES = [
@@ -64,11 +64,6 @@ export function LandingHero() {
     if (el) el.scrollIntoView({ behavior: "smooth" });
   };
 
-  const scrollToDemo = () => {
-    const el = document.getElementById("compare-demo");
-    if (el) el.scrollIntoView({ behavior: "smooth" });
-  };
-
   return (
     <section className={styles.heroSection} aria-label="Hero">
       <div className={styles.backgroundGlow} aria-hidden="true" />
@@ -109,15 +104,6 @@ export function LandingHero() {
             >
               <span>Explore Plans ($0 – $12.99)</span>
             </button>
-
-            <button
-              type="button"
-              className={styles.tertiaryCta}
-              onClick={scrollToDemo}
-            >
-              <CortexIcon name="compare" size={16} />
-              <span>Interactive Compare Demo</span>
-            </button>
           </div>
 
           <div className={styles.providersRibbon} aria-label="Supported Providers">
@@ -127,7 +113,6 @@ export function LandingHero() {
                 <div key={p.provider} className={styles.providerPill}>
                   <ProviderLogo provider={p.provider} size={18} />
                   <span className={styles.providerName}>{p.name}</span>
-                  <span className={styles.providerModels}>{p.models}</span>
                 </div>
               ))}
             </div>

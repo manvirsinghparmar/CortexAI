@@ -10,6 +10,7 @@ interface LandingNavbarProps {
   onToggleTheme: () => void;
   loggedIn?: boolean;
   onLogin?: () => void;
+  onNavigate: (id: string) => void;
 }
 
 export function LandingNavbar({
@@ -17,6 +18,7 @@ export function LandingNavbar({
   onToggleTheme,
   loggedIn = false,
   onLogin,
+  onNavigate,
 }: LandingNavbarProps) {
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
@@ -32,10 +34,7 @@ export function LandingNavbar({
 
   const scrollToSection = (id: string) => {
     setMobileMenuOpen(false);
-    const element = document.getElementById(id);
-    if (element) {
-      element.scrollIntoView({ behavior: "smooth" });
-    }
+    onNavigate(id);
   };
 
   return (
@@ -60,27 +59,6 @@ export function LandingNavbar({
             className={styles.navLink}
             onClick={() => scrollToSection("why-cortex")}
           >
-            Why Us
-          </button>
-          <button
-            type="button"
-            className={styles.navLink}
-            onClick={() => scrollToSection("how-it-works")}
-          >
-            Architecture
-          </button>
-          <button
-            type="button"
-            className={styles.navLink}
-            onClick={() => scrollToSection("compare-demo")}
-          >
-            Compare Demo
-          </button>
-          <button
-            type="button"
-            className={styles.navLink}
-            onClick={() => scrollToSection("features")}
-          >
             Features
           </button>
           <button
@@ -93,9 +71,9 @@ export function LandingNavbar({
           <button
             type="button"
             className={styles.navLink}
-            onClick={() => scrollToSection("trust")}
+            onClick={() => scrollToSection("learn-more-details")}
           >
-            Trust & Security
+            Learn More
           </button>
         </nav>
 
@@ -163,27 +141,6 @@ export function LandingNavbar({
               className={styles.mobileNavLink}
               onClick={() => scrollToSection("why-cortex")}
             >
-              Why Us
-            </button>
-            <button
-              type="button"
-              className={styles.mobileNavLink}
-              onClick={() => scrollToSection("how-it-works")}
-            >
-              Architecture
-            </button>
-            <button
-              type="button"
-              className={styles.mobileNavLink}
-              onClick={() => scrollToSection("compare-demo")}
-            >
-              Compare Demo
-            </button>
-            <button
-              type="button"
-              className={styles.mobileNavLink}
-              onClick={() => scrollToSection("features")}
-            >
               Features
             </button>
             <button
@@ -196,9 +153,9 @@ export function LandingNavbar({
             <button
               type="button"
               className={styles.mobileNavLink}
-              onClick={() => scrollToSection("trust")}
+              onClick={() => scrollToSection("learn-more-details")}
             >
-              Trust & Security
+              Learn More
             </button>
             <button
               type="button"

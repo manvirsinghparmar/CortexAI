@@ -47,3 +47,32 @@
     display: none;
   }
 }
+
+.learnMoreWrap {
+  display: flex;
+  justify-content: center;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.learnMoreLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--cx-font-ui);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--cx-ink-600);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.5rem 0.25rem;
+  transition: color 0.2s ease;
+}
+
+.learnMoreLink:hover {
+  color: var(--cx-accent);
+}
+
+.learnMoreLink svg {
+  transition: transform 0.2s ease;
+}

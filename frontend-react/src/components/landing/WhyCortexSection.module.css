@@ -129,104 +129,18 @@
   border-radius: 9999px;
 }
 
-.problemBox {
-  padding: 1rem;
-  background-color: rgba(220, 38, 38, 0.04);
-  border: 1px solid rgba(220, 38, 38, 0.15);
-  border-radius: var(--cx-r-md);
-  margin-bottom: 0.75rem;
-}
-
-:global([data-theme="dark"]) .problemBox {
-  background-color: rgba(220, 38, 38, 0.08);
-  border-color: rgba(220, 38, 38, 0.25);
-}
-
-.solutionBox {
-  padding: 1rem;
-  background-color: var(--cx-success-soft);
-  border: 1px solid var(--cx-success-border);
-  border-radius: var(--cx-r-md);
-  flex: 1;
-}
-
-.boxLabel {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  font-family: var(--cx-font-mono);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 0.375rem;
-}
-
-.problemBox .boxLabel {
-  color: var(--cx-danger);
-}
-
-.solutionBox .boxLabel {
-  color: var(--cx-success-text);
-}
-
-.crossIcon {
-  font-weight: 800;
-  font-size: 0.8125rem;
-}
-
-.checkIcon {
-  font-weight: 800;
-  font-size: 0.8125rem;
-}
-
-.problemHeading {
+.cardTitle {
   font-family: var(--cx-font-ui);
-  font-size: 1rem;
+  font-size: 1.125rem;
   font-weight: 700;
   color: var(--cx-ink-900);
-  margin: 0 0 0.375rem;
+  margin: 0 0 0.5rem;
 }
 
-.problemDesc {
+.blurb {
   font-family: var(--cx-font-ui);
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: 0.9375rem;
+  line-height: 1.6;
   color: var(--cx-ink-600);
-  margin: 0;
-}
-
-.divider {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0.25rem 0;
-  position: relative;
-}
-
-.dividerBadge {
-  font-family: var(--cx-font-mono);
-  font-size: 0.625rem;
-  font-weight: 800;
-  color: var(--cx-ink-400);
-  background-color: var(--cx-surface);
-  padding: 0.15rem 0.45rem;
-  border-radius: 4px;
-  border: 1px solid var(--cx-hairline);
-}
-
-.solutionHeading {
-  font-family: var(--cx-font-ui);
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--cx-ink-900);
-  margin: 0 0 0.375rem;
-}
-
-.solutionDesc {
-  font-family: var(--cx-font-ui);
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--cx-ink-700);
   margin: 0;
 }

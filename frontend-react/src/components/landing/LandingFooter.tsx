@@ -8,9 +8,10 @@ import styles from "./LandingFooter.module.css";
 interface LandingFooterProps {
   theme: AppTheme;
   onToggleTheme: () => void;
+  onNavigate: (id: string) => void;
 }
 
-export function LandingFooter({ theme, onToggleTheme }: LandingFooterProps) {
+export function LandingFooter({ theme, onToggleTheme, onNavigate }: LandingFooterProps) {
   const navigate = useNavigate();
 
   const scrollToTop = () => {
@@ -18,8 +19,7 @@ export function LandingFooter({ theme, onToggleTheme }: LandingFooterProps) {
   };
 
   const scrollToSection = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: "smooth" });
+    onNavigate(id);
   };
 
   return (

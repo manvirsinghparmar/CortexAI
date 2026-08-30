@@ -1,8 +1,21 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import type { AttachmentUploadTask } from "../../store/attachmentUploadStore";
 import type { ToolCatalogItem, ToolConnection } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./Work.module.css";
+
+const POPOVER_GAP = 9;
+const POPOVER_VIEWPORT_MARGIN = 16;
+const TOOLS_POPOVER_MAX_HEIGHT = 520;
+const TOOLS_POPOVER_WIDTH = 302;
 
 interface WorkComposerProps {
   value: string;
@@ -52,7 +65,10 @@ export function WorkComposer({
   followup,
 }: WorkComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const toolsButtonRef = useRef<HTMLButtonElement>(null);
+  const toolsPopoverRef = useRef<HTMLDivElement>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolsPopoverStyle, setToolsPopoverStyle] = useState<CSSProperties>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpName, setMcpName] = useState("");
@@ -61,6 +77,77 @@ export function WorkComposer({
   const ready = tasks.every((task) => task.state === "ready" || task.state === "cancelled");
   const canSubmit = Boolean(value.trim()) && ready && !busy && !disabled;
   const connectedCount = enabledConnectionIds.length;
+
+  const updateToolsPopoverPosition = useCallback(() => {
+    const button = toolsButtonRef.current;
+    const popover = toolsPopoverRef.current;
+    if (!button || !popover) return;
+
+    const triggerRect = button.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(
+      TOOLS_POPOVER_WIDTH,
+      Math.max(0, viewportWidth - POPOVER_VIEWPORT_MARGIN * 2),
+    );
+    const naturalHeight = Math.min(
+      popover.scrollHeight,
+      TOOLS_POPOVER_MAX_HEIGHT,
+      Math.max(0, viewportHeight - POPOVER_VIEWPORT_MARGIN * 2),
+    );
+    const availableAbove = Math.max(
+      0,
+      triggerRect.top - POPOVER_GAP - POPOVER_VIEWPORT_MARGIN,
+    );
+    const availableBelow = Math.max(
+      0,
+      viewportHeight - triggerRect.bottom - POPOVER_GAP - POPOVER_VIEWPORT_MARGIN,
+    );
+    const openAbove =
+      availableAbove >= naturalHeight || availableAbove >= availableBelow;
+    const availableHeight = openAbove ? availableAbove : availableBelow;
+    const maxHeight = Math.min(
+      TOOLS_POPOVER_MAX_HEIGHT,
+      Math.floor(viewportHeight * 0.7),
+      availableHeight,
+    );
+    const renderedHeight = Math.min(naturalHeight, maxHeight);
+    const left = Math.min(
+      Math.max(POPOVER_VIEWPORT_MARGIN, triggerRect.left),
+      Math.max(
+        POPOVER_VIEWPORT_MARGIN,
+        viewportWidth - width - POPOVER_VIEWPORT_MARGIN,
+      ),
+    );
+    const top = openAbove
+      ? triggerRect.top - POPOVER_GAP - renderedHeight
+      : triggerRect.bottom + POPOVER_GAP;
+
+    setToolsPopoverStyle({
+      position: "fixed",
+      zIndex: 80,
+      top: Math.max(POPOVER_VIEWPORT_MARGIN, top),
+      right: "auto",
+      bottom: "auto",
+      left,
+      width,
+      maxHeight,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!toolsOpen) return;
+
+    updateToolsPopoverPosition();
+    const frame = window.requestAnimationFrame(updateToolsPopoverPosition);
+    window.addEventListener("resize", updateToolsPopoverPosition);
+    window.addEventListener("scroll", updateToolsPopoverPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateToolsPopoverPosition);
+      window.removeEventListener("scroll", updateToolsPopoverPosition, true);
+    };
+  }, [catalog.length, connections.length, mcpOpen, toolsOpen, updateToolsPopoverPosition]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -111,11 +198,11 @@ export function WorkComposer({
             <CortexIcon name="web" size={15} /> Web
           </button>
           <div className={styles.popoverAnchor}>
-            <button type="button" className={`${styles.workChip} ${connectedCount ? styles.workChipActive : ""}`} onClick={() => { setToolsOpen((open) => !open); setSettingsOpen(false); }} aria-haspopup="dialog" aria-expanded={toolsOpen} disabled={disabled}>
+            <button ref={toolsButtonRef} type="button" className={`${styles.workChip} ${connectedCount ? styles.workChipActive : ""}`} onClick={() => { setToolsOpen((open) => !open); setSettingsOpen(false); }} aria-haspopup="dialog" aria-expanded={toolsOpen} disabled={disabled}>
               <CortexIcon name="tools" size={15} /> Tools {connectedCount > 0 && <b>{connectedCount}</b>} <CortexIcon name="chevron-down" size={12} />
             </button>
-            {toolsOpen && (
-              <div className={styles.toolsPopover} role="dialog" aria-label="Tools">
+            {toolsOpen && typeof document !== "undefined" && createPortal(
+              <div ref={toolsPopoverRef} className={styles.toolsPopover} style={toolsPopoverStyle} role="dialog" aria-label="Tools">
                 <div className={styles.popoverHeader}><strong>Tools</strong><button type="button" aria-label="Close tools" onClick={() => setToolsOpen(false)}>×</button></div>
                 <p className={styles.popoverEyebrow}>Connected</p>
                 {connections.length === 0 ? <p className={styles.popoverEmpty}>No connected apps yet.</p> : connections.map((connection) => (
@@ -142,7 +229,8 @@ export function WorkComposer({
                 ) : (
                   <button type="button" className={styles.mcpLink} onClick={() => setMcpOpen(true)}><CortexIcon name="plus" size={14} /> Add MCP server</button>
                 )}
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>

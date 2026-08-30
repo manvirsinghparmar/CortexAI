@@ -3,6 +3,7 @@ import { expect, expectNoHorizontalOverflow, test } from "../fixtures/responsive
 test("desktop Work empty state starts a real mocked run and renders its deliverable", async ({ responsiveApp }) => {
     const { page, state } = responsiveApp;
     state.subscriptionPlan = "pro";
+    state.workStartDelayMs = 900;
     await page.goto("/work");
 
     await expect(page.getByRole("heading", { name: "What should I work on?" })).toBeVisible();
@@ -13,9 +14,30 @@ test("desktop Work empty state starts a real mocked run and renders its delivera
     await page.getByRole("textbox", { name: "Work goal" }).fill("Analyze these files and create a report");
     await page.getByRole("button", { name: /Start work/ }).click();
 
+    await expect(page.getByRole("status", { name: "Starting work" })).toBeVisible();
+    await expect(page.getByText("Starting", { exact: true })).toBeVisible();
     await expect(page.getByText("Work completed", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("work-report.pdf")).toBeVisible();
     await expect(page.getByRole("link", { name: "Download work-report.pdf" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+});
+
+test("desktop Work opens and interacts with the Tools menu", async ({ responsiveApp }) => {
+    const { page, state } = responsiveApp;
+    state.subscriptionPlan = "pro";
+    await page.setViewportSize({ width: 1367, height: 675 });
+    await page.goto("/work");
+
+    const toolsButton = page.getByRole("button", { name: /Tools/ });
+    await toolsButton.click();
+
+    const toolsDialog = page.getByRole("dialog", { name: "Tools" });
+    await expect(toolsButton).toHaveAttribute("aria-expanded", "true");
+    await expect(toolsDialog).toBeVisible();
+    await toolsDialog.getByRole("button", { name: "Add MCP server" }).click();
+    await expect(toolsDialog.getByRole("textbox", { name: "HTTPS endpoint" })).toBeVisible();
+    await toolsDialog.getByRole("button", { name: "Close tools" }).click();
+    await expect(toolsDialog).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 });
 

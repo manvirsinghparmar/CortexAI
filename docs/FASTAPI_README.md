@@ -175,11 +175,19 @@ If `FRONTEND_DIR` is unset, `server/app.py` serves `frontend-react/dist`. Set th
   `GET /v1/tools/{connector_key}/oauth/callback`
 
 Every Work lookup is authenticated and joined through the owning Work session.
+`POST /v1/work/sessions` collapses whitespace and removes Unicode control or
+format characters from `title`, yielding an optional provider-safe single-line
+value of at most 200 characters. The Managed Agent adapter repeats this
+normalization before remote session creation so older stored titles are safe to
+retry.
 Starting a run accepts `Idempotency-Key`; the ID is the idempotency key within the
 user's Work history. React stores the newly created session before starting its
 first run, reuses that session after a structured start denial, and shows only
 run-backed Work sessions in the sidebar; zero-run shells remain outside visible
-history. The activity rail omits unlabeled internal progress events, animates
+history. While the accepted-run response is pending, React immediately renders
+a `Starting work` workspace with the submitted instruction. Stop remains
+unavailable until the backend returns a durable run ID. The activity rail omits
+unlabeled internal progress events, animates
 only the latest visible activity while the run is nonterminal, and renders no
 active indicators after a terminal outcome; completed runs show every plan step
 done. SSE emits persisted events in sequence, accepts either the

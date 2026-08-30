@@ -58,6 +58,14 @@ React remembers a newly created Work session before it requests the first run,
 so a rejected start can be retried without creating another session. The
 sidebar treats Work history as run-backed and omits session shells whose first
 run never passed validation, entitlement, or credit reservation.
+As soon as the user submits, React replaces the landing composer with a
+dedicated `Starting work` state while the API validates and creates the durable
+run. It does not fabricate a run ID or expose Stop until the accepted run is
+returned, so provider-session startup latency never looks like a frozen button.
+Work session titles are normalized to one line before persistence and again at
+the Managed Agent boundary. Multiline prompts and invisible Unicode control or
+format characters therefore cannot prevent provider-session creation, and an
+existing failed session with an older unsafe title can be retried in place.
 
 The Work activity rail is a user-facing history, not a raw provider trace. It
 omits unlabeled internal progress telemetry and animates only the latest visible

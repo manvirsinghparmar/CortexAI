@@ -18,7 +18,7 @@ from server.work.provider import (
     ProviderResource,
     ProviderSession,
 )
-from server.work.security import redact_mapping
+from server.work.security import normalize_work_title, redact_mapping
 
 _MANAGED_AGENTS_BETA = ["managed-agents-2026-04-01"]
 _CORTEX_CREDITS_PER_PROVIDER_CENT = 10_000
@@ -221,10 +221,11 @@ class AnthropicManagedAgentProvider(AgentProvider):
         web_enabled: bool,
         max_credit_budget: int,
     ) -> ProviderSession:
+        provider_title = normalize_work_title(title, max_length=200) or "Cortex Work"
         kwargs: dict[str, object] = {
             "agent": self._config.agent_id,
             "environment_id": self._config.environment_id,
-            "title": title[:200],
+            "title": provider_title,
         }
         toolsets: list[dict[str, object]] = [
             {

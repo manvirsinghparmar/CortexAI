@@ -72,6 +72,8 @@ export function WorkPage() {
   const [instruction, setInstruction] = useState("");
   const [workUploadIds, setWorkUploadIds] = useState<string[]>([]);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [startPending, setStartPending] = useState(false);
+  const [startingInstruction, setStartingInstruction] = useState("");
   const streamAbortRef = useRef<AbortController | null>(null);
   const allUploadTasks = useAttachmentUploadStore((state) => state.tasks);
   const uploadTasks = useMemo(
@@ -216,15 +218,18 @@ export function WorkPage() {
       return;
     }
     const state = useWorkStore.getState();
-    if (!instruction.trim() || active || state.loading) return;
+    const submittedInstruction = instruction.trim();
+    if (!submittedInstruction || active || state.loading || startPending) return;
+    setStartingInstruction(submittedInstruction);
+    setStartPending(true);
     state.setError(null);
     state.setLoading(true);
     try {
       const session = await useWorkStore.getState().ensureSession(
-        () => createWorkSession(instruction.trim().slice(0, 120)),
+        () => createWorkSession(submittedInstruction.slice(0, 120)),
       );
       const payload = {
-        instruction: instruction.trim(),
+        instruction: submittedInstruction,
         input_file_ids: uploadTasks.filter((task) => task.state === "ready" && task.fileId).map((task) => task.fileId!),
         enabled_connection_ids: store.enabledConnectionIds,
         web_enabled: store.webEnabled,
@@ -246,6 +251,7 @@ export function WorkPage() {
     } catch (error) {
       store.setError(errorMessage(error));
     } finally {
+      setStartPending(false);
       store.setLoading(false);
     }
   };
@@ -379,6 +385,8 @@ export function WorkPage() {
           <CenteredMessage><strong>Cortex Work is not enabled in this environment.</strong><span>Ask and Compare remain available.</span></CenteredMessage>
         ) : !planWorkEnabled ? (
           <CenteredMessage><CortexIcon name="work" size={28} /><strong>Upgrade to use Cortex Work</strong><span>Delegate multi-step tasks, connected tools, and deliverables on Plus or Pro.</span><button className={styles.startButton} onClick={() => navigate("/pricing")}>View plans</button></CenteredMessage>
+        ) : startPending && !store.run ? (
+          <WorkStartingView instruction={startingInstruction} />
         ) : store.loading && !store.session && !store.run ? <CenteredMessage>Loading Work...</CenteredMessage> : store.run ? (
           <WorkSessionView
             session={store.session}
@@ -409,6 +417,27 @@ function WorkLanding({ instruction, onInstruction, onExample, composer }: { inst
   void instruction;
   void onInstruction;
   return <section className={styles.landing}><span className={styles.landingMark}><CortexIcon name="sparkle" size={22} /></span><p className={styles.eyebrow}>Work mode</p><h1>What should I work on?</h1><p className={styles.landingCopy}>Give Cortex a task and it can research, analyze your files, use connected tools and create deliverables.</p><div className={styles.exampleList}>{EXAMPLES.map((example) => <button type="button" key={example} onClick={() => onExample(example)}>{example}</button>)}</div><div className={styles.landingComposer}>{composer}</div></section>;
+}
+
+function WorkStartingView({ instruction }: { instruction: string }) {
+  return (
+    <div className={styles.workArea} aria-busy="true">
+      <header className={styles.taskHeader}>
+        <div>
+          <h1 title={instruction}>{instruction}</h1>
+          <p>Preparing a durable Work run</p>
+        </div>
+        <div className={styles.taskHeaderActions}>
+          <WorkStatusPill status="starting" />
+        </div>
+      </header>
+      <div className={styles.startingStage} role="status" aria-label="Starting work" aria-live="polite">
+        <span className={styles.startingSpinner} aria-hidden="true" />
+        <strong>Starting work...</strong>
+        <span>Securing the credit budget and connecting the managed agent. This usually takes a few seconds.</span>
+      </div>
+    </div>
+  );
 }
 
 function WorkSessionView({ session, run, resultText, onCancel, approval, artifacts, rail, composer }: { session: WorkSession | null; run: WorkRun; resultText?: string | null; onCancel: () => void; approval: React.ReactNode; artifacts: React.ReactNode; rail: React.ReactNode; composer: React.ReactNode }) {

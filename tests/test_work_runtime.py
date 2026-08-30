@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from server.schemas.work import WorkSessionCreateDTO
 from server.work.anthropic_provider import (
     AnthropicManagedAgentProvider,
     normalize_anthropic_event,
@@ -253,7 +254,14 @@ def test_remote_mcp_ssrf_and_action_classification(monkeypatch):
     }
 
 
-def test_provider_create_session_uses_beta_budget_permissions_resources_and_mcp():
+def test_work_session_title_normalizes_control_and_format_characters():
+    request = WorkSessionCreateDTO(title="Run this command:\n\npwd\tgit\u200b--version")
+
+    assert request.title == "Run this command: pwd git --version"
+    assert WorkSessionCreateDTO(title="\n\t\u200b").title is None
+
+
+def test_provider_create_session_uses_beta_budget_permissions_resources_mcp_and_safe_title():
     calls: dict[str, object] = {}
 
     class Events:
@@ -291,7 +299,7 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_and_mcp(
     )
     provider = AnthropicManagedAgentProvider(_config(), client=client)
     created = provider.create_session(
-        title="Prepare report",
+        title="Prepare\u200breport\nfor\tthe team",
         resources=[ProviderResource("file-1", "/report.csv")],
         mcp_servers=[ProviderMcpServer("github", "https://mcp.example.com", ("list_issues",))],
         vault_ids=["vault-1"],
@@ -301,6 +309,7 @@ def test_provider_create_session_uses_beta_budget_permissions_resources_and_mcp(
     assert created.id == "session-1"
     request = calls["create"]
     assert isinstance(request, dict)
+    assert request["title"] == "Prepare report for the team"
     assert request["betas"] == ["managed-agents-2026-04-01"]
     assert request["budget"] == {
         "type": "limit",

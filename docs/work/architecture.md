@@ -25,20 +25,25 @@ The authoritative state is split deliberately:
 1. React uploads inputs through the existing Cortex file pipeline and receives
    owned `uploaded_files` IDs.
 2. `POST /v1/work/sessions` creates a common `sessions(mode=work)` row plus a
-   specialized `work_sessions` row.
+   specialized `work_sessions` row. Its optional title is normalized to one
+   line, with Unicode control/format characters removed, before persistence.
 3. `POST /v1/work/sessions/{id}/runs` validates auth, ownership, entitlement,
    active-run/connection/file limits, web rollout, and the requested credit
    ceiling. `Idempotency-Key` is the idempotency key.
    React retains the session created in step 2 before requesting this run, so a
    structured denial can retry in place. The sidebar displays only sessions
-   with a run and does not present a zero-run shell as executed work.
+   with a run and does not present a zero-run shell as executed work. React
+   immediately replaces the landing composer with a `Starting work` workspace
+   during this request, but it does not invent a run ID or offer cancellation
+   until the backend returns the durable run.
 4. A short DB transaction reserves the maximum credits, creates the run and
    initial event, attaches files, and snapshots selected connections. It closes
    before any external I/O.
 5. The provider adapter uploads input bytes server-side, creates or reuses the
    remote session, mounts all prior session resources after provider-session
    recovery, applies the provider budget, mounts MCP/vaults, and sends the user
-   instruction.
+   instruction. It defensively normalizes the title again before remote session
+   creation so a retry also repairs sessions stored before title normalization.
 6. `GET /stream` first replays `work_events` after `Last-Event-ID`, then claims a
    short PostgreSQL reconciliation lease, fetches provider events/usage, and
    appends normalized idempotent events. SSE comments keep the edge connection

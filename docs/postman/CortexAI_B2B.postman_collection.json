@@ -1673,6 +1673,7 @@
           "name": "POST /v1/work/sessions",
           "request": {
             "method": "POST",
+            "description": "Creates a durable Work session. The optional title is limited to 200 characters and normalized to a provider-safe single line by collapsing whitespace and removing Unicode control or format characters.",
             "header": [
               { "key": "Authorization", "value": "Bearer {{bearer_token}}" },
               { "key": "Content-Type", "value": "application/json" }

@@ -140,7 +140,14 @@ Use a signed internal account. Never use the fake provider in production.
 11. Force a structured first-run denial, correct it, and retry without leaving
     the page. Confirm the retry reuses the same Work session and the sidebar
     shows only the session that has a run, not the zero-run shell.
-12. During a run, confirm only the latest visible activity animates. After
+12. Delay the accepted-run response for several seconds. Confirm the landing
+    composer is replaced immediately by `Starting work`, the submitted goal is
+    visible, no Stop control appears before a durable run ID exists, and the
+    normal in-progress workspace replaces it when the response arrives.
+13. Start a Work task whose first prompt contains line breaks, tabs, and an
+    invisible Unicode format character. Confirm the persisted title is a single
+    line and the Managed Agent starts without a provider title-validation error.
+14. During a run, confirm only the latest visible activity animates. After
     completion, confirm no Activity spinner remains, unlabeled provider
     telemetry is absent, Plan reads `3 of 3`, and the final written outcome is
     visible before any page refresh. Refresh once and verify the outcome remains
@@ -166,6 +173,10 @@ credentials, or secret values.
 - `work_disabled` (404): master flag is false or the deployment did not reload.
 - `work_provider_not_configured` (503): provider IDs, billing model, or API key
   is missing; validate secret injection without printing values.
+- `work_provider_start_failed` accompanied by provider detail `title: must not
+  contain Unicode control or format characters`: deploy the title-normalization
+  fix and retry the existing Work session. New and previously stored titles are
+  sanitized at the provider boundary; users do not need to flatten the prompt.
 - `work_not_in_plan` (403): effective plan is Free or billing snapshots have not
   updated; inspect `/v1/entitlements`.
 - `insufficient_credits` (402): choose a lower budget or wait for/reset credits.

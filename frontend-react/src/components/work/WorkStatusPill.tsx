@@ -2,6 +2,7 @@ import type { WorkRunStatus, WorkSessionStatus } from "../../types";
 import styles from "./Work.module.css";
 
 const LABELS: Record<string, string> = {
+  starting: "Starting",
   created: "Planning",
   planning: "Planning",
   running: "Working",
@@ -16,7 +17,7 @@ const LABELS: Record<string, string> = {
 export function WorkStatusPill({
   status,
 }: {
-  status: WorkRunStatus | WorkSessionStatus | "idle";
+  status: WorkRunStatus | WorkSessionStatus | "idle" | "starting";
 }) {
   return (
     <span

@@ -7,9 +7,23 @@ import ipaddress
 import json
 import re
 import socket
+import unicodedata
 from urllib.parse import urlsplit
 
 _SECRET_KEYS = re.compile(r"token|secret|password|authorization|cookie|api[_-]?key", re.I)
+
+
+def normalize_work_title(value: object, *, max_length: int | None = None) -> str | None:
+    """Return a provider-safe, single-line Work session title."""
+
+    sanitized = "".join(
+        " " if character.isspace() or unicodedata.category(character) in {"Cc", "Cf"} else character
+        for character in str(value or "")
+    )
+    normalized = " ".join(sanitized.split())
+    if max_length is not None:
+        normalized = normalized[:max_length].rstrip()
+    return normalized or None
 
 
 def validate_remote_https_url(value: str) -> str:

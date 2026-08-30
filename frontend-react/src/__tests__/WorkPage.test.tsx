@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkPage } from "../pages/WorkPage";
@@ -64,7 +64,30 @@ vi.mock("../components/layout/AccountMenu", () => ({ AccountMenu: () => null }))
 vi.mock("../components/subscription/SubscriptionBanner", () => ({
   SubscriptionBanner: () => null,
 }));
-vi.mock("../components/work/WorkComposer", () => ({ WorkComposer: () => null }));
+vi.mock("../components/work/WorkComposer", () => ({
+  WorkComposer: ({
+    value,
+    onChange,
+    onSubmit,
+    busy,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    onSubmit: () => void;
+    busy: boolean;
+  }) => (
+    <div>
+      <textarea
+        aria-label="Work goal"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      <button type="button" onClick={onSubmit} disabled={busy || !value.trim()}>
+        Start work
+      </button>
+    </div>
+  ),
+}));
 vi.mock("../components/work/WorkRail", () => ({ WorkRail: () => null }));
 vi.mock("../components/work/WorkArtifacts", () => ({ WorkArtifacts: () => null }));
 vi.mock("../components/work/WorkApproval", () => ({ WorkApproval: () => null }));
@@ -80,6 +103,11 @@ describe("WorkPage terminal event synchronization", () => {
 
     apiMocks.getWorkSession.mockResolvedValue(workSession());
     apiMocks.getLatestWorkRun.mockResolvedValue(workRun());
+    apiMocks.createWorkSession.mockResolvedValue(
+      workSession({ status: "idle", latest_run_status: null }),
+    );
+    apiMocks.startWorkRun.mockResolvedValue(workRun());
+    apiMocks.sendWorkInstruction.mockResolvedValue(workRun());
     apiMocks.getWorkRun.mockResolvedValue(
       workRun({
         status: "completed",
@@ -142,9 +170,43 @@ describe("WorkPage terminal event synchronization", () => {
       ]);
     });
   });
+
+  it("shows a starting workspace while the run-start request is pending", async () => {
+    const pendingStart = deferred<WorkRun>();
+    apiMocks.startWorkRun.mockReturnValue(pendingStart.promise);
+
+    render(
+      <MemoryRouter initialEntries={["/work"]}>
+        <Routes>
+          <Route path="/work" element={<WorkPage />} />
+          <Route path="/work/:workSessionId" element={<WorkPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const goal = await screen.findByRole("textbox", { name: "Work goal" });
+    fireEvent.change(goal, { target: { value: "Prepare a launch report" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start work" }));
+
+    const starting = await screen.findByRole("status", { name: "Starting work" });
+    expect(starting).toHaveTextContent("Starting work...");
+    expect(screen.getByRole("heading", { name: "Prepare a launch report" })).toBeInTheDocument();
+    expect(screen.getByText("Starting", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "What should I work on?" })).not.toBeInTheDocument();
+
+    pendingStart.resolve(workRun({ instruction: "Prepare a launch report" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("status", { name: "Starting work" })).not.toBeInTheDocument();
+    });
+    expect(apiMocks.startWorkRun).toHaveBeenCalledWith(
+      "work-session-1",
+      expect.objectContaining({ instruction: "Prepare a launch report" }),
+      expect.stringMatching(/^work-ui-/),
+    );
+  });
 });
 
-function workSession(): WorkSession {
+function workSession(overrides: Partial<WorkSession> = {}): WorkSession {
   return {
     id: "work-session-1",
     session_id: "history-session-1",
@@ -154,6 +216,7 @@ function workSession(): WorkSession {
     created_at: "2026-08-24T23:00:00Z",
     updated_at: "2026-08-24T23:00:00Z",
     latest_run_status: "running",
+    ...overrides,
   };
 }
 
@@ -190,4 +253,14 @@ function workEvent(sequence: number, type: string, displayMessage: string): Work
     payload: {},
     created_at: "2026-08-24T23:00:13Z",
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

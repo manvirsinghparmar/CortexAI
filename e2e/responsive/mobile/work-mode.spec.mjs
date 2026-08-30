@@ -15,6 +15,39 @@ test("mobile Work keeps the four-item navigation and compact empty composer", as
     await expectNoHorizontalOverflow(page);
 });
 
+test("mobile Work shows immediate progress while the run start is pending", async ({ responsiveApp }) => {
+    const { page, state } = responsiveApp;
+    state.subscriptionPlan = "pro";
+    state.workStartDelayMs = 900;
+    await page.goto("/work");
+
+    await page.getByRole("textbox", { name: "Work goal" }).fill("Prepare a mobile launch report");
+    await page.getByRole("button", { name: /Start work/ }).click();
+
+    await expect(page.getByRole("status", { name: "Starting work" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Prepare a mobile launch report" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByText("Work completed", { exact: true }).first()).toBeVisible();
+});
+
+test("mobile Work opens and interacts with the Tools menu above navigation", async ({ responsiveApp }) => {
+    const { page, state } = responsiveApp;
+    state.subscriptionPlan = "pro";
+    await page.goto("/work");
+
+    const toolsButton = page.getByRole("button", { name: /Tools/ });
+    await toolsButton.click();
+
+    const toolsDialog = page.getByRole("dialog", { name: "Tools" });
+    await expect(toolsButton).toHaveAttribute("aria-expanded", "true");
+    await expect(toolsDialog).toBeVisible();
+    await toolsDialog.getByRole("button", { name: "Add MCP server" }).click();
+    await expect(toolsDialog.getByRole("textbox", { name: "HTTPS endpoint" })).toBeVisible();
+    await toolsDialog.getByRole("button", { name: "Close tools" }).click();
+    await expect(toolsDialog).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+});
+
 test("mobile completed Work shows outcome, inline activity rail, and deliverables above navigation", async ({ responsiveApp }) => {
     const { page, state } = responsiveApp;
     state.subscriptionPlan = "pro";

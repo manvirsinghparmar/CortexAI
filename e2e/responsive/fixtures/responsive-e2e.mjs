@@ -41,6 +41,7 @@ export const test = base.extend({
             directUploadSequence: 0,
             workSessions: [],
             workRun: null,
+            workStartDelayMs: 0,
             workEvents: [],
             workArtifacts: [],
             workApproval: null,
@@ -248,6 +249,9 @@ async function installResponsiveRoutes(page, state) {
             const payload = request.postDataJSON();
             const session = state.workSessions.find(item => item.id === workStart[1]) || makeWorkSession(payload.instruction.slice(0, 120));
             if (!state.workSessions.some(item => item.id === session.id)) state.workSessions.unshift(session);
+            if (state.workStartDelayMs > 0) {
+                await new Promise(resolve => setTimeout(resolve, state.workStartDelayMs));
+            }
             state.workRun = makeWorkRun(session.id, payload.instruction, "running");
             state.workEvents = [
                 makeWorkEvent(1, "run_created", "Work run created"),

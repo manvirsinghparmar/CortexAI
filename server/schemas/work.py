@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from server.work.security import normalize_work_title
+
 WorkSessionStatus = Literal[
     "idle", "running", "waiting_for_approval", "completed", "failed", "cancelled"
 ]
@@ -29,8 +31,7 @@ class WorkSessionCreateDTO(BaseModel):
     @field_validator("title")
     @classmethod
     def normalize_title(cls, value: str | None) -> str | None:
-        normalized = str(value or "").strip()
-        return normalized or None
+        return normalize_work_title(value)
 
 
 class WorkSessionDTO(BaseModel):

@@ -104,16 +104,22 @@ describe("ResponseCard", () => {
   });
 
   it("shows completed response stats without a run-details disclosure control", () => {
-    render(<ResponseCard response={{ ...response(), ai_credits: 1_234 }} compact />);
+    render(
+      <ResponseCard
+        response={{ ...response(), ai_credits: 1_234, cache_savings_ai_credits: 250 }}
+        compact
+      />,
+    );
 
     const stats = document.querySelector('[id^="response-stats-"]');
 
     expect(screen.queryByRole("button", { name: /run details/i })).not.toBeInTheDocument();
     expect(stats).toHaveTextContent("20.0s");
     expect(stats).toHaveTextContent("60 tok");
-    expect(stats).toHaveTextContent("1,234 credits");
+    expect(stats).toHaveTextContent("1.234 credits");
     expect(stats).not.toHaveTextContent("$0.0010");
     expect(stats?.querySelectorAll("svg")).toHaveLength(3);
+    expect(screen.getByText("Saved ~0.25 credits through context reuse")).toBeInTheDocument();
   });
 
   it("preserves a token-limited partial answer and offers a larger retry", () => {

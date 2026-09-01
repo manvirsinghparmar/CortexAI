@@ -207,7 +207,11 @@ describe("WorkPage terminal event synchronization", () => {
     });
     expect(apiMocks.startWorkRun).toHaveBeenCalledWith(
       "work-session-1",
-      expect.objectContaining({ instruction: "Prepare a launch report", web_mode: "on" }),
+      expect.objectContaining({
+        instruction: "Prepare a launch report",
+        max_credit_budget: 1_000_000,
+        web_mode: "on",
+      }),
       expect.stringMatching(/^work-ui-/),
     );
   });

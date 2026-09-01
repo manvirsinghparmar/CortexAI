@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ToolConnection, WorkEvent, WorkRun } from "../../types";
+import { formatAiCredits, toDisplayAiCredits } from "../../utils/aiCredits";
 import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./Work.module.css";
 
@@ -103,7 +104,7 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
           )}
         </ul>
       </RailSection>
-      <RailSection title="Credits" meta={`${run.actual_credits.toLocaleString()} used`} defaultOpen>
+      <RailSection title="Credits" meta={`${formatAiCredits(run.actual_credits)} used`} defaultOpen>
         {run.provider_model_id && (
           <p className={styles.usageIdentity} title={run.provider_model_id}>
             <CortexIcon name="sparkle" size={14} /> Provider model · {formatModel(run.provider_model_id)}
@@ -115,16 +116,19 @@ export function WorkRail({ run, events, connections, enabledConnectionIds }: Wor
           </p>
         )}
         <div className={styles.budgetFigure}>
-          <strong>{run.actual_credits.toLocaleString()}</strong>
-          <span>/ {run.max_credit_budget.toLocaleString()} max</span>
+          <strong>{formatAiCredits(run.actual_credits)}</strong>
+          <span>/ {formatAiCredits(run.max_credit_budget)} max</span>
         </div>
         <div
           className={styles.budgetTrack}
           role="progressbar"
           aria-label="Work credit usage"
           aria-valuemin={0}
-          aria-valuemax={run.max_credit_budget}
-          aria-valuenow={Math.min(run.actual_credits, run.max_credit_budget)}
+          aria-valuemax={toDisplayAiCredits(run.max_credit_budget)}
+          aria-valuenow={toDisplayAiCredits(
+            Math.min(run.actual_credits, run.max_credit_budget),
+          )}
+          aria-valuetext={`${formatAiCredits(run.actual_credits)} of ${formatAiCredits(run.max_credit_budget)} AI credits used`}
         >
           <span
             style={{

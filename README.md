@@ -38,8 +38,9 @@ approval unless the user explicitly saved the exact tool + connection grant
 for the current Work session. Destructive, deployment, financial, and external
 communication actions always interrupt for approval.
 
-Work defaults to a 1,000,000-credit ($1.00) run ceiling and clamps that value to
-the effective plan maximum. Anthropic enforces the corresponding session budget
+Work defaults to a 1,000,000-credit ($1.00) raw run ceiling, presented as 1,000
+AI credits in the browser, and clamps that value to the effective plan maximum.
+Anthropic enforces the corresponding session budget
 and pauses at `budget_reached`; Cortex does not send polling interrupts. A later
 run extends the reused provider session cap by its newly reserved budget, and a
 budget-paused turn resumes from the provider budget update without a competing
@@ -637,6 +638,8 @@ The React client owns subscription transport in `frontend-react/src/api/billing.
 `useSubscription` exposes effective entitlements, current subscription state, plan data, allowance/model/feature helpers, explicit reload, Checkout and Portal actions, and bounded Checkout-success polling. A successful Checkout redirect is treated only as a refresh hint: the hook reports `confirming` until `/v1/entitlements` returns a paid effective plan, then `confirmed`; if the webhook remains delayed after ten bounded attempts, it reports `pending` so future billing UI can show a safe refresh action. React follows only validated HTTPS hosted URLs returned by the backend and never calls Stripe directly.
 
 The React consumer plan surfaces are `/pricing` and `/account/billing`. Pricing renders the server catalogue, current-plan state, monthly allowances, billing-disabled state, and auth/lifecycle-aware Checkout or Portal actions. Billing renders effective plan status, renewal or cancellation dates, payment-grace warnings, and allowance progress. Signed-out users can read public pricing but must authenticate for account billing. The shared account menu shows only the plan label, past-due state, and Upgrade/Manage action; it intentionally omits detailed counters. Paid access is displayed only from the webhook-synchronized subscription and entitlement responses, including after `?checkout=success`.
+
+Backend APIs, PostgreSQL counters, ledger entries, reservations, and React state keep AI credits in raw integer metering units. Customer-facing React surfaces divide those values by 1,000 through `frontend-react/src/utils/aiCredits.ts`, so the Free/Plus/Pro monthly allowances display as 100/1,000/3,000 AI credits while their server values remain 100,000/1,000,000/3,000,000. The same presentation rule applies to balances, plan/billing meters, response and Compare usage, itemized activity, insufficient-credit messages, and Work budgets. Outgoing request payloads remain in raw units; the formatter never changes billing authority or arithmetic.
 
 Composer and catalogue gating is explanatory UX over the same backend authority. Manual model pickers and the Models screen consume live `/v1/models` catalogue, billing-class, lifecycle, and credit-usage metadata; disallowed models remain visible with the server-derived required plan, while missing live billing metadata is shown conservatively as unavailable. Ask waits for both the model catalogue and effective `/v1/entitlements` snapshot before initializing its manual selection: when Smart routing is turned off, Free defaults to `openai:gpt-5.6-luna`, Plus to `claude:claude-sonnet-4-6`, and Pro to `openai:gpt-5.6-terra`. Compare also waits for effective entitlements before filling empty initial model slots, then chooses those defaults only from billing classes allowed by the current plan. These rules change initial values only: the complete model offering remains visible, and valid existing/manual selections are preserved. Free/Plus users see a Pro action instead of silently adding a third Compare target. Web, Improve, file count/size, AI-credit balance, and CSV export use the current `/v1/entitlements` snapshot for preflight messaging, but every request is still enforced and reserved by the backend.
 

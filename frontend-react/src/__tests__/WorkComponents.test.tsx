@@ -117,7 +117,7 @@ describe("Cortex Work components", () => {
     expect(screen.getByText("Reading files")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Work credit usage" })).toHaveAttribute(
       "aria-valuenow",
-      "25000",
+      "25",
     );
     expect(screen.getByText(/Provider model · Claude Haiku 4.5/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Tools/ }));
@@ -177,6 +177,25 @@ describe("Cortex Work components", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: /Web access: Auto/ }));
     expect(onWebModeChange).toHaveBeenCalledWith("on");
+  });
+
+  it("presents scaled Work budgets while preserving raw budget selections", async () => {
+    const user = userEvent.setup();
+    const onBudgetChange = vi.fn();
+    render(
+      <WorkComposer
+        {...composerProps({ maxPlanBudget: 1_000_000, onBudgetChange })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Work settings" }));
+    expect(screen.getByRole("button", { name: "25 credits" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "100 credits" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "250 credits" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1,000 credits" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "250 credits" }));
+    expect(onBudgetChange).toHaveBeenCalledWith(250_000);
   });
 
   it("warns when Web is explicitly off for a current-information request", () => {

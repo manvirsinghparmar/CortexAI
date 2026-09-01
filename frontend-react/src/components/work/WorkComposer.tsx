@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import type { AttachmentUploadTask } from "../../store/attachmentUploadStore";
 import type { ToolCatalogItem, ToolConnection, WorkWebMode } from "../../types";
+import { formatAiCredits } from "../../utils/aiCredits";
 import { CortexIcon } from "../shared/CortexIcon";
 import styles from "./Work.module.css";
 
@@ -281,5 +282,5 @@ function looksLikeCurrentInformation(value: string): boolean {
 }
 
 function formatBudget(value: number): string {
-  return value >= 1_000_000 ? `${value / 1_000_000}m` : `${value / 1_000}k`;
+  return `${formatAiCredits(value)} credits`;
 }

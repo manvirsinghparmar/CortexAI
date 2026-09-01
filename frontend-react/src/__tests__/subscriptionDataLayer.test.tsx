@@ -122,6 +122,9 @@ describe("subscription data layer", () => {
     expect(error.kind).toBe("allowance");
     expect(error.status).toBe(402);
     expect(error.retryable).toBe(false);
+    expect(error.message).toBe(
+      "This request is estimated to require 15 AI credits. You have 2 remaining.",
+    );
     expect(error.details).toMatchObject({
       meter: "ai_credits",
       required: 15_000,

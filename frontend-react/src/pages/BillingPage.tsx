@@ -17,6 +17,7 @@ import type {
   SubscriptionMeterKey,
   SubscriptionStatus,
 } from "../types";
+import { formatAiCredits, toDisplayAiCredits } from "../utils/aiCredits";
 import styles from "./BillingPage.module.css";
 
 interface BillingPageContentProps {
@@ -261,7 +262,9 @@ function UsageRow({ label, counter }: { label: string; counter?: AllowanceCounte
       <div className={styles.usageLabel}>
         <span>{label}</span>
         <strong>
-          {limit > 0 ? `${formatCount(used)} / ${formatCount(limit)}` : "Not included"}
+          {limit > 0
+            ? `${formatAiCredits(used)} / ${formatAiCredits(limit)}`
+            : "Not included"}
         </strong>
       </div>
       <div
@@ -269,8 +272,9 @@ function UsageRow({ label, counter }: { label: string; counter?: AllowanceCounte
         role="progressbar"
         aria-label={label}
         aria-valuemin={0}
-        aria-valuemax={limit}
-        aria-valuenow={Math.min(used, limit)}
+        aria-valuemax={toDisplayAiCredits(limit)}
+        aria-valuenow={toDisplayAiCredits(Math.min(used, limit))}
+        aria-valuetext={`${formatAiCredits(used)} of ${formatAiCredits(limit)} AI credits used`}
       >
         <span style={{ width: `${percentage}%` }} />
       </div>
@@ -340,10 +344,6 @@ function formatDate(value: string | null): string {
     year: "numeric",
     timeZone: "UTC",
   }).format(date);
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
 }
 
 function isPaymentPastDue(status?: SubscriptionStatus): boolean {

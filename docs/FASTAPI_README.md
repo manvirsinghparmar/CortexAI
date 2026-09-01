@@ -226,8 +226,9 @@ The master feature flag is `CORTEX_WORK_ENABLED`. A disabled environment returns
 The full provider, MCP, OAuth, AWS, rollout, rollback, and troubleshooting
 contract is in `docs/runbooks/cortex-work.md`.
 
-The default Work ceiling is 1,000,000 AI credits ($1.00), clamped to the
-effective plan limit. Managed Agents enforces the provider session budget and
+The default Work ceiling is 1,000,000 raw AI-credit units ($1.00), presented as
+1,000 AI credits in the browser and clamped to the effective plan limit. Managed
+Agents enforces the provider session budget and
 pauses it at `budget_reached`; reconciliation never emits timer-driven
 `user.interrupt` events. Reused provider sessions receive a cumulative cap
 extension for the newly reserved run. If the prior turn is budget-paused, that
@@ -432,6 +433,8 @@ See `docs/runbooks/stripe-billing.md` for the enablement checklist. Do not place
 React consumes these contracts through `frontend-react/src/api/billing.ts`, `frontend-react/src/api/entitlements.ts`, and the auth-aware `useSubscription` hook. Signed-out hooks call only the public plans endpoint. Checkout-success polling remains bounded and considers payment confirmed only after `/v1/entitlements` reports a paid effective plan; browser storage and the return query string are never plan authority.
 
 React exposes `/pricing` for the public Free/Plus/Pro catalogue and `/account/billing` for authenticated plan status, lifecycle notices, allowance progress, and Portal management. Billing-disabled, Free, active paid, past-due, cancel-at-period-end, fully cancelled, and delayed Checkout-confirmation states render from these server contracts. Account-menu plan context stays summary-only.
+
+The API, database, ledger, reservations, and React state retain raw integer AI-credit units. Customer-facing React surfaces use `frontend-react/src/utils/aiCredits.ts` to display one AI credit per 1,000 raw units: Free/Plus/Pro therefore render 100/1,000/3,000 AI credits while the API contracts remain 100,000/1,000,000/3,000,000. Balances, allowance meters, response/Compare usage, itemized activity, structured insufficient-credit messages, and Work budgets use the same formatter. React still sends raw Work budgets and other credit-bearing request values back to the API.
 
 React model/composer/file locks are user-experience controls only. They consume live `/v1/models` catalogue and billing metadata, show the Pro-only third Compare target, display Web/Improve/file allowances, and open contextual dialogs for structured backend denials. Unknown model billing metadata is unavailable rather than optimistically allowed. Prompt text and attachments are cleared only after a stream is accepted, so a preflight denial remains editable; restored historical responses are not filtered after downgrade. The AI credits route shows the unified allowance separately from the provider token/cost analytics on Usage & insights. Its credit history groups itemized API rows by `activity_id` into one card with the original pre-optimization question and total first; Prompt Optimizer and the following Ask/Compare share that display key. When both exist, the native expandable breakdown presents their combined credits as one `Final optimized ... answer` line and explicitly identifies the included optimizer attempts and final answer generation. Optimizer-only activity remains identifiable, Compare/Cortex Analysis/Web Search charges remain understandable, optimizer retries are aggregated, zero-credit adjustments stay out of the visible breakdown, and an explicit fallback covers legacy or privacy-policy-limited activity with no query.
 

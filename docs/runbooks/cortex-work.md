@@ -75,8 +75,10 @@ The existing `DATABASE_URL`, billing/Stripe settings, attachment/S3 settings,
 Cognito/session settings, `MASTER_KEY`, proxy settings, and logging settings
 remain authoritative.
 
-`CORTEX_WORK_DEFAULT_CREDIT_BUDGET` defaults to 1,000,000 credits ($1.00)
-and is clamped to the effective plan maximum. The provider accepts whole US
+`CORTEX_WORK_DEFAULT_CREDIT_BUDGET` defaults to 1,000,000 raw credit units
+($1.00) and is clamped to the effective plan maximum. The React Work UI presents
+this as 1,000 AI credits by dividing raw API values by 1,000; its state and
+`max_credit_budget` request payload remain raw. The provider accepts whole US
 cents, so non-cent credit ceilings are rounded up. Each reused session extends
 its cumulative provider cap by the newly reserved run budget. A
 `budget_reached` session resumes when that cap is updated; do not send a

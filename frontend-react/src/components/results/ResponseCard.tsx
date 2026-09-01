@@ -19,6 +19,7 @@ import remarkGfm from "remark-gfm";
 import { getModelPresentation } from "../../config/modelPresentation";
 import { remarkCitations } from "../../markdown/remarkCitations";
 import type { ChatResponse, ResponseRunStatus } from "../../types";
+import { formatAiCredits } from "../../utils/aiCredits";
 import { CortexIcon } from "../shared/CortexIcon";
 import { ProviderLogo } from "../shared/ProviderLogo";
 import { Citation } from "./Citation";
@@ -194,7 +195,7 @@ export function ResponseCard({
                 {hasCredits && (
                   <span className={`${styles.metricPill} ${styles.metricText}`}>
                     <CortexIcon name="cost" />
-                    {aiCredits.toLocaleString()} credits
+                    {formatAiCredits(aiCredits)} credits
                     {response.credit_usage_estimated ? " estimated" : ""}
                   </span>
                 )}
@@ -224,7 +225,7 @@ export function ResponseCard({
         )}
         {cacheSavings > 0 && !hasError && !showLoading && (
           <div className={styles.cacheSavings} role="status">
-            Saved ~{cacheSavings.toLocaleString()} credits through context reuse
+            Saved ~{formatAiCredits(cacheSavings)} credits through context reuse
           </div>
         )}
         {isStreaming && !!responseText && <span className={styles.cursor} aria-hidden="true" />}

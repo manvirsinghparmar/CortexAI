@@ -17,6 +17,7 @@ import type {
   SubscriptionPlanCode,
   SubscriptionStatus,
 } from "../types";
+import { formatAiCredits } from "../utils/aiCredits";
 import styles from "./PricingPage.module.css";
 
 interface PricingPageContentProps {
@@ -344,7 +345,7 @@ function planFeatures(plan: PublicBillingPlan): string[] {
       ]
     : ["Core Chat and Compare access"];
   return [
-    `${formatCount(allowances.ai_credits)} AI credits per month`,
+    `${formatAiCredits(allowances.ai_credits)} AI credits per month`,
     `Compare up to ${plan.features.max_compare_models} models`,
     ...workFeatures,
     "Advanced Web Search draws from AI credits",
@@ -366,10 +367,6 @@ function planSummary(code: SubscriptionPlanCode): string {
 
 function formatPrice(value: number): string {
   return value === 0 ? "$0" : `$${value.toFixed(2)}`;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
 }
 
 function isPaymentPastDue(status?: SubscriptionStatus): boolean {

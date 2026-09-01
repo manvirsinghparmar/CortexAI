@@ -26,6 +26,9 @@ describe("PricingPageContent", () => {
     expect(screen.getByRole("heading", { name: "Plus" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pro" })).toBeInTheDocument();
     expect(screen.getByText("$6.99")).toBeInTheDocument();
+    expect(within(planCard("Free")).getByText("100 AI credits per month")).toBeInTheDocument();
+    expect(within(planCard("Plus")).getByText("1,000 AI credits per month")).toBeInTheDocument();
+    expect(within(planCard("Pro")).getByText("3,000 AI credits per month")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Sign in to choose" })).toHaveLength(3);
 
     await user.click(screen.getAllByRole("button", { name: "Sign in to choose" })[1]);
@@ -141,10 +144,10 @@ describe("BillingPageContent", () => {
     expect(screen.getByText("PLUS PLAN")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Renews August 18, 2026")).toBeInTheDocument();
-    expect(screen.getByText("124,000 / 1,000,000")).toBeInTheDocument();
+    expect(screen.getByText("124 / 1,000")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "AI credits" })).toHaveAttribute(
       "aria-valuenow",
-      "124000",
+      "124",
     );
 
     await user.click(screen.getByRole("button", { name: "Manage subscription" }));

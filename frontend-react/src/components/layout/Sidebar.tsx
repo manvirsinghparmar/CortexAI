@@ -41,6 +41,8 @@ interface HistoryDateGroup {
   threads: HistoryThread[];
 }
 
+const MAX_VISIBLE_HISTORY_THREADS = 100;
+
 export function Sidebar({
   onSelectThread,
   activeView = "chat",
@@ -78,7 +80,10 @@ export function Sidebar({
   const { removeThread, renameThread } = useHistory();
 
   const filteredThreads = useMemo(() => {
-    return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(0, 20);
+    return filterHistoryThreads(buildHistoryThreads(history), historySearch).slice(
+      0,
+      MAX_VISIBLE_HISTORY_THREADS,
+    );
   }, [history, historySearch]);
   const historyGroups = useMemo(() => groupHistoryThreads(filteredThreads), [filteredThreads]);
 

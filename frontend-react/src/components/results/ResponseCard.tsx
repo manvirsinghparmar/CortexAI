@@ -74,14 +74,13 @@ export function ResponseCard({
     ? errorMessage(response)
     : response.text || (loadingStatus ? "" : "(empty response)");
   const elapsedMs = useElapsedMs(response.started_at, !!loadingStatus);
-  const totalTokens = validTokenCount(response.token_usage?.total_tokens);
   const durationMs = resolveDisplayDurationMs(response);
   const failedDurationMs = resolveFailedDurationMs(response, elapsedMs);
   const isFailed = hasError || response.ui_status === "failed";
   const aiCredits = response.ai_credits ?? 0;
   const hasCredits = !loadingStatus && !isFailed && aiCredits > 0;
   const cacheSavings = Math.max(0, response.cache_savings_ai_credits ?? 0);
-  const hasCompletedMetrics = durationMs !== null || totalTokens !== null;
+  const hasCompletedMetrics = durationMs !== null;
   const hasMetaContent =
     !!loadingStatus || isFailed || hasCompletedMetrics || hasCredits;
   const metaPinned = !!loadingStatus || isFailed;
@@ -184,12 +183,6 @@ export function ResponseCard({
                         &middot; Fastest
                       </span>
                     )}
-                  </span>
-                )}
-                {totalTokens !== null && (
-                  <span className={`${styles.metricPill} ${styles.metricText}`}>
-                    <CortexIcon name="tokens" />
-                    {formatTokens(totalTokens)} tok
                   </span>
                 )}
                 {hasCredits && (
@@ -682,19 +675,9 @@ function validDurationMs(value: number | null | undefined): number | null {
     : null;
 }
 
-function validTokenCount(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? value
-    : null;
-}
-
 function parseTimestamp(value: string | undefined): number | null {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatTokens(tokens: number) {
-  return tokens.toLocaleString();
 }
 
 function formatMetricDurationSeconds(durationMs: number) {

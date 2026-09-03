@@ -181,7 +181,7 @@ describe("ResultsSection layout states", () => {
 
     expect(screen.getByText("3 succeeded")).toBeInTheDocument();
     expect(screen.getByText("0 errors")).toBeInTheDocument();
-    expect(screen.getByText("300 tok")).toBeInTheDocument();
+    expect(screen.queryByText("300 tok")).not.toBeInTheDocument();
     expect(screen.getByText("0.47 credits")).toBeInTheDocument();
     expect(screen.queryByText("$0.00470")).not.toBeInTheDocument();
     const fastestLabel = screen.getByText(/Fastest/);

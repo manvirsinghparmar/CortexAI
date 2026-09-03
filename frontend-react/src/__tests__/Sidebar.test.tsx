@@ -410,6 +410,29 @@ describe("Sidebar", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows up to 100 recent chat threads", () => {
+    useChatStore.setState({
+      history: Array.from({ length: 101 }, (_, index) =>
+        historyEntry({
+          id: index + 1,
+          sessionId: `history-session-${index + 1}`,
+          prompt: `History chat ${index + 1}`,
+          response: `History response ${index + 1}`,
+          mode: "single",
+          provider: "openai",
+          model: "gpt-5.1",
+          timestamp: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+        }),
+      ),
+    });
+
+    render(<Sidebar onSelectThread={vi.fn()} />);
+
+    expect(document.querySelectorAll("button[data-history-thread]")).toHaveLength(100);
+    expect(screen.getByText("History chat 101")).toBeInTheDocument();
+    expect(screen.queryByText("History chat 1", { exact: true })).not.toBeInTheDocument();
+  });
+
   it("shows completed Work history once and hides zero-run session shells", () => {
     const onSelectWorkSession = vi.fn();
     const title = "Prepare the regression strategy";

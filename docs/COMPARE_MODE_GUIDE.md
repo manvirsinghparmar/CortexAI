@@ -12,7 +12,42 @@ Compare Mode allows you to send every query to multiple LLM providers simultaneo
 This guide covers both:
 - API compare mode (`POST /v1/compare`, `POST /v1/compare/stream`)
 - CLI compare mode (`COMPARE_MODE=true`)
-- Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually.
+- Browser Compare mode, where `With sources` is enabled by default for new page sessions and can be turned off manually. Empty initial model slots are filled only after effective entitlements load and only from models allowed by the current plan; higher-plan models remain visible for discovery.
+- Browser Cortex Analysis, an on-demand synthesis of two or three completed Compare responses.
+
+## Cortex Analysis
+
+- After at least two Compare responses complete successfully, the browser offers `Analyze responses with Cortex` below the model answers.
+- The analysis runs only when requested. `gpt-5.4-mini` is the default analysis model and can be changed with `CORTEX_ANALYSIS_MODEL`.
+- The analysis model sees shuffled `Response A/B/C` content without provider or
+  model identities. After generation, the server translates those internal
+  labels back to canonical provider-and-model names, such as
+  `Claude (Sonnet 4.6)`, throughout the recommended answer, agreements,
+  differences, unique insights, confidence explanation, and verification
+  items. Selecting multiple models from one provider therefore does not collapse
+  their attribution into a shared provider label.
+- Finished results render as one always-visible reading document: combined answer, inline qualitative confidence, attributed evidence columns, and a single verification band. No section requires a click. Strong disagreement leads visually and lowers confidence to `Limited`; attribution identifies who holds each position without naming a winner.
+- Every successful analysis is retained. Reloading or reopening a History thread restores all prior runs and selects the newest by default.
+- Regenerating one source response appends a new response revision. Earlier analyses remain readable but are marked stale until the user explicitly runs an updated analysis.
+- Re-running Cortex Analysis temporarily hides the previous combined result and
+  shows only the processing state. A failed re-run restores the saved result
+  alongside the retry state.
+- Each analysis or re-analysis is a synthesized model call charged against the
+  unified AI-credit wallet. The reservation includes the Compare question and
+  successful source responses plus the analysis output ceiling. Reused Compare
+  research does not add a second Tavily charge, and there is no separate Cortex
+  quota. Saved runs stay readable after downgrade.
+- The required subscription/Cortex migrations are
+  `20260718_add_b2c_billing_foundation.sql`,
+  `20260727_add_cortex_analysis_runs.sql`,
+  `20260729_add_unified_ai_credits.sql`, and
+  `20260730_add_usage_reservation_activity.sql`, followed by
+  `20260731_add_model_pricing_audit.sql` and
+  `20260802_add_cortex_analysis_attribution.sql`, applied in that order.
+
+The API accepts two or three explicit targets. Subscription enforcement may reduce the effective maximum: Free and Plus allow two targets, while Pro allows three. The four-provider examples below describe the legacy CLI `COMPARE_MODE=true` flow, not the FastAPI request limit.
+
+In database-backed API mode, all target/model entitlements and monthly counters are enforced before providers start. Successful targets settle independently against their canonical requested model identity, even when a provider returns a versioned served-model snapshot; that same identity drives each response card's credits and the aggregate Compare credit total. Failed targets release their reserved model-response units, and shared research settles once only when it actually ran. One unrecognized served snapshot cannot suppress inline credits or the other successful target ledger rows. On a streaming disconnect or error, only successful targets whose output started are settled; completed-but-unemitted targets are released. A finalization failure releases and unregisters the reservation rather than allowing its activity heartbeat to keep credits reserved.
 
 ## Release Notes (2026-02-18)
 
@@ -26,8 +61,8 @@ This guide covers both:
   - mapped key owner is authoritative
   - unmapped key behavior controlled by `AUTO_REGISTER_UNMAPPED_API_KEYS` and `ALLOW_UNMAPPED_API_KEY_PERSIST`
 - Required DB migrations for compare persistence:
-  - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
   - `db/migrations/20260218_add_request_group_id_to_llm_requests.sql`
+  - `db/migrations/20260218_llm_requests_api_key_owner_guard.sql`
 
 ## How to Enable Compare Mode
 
@@ -61,8 +96,8 @@ Edit `config/config.py` to customize which models are compared:
 ```python
 COMPARE_TARGETS = [
     {"provider": "openai", "model": "gpt-4o-mini"},
-    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-    {"provider": "deepseek", "model": "deepseek-chat"},
+    {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
+    {"provider": "deepseek", "model": "deepseek-v4-flash"},
     {"provider": "grok", "model": "grok-4-latest"},
 ]
 ```
@@ -97,11 +132,11 @@ You: What is Python?
     Latency: 347ms | Tokens: 45 | Cost: $0.000023
     Response: Python is a high-level, interpreted programming language...
 
-[2] GEMINI/gemini-2.5-flash-lite
+[2] GEMINI/gemini-3.5-flash-lite
     Latency: 289ms | Tokens: 52 | Cost: $0.000015
     Response: Python is a versatile programming language known for...
 
-[3] DEEPSEEK/deepseek-chat
+[3] DEEPSEEK/deepseek-v4-flash
     Latency: 412ms | Tokens: 38 | Cost: $0.000008
     Response: Python is an easy-to-learn programming language...
 
@@ -154,10 +189,10 @@ If some models fail, the system continues with successful responses:
 [1] OPENAI/gpt-4o-mini
     Response: Successfully completed...
 
-[2] GEMINI/gemini-2.5-flash-lite
+[2] GEMINI/gemini-3.5-flash-lite
     [ERROR] timeout: Request timed out after 60s
 
-[3] DEEPSEEK/deepseek-chat
+[3] DEEPSEEK/deepseek-v4-flash
     Response: Successfully completed...
 
 === Summary ===
@@ -238,7 +273,7 @@ Solution: Edit `COMPARE_TARGETS` to include only the models you want:
 ```python
 COMPARE_TARGETS = [
     {"provider": "openai", "model": "gpt-4o-mini"},
-    {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+    {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
 ]
 ```
 
@@ -251,6 +286,7 @@ COMPARE_TARGETS = [
 - **Graceful Degradation**: System continues even if some models fail
 - **Canonical Grouping**: API compare returns one `request_group_id` used consistently in logs and DB persistence
 - **Browser Source Default**: The frontend starts Compare with `With sources` on and preserves a user's manual off choice while switching modes in the same page session.
+- **Plan-Aware Model Defaults**: The frontend fills empty initial Compare slots from the current `/v1/entitlements` billing-class allowlist. It does not remove locked models from the picker and does not rewrite valid existing/manual selections.
 - **Readable Multi-Turn Layout**: One desktop Compare turn fills the available transcript, and desktop/tablet comparisons keep tall visible cards with internal response-body scrolling. Phone-sized mobile uses a segmented model switcher, shows one selected response card at a time in natural page flow, and turns the stuck switcher into a frosted provider-tinted reading cue without shifting model pills horizontally.
 - **Shared Prompt Presentation**: Compare prompts use the same right-aligned `You` bubble as Ask mode, including attachment and prompt-optimization states. While Improve is pending, the prompt and optimization status remain visible but model tabs, response cards, and aggregate totals stay hidden; they appear only after optimization resolves and model generation begins. Aggregate Compare totals render separately.
 - **New-Turn Reveal**: Submitting a Compare follow-up always smoothly reveals that new question once, even when the user was viewing an older turn. Streaming response growth does not continuously move the transcript, and the UI no longer renders a floating down-arrow jump control.
@@ -260,8 +296,9 @@ COMPARE_TARGETS = [
 - **Mobile Model Picker**: Compare model dropdowns render through a fixed-position body portal, keeping every option visible and selectable above the horizontally scrollable mobile model row.
 - **Purposeful Empty State**: Before the first turn, Compare mode explains the ask-once, multi-model workflow and the value of comparing accuracy, depth, speed, tone, and usefulness. Three practical examples fill the prompt without submitting or changing the selected models.
 - **Controlled Response Rhythm**: Compare card titles, metadata, paragraphs, Markdown headings, and lists use a restrained type scale and tighter spacing so long model outputs remain readable without excessive vertical gaps.
+- **Append-only Cortex Analysis**: Successful synthesis runs live below Compare responses, survive reload/history reopening, retain every prior run, and use exact response revisions to disclose stale analyses without overwriting them.
 
 ---
 
-**Last Updated:** 2026-06-11
+**Last Updated:** 2026-08-02
 **Applies To:** OpenAI Project v2.0+

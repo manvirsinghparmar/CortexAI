@@ -21,6 +21,10 @@ describe("history threads", () => {
         timestamp: "2026-06-07T12:00:00Z",
         prompt: "Initial question",
         response: "First answer",
+        prompt_tokens: 4,
+        completion_tokens: 6,
+        tokens: 10,
+        ai_credits: 52,
       }),
     ];
 
@@ -37,6 +41,13 @@ describe("history threads", () => {
       "Initial question",
       "Follow up",
     ]);
+    const restoredResponse = buildTurnsFromHistoryEntries(threads[0].entries)[0].responses[0];
+    expect(restoredResponse.ai_credits).toBe(52);
+    expect(restoredResponse.token_usage).toMatchObject({
+      prompt_tokens: 4,
+      completion_tokens: 6,
+      total_tokens: 10,
+    });
   });
 
   it("groups compare target rows into one turn using request_group_id", () => {
@@ -49,6 +60,8 @@ describe("history threads", () => {
         model: "gpt-5",
         response: "OpenAI answer",
         request_group_id: "group-1",
+        ai_credits: 100,
+        research_ai_credits: 10_000,
       }),
       entry({
         id: 11,
@@ -58,6 +71,8 @@ describe("history threads", () => {
         model: "gemini-2.5-flash",
         response: "Gemini answer",
         request_group_id: "group-1",
+        ai_credits: 200,
+        research_ai_credits: 10_000,
       }),
     ];
 
@@ -70,12 +85,37 @@ describe("history threads", () => {
     expect(turns[0].mode).toBe("compare");
     expect(turns[0].requestGroupId).toBe("group-1");
     expect(turns[0].responses).toHaveLength(2);
+    expect(turns[0].responses.map((response) => response.ai_credits)).toEqual([100, 200]);
     expect(turns[0].compareSummary).toMatchObject({
       request_group_id: "group-1",
       success_count: 2,
       error_count: 0,
+      total_ai_credits: 10_300,
     });
   });
+
+  it.each([
+    [8_192, "deep"],
+    [12_288, "extended"],
+    [32_768, undefined],
+  ] as const)(
+    "reconstructs the Auto retry step from an effective %i-token budget",
+    (effectiveMaxOutputTokens, recommendedProfile) => {
+      const [restored] = buildTurnsFromHistoryEntries([
+        entry({
+          completion_status: "incomplete",
+          stop_cause: "token_limit",
+          generation_profile: "auto",
+          effective_max_output_tokens: effectiveMaxOutputTokens,
+        }),
+      ]);
+
+      expect(restored.responses[0].retry_with_more_room).toEqual({
+        available: Boolean(recommendedProfile),
+        recommended_profile: recommendedProfile,
+      });
+    },
+  );
 
   it("searches all prompts, responses, providers, and models in a thread", () => {
     const threads = buildHistoryThreads([

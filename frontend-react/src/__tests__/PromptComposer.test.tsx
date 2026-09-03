@@ -11,10 +11,12 @@ import userEvent from "@testing-library/user-event";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { DEFAULT_MODELS } from "../config/defaultModels";
 import { useChatStore } from "../store/chatStore";
+import { useAttachmentUploadStore } from "../store/attachmentUploadStore";
+import type { AttachmentUploadState } from "../store/attachmentUploadStore";
 import type { FileUploadResponse } from "../types";
 
 vi.mock("../api/files", () => ({
-  uploadFile: vi.fn(),
+  uploadFiles: vi.fn(),
   deleteFile: vi.fn().mockResolvedValue(undefined),
   fetchFileStatus: vi.fn(),
 }));
@@ -42,6 +44,7 @@ describe("PromptComposer", () => {
       streamingText: "",
       error: null,
     });
+    useAttachmentUploadStore.setState({ tasks: [] });
   });
 
   afterEach(() => {
@@ -88,6 +91,7 @@ describe("PromptComposer", () => {
       screen.getByRole("switch", { name: "Prompt optimization" }),
     ).toHaveAttribute("aria-describedby", improveTooltip.id);
     expect(card).toContainElement(sendButton);
+    expect(screen.queryByRole("combobox", { name: "Answer depth" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Compare" })).not.toBeInTheDocument();
     expect(
       textarea.compareDocumentPosition(fileName) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -212,7 +216,57 @@ describe("PromptComposer", () => {
       expect(textarea.style.overflowY).toBe("auto");
     });
   });
+
+  it.each(["authorizing", "uploading", "processing", "failed"] as const)(
+    "blocks Send while a selected attachment is %s",
+    (state) => {
+      useChatStore.setState({ prompt: "Analyze this file" });
+      useAttachmentUploadStore.setState({ tasks: [uploadTask(state)] });
+
+      render(<PromptComposer models={DEFAULT_MODELS} />);
+
+      const send = screen.getByRole("button", { name: "Send message" });
+      expect(send).toBeDisabled();
+      expect(send).toHaveAccessibleDescription(
+        "Waiting for attachments to finish uploading",
+      );
+    },
+  );
+
+  it("enables file-only Send when every selected attachment is server-ready", () => {
+    const ready = attachment();
+    useChatStore.setState({ attachments: [ready] });
+    useAttachmentUploadStore.setState({
+      tasks: [uploadTask("ready", ready)],
+    });
+
+    render(<PromptComposer models={DEFAULT_MODELS} />);
+
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(screen.getAllByText("long-mobile-design-reference.pdf")).toHaveLength(1);
+  });
 });
+
+function uploadTask(
+  state: AttachmentUploadState,
+  serverFile?: FileUploadResponse,
+) {
+  return {
+    clientId: `client-${state}`,
+    file: new File(["file"], "long-mobile-design-reference.pdf", {
+      type: "application/pdf",
+    }),
+    fileId: serverFile?.file_id ?? "file-pending",
+    filename: "long-mobile-design-reference.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 59699,
+    state,
+    progress: state === "uploading" ? 42 : state === "ready" ? 100 : 0,
+    retryCount: 0,
+    uploadMode: "direct" as const,
+    serverFile,
+  };
+}
 
 function attachment(): FileUploadResponse {
   return {

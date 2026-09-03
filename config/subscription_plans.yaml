@@ -1,0 +1,80 @@
+version: 2
+
+plans:
+  free:
+    display_name: Free
+    rank: 0
+    price:
+      monthly_usd: 0
+      stripe_price_env: null
+    entitlements:
+      compare_enabled: true
+      max_compare_models: 2
+      research_enabled: true
+      prompt_improvement_enabled: true
+      file_analysis_enabled: true
+      usage_export_enabled: false
+      saved_history_enabled: true
+      models_catalog_enabled: true
+      allowed_billing_classes:
+        - economical
+        - standard
+    allowances:
+      ai_credits: 100000
+    limits:
+      requests_per_minute: 5
+      max_files_per_request: 1
+      max_file_bytes: 10000000
+
+  plus:
+    display_name: Plus
+    rank: 1
+    price:
+      monthly_usd: 6.99
+      stripe_price_env: STRIPE_PLUS_MONTHLY_PRICE_ID
+    entitlements:
+      compare_enabled: true
+      max_compare_models: 2
+      research_enabled: true
+      prompt_improvement_enabled: true
+      file_analysis_enabled: true
+      usage_export_enabled: true
+      saved_history_enabled: true
+      models_catalog_enabled: true
+      allowed_billing_classes:
+        - economical
+        - standard
+        - advanced
+    allowances:
+      ai_credits: 1000000
+    limits:
+      requests_per_minute: 15
+      max_files_per_request: 3
+      max_file_bytes: 20000000
+
+  pro:
+    display_name: Pro
+    rank: 2
+    price:
+      monthly_usd: 12.99
+      stripe_price_env: STRIPE_PRO_MONTHLY_PRICE_ID
+    entitlements:
+      compare_enabled: true
+      max_compare_models: 3
+      research_enabled: true
+      prompt_improvement_enabled: true
+      file_analysis_enabled: true
+      usage_export_enabled: true
+      saved_history_enabled: true
+      models_catalog_enabled: true
+      allowed_billing_classes:
+        - economical
+        - standard
+        - advanced
+        - premium
+    allowances:
+      ai_credits: 3000000
+    limits:
+      requests_per_minute: 30
+      max_files_per_request: 5
+      max_file_bytes: 20000000

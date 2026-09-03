@@ -1,6 +1,7 @@
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { fetchCortexAnalysisRuns } from "../api/cortexAnalysis";
 import { fetchHistory } from "../api/history";
 import { PromptComposer } from "../components/composer/PromptComposer";
 import { ResultsSection } from "../components/results/ResultsSection";
@@ -10,6 +11,8 @@ import { CortexIcon } from "../components/shared/CortexIcon";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
+import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
+import { UpgradeDialog } from "../components/subscription/UpgradeDialog";
 import { DEFAULT_MODELS } from "../config/defaultModels";
 import { getModelPresentation } from "../config/modelPresentation";
 import { formatHistoryDateTime } from "../history/historyDate";
@@ -18,9 +21,11 @@ import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
 import { useModels } from "../hooks/useModels";
+import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { normalizeSessionId } from "../session/activeSession";
 import { useChatStore } from "../store/chatStore";
+import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
 import type { ChatMode, HistoryThread, ModelCatalogItem } from "../types";
 import brandMarkUrl from "../assets/brand/brand-mark.svg";
 import styles from "./ChatPage.module.css";
@@ -39,7 +44,12 @@ export function ChatPage() {
   const authEnabled = cognitoConfig?.enabled ?? false;
   const signedOut = !authLoading && authEnabled && !loggedIn;
   const workspaceReady = !authLoading && !signedOut;
-  const { models } = useModels(workspaceReady);
+  const subscriptionState = useSubscription({ authLoading, loggedIn });
+  const accountSubscription = getAccountMenuSubscriptionPresentation(
+    subscriptionState.entitlements,
+  );
+  const accountBillingDestination = accountSubscription.billingDestination;
+  const { models, loading: modelsLoading } = useModels(workspaceReady);
   const { load: loadHistory, removeThread } = useHistory();
   const { submit, regenerate, cancel } = useChat();
   const { theme, toggleTheme } = useTheme();
@@ -48,6 +58,8 @@ export function ChatPage() {
   const streaming = useChatStore((s) => s.streaming);
   const error = useChatStore((s) => s.error);
   const setError = useChatStore((s) => s.setError);
+  const subscriptionError = useChatStore((s) => s.subscriptionError);
+  const setSubscriptionError = useChatStore((s) => s.setSubscriptionError);
   const hydrateFromHistoryThread = useChatStore((s) => s.hydrateFromHistoryThread);
   const mode = useChatStore((s) => s.mode);
   const sessionId = useChatStore((s) => s.sessionId);
@@ -77,20 +89,31 @@ export function ChatPage() {
   }, [streaming]);
 
   useEffect(() => {
+    if (!subscriptionError) return;
+    setMobilePanel("chat");
+    setComposerCollapsed(false);
+  }, [subscriptionError]);
+
+  useEffect(() => {
     if (!hasTurns) setComposerCollapsed(false);
   }, [hasTurns]);
 
   const handleSelectHistoryThread = async (thread: HistoryThread) => {
     try {
-      const entries = thread.sessionId
-        ? await fetchHistory(500, thread.sessionId)
-        : thread.entries;
+      const [entries, analysisRuns] = thread.sessionId
+        ? await Promise.all([
+            fetchHistory(500, thread.sessionId),
+            fetchCortexAnalysisRuns({ sessionId: thread.sessionId }),
+          ])
+        : [thread.entries, []];
       const completeThread = buildHistoryThreads(entries)[0] ?? thread;
-      hydrateFromHistoryThread(completeThread);
+      hydrateFromHistoryThread(completeThread, analysisRuns);
       setMobilePanel("chat");
       setComposerCollapsed(true);
     } catch (historyError) {
-      setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");
+      setError(
+        historyError instanceof Error ? historyError.message : "Failed to load chat history",
+      );
     }
   };
 
@@ -143,11 +166,12 @@ export function ChatPage() {
   };
 
   return (
-    <div className={styles.layout}>
+    <div className={styles.layout} data-theme={theme}>
       <Sidebar
         onSelectThread={(thread) => void handleSelectHistoryThread(thread)}
         activeView="chat"
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateCredits={() => navigate("/credits")}
         onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
@@ -176,8 +200,15 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              planLabel={accountSubscription.planLabel}
+              billingActionLabel={accountSubscription.billingActionLabel}
+              billingPastDue={accountSubscription.billingPastDue}
+              onBilling={
+                accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+              }
               onModels={() => navigate("/models")}
               onUsageInsights={() => navigate("/usage")}
+              onCredits={() => navigate("/credits")}
               theme={theme}
               onToggleTheme={toggleTheme}
             />
@@ -222,11 +253,25 @@ export function ChatPage() {
               loggedIn={loggedIn}
               onLogin={authEnabled ? login : undefined}
               onLogout={handleLogout}
+              planLabel={accountSubscription.planLabel}
+              billingActionLabel={accountSubscription.billingActionLabel}
+              billingPastDue={accountSubscription.billingPastDue}
+              onBilling={
+                accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+              }
+              onModels={() => navigate("/models")}
+              onUsageInsights={() => navigate("/usage")}
+              onCredits={() => navigate("/credits")}
               theme={theme}
               onToggleTheme={toggleTheme}
             />
           </div>
         </header>
+
+        <SubscriptionBanner
+          entitlements={subscriptionState.entitlements}
+          onManageBilling={() => navigate("/account/billing")}
+        />
 
         <div className={styles.canvas}>
           {authLoading ? (
@@ -270,10 +315,7 @@ export function ChatPage() {
             />
 
             {/* Composer: inline on desktop, fixed sheet overlay on mobile */}
-            <div
-              className={styles.composerWrap}
-              data-collapsed={composerCollapsed}
-            >
+            <div className={styles.composerWrap} data-collapsed={composerCollapsed}>
               {/* Handle + collapse chevron — mobile sheet header */}
               <div className={styles.composerSheetHeader} aria-hidden="true">
                 <div className={styles.composerSheetHandle} />
@@ -286,15 +328,16 @@ export function ChatPage() {
                   <CortexIcon name="chevron-down" size={18} />
                 </button>
               </div>
-              <PromptComposer models={models} />
+              <PromptComposer
+                models={models}
+                modelsLoading={modelsLoading}
+                subscription={subscriptionState}
+              />
             </div>
 
             {/* Docked mobile composer pill, shown when the sheet is collapsed */}
             {composerCollapsed && (
-              <MobileComposerDock
-                models={models}
-                onOpen={handleOpenMobileComposer}
-              />
+              <MobileComposerDock models={models} onOpen={handleOpenMobileComposer} />
             )}
           </>
         )}
@@ -333,6 +376,19 @@ export function ChatPage() {
             </button>
           </nav>
         )}
+
+        <UpgradeDialog
+          error={subscriptionError}
+          onClose={() => setSubscriptionError(null)}
+          onViewPlans={() => {
+            setSubscriptionError(null);
+            navigate("/pricing");
+          }}
+          onManageBilling={() => {
+            setSubscriptionError(null);
+            navigate("/account/billing");
+          }}
+        />
       </main>
     </div>
   );
@@ -408,13 +464,7 @@ function MobileComposerDock({
   );
 }
 
-function ModelDockChip({
-  modelKey,
-  models,
-}: {
-  modelKey: string;
-  models: ModelCatalogItem[];
-}) {
+function ModelDockChip({ modelKey, models }: { modelKey: string; models: ModelCatalogItem[] }) {
   const model = resolveDockModel(modelKey, models, 0);
   const meta = getModelPresentation(model.provider, model.model);
 
@@ -455,10 +505,7 @@ function CompareDockChip({
         {stackModels.map((model, index) => {
           const meta = getModelPresentation(model.provider, model.model);
           return (
-            <span
-              key={`${model.provider}:${model.model}:${index}`}
-              className={styles.dockAvatar}
-            >
+            <span key={`${model.provider}:${model.model}:${index}`} className={styles.dockAvatar}>
               <ProviderLogo
                 provider={model.provider}
                 logoUrl={meta.logoUrl}
@@ -612,10 +659,7 @@ function MobileHistory({
                         onClick={() => onSelectThread(thread)}
                       >
                         <span className={styles.mobileHistoryTop}>
-                          <span
-                            className={styles.mobileHistoryMode}
-                            data-mode={thread.mode}
-                          >
+                          <span className={styles.mobileHistoryMode} data-mode={thread.mode}>
                             {formatHistoryMode(thread.mode)}
                           </span>
                           <time dateTime={thread.latestTimestamp}>
@@ -645,8 +689,7 @@ function MobileHistory({
                         </span>
                         <small className={styles.mobileHistoryMeta}>
                           <span>
-                            {thread.turnCount}{" "}
-                            {thread.turnCount === 1 ? "turn" : "turns"}
+                            {thread.turnCount} {thread.turnCount === 1 ? "turn" : "turns"}
                           </span>
                           <span aria-hidden="true">·</span>
                           <span className={styles.mobileHistoryModel}>{thread.modelLabel}</span>

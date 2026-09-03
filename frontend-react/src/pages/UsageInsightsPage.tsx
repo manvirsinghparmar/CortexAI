@@ -1,20 +1,29 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { fetchCortexAnalysisRuns } from "../api/cortexAnalysis";
 import { fetchHistory } from "../api/history";
 import { exportUsageCsv, type UsageSummaryParams } from "../api/usage";
 import { AccountMenu } from "../components/layout/AccountMenu";
 import { Sidebar } from "../components/layout/Sidebar";
 import { ProviderLogo } from "../components/shared/ProviderLogo";
 import { CortexIcon, type CortexIconName } from "../components/shared/CortexIcon";
+import { SubscriptionBanner } from "../components/subscription/SubscriptionBanner";
 import { getModelPresentation } from "../config/modelPresentation";
 import { buildHistoryThreads } from "../history/historyThreads";
 import { useAuth } from "../hooks/useAuth";
 import { useChat } from "../hooks/useChat";
 import { useHistory } from "../hooks/useHistory";
+import { useSubscription } from "../hooks/useSubscription";
 import { useTheme } from "../hooks/useTheme";
 import { useUsageSummary } from "../hooks/useUsageSummary";
 import { useChatStore } from "../store/chatStore";
-import type { ChatMode, HistoryThread, UsageSummary, UsageSummaryPeriod } from "../types";
+import { getAccountMenuSubscriptionPresentation } from "../subscription/accountMenuPresentation";
+import type {
+  ChatMode,
+  HistoryThread,
+  UsageSummary,
+  UsageSummaryPeriod,
+} from "../types";
 import styles from "./UsageInsightsPage.module.css";
 
 export function UsageInsightsPage() {
@@ -38,6 +47,12 @@ export function UsageInsightsPage() {
   const usageParams = useMemo(() => buildUsagePeriodParams(selectedPeriodKey), [selectedPeriodKey]);
   const { summary, loading: usageLoading, error: usageError, reload } = useUsageSummary(usageParams);
   const authEnabled = cognitoConfig?.enabled ?? false;
+  const subscriptionState = useSubscription({ authLoading, loggedIn });
+  const accountSubscription = getAccountMenuSubscriptionPresentation(
+      subscriptionState.entitlements,
+  );
+
+  const accountBillingDestination = accountSubscription.billingDestination;
   const periodLabel = summary?.period.label ?? selectedPeriod.label;
   const periodControlLabel = selectedPeriod.label;
   const empty = summary ? isUsageSummaryEmpty(summary) : false;
@@ -74,11 +89,14 @@ export function UsageInsightsPage() {
 
   const handleSelectHistoryThread = async (thread: HistoryThread) => {
     try {
-      const entries = thread.sessionId
-        ? await fetchHistory(500, thread.sessionId)
-        : thread.entries;
+      const [entries, analysisRuns] = thread.sessionId
+        ? await Promise.all([
+            fetchHistory(500, thread.sessionId),
+            fetchCortexAnalysisRuns({ sessionId: thread.sessionId }),
+          ])
+        : [thread.entries, []];
       const completeThread = buildHistoryThreads(entries)[0] ?? thread;
-      hydrateFromHistoryThread(completeThread);
+      hydrateFromHistoryThread(completeThread, analysisRuns);
       navigate("/");
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Failed to load chat history");
@@ -101,7 +119,13 @@ export function UsageInsightsPage() {
   };
 
   const handleExportUsage = async () => {
-    if (!summary || exporting) return;
+    if (
+      !summary ||
+      exporting ||
+      !subscriptionState.entitlements?.features.usage_export_enabled
+    ) {
+      return;
+    }
 
     setExporting(true);
     setExportStatus("Exporting usage CSV");
@@ -127,6 +151,7 @@ export function UsageInsightsPage() {
         activeView="usage"
         onNavigateChat={openChatMode}
         onNavigateUsage={() => navigate("/usage")}
+        onNavigateCredits={() => navigate("/credits")}
         onNavigateModels={() => navigate("/models")}
         whoAmI={whoAmI}
         loggedIn={loggedIn}
@@ -200,7 +225,17 @@ export function UsageInsightsPage() {
               className={styles.exportButton}
               aria-busy={exporting}
               aria-label={`Export usage CSV for ${periodLabel}`}
-              disabled={usageLoading || !summary || exporting}
+              disabled={
+                usageLoading ||
+                !summary ||
+                exporting ||
+                !subscriptionState.entitlements?.features.usage_export_enabled
+              }
+              title={
+                subscriptionState.entitlements?.features.usage_export_enabled
+                  ? undefined
+                  : "CSV export is available on Plus and Pro"
+              }
               onClick={() => void handleExportUsage()}
             >
               <CortexIcon name="download" size={15} />
@@ -217,14 +252,25 @@ export function UsageInsightsPage() {
                 loggedIn={loggedIn}
                 onLogin={authEnabled ? login : undefined}
                 onLogout={handleLogout}
+                planLabel={accountSubscription.planLabel}
+                billingActionLabel={accountSubscription.billingActionLabel}
+                billingPastDue={accountSubscription.billingPastDue}
+                onBilling={
+                  accountBillingDestination ? () => navigate(accountBillingDestination) : undefined
+                }
                 onModels={() => navigate("/models")}
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 onUsageInsights={() => navigate("/usage")}
+                onCredits={() => navigate("/credits")}
               />
             </div>
           </div>
         </header>
+        <SubscriptionBanner
+          entitlements={subscriptionState.entitlements}
+          onManageBilling={() => navigate("/account/billing")}
+        />
         <section className={styles.body} aria-label="Usage dashboard content">
           {usageLoading ? (
             <UsageLoadingState />

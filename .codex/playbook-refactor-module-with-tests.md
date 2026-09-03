@@ -35,6 +35,8 @@
 - Relevant targeted tests for refactored module(s).
 - `python -m pytest -q`
 - `python scripts/release_gate.py` for high-confidence refactors.
+- For a user-requested commit, verify the blocking hooks in
+  [ci-commit-gate.md](./ci-commit-gate.md) are installed and do not bypass them.
 
 ## Done Criteria
 

@@ -2,7 +2,7 @@ import time
 
 import openai
 
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import NormalizedError, UnifiedResponse
 from utils.cost_calculator import CostCalculator
 from utils.logger import get_logger
 
@@ -65,8 +65,11 @@ class DeepSeekClient(BaseAIClient):
         start_time = time.time()
 
         model = kwargs.get("model", self.model_name)
+        self._resolve_cache_context(kwargs, provider="deepseek", model=model)
         temperature = kwargs.get("temperature", 0.7)
         max_tokens = kwargs.get("max_tokens", 2048)
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "thinking").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "high").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -97,9 +100,18 @@ class DeepSeekClient(BaseAIClient):
             request_payload = {
                 "model": model,
                 "messages": normalized_messages,
-                "temperature": temperature,
                 "max_tokens": max_tokens,
             }
+            thinking_enabled = reasoning_mode not in {"none", "off", "disabled"}
+            request_payload["extra_body"] = {
+                "thinking": {"type": "enabled" if thinking_enabled else "disabled"}
+            }
+            if thinking_enabled:
+                request_payload["reasoning_effort"] = (
+                    "max" if reasoning_effort in {"xhigh", "max"} else "high"
+                )
+            else:
+                request_payload["temperature"] = temperature
             adaptive_retry = None
 
             try:
@@ -143,17 +155,23 @@ class DeepSeekClient(BaseAIClient):
             text = response.choices[0].message.content or ""
 
             # Extract token usage
-            token_usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") else 0,
-                completion_tokens=(
-                    response.usage.completion_tokens if hasattr(response, "usage") else 0
-                ),
-                total_tokens=response.usage.total_tokens if hasattr(response, "usage") else 0,
+            token_usage = self._openai_compatible_token_usage(
+                response.usage if hasattr(response, "usage") else None
             )
+            served_model = self._served_model(getattr(response, "model", model), model)
 
             # Calculate cost
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("deepseek", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
+                reasoning_tokens=token_usage.reasoning_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -209,18 +227,30 @@ class DeepSeekClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="deepseek",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "chat.completions", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "chat.completions",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "chat.completions"}
+                    else {
+                        "endpoint": "chat.completions",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode="thinking" if thinking_enabled else "none",
+                ),
             )
 
         except Exception as e:

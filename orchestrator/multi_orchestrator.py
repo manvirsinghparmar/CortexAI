@@ -205,9 +205,19 @@ class MultiModelOrchestrator:
 
         # Create tasks for all clients
         base_request_id = str(kwargs.get("request_id") or "").strip()
+        per_client_generation = kwargs.pop("_per_client_generation", {}) or {}
         tasks = []
         for idx, client in enumerate(clients):
             call_kwargs = dict(kwargs)
+            requested_model = getattr(client, "requested_model_name", None)
+            client_key = f"{client.provider_name}:{requested_model or client.model_name}"
+            client_generation = (
+                per_client_generation.get(client_key, {})
+                if isinstance(per_client_generation, dict)
+                else {}
+            )
+            if isinstance(client_generation, dict):
+                call_kwargs.update(client_generation)
             if base_request_id:
                 call_kwargs["request_id"] = f"{base_request_id}:cmp:{idx}"
             tasks.append(self._safe_call(client, prompt, timeout, **call_kwargs))

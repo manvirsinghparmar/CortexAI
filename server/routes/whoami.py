@@ -11,10 +11,25 @@ from server import persistence as persistence_service
 from server import privacy as privacy_service
 from server import rate_limit as rate_limit_service
 from server import savings as savings_service
+from server.billing.errors import (
+    BillingConfigurationError,
+    BillingIdentityError,
+    billing_configuration_http_exception,
+    billing_identity_http_exception,
+)
+from server.billing.subscription_service import resolve_effective_subscription
 from server.dependencies import get_auth
-from server.schemas.responses import WhoAmIResponseDTO
+from server.schemas.responses import (
+    WhoAmIBaselineDTO,
+    WhoAmIBillingDTO,
+    WhoAmIBreakerConfigDTO,
+    WhoAmIRateLimitConfigDTO,
+    WhoAmIResponseDTO,
+)
+from utils.logger import get_logger
 
 router = APIRouter(prefix="/v1", tags=["Auth"])
+logger = get_logger(__name__)
 
 API_DB_ENABLED = persistence_service.API_DB_ENABLED
 _resolve_identity = persistence_service.resolve_identity
@@ -75,33 +90,53 @@ async def whoami(
     user_id: str | None = None
     rpm = rate_limit_service.default_requests_per_minute()
     baseline_source = _baseline_source_from_env()
+    plan_tier = os.getenv("PLAN_TIER")
+    billing: dict[str, str] | None = None
 
     if API_DB_ENABLED:
-        with _db_uow(commit_on_success=False) as db_session:
-            resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
-            user_id = str(resolution.user_id)
-            api_key_id = str(resolution.api_key_id) if resolution.api_key_id else None
+        try:
+            with _db_uow() as db_session:
+                resolution = _resolve_identity(
+                    auth=auth,
+                    request_id=req_id,
+                    db_session=db_session,
+                )
+                user_id = str(resolution.user_id)
+                api_key_id = str(resolution.api_key_id) if resolution.api_key_id else None
 
-            baseline_provider, baseline_model = savings_service.resolve_baseline_for_api_key(
-                db_session,
-                api_key_id=resolution.api_key_id,
-            )
+                baseline_provider, baseline_model = savings_service.resolve_baseline_for_api_key(
+                    db_session,
+                    api_key_id=resolution.api_key_id,
+                )
+                effective = resolve_effective_subscription(
+                    db_session,
+                    resolution.user_id,
+                )
+                plan_tier = effective.plan.display_name
+                billing = {
+                    "plan_code": effective.plan.code,
+                    "status": effective.status,
+                }
 
-            if resolution.api_key_id is not None:
-                settings = get_api_key_settings(db_session, resolution.api_key_id)
-                if settings:
-                    override_rpm = settings.get("requests_per_minute")
-                    if override_rpm is not None:
-                        try:
-                            rpm = int(override_rpm)
-                        except Exception:
-                            pass
-                    if settings.get("baseline_provider") and settings.get("baseline_model"):
-                        baseline_source = "api_key"
+                if resolution.api_key_id is not None:
+                    settings = get_api_key_settings(db_session, resolution.api_key_id)
+                    if settings:
+                        override_rpm = settings.get("requests_per_minute")
+                        if override_rpm is not None:
+                            try:
+                                rpm = int(override_rpm)
+                            except Exception:
+                                pass
+                        if settings.get("baseline_provider") and settings.get("baseline_model"):
+                            baseline_source = "api_key"
+        except BillingIdentityError as exc:
+            raise billing_identity_http_exception() from exc
+        except BillingConfigurationError as exc:
+            logger.exception(
+                "Who-am-I subscription resolution failed",
+                extra={"extra_fields": {"request_id": req_id}},
+            )
+            raise billing_configuration_http_exception() from exc
     else:
         baseline_provider, baseline_model = _resolve_baseline_no_db()
 
@@ -112,24 +147,25 @@ async def whoami(
     return WhoAmIResponseDTO(
         api_key_id=api_key_id,
         user_id=user_id,
-        plan_tier=os.getenv("PLAN_TIER"),
+        plan_tier=plan_tier,
         storage_policy="metadata" if privacy_service.is_metadata_only() else "full",
         redact_pii=privacy_service.redact_pii_enabled(),
-        baseline={
-            "provider": baseline_provider,
-            "model": baseline_model,
-            "source": baseline_source,
-        },
-        rate_limits={
-            "requests_per_minute": max(0, int(rpm)),
-            "daily_cap_scope": daily_cap_scope,
-            "daily_token_cap": _parse_int(os.getenv("DAILY_TOKEN_CAP")),
-            "daily_cost_cap": _parse_float(os.getenv("DAILY_COST_CAP")),
-        },
-        breakers={
-            "failure_threshold": circuit_breaker_service.failure_threshold(),
-            "window_seconds": circuit_breaker_service.window_seconds(),
-            "cooldown_seconds": circuit_breaker_service.cooldown_seconds(),
-            "scope": "global_provider_model",
-        },
+        baseline=WhoAmIBaselineDTO(
+            provider=baseline_provider,
+            model=baseline_model,
+            source=baseline_source,
+        ),
+        rate_limits=WhoAmIRateLimitConfigDTO(
+            requests_per_minute=max(0, int(rpm)),
+            daily_cap_scope=daily_cap_scope,
+            daily_token_cap=_parse_int(os.getenv("DAILY_TOKEN_CAP")),
+            daily_cost_cap=_parse_float(os.getenv("DAILY_COST_CAP")),
+        ),
+        breakers=WhoAmIBreakerConfigDTO(
+            failure_threshold=circuit_breaker_service.failure_threshold(),
+            window_seconds=circuit_breaker_service.window_seconds(),
+            cooldown_seconds=circuit_breaker_service.cooldown_seconds(),
+            scope="global_provider_model",
+        ),
+        billing=WhoAmIBillingDTO(**billing) if billing is not None else None,
     )

@@ -9,10 +9,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from api.claude_client import ClaudeClient
 from api.deepseek_client import DeepSeekClient
 from api.google_gemini_client import GeminiClient
 from api.grok_client import GrokClient
 from api.openai_client import OpenAIClient
+from orchestrator.cache_context import CacheContext
+from orchestrator.generation_policy import resolve_generation_budget
+from orchestrator.model_registry import ModelRegistry
 from server.schemas.responses import CompareResponseDTO
 from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
 
@@ -139,6 +143,28 @@ class TestProviderContractCompliance:
         assert response.finish_reason == "stop"
         assert response.error is None
         assert response.is_success
+
+    @patch("openai.OpenAI")
+    def test_openai_gpt56_receives_resolved_budget_and_reasoning(self, mock_openai):
+        mock_response = Mock()
+        mock_response.output_text = "Reasoned answer"
+        mock_response.usage = Mock(input_tokens=7, output_tokens=11, total_tokens=18)
+        mock_response.status = "completed"
+        mock_response.finish_reason = None
+        mock_openai.return_value.responses.create.return_value = mock_response
+
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=8192,
+            reasoning_mode="standard",
+            reasoning_effort="medium",
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.responses.create.call_args.kwargs
+        assert payload["max_output_tokens"] == 8192
+        assert payload["reasoning"] == {"effort": "medium"}
 
     @patch("openai.OpenAI")
     def test_openai_defaults_to_2048_max_tokens_when_not_provided(self, mock_openai):
@@ -422,6 +448,139 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("openai.OpenAI")
+    def test_deepseek_receives_thinking_budget_parameters(self, mock_openai):
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Deep answer"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+        client = DeepSeekClient(api_key="test-key", model_name="deepseek-v4-flash")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="thinking",
+            reasoning_effort="xhigh",
+        )
+
+        assert response.is_success
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert payload["max_tokens"] == 32768
+        assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
+        assert payload["reasoning_effort"] == "max"
+        assert "temperature" not in payload
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_receives_adaptive_thinking_and_effort(self, mock_anthropic):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-opus-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        client = ClaudeClient(api_key="test-key", model_name="claude-opus-5")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="adaptive",
+            reasoning_effort="xhigh",
+            temperature=0.7,
+        )
+
+        assert response.is_success
+        payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+        assert payload["max_tokens"] == 32768
+        assert payload["thinking"] == {"type": "adaptive"}
+        assert payload["output_config"] == {"effort": "xhigh"}
+        assert "temperature" not in payload
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_all_registry_claude_models_build_compatible_default_payloads(
+        self, mock_anthropic
+    ):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        registry = ModelRegistry.from_yaml()
+        manual_only_models = {
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+        }
+        for candidate in registry.list_models(provider="claude"):
+            model = candidate.model_name
+            mock_response.model = model
+            budget = resolve_generation_budget(
+                provider="claude",
+                model=model,
+                generation={"profile": "balanced"},
+                registry=registry,
+            )
+            response = ClaudeClient(api_key="test-key", model_name=model).get_completion(
+                "Test prompt",
+                model=model,
+                **budget.provider_kwargs(),
+            )
+
+            assert response.is_success
+            payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+            assert "temperature" not in payload
+            if model in manual_only_models:
+                assert budget.effective_reasoning_mode == "off"
+                assert "thinking" not in payload
+                assert "output_config" not in payload
+            else:
+                assert budget.effective_reasoning_mode == "adaptive"
+                assert payload["thinking"] == {"type": "adaptive"}
+                assert payload["output_config"]["effort"] == (
+                    budget.effective_reasoning_effort
+                )
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_45_keeps_custom_temperature_when_thinking_is_off(
+        self, mock_anthropic
+    ):
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude answer")]
+        mock_response.usage = Mock(
+            input_tokens=10,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-haiku-4-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+
+        response = ClaudeClient(
+            api_key="test-key", model_name="claude-haiku-4-5"
+        ).get_completion(
+            "Test prompt",
+            reasoning_mode="off",
+            reasoning_effort="none",
+            temperature=0.4,
+        )
+
+        assert response.is_success
+        payload = mock_anthropic.return_value.messages.create.call_args.kwargs
+        assert payload["temperature"] == 0.4
+        assert "thinking" not in payload
+        assert "output_config" not in payload
+
+    @patch("openai.OpenAI")
     def test_deepseek_retries_without_unsupported_parameter(self, mock_openai):
         """DeepSeek should retry once when provider rejects an optional parameter."""
         unsupported_temp = Exception(
@@ -434,7 +593,12 @@ class TestProviderContractCompliance:
         mock_openai.return_value.chat.completions.create.side_effect = [unsupported_temp, mock_success]
 
         client = DeepSeekClient(api_key="test-key", model_name="deepseek-chat")
-        response = client.get_completion("Test prompt", temperature=0.5, max_tokens=200)
+        response = client.get_completion(
+            "Test prompt",
+            temperature=0.5,
+            max_tokens=200,
+            reasoning_mode="none",
+        )
 
         assert response.is_success
         assert response.text == "Recovered"
@@ -554,6 +718,29 @@ class TestProviderContractCompliance:
         assert response.is_success
 
     @patch("google.genai.Client")
+    def test_gemini_receives_thinking_level_and_budget(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Gemini answer"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=10, candidates_token_count=20, total_token_count=30
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+
+        client = GeminiClient(api_key="test-key", model_name="gemini-3.6-pro")
+        response = client.get_completion(
+            "Test prompt",
+            max_tokens=32768,
+            reasoning_mode="thinking",
+            reasoning_effort="high",
+        )
+
+        assert response.is_success
+        config = mock_genai.return_value.models.generate_content.call_args.kwargs["config"]
+        assert config["max_output_tokens"] == 32768
+        assert config["thinking_config"] == {"thinking_level": "high"}
+
+    @patch("google.genai.Client")
     def test_gemini_retries_without_unsupported_parameter(self, mock_genai):
         """Gemini should retry once when config includes unsupported optional parameter."""
         unsupported_temp = Exception(
@@ -669,6 +856,147 @@ class TestProviderContractCompliance:
         contents = mock_genai.return_value.models.generate_content.call_args.kwargs["contents"]
         user_parts = contents[-1]["parts"]
         assert any("inline_data" in part for part in user_parts)
+
+
+class TestProviderCacheAdapters:
+    @patch("openai.OpenAI")
+    def test_openai_prompt_cache_key_is_flagged_and_compatibly_retried(
+        self, mock_openai, monkeypatch
+    ):
+        monkeypatch.setenv("OPENAI_PROMPT_CACHE_ENABLED", "true")
+        unsupported = Exception("Unsupported parameter: 'prompt_cache_key'")
+        success = Mock(
+            output_text="cached",
+            usage=Mock(input_tokens=8, output_tokens=2, total_tokens=10),
+            status="completed",
+            finish_reason=None,
+        )
+        mock_openai.return_value.responses.create.side_effect = [unsupported, success]
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+
+        response = client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        )
+
+        assert response.is_success
+        first, second = mock_openai.return_value.responses.create.call_args_list
+        assert first.kwargs["prompt_cache_key"] == "cortex_pc_abc"
+        assert "prompt_cache_key" not in second.kwargs
+
+    @patch("openai.OpenAI")
+    def test_openai_prompt_cache_key_is_absent_when_flag_disabled(
+        self, mock_openai, monkeypatch
+    ):
+        monkeypatch.setenv("OPENAI_PROMPT_CACHE_ENABLED", "false")
+        mock_openai.return_value.responses.create.return_value = Mock(
+            output_text="answer",
+            usage=Mock(input_tokens=8, output_tokens=2, total_tokens=10),
+            status="completed",
+            finish_reason=None,
+        )
+        client = OpenAIClient(api_key="test-key", model_name="gpt-5.6-sol")
+        assert client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        ).is_success
+        assert "prompt_cache_key" not in (
+            mock_openai.return_value.responses.create.call_args.kwargs
+        )
+
+    @patch("api.claude_client.anthropic.Anthropic")
+    def test_claude_prompt_cache_and_usage_mapping(self, mock_anthropic, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROMPT_CACHE_ENABLED", "true")
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Claude cached answer")]
+        mock_response.usage = Mock(
+            input_tokens=20,
+            output_tokens=5,
+            cache_read_input_tokens=70,
+            cache_creation_input_tokens=10,
+        )
+        mock_response.stop_reason = "end_turn"
+        mock_response.model = "claude-sonnet-5"
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        client = ClaudeClient(api_key="test-key", model_name="claude-sonnet-5")
+
+        response = client.get_completion(
+            "hello",
+            cache_context=CacheContext(enabled=True, cache_scope_key="cortex_pc_abc"),
+        )
+
+        assert response.is_success
+        assert mock_anthropic.return_value.messages.create.call_args.kwargs[
+            "cache_control"
+        ] == {"type": "ephemeral"}
+        assert response.token_usage.prompt_tokens == 100
+        assert response.token_usage.cached_input_tokens == 70
+        assert response.token_usage.cache_write_tokens == 10
+
+    @patch("openai.OpenAI")
+    def test_grok_uses_opaque_cache_affinity_header(self, mock_openai, monkeypatch):
+        monkeypatch.setenv("GROK_PROMPT_CACHE_ENABLED", "true")
+        monkeypatch.setenv("CACHE_KEY_SECRET", "unit-test-secret")
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Test response"), finish_reason="stop")]
+        mock_response.usage = Mock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        client = GrokClient(api_key="test-key", model_name="grok-4-latest")
+
+        response = client.get_completion(
+            "Test prompt",
+            _cache_scope={
+                "scope_id": "person@example.com",
+                "mode": "ask",
+                "stable_context_hash": "abc123",
+            },
+        )
+
+        assert response.is_success
+        header = mock_openai.return_value.chat.completions.create.call_args.kwargs[
+            "extra_headers"
+        ]["x-grok-conv-id"]
+        assert header.startswith("cortex_pc_")
+        assert "person@example.com" not in header
+        assert len(header) == len("cortex_pc_") + 64
+
+    @patch("google.genai.Client")
+    def test_gemini_maps_cached_content_tokens(self, mock_genai):
+        mock_response = Mock()
+        mock_response.text = "Cached response"
+        mock_response.usage_metadata = Mock(
+            prompt_token_count=100,
+            cached_content_token_count=80,
+            candidates_token_count=20,
+            thoughts_token_count=0,
+            total_token_count=120,
+        )
+        mock_response.candidates = [Mock(finish_reason="STOP")]
+        mock_genai.return_value.models.generate_content.return_value = mock_response
+        response = GeminiClient(
+            api_key="test-key", model_name="gemini-2.5-flash"
+        ).get_completion("Test prompt")
+        assert response.token_usage.cached_input_tokens == 80
+
+    @patch("openai.OpenAI")
+    def test_deepseek_maps_compatible_cache_hit_fields_without_parameters(
+        self, mock_openai
+    ):
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Cached"), finish_reason="stop")]
+        mock_response.usage = Mock(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=Mock(cached_tokens=75, cache_write_tokens=0),
+        )
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        response = DeepSeekClient(
+            api_key="test-key", model_name="deepseek-chat"
+        ).get_completion("Test prompt")
+        payload = mock_openai.return_value.chat.completions.create.call_args.kwargs
+        assert "prompt_cache_key" not in payload
+        assert response.token_usage.cached_input_tokens == 75
 
 
 class TestErrorHandlingContract:

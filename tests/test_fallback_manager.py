@@ -33,6 +33,22 @@ def test_escalate_on_format_violation():
     assert decision.next_tier == Tier.T2
 
 
+def test_retry_same_tier_on_truncated_response_when_candidate_remains():
+    manager = FallbackManager()
+    policy = FallbackPolicy(max_attempts=3, max_total_latency_ms=12000, allow_escalation=True)
+    decision = manager.decide(
+        current_tier=Tier.T2,
+        validation=ValidationResult(ok=False, reason="truncated", severity="medium"),
+        attempt_index=0,
+        elapsed_ms=100,
+        remaining_same_tier_candidates=1,
+        policy=policy,
+        next_tier_fn=lambda t: Tier.T3,
+    )
+    assert decision.action == NextAction.RETRY_SAME_TIER
+    assert decision.next_tier is None
+
+
 def test_stop_when_attempts_exhausted():
     manager = FallbackManager()
     policy = FallbackPolicy(max_attempts=1, max_total_latency_ms=12000, allow_escalation=True)

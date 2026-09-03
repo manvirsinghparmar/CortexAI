@@ -13,6 +13,7 @@ from db import (
     rename_history_session,
 )
 from server import persistence as persistence_service
+from server.billing.response_credit_service import calculate_response_credit_usage
 from server.dependencies import AuthResult, get_auth
 from server.routes.session_auth import SessionScopedAuthGuard
 from utils.logger import get_logger
@@ -42,6 +43,7 @@ def _require_db_mode() -> None:
 
 class HistoryEntry(BaseModel):
     id: int
+    request_id: str
     session_id: Optional[str] = None
     session_title: Optional[str] = None
     request_group_id: Optional[str] = None
@@ -50,10 +52,38 @@ class HistoryEntry(BaseModel):
     prompt: str
     provider: str
     model: str
+    requested_model: Optional[str] = None
+    served_model: Optional[str] = None
+    pricing_model: Optional[str] = None
+    model_lifecycle_status: Optional[str] = None
+    alias_redirected: bool = False
+    replacement_model: Optional[str] = None
+    migration_reason: Optional[str] = None
+    pricing_rule_applied: Optional[str] = None
+    pricing_version: Optional[str] = None
+    pricing_unknown: bool = False
+    response_version: int = 1
+    generation_profile: Optional[str] = None
+    effective_max_output_tokens: Optional[int] = None
+    effective_reasoning_mode: Optional[str] = None
+    effective_reasoning_effort: Optional[str] = None
+    generation_policy_version: Optional[str] = None
+    completion_status: str = "complete"
+    stop_cause: str = "unknown"
     response: str
     latency_ms: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
     tokens: Optional[int] = None
     cost: Optional[float] = None
+    ai_credits: Optional[int] = None
+    credit_usage_estimated: bool = False
+    cache_hit: bool = False
+    cache_hit_ratio: float = 0.0
+    cache_savings_ai_credits: int = 0
+    uncached_equivalent_ai_credits: int = 0
+    research_ai_credits: Optional[int] = None
+    research_credit_usage_estimated: bool = False
     web_source_items: List[dict[str, str]] = Field(default_factory=list)
 
 
@@ -79,16 +109,45 @@ async def list_history(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow(commit_on_success=False) as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
-        return get_llm_history_entries(
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
+        entries = get_llm_history_entries(
             db_session,
             resolution.user_id,
             limit=limit,
             session_id=session_id,
         )
+    for entry in entries:
+        credit_usage = calculate_response_credit_usage(
+            provider=str(entry.get("provider") or ""),
+            model=str(entry.get("model") or ""),
+            requested_model=str(entry.get("requested_model") or ""),
+            input_tokens=max(0, int(entry.get("prompt_tokens") or 0)),
+            cached_input_tokens=max(0, int(entry.get("cached_input_tokens") or 0)),
+            cache_write_tokens=max(0, int(entry.get("cache_write_tokens") or 0)),
+            reasoning_tokens=max(0, int(entry.get("reasoning_tokens") or 0)),
+            output_tokens=max(0, int(entry.get("completion_tokens") or 0)),
+            output_text=str(entry.get("response") or ""),
+            is_error=str(entry.get("response") or "").lower().startswith("[error]"),
+            pricing_snapshot=(
+                entry.get("pricing_snapshot")
+                if isinstance(entry.get("pricing_snapshot"), dict)
+                else None
+            ),
+            include_research_charge=False,
+        )
+        if entry.get("ai_credits") is None:
+            entry["ai_credits"] = credit_usage.ai_credits
+        entry["credit_usage_estimated"] = credit_usage.credit_usage_estimated
+        entry["cache_hit"] = credit_usage.cache_hit
+        entry["cache_hit_ratio"] = credit_usage.cache_hit_ratio
+        entry["cache_savings_ai_credits"] = credit_usage.cache_savings_ai_credits
+        entry["uncached_equivalent_ai_credits"] = (
+            credit_usage.uncached_equivalent_ai_credits
+        )
+    return entries
 
 
 @router.delete("/history/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -103,10 +162,10 @@ async def delete_entry(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
         removed = delete_llm_history_entry(db_session, resolution.user_id, entry_id)
 
     if not removed:
@@ -161,8 +220,8 @@ async def clear_history(
     _SESSION_AUTH_GUARD.require(auth=auth, request_id=req_id)
     with _db_uow() as db_session:
         resolution = _resolve_identity(
-                auth=auth,
-                request_id=req_id,
-                db_session=db_session,
-            )
+            auth=auth,
+            request_id=req_id,
+            db_session=db_session,
+        )
         clear_llm_history(db_session, resolution.user_id, session_id=session_id)

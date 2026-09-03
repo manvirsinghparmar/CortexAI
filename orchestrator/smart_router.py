@@ -1,4 +1,3 @@
-import re
 from dataclasses import replace
 from typing import Any
 
@@ -9,6 +8,7 @@ from orchestrator.prompt_analyzer import PromptAnalyzer
 from orchestrator.response_validator import ResponseValidator
 from orchestrator.routing_types import ModelCandidate, PromptFeatures, RoutingConstraints, Tier
 from orchestrator.tier_decider import TierDecider
+from utils.token_estimation import estimate_tokens
 
 
 class SmartRouter:
@@ -51,6 +51,19 @@ class SmartRouter:
             reasons = decision.reasons
 
         candidates = self._registry.get_candidates(tier, constraints)
+        if not candidates and constraints and constraints.allowed_models:
+            for model_key in constraints.allowed_models:
+                provider, separator, model = str(model_key or "").partition(":")
+                if not separator:
+                    continue
+                candidate = self._registry.find_model(provider, model)
+                if candidate is None or not candidate.enabled:
+                    continue
+                tier = candidate.tier
+                candidates = self._registry.get_candidates(tier, constraints)
+                if candidates:
+                    reasons.append("credit_affordable_lower_tier")
+                    break
         selection = self._selector.select(features, candidates, constraints)
         ordered_candidates = [selection.primary_candidate, *selection.fallback_candidates]
 
@@ -116,11 +129,7 @@ class SmartRouter:
 
     @staticmethod
     def _estimate_text_tokens(text: str) -> int:
-        if not text:
-            return 0
-        words = len(re.findall(r"\b[\w'-]+\b", text))
-        chars = len(text)
-        return max(int(words * 1.3), int(chars / 4))
+        return estimate_tokens(text)
 
     def _apply_runtime_message_features(
         self,
@@ -208,7 +217,9 @@ class SmartRouter:
                     if "reasoning" in tags:
                         why_selected.append("matches_reasoning_requirement")
                     else:
-                        why_selected.append("selected_without_reasoning_tag_due_to_ranking_availability")
+                        why_selected.append(
+                            "selected_without_reasoning_tag_due_to_ranking_availability"
+                        )
                 if (features.token_estimate + features.context_token_estimate) >= 2200:
                     if "long_context" in tags:
                         why_selected.append("long_context_preferred")
@@ -221,6 +232,7 @@ class SmartRouter:
                     "provider": candidate.provider,
                     "model": candidate.model_name,
                     "tier": tier.value,
+                    "billing_class": candidate.billing_class.value,
                     "status": "pending",
                     "outcome_reason": "not_attempted",
                     "why_selected": why_selected,
@@ -229,7 +241,9 @@ class SmartRouter:
 
         return plan
 
-    def _build_selected_slots(self, candidate_plan: list[dict[str, Any]]) -> list[dict[str, Any] | None]:
+    def _build_selected_slots(
+        self, candidate_plan: list[dict[str, Any]]
+    ) -> list[dict[str, Any] | None]:
         slots: list[dict[str, Any] | None] = []
         for idx in range(3):
             if idx < len(candidate_plan):
@@ -240,6 +254,7 @@ class SmartRouter:
                         "provider": item["provider"],
                         "model": item["model"],
                         "tier": item["tier"],
+                        "billing_class": item["billing_class"],
                         "why_selected": item.get("why_selected", []),
                         "status": "pending",
                         "why_worked": None,

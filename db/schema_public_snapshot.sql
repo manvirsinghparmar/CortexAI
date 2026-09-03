@@ -111,6 +111,7 @@ CREATE TABLE public.llm_requests (
 	route_mode TEXT DEFAULT 'ask'::text NOT NULL, 
 	provider TEXT NOT NULL, 
 	model TEXT NOT NULL, 
+	requested_model TEXT,
 	prompt_sha256 TEXT, 
 	prompt_stored BOOLEAN DEFAULT false NOT NULL, 
 	prompt_text TEXT, 
@@ -118,12 +119,26 @@ CREATE TABLE public.llm_requests (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	api_key_id UUID, 
 	request_group_id UUID, 
+	response_revision_root_id UUID,
+	response_revision INTEGER DEFAULT 1 NOT NULL,
+	generation_profile TEXT,
+	requested_max_output_tokens INTEGER,
+	effective_max_output_tokens INTEGER,
+	requested_reasoning_mode TEXT,
+	effective_reasoning_mode TEXT,
+	requested_reasoning_effort TEXT,
+	effective_reasoning_effort TEXT,
+	generation_policy_version TEXT,
 	CONSTRAINT llm_requests_pkey PRIMARY KEY (id), 
 	CONSTRAINT llm_requests_api_key_id_fkey FOREIGN KEY(api_key_id) REFERENCES public.api_keys (id) ON DELETE SET NULL, 
+	CONSTRAINT llm_requests_response_revision_root_id_fkey FOREIGN KEY(response_revision_root_id) REFERENCES public.llm_requests (id) ON DELETE CASCADE,
 	CONSTRAINT llm_requests_session_id_fkey FOREIGN KEY(session_id) REFERENCES public.sessions (id) ON DELETE SET NULL, 
 	CONSTRAINT llm_requests_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE, 
 	CONSTRAINT llm_requests_request_id_key UNIQUE NULLS DISTINCT (request_id), 
-	CONSTRAINT llm_requests_route_mode_check CHECK (route_mode = ANY (ARRAY['ask'::text, 'compare'::text, 'eval'::text, 'research'::text]))
+	CONSTRAINT llm_requests_route_mode_check CHECK (route_mode = ANY (ARRAY['ask'::text, 'compare'::text, 'eval'::text, 'research'::text])),
+	CONSTRAINT llm_requests_response_revision_check CHECK (response_revision >= 1),
+	CONSTRAINT llm_requests_requested_max_output_tokens_check CHECK (requested_max_output_tokens IS NULL OR requested_max_output_tokens > 0),
+	CONSTRAINT llm_requests_effective_max_output_tokens_check CHECK (effective_max_output_tokens IS NULL OR effective_max_output_tokens > 0)
 );
 
 
@@ -149,6 +164,9 @@ CREATE TABLE public.context_snapshots (
 	base_message_id UUID, 
 	context_hash TEXT NOT NULL, 
 	context_text TEXT NOT NULL, 
+	source_message_range TEXT,
+	source_hash TEXT,
+	summary_policy_version TEXT,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	CONSTRAINT context_snapshots_pkey PRIMARY KEY (id), 
 	CONSTRAINT context_snapshots_base_message_id_fkey FOREIGN KEY(base_message_id) REFERENCES public.messages (id) ON DELETE SET NULL, 
@@ -182,12 +200,111 @@ CREATE TABLE public.llm_responses (
 	completion_tokens INTEGER, 
 	total_tokens INTEGER, 
 	estimated_cost NUMERIC(12, 6), 
+	served_model TEXT,
+	pricing_model TEXT,
+	model_lifecycle_status TEXT,
+	alias_redirected BOOLEAN DEFAULT false NOT NULL,
+	replacement_model TEXT,
+	model_migration_reason TEXT,
+	reasoning_mode TEXT,
+	cached_input_tokens INTEGER DEFAULT 0 NOT NULL,
+	cache_write_tokens INTEGER DEFAULT 0 NOT NULL,
+	reasoning_tokens INTEGER DEFAULT 0 NOT NULL,
+	pricing_rule_applied TEXT,
+	pricing_version TEXT,
+	pricing_unknown BOOLEAN DEFAULT false NOT NULL,
+	pricing_snapshot JSONB DEFAULT '{}'::jsonb NOT NULL,
+	completion_status TEXT DEFAULT 'complete'::text NOT NULL,
+	stop_cause TEXT DEFAULT 'unknown'::text NOT NULL,
 	error_type TEXT, 
 	error_message TEXT, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	CONSTRAINT llm_responses_pkey PRIMARY KEY (id), 
 	CONSTRAINT llm_responses_llm_request_id_fkey FOREIGN KEY(llm_request_id) REFERENCES public.llm_requests (id) ON DELETE CASCADE, 
-	CONSTRAINT llm_responses_llm_request_id_key UNIQUE NULLS DISTINCT (llm_request_id)
+	CONSTRAINT llm_responses_llm_request_id_key UNIQUE NULLS DISTINCT (llm_request_id),
+	CONSTRAINT llm_responses_completion_status_check CHECK (completion_status = ANY (ARRAY['complete'::text, 'incomplete'::text, 'failed'::text])),
+	CONSTRAINT llm_responses_stop_cause_check CHECK (stop_cause = ANY (ARRAY['natural'::text, 'token_limit'::text, 'context_limit'::text, 'content_filter'::text, 'error'::text, 'unknown'::text]))
+);
+
+
+CREATE TABLE public.cortex_analysis_runs (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	session_id UUID NOT NULL,
+	request_group_id UUID NOT NULL,
+	model TEXT NOT NULL,
+	source_fingerprint TEXT NOT NULL,
+	source_snapshot JSONB DEFAULT '[]'::jsonb NOT NULL,
+	recommended_answer TEXT NOT NULL,
+	agreements JSONB DEFAULT '[]'::jsonb NOT NULL,
+	disagreements JSONB DEFAULT '[]'::jsonb NOT NULL,
+	disagreement_note TEXT,
+	unique_insights JSONB DEFAULT '[]'::jsonb NOT NULL,
+	confidence_level TEXT NOT NULL,
+	confidence_reason TEXT NOT NULL,
+	verify_items JSONB DEFAULT '[]'::jsonb NOT NULL,
+	high_stakes_domain TEXT,
+	combined_response_count INTEGER NOT NULL,
+	failed_response_count INTEGER DEFAULT 0 NOT NULL,
+	prompt_tokens INTEGER DEFAULT 0 NOT NULL,
+	cached_input_tokens BIGINT DEFAULT 0 NOT NULL,
+	cache_write_tokens BIGINT DEFAULT 0 NOT NULL,
+	reasoning_tokens BIGINT DEFAULT 0 NOT NULL,
+	completion_tokens INTEGER DEFAULT 0 NOT NULL,
+	total_tokens INTEGER DEFAULT 0 NOT NULL,
+	estimated_cost NUMERIC(12, 6) DEFAULT 0 NOT NULL,
+	pricing_snapshot JSONB DEFAULT '{}'::jsonb NOT NULL,
+	pricing_version TEXT,
+	analysis_policy_version TEXT DEFAULT 'cortex-analysis-v1' NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	CONSTRAINT cortex_analysis_runs_pkey PRIMARY KEY (id),
+	CONSTRAINT cortex_analysis_runs_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT cortex_analysis_runs_session_id_fkey FOREIGN KEY(session_id) REFERENCES public.sessions (id) ON DELETE CASCADE,
+	CONSTRAINT cortex_analysis_runs_confidence_level_check CHECK (confidence_level = ANY (ARRAY['limited'::text, 'moderate'::text, 'high'::text])),
+	CONSTRAINT cortex_analysis_runs_high_stakes_domain_check CHECK (high_stakes_domain IS NULL OR high_stakes_domain = ANY (ARRAY['financial'::text, 'medical'::text, 'legal'::text, 'safety'::text])),
+	CONSTRAINT cortex_analysis_runs_combined_response_count_check CHECK (combined_response_count BETWEEN 2 AND 3),
+	CONSTRAINT cortex_analysis_runs_failed_response_count_check CHECK (failed_response_count >= 0)
+);
+
+
+CREATE TABLE public.prompt_optimization_cache (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	cache_key TEXT NOT NULL,
+	optimizer_provider TEXT NOT NULL,
+	optimizer_model TEXT NOT NULL,
+	prompt_version TEXT NOT NULL,
+	result JSONB NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	last_used_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	CONSTRAINT prompt_optimization_cache_pkey PRIMARY KEY (id),
+	CONSTRAINT prompt_optimization_cache_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT uq_prompt_optimization_cache_user_key UNIQUE NULLS DISTINCT (user_id, cache_key)
+);
+
+
+CREATE TABLE public.research_reuse_cache (
+	session_id TEXT NOT NULL,
+	state JSONB NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	last_used_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	CONSTRAINT research_reuse_cache_pkey PRIMARY KEY (session_id)
+);
+
+
+CREATE TABLE public.cache_reuse_events (
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	user_id UUID NOT NULL,
+	request_id CHARACTER VARYING(255) NOT NULL,
+	operation_type CHARACTER VARYING(64) NOT NULL,
+	reused BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	CONSTRAINT cache_reuse_events_pkey PRIMARY KEY (id),
+	CONSTRAINT cache_reuse_events_user_id_fkey FOREIGN KEY(user_id) REFERENCES public.users (id) ON DELETE CASCADE,
+	CONSTRAINT cache_reuse_events_operation_type_check CHECK (operation_type = ANY (ARRAY['research'::character varying, 'prompt_optimization'::character varying, 'cortex_analysis'::character varying])),
+	CONSTRAINT uq_cache_reuse_events_user_operation_request UNIQUE NULLS DISTINCT (user_id, operation_type, request_id)
 );
 
 
@@ -235,6 +352,7 @@ CREATE TABLE public.routing_attempts (
 CREATE INDEX idx_api_keys_user_id ON public.api_keys USING btree (user_id);
 CREATE INDEX idx_context_snapshots_user_session_time ON public.context_snapshots USING btree (user_id, session_id, created_at DESC);
 CREATE UNIQUE INDEX uq_context_snapshots_session_hash ON public.context_snapshots USING btree (session_id, context_hash);
+CREATE UNIQUE INDEX uq_context_snapshots_reusable_summary ON public.context_snapshots USING btree (session_id, source_message_range, source_hash, summary_policy_version) WHERE (source_hash IS NOT NULL);
 CREATE INDEX idx_feedback_request ON public.feedback USING btree (llm_request_id);
 CREATE INDEX idx_feedback_user_time ON public.feedback USING btree (user_id, created_at DESC);
 CREATE INDEX idx_ledger_reference ON public.ledger_entries USING btree (reference);
@@ -242,10 +360,18 @@ CREATE INDEX idx_ledger_wallet_time ON public.ledger_entries USING btree (wallet
 CREATE INDEX idx_llm_requests_api_key_time ON public.llm_requests USING btree (api_key_id, created_at DESC);
 CREATE INDEX idx_llm_requests_provider_model_time ON public.llm_requests USING btree (provider, model, created_at DESC);
 CREATE INDEX idx_llm_requests_request_group_id ON public.llm_requests USING btree (request_group_id) WHERE (request_group_id IS NOT NULL);
+CREATE INDEX idx_llm_requests_response_revision_root ON public.llm_requests USING btree (response_revision_root_id, response_revision DESC) WHERE (response_revision_root_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_llm_requests_logical_response_revision ON public.llm_requests USING btree (COALESCE(response_revision_root_id, id), response_revision);
 CREATE INDEX idx_llm_requests_session_time ON public.llm_requests USING btree (session_id, created_at DESC);
 CREATE INDEX idx_llm_requests_user_request_group_id ON public.llm_requests USING btree (user_id, request_group_id) WHERE (request_group_id IS NOT NULL);
 CREATE INDEX idx_llm_requests_user_time ON public.llm_requests USING btree (user_id, created_at DESC);
 CREATE INDEX idx_llm_responses_request_id ON public.llm_responses USING btree (llm_request_id);
+CREATE INDEX idx_cortex_analysis_runs_user_group_time ON public.cortex_analysis_runs USING btree (user_id, request_group_id, created_at DESC);
+CREATE INDEX idx_cortex_analysis_runs_user_session_time ON public.cortex_analysis_runs USING btree (user_id, session_id, created_at DESC);
+CREATE INDEX idx_cortex_analysis_runs_reuse ON public.cortex_analysis_runs USING btree (user_id, request_group_id, source_fingerprint, model, analysis_policy_version, created_at DESC);
+CREATE INDEX idx_prompt_optimization_cache_expiry ON public.prompt_optimization_cache USING btree (expires_at);
+CREATE INDEX idx_research_reuse_cache_expiry ON public.research_reuse_cache USING btree (expires_at);
+CREATE INDEX idx_cache_reuse_events_user_created ON public.cache_reuse_events USING btree (user_id, created_at DESC);
 CREATE INDEX idx_messages_session_id ON public.messages USING btree (session_id);
 CREATE INDEX idx_messages_session_time ON public.messages USING btree (session_id, created_at);
 CREATE INDEX idx_routing_attempts_decision_id ON public.routing_attempts USING btree (routing_decision_id);

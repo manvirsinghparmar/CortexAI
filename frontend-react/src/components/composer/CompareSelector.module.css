@@ -126,6 +126,12 @@
   white-space: nowrap;
 }
 
+.limitButton {
+  gap: 7px;
+  border-style: dashed;
+  color: var(--cx-ink-600);
+}
+
 .addButton svg {
   width: 15px;
   height: 15px;

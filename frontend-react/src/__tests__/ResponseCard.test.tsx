@@ -104,15 +104,39 @@ describe("ResponseCard", () => {
   });
 
   it("shows completed response stats without a run-details disclosure control", () => {
-    render(<ResponseCard response={response()} compact />);
+    render(<ResponseCard response={{ ...response(), ai_credits: 1_234 }} compact />);
 
     const stats = document.querySelector('[id^="response-stats-"]');
 
     expect(screen.queryByRole("button", { name: /run details/i })).not.toBeInTheDocument();
     expect(stats).toHaveTextContent("20.0s");
     expect(stats).toHaveTextContent("60 tok");
-    expect(stats).toHaveTextContent("$0.0010");
+    expect(stats).toHaveTextContent("1,234 credits");
+    expect(stats).not.toHaveTextContent("$0.0010");
     expect(stats?.querySelectorAll("svg")).toHaveLength(3);
+  });
+
+  it("preserves a token-limited partial answer and offers a larger retry", () => {
+    const onRetry = vi.fn();
+    render(
+      <ResponseCard
+        response={{
+          ...response(false, "Partial but useful answer"),
+          completion_status: "incomplete",
+          stop_cause: "token_limit",
+          retry_with_more_room: {
+            available: true,
+            recommended_profile: "deep",
+          },
+        }}
+        onRetryWithMoreRoom={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("Partial but useful answer")).toBeInTheDocument();
+    expect(screen.getByText("Response stopped at its token limit.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry with more room" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("shows live elapsed loading meta without placeholder zero metrics", () => {

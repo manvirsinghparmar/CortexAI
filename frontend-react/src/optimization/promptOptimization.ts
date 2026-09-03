@@ -24,13 +24,16 @@ export function buildOptimizeRequest({
   conversationHistory,
   context,
   attachments,
+  creditActivityId,
 }: {
   prompt: string;
   conversationHistory: ConversationHistoryItem[];
   context: UserContextRequest;
   attachments: FileUploadResponse[];
+  creditActivityId?: string;
 }): OptimizeRequest {
   const request: OptimizeRequest = { prompt };
+  if (creditActivityId) request.credit_activity_id = creditActivityId;
 
   const contextMessages = selectOptimizeContextMessages(conversationHistory);
   if (contextMessages.length === 0) return request;

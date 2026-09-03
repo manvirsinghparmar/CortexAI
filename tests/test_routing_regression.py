@@ -142,6 +142,8 @@ class FakeResearchContext:
         ]
         self.cache_hit = False
         self.error = None
+        self.provider_credits_used = 2
+        self.provider_credits_estimated = False
 
 
 class FakeResearchService:
@@ -184,7 +186,7 @@ def test_direct_ask_normalizes_empty_output_to_provider_error(monkeypatch):
     assert "empty response" in resp.error.message.lower()
 
 
-def test_direct_ask_normalizes_empty_length_output_to_provider_error(monkeypatch):
+def test_direct_ask_preserves_empty_length_output_as_incomplete(monkeypatch):
     orchestrator = CortexOrchestrator()
     fake = EmptyLengthResponseClient("openai", "gpt-5.1")
     monkeypatch.setattr(orchestrator, "_get_client", lambda *_args, **_kwargs: fake)
@@ -195,11 +197,11 @@ def test_direct_ask_normalizes_empty_length_output_to_provider_error(monkeypatch
         model_name="gpt-5.1",
         routing_mode="legacy",
     )
-    assert resp.is_error is True
-    assert resp.error is not None
-    assert resp.error.code == "provider_error"
-    assert resp.error.details.get("finish_reason") == "length"
-    assert resp.error.details.get("endpoint") == "chat.completions"
+    assert resp.is_success is True
+    assert resp.error is None
+    assert resp.finish_reason == "length"
+    assert resp.metadata["completion_status"] == "incomplete"
+    assert resp.metadata["stop_cause"] == "token_limit"
 
 
 def test_research_metadata_attached(monkeypatch):
@@ -276,6 +278,11 @@ def test_explicit_unknown_model_rejected():
 
 def test_smart_retry_on_refusal_then_success(monkeypatch):
     orchestrator = CortexOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda **_kwargs: ["gemini", "openai"],
+    )
 
     features = PromptFeatures(
         word_count=20,
@@ -388,6 +395,110 @@ def test_smart_retry_on_refusal_then_success(monkeypatch):
     assert resp.metadata["routing"]["fallback_used"] is True
 
 
+def test_smart_skips_unauthorized_expensive_candidate_before_provider_call(monkeypatch):
+    orchestrator = CortexOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "available_providers",
+        lambda **_kwargs: ["claude", "deepseek"],
+    )
+    features = PromptFeatures(
+        word_count=20,
+        char_count=120,
+        token_estimate=80,
+        has_code=True,
+        has_math=False,
+        has_analysis=True,
+        has_creative=False,
+        has_factual=False,
+        strict_format=False,
+        has_logs_stacktrace=False,
+        context_token_estimate=0,
+        context_messages=0,
+        is_follow_up=False,
+        needs_latest_info=False,
+        needs_accuracy=True,
+        intent="code",
+        has_strict_constraints=False,
+    )
+    candidates = [
+        ModelCandidate(
+            provider="claude",
+            model_name="claude-opus-4-6",
+            tier=Tier.T3,
+            input_cost_per_1m=5.0,
+            output_cost_per_1m=25.0,
+            context_limit=200000,
+            tags=["flagship"],
+            enabled=True,
+        ),
+        ModelCandidate(
+            provider="deepseek",
+            model_name="deepseek-chat",
+            tier=Tier.T3,
+            input_cost_per_1m=0.28,
+            output_cost_per_1m=0.42,
+            context_limit=128000,
+            tags=["cheap"],
+            enabled=True,
+        ),
+    ]
+    routing_md = {
+        "mode": "smart",
+        "initial_tier": "T3",
+        "final_tier": "T3",
+        "attempt_count": 0,
+        "fallback_used": False,
+        "attempts": [],
+        "decision_reasons": ["analysis_detected"],
+    }
+    monkeypatch.setattr(
+        orchestrator._smart_router,
+        "route_once_plan",
+        lambda **_kwargs: (features, Tier.T3, candidates, routing_md),
+    )
+    invoked: list[str] = []
+
+    def invoke(candidate, *_args, **_kwargs):
+        invoked.append(candidate.model_name)
+        return UnifiedResponse(
+            request_id="req_affordable_fallback",
+            text=(
+                "Use an atomic transaction boundary, lock the shared counter, and retry "
+                "only serialization failures. This preserves the credit invariant."
+            ),
+            provider=candidate.provider,
+            model=candidate.model_name,
+            latency_ms=5,
+            token_usage=TokenUsage(prompt_tokens=20, completion_tokens=30, total_tokens=50),
+            estimated_cost=0.0001,
+            finish_reason="stop",
+            error=None,
+            metadata={},
+        )
+
+    monkeypatch.setattr(orchestrator, "_invoke_candidate", invoke)
+    authorization_checks: list[str] = []
+
+    def authorize(_provider: str, model: str) -> bool:
+        authorization_checks.append(model)
+        return model == "deepseek-chat"
+
+    response = orchestrator._run_smart_attempt_loop(
+        prompt="Review this transaction design.",
+        context=None,
+        messages=[{"role": "user", "content": "Review this transaction design."}],
+        routing_mode="smart",
+        routing_constraints=None,
+        candidate_authorizer=authorize,
+    )
+
+    assert authorization_checks[:2] == ["claude-opus-4-6", "deepseek-chat"]
+    assert invoked == ["deepseek-chat"]
+    assert response.provider == "deepseek"
+    assert response.model == "deepseek-chat"
+
+
 def test_smart_retry_on_empty_length_output_then_success(monkeypatch):
     orchestrator = CortexOrchestrator()
 
@@ -470,7 +581,9 @@ def test_smart_retry_on_empty_length_output_then_success(monkeypatch):
     resp = orchestrator._run_smart_attempt_loop(
         prompt="give me a deeply detailed answer with citations format",
         context=None,
-        messages=[{"role": "user", "content": "give me a deeply detailed answer with citations format"}],
+        messages=[
+            {"role": "user", "content": "give me a deeply detailed answer with citations format"}
+        ],
         routing_mode="smart",
         routing_constraints=None,
     )
@@ -482,7 +595,7 @@ def test_smart_retry_on_empty_length_output_then_success(monkeypatch):
     assert routing.get("attempt_count") == 2
     assert routing.get("fallback_used") is True
     attempts = routing.get("attempts", [])
-    assert attempts[0]["validation"] == "provider_error"
+    assert attempts[0]["validation"] == "truncated"
     assert attempts[1]["validation"] == "ok"
 
 
@@ -739,6 +852,7 @@ def test_smart_routing_returns_provider_error_when_no_provider_is_routable(monke
     assert resp.error.code == "provider_error"
     assert "No routable providers are available" in resp.error.message
 
+
 def test_research_mode_off_does_not_reuse_prior_web_context():
     orchestrator = CortexOrchestrator()
     session_id = "session-web-off-guard"
@@ -781,6 +895,8 @@ def test_research_mode_off_does_not_reuse_prior_web_context():
     assert updated_messages == messages
     assert metadata["research_used"] is False
     assert metadata["research_reused"] is False
+    assert metadata["research_provider_credits_used"] == 0
+    assert metadata["research_provider_credits_estimated"] is False
     assert metadata["sources"] == []
 
 
@@ -850,7 +966,9 @@ def test_ask_sequence_web_on_then_off_does_not_leak_prior_sources(monkeypatch):
     first_messages = spy.calls[0]
     second_messages = spy.calls[1]
     assert any("WEB RESEARCH SOURCES:" in str(msg.get("content", "")) for msg in first_messages)
-    assert all("WEB RESEARCH SOURCES:" not in str(msg.get("content", "")) for msg in second_messages)
+    assert all(
+        "WEB RESEARCH SOURCES:" not in str(msg.get("content", "")) for msg in second_messages
+    )
     assert "Web research is disabled for this turn." in str(second_messages[0].get("content", ""))
 
 
@@ -989,7 +1107,9 @@ def test_research_mode_on_forces_fresh_search_instead_of_reuse():
 
     updated_messages, metadata = orchestrator._apply_research_if_needed(
         prompt="Can you verify the latest inflation numbers in Canada?",
-        messages=[{"role": "user", "content": "Can you verify the latest inflation numbers in Canada?"}],
+        messages=[
+            {"role": "user", "content": "Can you verify the latest inflation numbers in Canada?"}
+        ],
         research_mode="on",
         context=UserContext(session_id=session_id),
     )
@@ -998,6 +1118,8 @@ def test_research_mode_on_forces_fresh_search_instead_of_reuse():
     assert fake_research.calls[0]["use_cache"] is False
     assert metadata["research_used"] is True
     assert metadata["research_reused"] is False
+    assert metadata["research_provider_credits_used"] == 2
+    assert metadata["research_provider_credits_estimated"] is False
     assert metadata["sources"] == [
         {
             "id": 1,
@@ -1106,6 +1228,3 @@ def test_compare_normalizes_empty_output_to_provider_error(monkeypatch):
     assert resp.error is not None
     assert resp.error.code == "provider_error"
     assert "empty response" in resp.error.message.lower()
-
-
-

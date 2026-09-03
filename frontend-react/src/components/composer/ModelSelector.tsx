@@ -8,9 +8,21 @@ interface ModelSelectorProps {
   onChange: (key: string) => void;
   label?: string;
   id?: string;
+  lockedKeys?: string[];
+  lockedLabels?: Record<string, string>;
+  onLockedSelect?: (key: string) => void;
 }
 
-export function ModelSelector({ models, value, onChange, label, id }: ModelSelectorProps) {
+export function ModelSelector({
+  models,
+  value,
+  onChange,
+  label,
+  id,
+  lockedKeys,
+  lockedLabels,
+  onLockedSelect,
+}: ModelSelectorProps) {
   const pickerId = id ?? "modelSelector";
   return (
     <div className={styles.wrap}>
@@ -26,6 +38,9 @@ export function ModelSelector({ models, value, onChange, label, id }: ModelSelec
         onChange={onChange}
         ariaLabel={label ?? "Model"}
         listboxLabel={`${label ?? "Model"} options`}
+        lockedKeys={lockedKeys}
+        lockedLabels={lockedLabels}
+        onLockedSelect={onLockedSelect}
         placement="up"
         align="left"
         className={styles.picker}

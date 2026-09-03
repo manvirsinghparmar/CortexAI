@@ -49,7 +49,7 @@ test("mobile Usage route renders the compact dashboard and footer navigation", a
     await expectNoHorizontalOverflow(page);
 });
 
-test("mobile account menu exposes the Usage entry point", async ({ responsiveApp }) => {
+test("mobile account menu exposes the Usage and AI credits entry points", async ({ responsiveApp }) => {
     const { page } = responsiveApp;
 
     await page.goto("/");
@@ -59,5 +59,29 @@ test("mobile account menu exposes the Usage entry point", async ({ responsiveApp
 
     await expect(page).toHaveURL(/\/usage$/);
     await expect(page.getByRole("heading", { name: "Usage & insights" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.getByRole("button", { name: /^(Account|Guest account)$/ }).click();
+    await expect(page.getByRole("menuitem", { name: "AI credits" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "AI credits" }).click();
+
+    await expect(page).toHaveURL(/\/credits$/);
+    await expect(
+        page.getByRole("heading", { name: "See what each question cost." }),
+    ).toBeVisible();
+    await expect(
+        page.getByRole("progressbar", { name: "AI credits: 90,000 left of 100,000" }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
+    await expect(page.getByText("How do atomic credit reservations work?")).toBeVisible();
+    await expect(page.getByText("13,000 credits")).toBeVisible();
+    await expect(
+      page.locator('section[aria-labelledby="recent-credit-activity-title"] article'),
+    ).toHaveCount(1);
+    await page.getByText("View credit breakdown").click();
+    await expect(
+      page.getByRole("listitem").filter({ hasText: "Final optimized AI answer" }),
+    ).toContainText("Includes Prompt Optimizer");
+    await expect(page.getByRole("listitem").filter({ hasText: "Web Search" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 });

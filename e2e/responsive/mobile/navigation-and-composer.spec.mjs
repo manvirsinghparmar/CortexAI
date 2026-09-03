@@ -207,8 +207,10 @@ test("small mobile keeps focused feature tooltips inside the viewport", async ({
                 viewportWidth: window.innerWidth,
             };
         });
-        expect(bounds.left).toBeGreaterThanOrEqual(0);
-        expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+        expect(bounds.left, `${switchName} tooltip left edge`).toBeGreaterThanOrEqual(0);
+        expect(bounds.right, `${switchName} tooltip right edge`).toBeLessThanOrEqual(
+            bounds.viewportWidth,
+        );
     }
 
     await openMobilePanel(page, "Compare");

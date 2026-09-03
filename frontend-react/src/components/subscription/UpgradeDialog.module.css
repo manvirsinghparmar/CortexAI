@@ -1,0 +1,139 @@
+.backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, #0f172a 48%, transparent);
+  padding: 20px;
+}
+
+.dialog {
+  position: relative;
+  display: grid;
+  width: min(460px, 100%);
+  max-height: calc(100vh - 40px);
+  gap: 18px;
+  overflow: auto;
+  border: 1px solid var(--cx-hairline);
+  border-radius: 22px;
+  background: var(--cx-surface);
+  box-shadow: 0 24px 70px rgb(15 23 42 / 28%);
+  padding: 26px;
+}
+
+.close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cx-ink-400);
+  cursor: pointer;
+  font: 500 25px/1 var(--font-sans);
+}
+
+.close:hover {
+  background: var(--cx-surface-2);
+  color: var(--cx-ink-900);
+}
+
+.close:focus-visible,
+.actions button:focus-visible {
+  outline: 2px solid var(--cx-accent);
+  outline-offset: 2px;
+}
+
+.icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--cx-accent-soft);
+  font-size: 21px;
+}
+
+.copy {
+  display: grid;
+  gap: 9px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.copy h2,
+.copy p {
+  margin: 0;
+}
+
+.copy h2 {
+  color: var(--cx-ink-900);
+  font: 850 22px/1.2 var(--font-sans);
+}
+
+.copy p {
+  color: var(--cx-ink-500);
+  font: 600 14px/1.55 var(--font-sans);
+}
+
+.copy .reset {
+  color: var(--cx-ink-700);
+  font-weight: 750;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.actions button {
+  min-height: 42px;
+  border-radius: 12px;
+  cursor: pointer;
+  font: 800 13px/1 var(--font-sans);
+  padding: 0 16px;
+}
+
+.secondary {
+  border: 1px solid var(--cx-hairline);
+  background: var(--cx-surface);
+  color: var(--cx-ink-700);
+}
+
+.primary {
+  border: 1px solid var(--cx-accent);
+  background: var(--cx-accent);
+  color: white;
+}
+
+@media (max-width: 520px) {
+  .backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .dialog {
+    width: 100%;
+    max-height: min(82vh, 640px);
+    border-radius: 22px 22px 0 0;
+    padding: 24px 18px calc(20px + env(safe-area-inset-bottom));
+  }
+
+  .actions {
+    flex-direction: column-reverse;
+  }
+
+  .actions button {
+    width: 100%;
+  }
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import math
 import os
 import socket
 import time
@@ -12,7 +13,7 @@ from typing import Any
 
 from utils.logger import get_logger
 
-from .contracts import SourceDoc
+from .contracts import ProviderSearchResponse, SourceDoc
 from .tavily_resolver import (
     TAVILY_CREDITS_PER_ADVANCED_SEARCH,
     resolve_tavily_search_options,
@@ -361,14 +362,24 @@ class TavilyResearchClient:
         return fallback
 
     @staticmethod
-    def _resolve_credits_used(response: dict[str, Any]) -> int:
+    def _resolve_credit_usage(response: dict[str, Any]) -> tuple[int, bool]:
         usage = response.get("usage")
         if isinstance(usage, dict):
             for key in ("credits", "credits_used", "api_credits"):
                 value = usage.get(key)
-                if isinstance(value, (int, float)) and value > 0:
-                    return int(value)
-        return TAVILY_CREDITS_PER_ADVANCED_SEARCH
+                if (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                    and value >= 0
+                ):
+                    return math.ceil(value), False
+        return TAVILY_CREDITS_PER_ADVANCED_SEARCH, True
+
+    @staticmethod
+    def _resolve_credits_used(response: dict[str, Any]) -> int:
+        """Backward-compatible credit count helper used by diagnostics/tests."""
+        return TavilyResearchClient._resolve_credit_usage(response)[0]
 
     # Tavily rejects queries longer than this with BadRequestError.
     _TAVILY_MAX_QUERY_CHARS = 400
@@ -387,6 +398,16 @@ class TavilyResearchClient:
         Returns:
             List of SourceDoc objects with extracted content
         """
+        return self.search_with_usage(
+            query,
+            max_results=max_results,
+            search_depth=search_depth,
+        ).sources
+
+    def search_with_usage(
+        self, query: str, max_results: int = 5, search_depth: str = "advanced"
+    ) -> ProviderSearchResponse:
+        """Search once and return sources with provider credit usage."""
         # Truncate before sending to avoid a guaranteed BadRequestError for
         # queries that exceed Tavily's 400-character hard limit.
         original_length = len(str(query or ""))
@@ -480,6 +501,7 @@ class TavilyResearchClient:
                     },
                 )
 
+            provider_credits_used, provider_credits_estimated = self._resolve_credit_usage(response)
             latency_ms = int((time.perf_counter() - started) * 1000)
             source_content_lengths = [len(str(source.excerpt or "")) for source in sources]
             logger.info(
@@ -493,7 +515,8 @@ class TavilyResearchClient:
                         "result_count": len(sources),
                         "raw_result_count": len(raw_results),
                         "source_content_lengths": source_content_lengths,
-                        "credits_used": self._resolve_credits_used(response),
+                        "credits_used": provider_credits_used,
+                        "credits_estimated": provider_credits_estimated,
                         "latency_ms": latency_ms,
                         "max_results": int(resolution.params["max_results"]),
                         "search_depth": str(resolution.params["search_depth"]),
@@ -504,7 +527,11 @@ class TavilyResearchClient:
                     }
                 },
             )
-            return sources
+            return ProviderSearchResponse(
+                sources=sources,
+                provider_credits_used=provider_credits_used,
+                provider_credits_estimated=provider_credits_estimated,
+            )
 
         except Exception as exc:
             self._maybe_emit_network_diagnostics(trigger="search_failure")
@@ -538,7 +565,7 @@ class TavilyResearchClient:
                     }
                 },
             )
-            return []
+            return ProviderSearchResponse()
 
     def qna_search(self, query: str) -> tuple[str, list[SourceDoc]]:
         """

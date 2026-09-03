@@ -44,6 +44,8 @@
 - `python scripts/release_gate.py` for pre-handoff confidence.
 - `npm run --prefix frontend-react build` when React UI is touched.
 - `npm run --prefix e2e test` when end-user flow or streaming UX changed.
+- For a user-requested commit, verify the blocking hooks in
+  [ci-commit-gate.md](./ci-commit-gate.md) are installed and do not bypass them.
 
 ## Done Criteria
 

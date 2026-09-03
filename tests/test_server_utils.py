@@ -1,16 +1,20 @@
-from models.unified_response import NormalizedError, TokenUsage, UnifiedResponse
+from models.unified_response import FinishReason, NormalizedError, TokenUsage, UnifiedResponse
 from server.utils import (
     clamp_max_tokens,
+    effective_output_token_limit,
     normalize_empty_success_response,
     redact_sensitive_headers,
     sanitize_provider_error_response,
+    context_summary_payload,
+    validate_and_trim_context,
 )
+from server.schemas.requests import ConversationHistoryItem, UserContextRequest
 
 
 def _build_response(
     *,
     text: str,
-    finish_reason: str | None = "stop",
+    finish_reason: FinishReason = "stop",
     error: NormalizedError | None = None,
     metadata: dict | None = None,
 ) -> UnifiedResponse:
@@ -40,6 +44,14 @@ def test_clamp_max_tokens_preserves_small_values():
     assert clamp_max_tokens(128) == 128
 
 
+def test_effective_output_limit_matches_provider_clamp_and_default():
+    assert effective_output_token_limit(128) == 128
+    assert effective_output_token_limit(2048) == 2048
+    assert effective_output_token_limit(2049) == 2048
+    assert effective_output_token_limit(100_000_000) == 2048
+    assert effective_output_token_limit(None) == 2048
+
+
 def test_normalize_empty_success_keeps_non_empty_response():
     original = _build_response(text="useful answer", finish_reason="stop")
     normalized = normalize_empty_success_response(original)
@@ -61,20 +73,18 @@ def test_normalize_empty_success_keeps_existing_error_unchanged():
     assert normalized == original
 
 
-def test_normalize_empty_success_converts_empty_length_to_provider_error():
+def test_normalize_empty_success_preserves_billable_incomplete_length_response():
     original = _build_response(
         text="",
         finish_reason="length",
         metadata={"endpoint": "chat.completions"},
     )
     normalized = normalize_empty_success_response(original)
-    assert normalized.is_error
-    assert normalized.error is not None
-    assert normalized.error.code == "provider_error"
-    assert normalized.error.retryable is True
-    assert normalized.error.details["finish_reason"] == "length"
-    assert normalized.error.details["endpoint"] == "chat.completions"
-    assert normalized.finish_reason == "error"
+    assert normalized.is_success
+    assert normalized.error is None
+    assert normalized.finish_reason == "length"
+    assert normalized.metadata["completion_status"] == "incomplete"
+    assert normalized.metadata["stop_cause"] == "token_limit"
 
 
 def test_normalize_empty_success_content_filter_is_non_retryable():
@@ -126,7 +136,10 @@ def test_sanitize_provider_error_response_hides_raw_transient_capacity_payload()
     sanitized = sanitize_provider_error_response(original)
 
     assert sanitized.error is not None
-    assert sanitized.error.message == "This model is temporarily busy. Try again shortly or switch to another model."
+    assert (
+        sanitized.error.message
+        == "This model is temporarily busy. Try again shortly or switch to another model."
+    )
     assert sanitized.error.details["kind"] == "transient_capacity"
     assert sanitized.error.details["client_safe"] is True
     assert "UNAVAILABLE" not in sanitized.error.message
@@ -145,3 +158,30 @@ def test_sanitize_provider_error_response_preserves_explicit_bad_request_message
     )
 
     assert sanitize_provider_error_response(original) == original
+
+
+def test_context_compaction_is_deterministic_and_preserves_latest_turn(monkeypatch):
+    monkeypatch.setenv("CONTEXT_COMPACTION_ENABLED", "true")
+    monkeypatch.setenv("CONTEXT_COMPACTION_USABLE_WINDOW_TOKENS", "1000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD_RATIO", "0.5")
+    older = "Older discussion sentence. " * 250
+    history = [
+        ConversationHistoryItem(role="user", content=older),
+        ConversationHistoryItem(role="assistant", content="Keep URL https://example.com and ID 42 exactly."),
+        ConversationHistoryItem(role="user", content="Immediately preceding question"),
+        ConversationHistoryItem(role="assistant", content="Immediately preceding answer"),
+    ]
+    first = UserContextRequest(session_id="00000000-0000-0000-0000-000000000001", conversation_history=history)
+    second = UserContextRequest(session_id=first.session_id, conversation_history=history)
+
+    validate_and_trim_context(first)
+    validate_and_trim_context(second)
+
+    assert len(first.conversation_history or []) == 3
+    assert first.conversation_history == second.conversation_history
+    assert first.conversation_history[-2].content == "Immediately preceding question"
+    assert first.conversation_history[-1].content == "Immediately preceding answer"
+    payload = context_summary_payload(first)
+    assert payload is not None
+    assert payload["summary_policy_version"] == "context-summary-v1"
+    assert len(payload["source_hash"]) == 64

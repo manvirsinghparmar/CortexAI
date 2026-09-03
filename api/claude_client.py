@@ -3,8 +3,16 @@ import sys
 import time
 from typing import Any
 
+from config.cache_optimization import (
+    cache_friendly_prompt_ordering_enabled,
+    claude_prompt_cache_enabled,
+)
+
+anthropic: Any
 try:
-    import anthropic
+    import anthropic as anthropic_sdk
+
+    anthropic = anthropic_sdk
     _anthropic_import_error: Exception | None = None
 except Exception as exc:
     anthropic = None
@@ -85,7 +93,7 @@ class ClaudeClient(BaseAIClient):
                 role = "user"
 
             content_blocks: list[dict[str, Any]] = []
-            if content:
+            if content and not cache_friendly_prompt_ordering_enabled():
                 content_blocks.append({"type": "text", "text": content})
 
             if attachments and last_user_index is not None and idx == last_user_index:
@@ -102,6 +110,7 @@ class ClaudeClient(BaseAIClient):
                                 },
                             }
                         )
+
                     elif mime_type == "application/pdf":
                         content_blocks.append(
                             {
@@ -114,6 +123,9 @@ class ClaudeClient(BaseAIClient):
                                 },
                             }
                         )
+
+            if content and cache_friendly_prompt_ordering_enabled():
+                content_blocks.append({"type": "text", "text": content})
 
             claude_messages.append(
                 {
@@ -136,6 +148,17 @@ class ClaudeClient(BaseAIClient):
                 chunks.append(str(getattr(part, "text", "") or ""))
         return "".join(chunks).strip()
 
+    @staticmethod
+    def _supports_custom_temperature(model: str, reasoning_mode: str) -> bool:
+        """Return whether Anthropic accepts a non-default temperature here."""
+        normalized_model = str(model or "").strip().lower()
+        normalized_mode = str(reasoning_mode or "").strip().lower()
+        if normalized_mode not in {"", "none", "off", "disabled"}:
+            return False
+        # Claude 5 requires default sampling even when thinking is disabled.
+        # Current 4.5/4.6 models still accept custom sampling when thinking is off.
+        return any(marker in normalized_model for marker in ("-4-5", "-4-6"))
+
     def get_completion(
         self,
         prompt: str | None = None,
@@ -147,9 +170,19 @@ class ClaudeClient(BaseAIClient):
         request_id = self._resolve_request_id_from_kwargs(kwargs)
         start_time = time.time()
 
-        model = kwargs.get("model", self.model_name)
-        temperature = kwargs.get("temperature", 0.7)
+        requested_model = kwargs.get("model")
+        model = (
+            requested_model
+            if isinstance(requested_model, str)
+            else str(self.model_name or "claude-sonnet-4-5")
+        )
+        cache_context = self._resolve_cache_context(
+            kwargs, provider="claude", model=model
+        )
+        temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens", 2048)
+        reasoning_mode = str(kwargs.get("reasoning_mode") or "").strip().lower()
+        reasoning_effort = str(kwargs.get("reasoning_effort") or "").strip().lower()
         attachments = self._normalize_inference_attachments(kwargs.pop("attachments", None))
 
         try:
@@ -167,10 +200,32 @@ class ClaudeClient(BaseAIClient):
                 "model": model,
                 "messages": claude_messages,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
+            if temperature is not None and self._supports_custom_temperature(
+                model, reasoning_mode
+            ):
+                request_payload["temperature"] = temperature
+            elif temperature is not None:
+                logger.info(
+                    "Omitting incompatible Claude temperature",
+                    extra={
+                        "extra_fields": {
+                            "request_id": request_id,
+                            "model": model,
+                            "reasoning_mode": reasoning_mode or "provider_default",
+                        }
+                    },
+                )
             if system_instruction:
                 request_payload["system"] = system_instruction
+            if cache_context.enabled and claude_prompt_cache_enabled():
+                request_payload["cache_control"] = {"type": "ephemeral"}
+            if reasoning_mode == "adaptive":
+                request_payload["thinking"] = {"type": "adaptive"}
+            elif reasoning_mode == "disabled":
+                request_payload["thinking"] = {"type": "disabled"}
+            if reasoning_mode == "adaptive" and reasoning_effort not in {"", "none"}:
+                request_payload["output_config"] = {"effort": reasoning_effort}
 
             adaptive_retry = None
             try:
@@ -179,7 +234,12 @@ class ClaudeClient(BaseAIClient):
                 dropped_param, retry_payload = self._build_retry_payload_without_unsupported_parameter(
                     request_payload,
                     request_exc,
-                    safe_parameters={"temperature", "top_p", "max_tokens"},
+                    safe_parameters={
+                        "temperature",
+                        "top_p",
+                        "max_tokens",
+                        "cache_control",
+                    },
                 )
                 if retry_payload is not None and dropped_param is not None:
                     logger.warning(
@@ -205,16 +265,35 @@ class ClaudeClient(BaseAIClient):
 
             text = self._extract_text(response)
             usage = getattr(response, "usage", None)
-            prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            completion_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            normal_input_tokens = self._usage_int(getattr(usage, "input_tokens", 0))
+            cached_input_tokens = self._usage_int(
+                getattr(usage, "cache_read_input_tokens", 0)
+            )
+            cache_write_tokens = self._usage_int(
+                getattr(usage, "cache_creation_input_tokens", 0)
+            )
+            prompt_tokens = normal_input_tokens + cached_input_tokens + cache_write_tokens
+            completion_tokens = self._usage_int(getattr(usage, "output_tokens", 0))
             token_usage = TokenUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
 
-            cost = self.cost_calculator.calculate_cost(
-                token_usage.prompt_tokens, token_usage.completion_tokens
+            served_model = self._served_model(getattr(response, "model", model), model)
+
+            calculator = (
+                self.cost_calculator
+                if self.cost_calculator.model_name == served_model
+                else CostCalculator("claude", served_model)
+            )
+            cost = calculator.calculate_cost(
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+                cached_input_tokens=token_usage.cached_input_tokens,
+                cache_write_tokens=token_usage.cache_write_tokens,
             )
             estimated_cost = cost["total_cost"]
 
@@ -253,18 +332,30 @@ class ClaudeClient(BaseAIClient):
                 request_id=request_id,
                 text=text,
                 provider="claude",
-                model=model,
+                model=served_model,
                 latency_ms=latency_ms,
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
                 finish_reason=finish_reason,
                 error=None,
                 metadata=(
-                    {"endpoint": "messages.create", "adaptive_retry": adaptive_retry}
+                    {
+                        "endpoint": "messages.create",
+                        "adaptive_retry": adaptive_retry,
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                     if adaptive_retry
-                    else {"endpoint": "messages.create"}
+                    else {
+                        "endpoint": "messages.create",
+                        "pricing_unknown": bool(cost.get("pricing_unknown", False)),
+                    }
                 ),
                 raw=raw,
+                **self._response_audit_fields(
+                    served_model=served_model,
+                    cost=cost,
+                    reasoning_mode=reasoning_mode or None,
+                ),
             )
 
         except Exception as e:

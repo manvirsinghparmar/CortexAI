@@ -182,8 +182,11 @@
 }
 
 .body {
+  display: flex;
   flex: 1;
   min-height: 0;
+  flex-direction: column;
+  gap: 18px;
   overflow: auto;
   padding: 22px 30px;
 }

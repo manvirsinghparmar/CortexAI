@@ -20,6 +20,25 @@ export interface ChatRoutingRequest {
 
 export type AttachmentUsageRole = "primary" | "reference";
 export type AttachmentTransformMode = "auto" | "text_only" | "vision_pages" | "table_summary";
+export type GenerationProfile = "auto" | "quick" | "balanced" | "deep" | "extended";
+export type ReasoningMode = "auto" | "off" | "on";
+export type ReasoningEffort =
+  | "auto"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export interface GenerationRequest {
+  profile?: GenerationProfile;
+  max_output_tokens?: number;
+  reasoning?: {
+    mode?: ReasoningMode;
+    effort?: ReasoningEffort;
+  };
+}
 
 export interface AttachmentRequestItem {
   file_id: string;
@@ -29,11 +48,19 @@ export interface AttachmentRequestItem {
 
 export interface ChatRequest {
   prompt: string;
+  credit_activity_id?: string;
+  initial_query?: string;
   provider?: string;
   model?: string;
   context?: UserContextRequest;
   routing?: ChatRoutingRequest;
   attachments?: AttachmentRequestItem[];
+  regeneration?: {
+    source_request_id: string;
+    refresh_research?: boolean;
+    retry_reason?: "output_limit";
+  };
+  generation?: GenerationRequest;
   temperature?: number;
   max_tokens?: number;
 }
@@ -41,14 +68,18 @@ export interface ChatRequest {
 export interface CompareTargetRequest {
   provider: string;
   model?: string;
+  generation?: GenerationRequest;
 }
 
 export interface CompareRequest {
   prompt: string;
+  credit_activity_id?: string;
+  initial_query?: string;
   targets: CompareTargetRequest[];
   routing?: ChatRoutingRequest;
   context?: UserContextRequest;
   attachments?: AttachmentRequestItem[];
+  generation?: GenerationRequest;
   timeout_s?: number;
   temperature?: number;
   max_tokens?: number;
@@ -58,6 +89,9 @@ export interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_input_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export type ResponseRunStatus =
@@ -67,6 +101,7 @@ export type ResponseRunStatus =
   | "streaming"
   | "finalizing"
   | "complete"
+  | "incomplete"
   | "failed";
 
 export interface ApiError {
@@ -84,15 +119,52 @@ export interface WebSourceItem {
 
 export interface ChatResponse {
   request_id: string;
+  response_version?: number;
   session_id?: string;
   text: string;
   provider: string;
   model: string;
+  requested_model?: string;
+  served_model?: string;
+  pricing_model?: string;
+  model_lifecycle_status?: string;
+  alias_redirected?: boolean;
+  replacement_model?: string;
+  migration_reason?: string;
+  reasoning_mode?: string;
   latency_ms: number | null;
   token_usage: TokenUsage | null;
   estimated_cost: number;
   cost_currency: string;
+  pricing_version?: string;
+  pricing_rule_applied?: string;
+  pricing_unknown?: boolean;
+  pricing_snapshot?: Record<string, unknown>;
+  ai_credits?: number;
+  credit_usage_estimated?: boolean;
+  cache_hit?: boolean;
+  cache_hit_ratio?: number;
+  cache_savings_ai_credits?: number;
+  uncached_equivalent_ai_credits?: number;
   finish_reason?: string;
+  completion_status?: "complete" | "incomplete" | "failed";
+  stop_cause?: string;
+  generation_budget?: {
+    profile: string;
+    requested_max_output_tokens: number;
+    effective_max_output_tokens: number;
+    requested_reasoning_mode: string;
+    effective_reasoning_mode: string;
+    requested_reasoning_effort: string;
+    effective_reasoning_effort: string;
+    reasoning_disable_supported: boolean;
+    reasoning_counts_against_output: boolean;
+    policy_version: string;
+  };
+  retry_with_more_room?: {
+    available: boolean;
+    recommended_profile?: GenerationProfile;
+  };
   error?: ApiError;
   web_source_items: WebSourceItem[];
   timestamp: string;
@@ -110,18 +182,185 @@ export interface CompareResponse {
   error_count: number;
   total_tokens: number;
   total_cost: number;
+  total_ai_credits?: number;
+  total_cache_savings_ai_credits?: number;
   timestamp: string;
+}
+
+export type ModelBillingClass = "economical" | "standard" | "advanced" | "premium";
+
+export type SubscriptionPlanCode = "free" | "plus" | "pro";
+
+export type SubscriptionStatus =
+  | "free"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "unpaid"
+  | "canceled"
+  | "incomplete"
+  | "incomplete_expired"
+  | "paused"
+  | "configuration_error";
+
+export type SubscriptionMeterKey = "ai_credits";
+
+export interface AllowanceCounter {
+  used: number;
+  reserved: number;
+  limit: number;
+  remaining: number;
+}
+
+export interface PublicBillingPlanFeatures {
+  max_compare_models: number;
+  research_enabled: boolean;
+  prompt_improvement_enabled: boolean;
+  file_analysis_enabled: boolean;
+  allowed_billing_classes: ModelBillingClass[];
+}
+
+export interface PublicBillingPlanAllowances {
+  ai_credits: number;
+}
+
+export interface PublicBillingPlan {
+  code: SubscriptionPlanCode;
+  display_name: string;
+  monthly_price: number;
+  recommended: boolean;
+  features: PublicBillingPlanFeatures;
+  allowances: PublicBillingPlanAllowances;
+}
+
+export interface BillingPlansResponse {
+  currency: "USD";
+  billing_period: "monthly";
+  billing_enabled: boolean;
+  plans: PublicBillingPlan[];
+}
+
+export interface BillingSubscriptionResponse {
+  plan_code: SubscriptionPlanCode;
+  status: SubscriptionStatus;
+  provider: string | null;
+  current_period_start: string;
+  current_period_end: string;
+  cancel_at_period_end: boolean;
+  can_manage: boolean;
+}
+
+export interface EntitlementsResponse {
+  plan: {
+    code: SubscriptionPlanCode;
+    display_name: string;
+    status: SubscriptionStatus;
+    source: string;
+    renews_at: string;
+    cancel_at_period_end: boolean;
+    grace_until: string | null;
+  };
+  features: {
+    compare_enabled: boolean;
+    max_compare_models: number;
+    research_enabled: boolean;
+    prompt_improvement_enabled: boolean;
+    file_analysis_enabled: boolean;
+    usage_export_enabled: boolean;
+    saved_history_enabled: boolean;
+    models_catalog_enabled: boolean;
+  };
+  model_access: {
+    allowed_billing_classes: ModelBillingClass[];
+  };
+  limits: {
+    max_files_per_request: number;
+    max_file_bytes: number;
+  };
+  allowances: Partial<Record<SubscriptionMeterKey, AllowanceCounter>>;
+  period: {
+    starts_at: string;
+    ends_at: string;
+  };
+}
+
+export interface CreditTransaction {
+  id: string;
+  request_id: string;
+  activity_id: string;
+  query: string | null;
+  operation_type: string;
+  item_type: "model" | "research" | "adjustment";
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  input_credits: number;
+  output_credits: number;
+  fixed_credits: number;
+  total_credits: number;
+  provider_cost_usd: number;
+  usage_estimated: boolean;
+  pricing_version: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreditTransactionsResponse {
+  items: CreditTransaction[];
+  limit: number;
+  offset: number;
+}
+
+export interface CheckoutSessionResponse {
+  checkout_url: string;
+  destination: "checkout" | "portal";
+}
+
+export interface PortalSessionResponse {
+  portal_url: string;
 }
 
 export interface ModelCatalogItem {
   provider: string;
   model: string;
   tier: string;
+  billing_class: ModelBillingClass;
+  access_category?: ModelBillingClass;
+  input_credit_multiplier?: number;
+  output_credit_multiplier?: number;
+  credit_usage_label?: string;
+  credit_pricing_version?: string;
   input_cost_per_1m: number;
   output_cost_per_1m: number;
+  cached_input_cost_per_1m?: number;
+  cache_write_cost_per_1m?: number;
   context_limit: number;
+  max_output_tokens?: number;
   tags: string[];
   enabled: boolean;
+  selectable?: boolean;
+  display_name?: string;
+  description?: string;
+  release_status?: string;
+  lifecycle_status?: string;
+  replacement_model?: string;
+  retirement_date?: string;
+  migration_reason?: string;
+  pricing_model?: string;
+  pricing_rule_id?: string;
+  pricing_effective_from?: string;
+  pricing_effective_until?: string;
+  long_context_threshold_tokens?: number;
+  aliases?: string[];
+  reasoning_modes?: string[];
+  default_reasoning_mode?: string;
+  reasoning_efforts?: string[];
+  reasoning_disable_supported?: boolean;
+  reasoning_counts_against_output?: boolean;
+  pricing_source_url?: string;
+  lifecycle_source_url?: string;
+  source_verified_at?: string;
   supports_image_input: boolean;
   supported_attachment_mime_types: string[];
   max_attachment_bytes?: number;
@@ -157,6 +396,7 @@ export interface ProvidersCatalogResponse {
 
 export interface HistoryEntry {
   id: number;
+  request_id?: string;
   session_id?: string;
   session_title?: string;
   request_group_id?: string;
@@ -165,10 +405,34 @@ export interface HistoryEntry {
   prompt: string;
   provider: string;
   model: string;
+  requested_model?: string;
+  served_model?: string;
+  pricing_model?: string;
+  model_lifecycle_status?: string;
+  alias_redirected?: boolean;
+  replacement_model?: string;
+  migration_reason?: string;
+  pricing_rule_applied?: string;
+  pricing_version?: string;
+  pricing_unknown?: boolean;
+  response_version?: number;
+  generation_profile?: GenerationProfile;
+  effective_max_output_tokens?: number;
+  effective_reasoning_mode?: string;
+  effective_reasoning_effort?: string;
+  generation_policy_version?: string;
+  completion_status?: "complete" | "incomplete" | "failed";
+  stop_cause?: string;
   response: string;
   latency_ms?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
   tokens?: number;
   cost?: number;
+  ai_credits?: number;
+  credit_usage_estimated?: boolean;
+  research_ai_credits?: number;
+  research_credit_usage_estimated?: boolean;
   web_source_items: WebSourceItem[];
 }
 
@@ -199,13 +463,38 @@ export interface FileUploadResponse {
   mime_type: string;
   size_bytes: number;
   status: FileUploadStatus;
-  error_code?: string;
-  error_message?: string;
+  error_code?: string | null;
+  error_message?: string | null;
   ingestion_meta: Record<string, unknown>;
   created_at: string;
-  updated_at?: string;
-  expires_at?: string;
+  updated_at?: string | null;
+  expires_at?: string | null;
   deduplicated: boolean;
+}
+
+export interface PresignedPost {
+  url: string;
+  fields: Record<string, string>;
+  expires_at: string;
+}
+
+export interface FileUploadIntentItem {
+  file_id: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  status: FileUploadStatus;
+  error_code?: string | null;
+  error_message?: string | null;
+  ingestion_meta: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string | null;
+  expires_at?: string | null;
+  upload: PresignedPost;
+}
+
+export interface FileUploadIntentResponse {
+  files: FileUploadIntentItem[];
 }
 
 export interface CognitoConfig {
@@ -292,10 +581,28 @@ export interface UsageSummary {
   sessionModes: UsageSummarySessionModes;
   switchedMidSession: number;
   activityDaily: UsageActivityDay[];
+  totalAiCredits?: number;
+  averageAiCreditsPerRequest?: number;
+  normalInputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  cacheHitRatio?: number;
+  cacheSavingsAiCredits?: number;
+  providerCostCacheSavings?: number;
+  reservationCredits?: number;
+  settledCredits?: number;
+  reservationReleaseRatio?: number;
+  outputTokenUtilization?: number;
+  reasoningTokens?: number;
+  researchRequests?: number;
+  researchReuseRate?: number;
+  promptOptimizationReuseRate?: number;
+  cortexAnalysisReuseRate?: number;
 }
 
 export interface OptimizeRequest {
   prompt: string;
+  credit_activity_id?: string;
   context_hint?: string;
   context?: UserContextRequest;
 }
@@ -307,10 +614,52 @@ export interface OptimizeResponse {
   server_optimization_enabled: boolean;
   optimization_status: string;
   fallback_reason?: string;
+  optimization_reused?: boolean;
 }
 
 export type ChatMode = "single" | "compare";
 export type TurnStatus = "idle" | "optimizing" | "streaming" | "complete" | "error" | "cancelled";
+export type CortexAnalysisStatus = "idle" | "processing" | "failed";
+
+export interface CortexAnalysisSource {
+  requestId: string;
+  responseVersion: number;
+  responseName: string;
+}
+
+export interface CortexAnalysisUniqueInsight {
+  responseName: string;
+  text: string;
+}
+
+export interface CortexAnalysisDisagreement {
+  who: string;
+  text: string;
+}
+
+export interface CortexAnalysisRun {
+  analysisId: string;
+  requestGroupId: string;
+  sessionId: string;
+  model: string;
+  recommendedAnswer: string;
+  agreements: string[];
+  disagreements: CortexAnalysisDisagreement[];
+  disagreementNote: string | null;
+  uniqueInsights: CortexAnalysisUniqueInsight[];
+  confidence: {
+    level: "limited" | "moderate" | "high";
+    reason: string;
+  };
+  verify: string[];
+  highStakesDomain: "financial" | "medical" | "legal" | "safety" | null;
+  sourceFingerprint: string;
+  sourceResponses: CortexAnalysisSource[];
+  combinedResponseCount: number;
+  failedResponseCount: number;
+  createdAt: string;
+  isStale: boolean;
+}
 
 export type PromptOptimizationUiStatus = "pending" | "optimized" | "kept_original" | "cancelled";
 
@@ -342,6 +691,9 @@ export interface ChatTurn {
   requestGroupId?: string;
   compareSummary?: CompareResponse;
   optimization?: PromptOptimizationState;
+  analysisRuns?: CortexAnalysisRun[];
+  analysisStatus?: CortexAnalysisStatus;
+  analysisError?: string;
 }
 
 export interface AppState {

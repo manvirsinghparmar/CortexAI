@@ -17,18 +17,28 @@ const TABLE_RESPONSE = [
 ].join("\n");
 
 const MODELS = [
-    model("openai", "gpt-5.1", true),
-    model("claude", "claude-sonnet-4-5", true),
-    model("deepseek", "deepseek-chat", false),
-    model("gemini", "gemini-2.5-flash", true),
-    model("grok", "grok-4", true),
+    model("openai", "gpt-5.1", true, "standard"),
+    model("claude", "claude-sonnet-4-5", true, "advanced"),
+    model("deepseek", "deepseek-chat", false, "economical"),
+    model("gemini", "gemini-2.5-flash", true, "standard"),
+    model("grok", "grok-4", true, "premium"),
 ];
 
 export const test = base.extend({
     responsiveApp: async ({ page }, use) => {
         const state = {
             history: responsiveHistoryEntries(),
+            analysisRuns: responsiveAnalysisRuns(),
             uploadedFiles: new Map(),
+            models: [...MODELS],
+            subscriptionPlan: "free",
+            maxFilesPerRequest: 1,
+            directUploadIntentRequests: [],
+            s3UploadRequests: [],
+            completeUploadRequests: [],
+            s3FailuresByFilename: new Map(),
+            s3DelayMs: 0,
+            directUploadSequence: 0,
         };
         const pageErrors = [];
         page.on("pageerror", error => pageErrors.push(error));
@@ -46,7 +56,10 @@ export const test = base.extend({
             },
         });
 
-        expect(pageErrors, "uncaught browser errors").toEqual([]);
+        expect(
+            pageErrors.map(error => error.stack || error.message),
+            "uncaught browser errors",
+        ).toEqual([]);
     },
 });
 
@@ -85,9 +98,47 @@ async function installResponsiveRoutes(page, state) {
         route.fulfill({
             status: 200,
             contentType: "application/javascript",
-            body: "window.CORTEX_RUNTIME_CONFIG = { enableDevSessionLogin: false };",
+            body: "window.CORTEX_RUNTIME_CONFIG = { enableDevSessionLogin: false, directAttachmentUploads: true, legacyAttachmentUploads: true };",
         }),
     );
+
+    await page.route("https://*.amazonaws.com/**", async route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const fileId = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "");
+        const uploaded = state.uploadedFiles.get(fileId);
+        const body = request.postDataBuffer();
+        state.s3UploadRequests.push({
+            fileId,
+            headers: request.headers(),
+            body: body?.toString("latin1") ?? "",
+        });
+        if (!uploaded) {
+            return route.fulfill({
+                status: 404,
+                headers: { "Access-Control-Allow-Origin": "*" },
+                body: "missing upload intent",
+            });
+        }
+        const failuresRemaining = state.s3FailuresByFilename.get(uploaded.original_filename) ?? 0;
+        if (failuresRemaining > 0) {
+            state.s3FailuresByFilename.set(uploaded.original_filename, failuresRemaining - 1);
+            return route.fulfill({
+                status: 503,
+                headers: { "Access-Control-Allow-Origin": "*" },
+                body: "temporary storage failure",
+            });
+        }
+        if (state.s3DelayMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, state.s3DelayMs));
+        }
+        uploaded.s3Uploaded = true;
+        return route.fulfill({
+            status: 204,
+            headers: { "Access-Control-Allow-Origin": "*" },
+            body: "",
+        });
+    });
 
     await page.route("**/v1/**", async route => {
         const request = route.request();
@@ -103,10 +154,36 @@ async function installResponsiveRoutes(page, state) {
         if (url.pathname === "/v1/models") {
             return json(route, {
                 enabled_only: true,
-                models: MODELS,
-                total: MODELS.length,
+                models: state.models,
+                total: state.models.length,
                 timestamp: "2026-06-12T12:00:00Z",
             });
+        }
+        if (url.pathname === "/v1/billing/plans" && method === "GET") {
+            return json(route, {
+                currency: "USD",
+                billing_period: "monthly",
+                billing_enabled: true,
+                plans: [],
+            });
+        }
+        if (url.pathname === "/v1/billing/subscription" && method === "GET") {
+            const paid = state.subscriptionPlan !== "free";
+            return json(route, {
+                plan_code: state.subscriptionPlan,
+                status: paid ? "active" : "free",
+                provider: paid ? "stripe" : null,
+                current_period_start: "2026-07-01T00:00:00Z",
+                current_period_end: "2026-08-01T00:00:00Z",
+                cancel_at_period_end: false,
+                can_manage: paid,
+            });
+        }
+        if (url.pathname === "/v1/entitlements" && method === "GET") {
+            return json(route, entitlements(state.subscriptionPlan, state.maxFilesPerRequest));
+        }
+        if (url.pathname === "/v1/credits/transactions" && method === "GET") {
+            return json(route, creditTransactions());
         }
         if (url.pathname === "/v1/usage/summary" && method === "GET") {
             return json(route, usageSummary());
@@ -132,7 +209,118 @@ async function installResponsiveRoutes(page, state) {
         }
         if (url.pathname === "/v1/history" && method === "DELETE") {
             state.history = [];
+            state.analysisRuns = [];
             return route.fulfill({ status: 204, body: "" });
+        }
+        if (url.pathname === "/v1/compare/analysis-runs" && method === "GET") {
+            const sessionId = url.searchParams.get("session_id");
+            const requestGroupId = url.searchParams.get("request_group_id");
+            return json(
+                route,
+                state.analysisRuns.filter(run =>
+                    (!sessionId || run.sessionId === sessionId) &&
+                    (!requestGroupId || run.requestGroupId === requestGroupId),
+                ),
+            );
+        }
+        const analysisMatch = url.pathname.match(/^\/v1\/compare\/([^/]+)\/analysis$/);
+        if (analysisMatch && method === "POST") {
+            const requestGroupId = decodeURIComponent(analysisMatch[1]);
+            const sourceRows = state.history.filter(
+                entry => entry.request_group_id === requestGroupId && !entry.error_message,
+            );
+            if (sourceRows.length < 2) {
+                return json(route, { detail: "Not enough successful responses" }, 409);
+            }
+            const run = makeResponsiveAnalysisRun({
+                analysisId: `analysis-${state.analysisRuns.length + 1}`,
+                requestGroupId,
+                sessionId: sourceRows[0].session_id,
+                createdAt: new Date().toISOString(),
+                sourceRows,
+            });
+            state.analysisRuns = [run, ...state.analysisRuns];
+            return json(route, run, 201);
+        }
+        if (url.pathname === "/v1/files/upload-batch" && method === "POST") {
+            const requestBody = request.postDataBuffer();
+            const multipartText = requestBody?.toString("latin1") ?? "";
+            const fileNames = [...multipartText.matchAll(/filename="([^"]+)"/g)].map(
+                match => match[1],
+            );
+            const uploadedFiles = fileNames.map((fileName, index) => {
+                const uploaded = {
+                    file_id: `file-${state.uploadedFiles.size + index + 1}`,
+                    original_filename: fileName,
+                    mime_type: "text/plain",
+                    size_bytes: requestBody?.byteLength ?? 0,
+                    status: "ready",
+                    ingestion_meta: {},
+                    created_at: "2026-06-12T12:00:00Z",
+                    deduplicated: false,
+                };
+                state.uploadedFiles.set(uploaded.file_id, uploaded);
+                return uploaded;
+            });
+            return json(route, { files: uploadedFiles });
+        }
+        if (url.pathname === "/v1/files/upload-intents" && method === "POST") {
+            const payload = request.postDataJSON();
+            state.directUploadIntentRequests.push(payload);
+            const files = (payload.files ?? []).map(metadata => {
+                state.directUploadSequence += 1;
+                const fileId = `direct-file-${state.directUploadSequence}`;
+                const uploaded = {
+                    file_id: fileId,
+                    original_filename: metadata.filename,
+                    mime_type: metadata.mime_type,
+                    size_bytes: metadata.size_bytes,
+                    status: "uploading",
+                    ingestion_meta: {},
+                    created_at: "2026-08-11T12:00:00Z",
+                    deduplicated: false,
+                    s3Uploaded: false,
+                };
+                state.uploadedFiles.set(fileId, uploaded);
+                return {
+                    ...uploaded,
+                    upload: {
+                        url: `https://cortex-e2e-bucket.s3.us-east-1.amazonaws.com/${fileId}`,
+                        fields: {
+                            key: `attachments/users/e2e/${fileId}`,
+                            "Content-Type": metadata.mime_type,
+                            "x-amz-meta-cortex-file-id": fileId,
+                            policy: `policy-${fileId}`,
+                            "x-amz-signature": `signature-${fileId}`,
+                        },
+                        expires_at: "2026-08-11T12:05:00Z",
+                    },
+                };
+            });
+            return json(route, { files });
+        }
+        const completeMatch = url.pathname.match(/^\/v1\/files\/([^/]+)\/complete$/);
+        if (completeMatch && method === "POST") {
+            const fileId = decodeURIComponent(completeMatch[1]);
+            const uploaded = state.uploadedFiles.get(fileId);
+            state.completeUploadRequests.push(fileId);
+            if (!uploaded?.s3Uploaded) {
+                return json(route, {
+                    detail: {
+                        code: "attachment_upload_not_complete",
+                        message: "The object has not reached storage.",
+                    },
+                }, 409);
+            }
+            uploaded.status = "ready";
+            return json(route, uploaded);
+        }
+        if (url.pathname.startsWith("/v1/files/") && method === "DELETE") {
+            const fileId = decodeURIComponent(url.pathname.split("/").at(-1));
+            const uploaded = state.uploadedFiles.get(fileId);
+            if (!uploaded) return json(route, { detail: "File not found" }, 404);
+            uploaded.status = "deleting";
+            return json(route, uploaded);
         }
         if (url.pathname === "/v1/files/upload" && method === "POST") {
             const fileName = request.headers()["x-file-name"] || "attachment.txt";
@@ -194,6 +382,71 @@ function responsiveHistoryEntries() {
         ...compareTableHistoryEntries(),
         ...threeModelCompareHistoryEntries(),
     ];
+}
+
+function responsiveAnalysisRuns() {
+    const history = responsiveHistoryEntries();
+    const sourceRows = history.filter(
+        entry => entry.request_group_id === "compare-group-1",
+    );
+    return [
+        makeResponsiveAnalysisRun({
+            analysisId: "analysis-saved-1",
+            requestGroupId: "compare-group-1",
+            sessionId: "compare-session",
+            createdAt: "2026-06-12T10:02:00Z",
+            sourceRows,
+        }),
+    ];
+}
+
+function makeResponsiveAnalysisRun({
+    analysisId,
+    requestGroupId,
+    sessionId,
+    createdAt,
+    sourceRows,
+}) {
+    return {
+        analysisId,
+        requestGroupId,
+        sessionId,
+        model: "gpt-5.4-mini",
+        recommendedAnswer:
+            "Use a phased gateway rollout with explicit provider fallbacks and observable recovery checks.",
+        agreements: [
+            "Both responses favor incremental rollout over a one-time cutover.",
+        ],
+        disagreements: [
+            {
+                who: "Claude (Sonnet 4.5)",
+                text: "Assigns a different priority to cost and operational control.",
+            },
+        ],
+        disagreementNote: "These are different implementation priorities, not conflicting facts.",
+        uniqueInsights: [
+            {
+                responseName: "ChatGPT",
+                text: "One response highlights request correlation as a rollout prerequisite.",
+            },
+        ],
+        confidence: {
+            level: "moderate",
+            reason: "The responses align on the main rollout shape but differ on priorities.",
+        },
+        verify: ["Confirm the recovery objectives for each rollout phase."],
+        highStakesDomain: null,
+        sourceFingerprint: `responsive-${analysisId}`,
+        sourceResponses: sourceRows.map(entry => ({
+            requestId: entry.request_id,
+            responseVersion: entry.response_version,
+            responseName: entry.provider === "openai" ? "ChatGPT" : "Claude",
+        })),
+        combinedResponseCount: sourceRows.length,
+        failedResponseCount: 0,
+        createdAt,
+        isStale: false,
+    };
 }
 
 function compareHistoryEntries() {
@@ -292,6 +545,8 @@ function historyEntry({
 }) {
     return {
         id,
+        request_id: String(id),
+        response_version: 1,
         session_id: sessionId,
         request_group_id: requestGroupId,
         timestamp,
@@ -307,11 +562,17 @@ function historyEntry({
     };
 }
 
-function model(provider, modelName, supportsImageInput) {
+function model(provider, modelName, supportsImageInput, billingClass) {
     return {
         provider,
         model: modelName,
         tier: "frontier",
+        billing_class: billingClass,
+        access_category: billingClass,
+        input_credit_multiplier: 1,
+        output_credit_multiplier: 4,
+        credit_usage_label: "Standard",
+        credit_pricing_version: "responsive-test",
         input_cost_per_1m: 0,
         output_cost_per_1m: 0,
         context_limit: 128000,
@@ -344,6 +605,170 @@ function whoAmI() {
             cooldown_seconds: 120,
             scope: "provider_model",
         },
+    };
+}
+
+function entitlements(planCode = "free", maxFilesPerRequest = 1) {
+    const plan = {
+        free: {
+            displayName: "Free",
+            allowedBillingClasses: ["economical", "standard"],
+            maxCompareModels: 2,
+            allowance: 100000,
+        },
+        plus: {
+            displayName: "Plus",
+            allowedBillingClasses: ["economical", "standard", "advanced"],
+            maxCompareModels: 2,
+            allowance: 1000000,
+        },
+        pro: {
+            displayName: "Pro",
+            allowedBillingClasses: ["economical", "standard", "advanced", "premium"],
+            maxCompareModels: 3,
+            allowance: 3000000,
+        },
+    }[planCode] ?? {
+        displayName: "Free",
+        allowedBillingClasses: ["economical", "standard"],
+        maxCompareModels: 2,
+        allowance: 100000,
+    };
+    return {
+        plan: {
+            code: planCode,
+            display_name: plan.displayName,
+            status: planCode === "free" ? "free" : "active",
+            source: planCode === "free" ? "default" : "stripe",
+            renews_at: "2026-08-01T00:00:00Z",
+            cancel_at_period_end: false,
+            grace_until: null,
+        },
+        features: {
+            compare_enabled: true,
+            max_compare_models: plan.maxCompareModels,
+            research_enabled: true,
+            prompt_improvement_enabled: true,
+            file_analysis_enabled: true,
+            usage_export_enabled: false,
+            saved_history_enabled: true,
+            models_catalog_enabled: true,
+        },
+        model_access: {
+            allowed_billing_classes: plan.allowedBillingClasses,
+        },
+        limits: {
+            max_files_per_request: maxFilesPerRequest,
+            max_file_bytes: 10000000,
+        },
+        allowances: {
+            ai_credits: {
+                used: 10000,
+                reserved: 0,
+                limit: plan.allowance,
+                remaining: plan.allowance - 10000,
+            },
+        },
+        period: {
+            starts_at: "2026-07-01T00:00:00Z",
+            ends_at: "2026-08-01T00:00:00Z",
+        },
+    };
+}
+
+function creditTransactions() {
+    return {
+        items: [
+            {
+                id: "credit-1",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "model",
+                provider: "openai",
+                model: "gpt-5.4-mini",
+                input_tokens: 600,
+                output_tokens: 200,
+                input_credits: 1200,
+                output_credits: 800,
+                fixed_credits: 0,
+                total_credits: 2000,
+                provider_cost_usd: 0.002,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {},
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-2",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "research",
+                provider: "tavily",
+                model: null,
+                input_tokens: 0,
+                output_tokens: 0,
+                input_credits: 0,
+                output_credits: 0,
+                fixed_credits: 10000,
+                total_credits: 10000,
+                provider_cost_usd: 0.002,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {
+                    provider_credits_used: 2,
+                    cortex_credits_per_provider_credit: 5000,
+                },
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-3",
+                request_id: "request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "chat",
+                item_type: "adjustment",
+                provider: null,
+                model: null,
+                input_tokens: 0,
+                output_tokens: 0,
+                input_credits: 0,
+                output_credits: 0,
+                fixed_credits: 0,
+                total_credits: 0,
+                provider_cost_usd: 0,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: { unbilled_credits: 200 },
+                created_at: "2026-07-31T14:30:00Z",
+            },
+            {
+                id: "credit-4",
+                request_id: "optimizer-request-1",
+                activity_id: "activity-1",
+                query: "How do atomic credit reservations work?",
+                operation_type: "optimize",
+                item_type: "model",
+                provider: "openai",
+                model: "gpt-5.4-mini",
+                input_tokens: 150,
+                output_tokens: 100,
+                input_credits: 300,
+                output_credits: 700,
+                fixed_credits: 0,
+                total_credits: 1000,
+                provider_cost_usd: 0.001,
+                usage_estimated: false,
+                pricing_version: "2026-07-29",
+                metadata: {},
+                created_at: "2026-07-31T14:29:58Z",
+            },
+        ],
+        limit: 20,
+        offset: 0,
     };
 }
 

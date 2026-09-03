@@ -48,6 +48,17 @@ TABLE_NAMES = [
     "uploaded_files",
     "request_attachments",
     "file_deletion_queue",
+    "billing_accounts",
+    "subscriptions",
+    "usage_periods",
+    "usage_counters",
+    "usage_reservations",
+    "credit_transactions",
+    "billing_webhook_events",
+    "cortex_analysis_runs",
+    "prompt_optimization_cache",
+    "research_reuse_cache",
+    "cache_reuse_events",
 ]
 
 

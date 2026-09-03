@@ -151,6 +151,7 @@ sequenceDiagram
     participant API as /v1/chat/stream
     participant MW as middleware+auth
     participant PF as persistence preflight
+    participant GB as generation budget resolver
     participant BYOK as runtime BYOK resolver
     participant ORCH as CortexOrchestrator.ask
     participant SR as Smart routing stack
@@ -160,10 +161,12 @@ sequenceDiagram
     participant PERSIST as persist_chat_interaction
 
     User->>FE: Submit prompt
-    FE->>API: POST /v1/chat/stream (prompt+routing+context)
+    FE->>API: POST /v1/chat/stream (prompt+routing+context+generation)
     API->>MW: request_id + X-API-Key validation
+    API->>GB: resolve profile, reasoning, and effective ceiling
+    GB-->>API: one provider+billing budget
     opt DB mode enabled
-        API->>PF: resolve owner + enforce caps + rate limit
+        API->>PF: resolve owner + authorize exact effective ceiling + rate limit
         API->>BYOK: resolve tenant provider keys
     end
     API->>ORCH: ask(...)
@@ -171,14 +174,14 @@ sequenceDiagram
     loop attempt until valid response or stop
         ORCH->>REG: create_client(provider, model)
         REG-->>ORCH: client
-        ORCH->>PC: get_completion(messages,...)
+        ORCH->>PC: get_completion(messages, resolved generation params)
         PC->>LLM: provider API request
         LLM-->>PC: raw completion
         PC-->>ORCH: UnifiedResponse
         ORCH->>ORCH: validate + circuit breaker + fallback
     end
     ORCH-->>API: final UnifiedResponse
-    API-->>FE: NDJSON start/line/response_done/done
+    API-->>FE: NDJSON start/line/response_done(status+budget+retry)/done
     opt DB mode enabled
         API->>PERSIST: save session+messages+request+response+routing+usage+savings
     end
@@ -195,6 +198,7 @@ sequenceDiagram
     participant API as /v1/compare/stream
     participant MW as middleware+auth
     participant PF as persistence preflight
+    participant GB as generation budget resolver
     participant BYOK as runtime BYOK resolver
     participant ORCH as CortexOrchestrator.compare
     participant MMO as MultiModelOrchestrator
@@ -203,16 +207,18 @@ sequenceDiagram
     participant PERSIST as persist_compare_interaction
 
     User->>FE: Submit compare prompt with targets
-    FE->>API: POST /v1/compare/stream
+    FE->>API: POST /v1/compare/stream (shared/target generation)
     API->>MW: request_id + X-API-Key validation
+    API->>GB: resolve each target's effective ceiling/reasoning
+    GB-->>API: per-target provider+billing budgets
     opt DB mode enabled
-        API->>PF: resolve owner + enforce caps + rate limit
+        API->>PF: authorize exact per-target ceilings + rate limit
         API->>BYOK: resolve tenant provider keys
     end
     API->>ORCH: compare(...)
     ORCH->>MMO: get_comparisons_sync(...)
     par each target
-        MMO->>PC: get_completion(...)
+        MMO->>PC: get_completion(..., target generation params)
         PC->>LLM: provider API request
         LLM-->>PC: provider response
         PC-->>MMO: UnifiedResponse

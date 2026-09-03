@@ -26,8 +26,18 @@ function casePattern(caseId) {
     return normalized ? `%case:${normalized}]%` : null;
 }
 
+function caseRequestIdPattern(caseId) {
+    const normalized = String(caseId || "").trim();
+    return normalized ? `%${normalized}%` : null;
+}
+
 function runPattern(runId) {
     return `%[e2e-run:${runId};%`;
+}
+
+function runRequestIdPattern(runId) {
+    const normalized = String(runId || "").trim();
+    return normalized ? `%e2e-${normalized}-%` : null;
 }
 
 /** Allow SQLAlchemy-style PostgreSQL URLs in `E2E_DATABASE_URL`. */
@@ -52,9 +62,11 @@ export async function verifyDbConnection(pool) {
 /**
  * Resolve request ids for one case.
  *
- * Case markers are the primary selector. Session id is only used as a fallback when
- * no case marker is available, which prevents history restoration from polluting
- * case-scoped snapshots with older rows from the same backend session.
+ * Case markers and E2E request ids are the primary selectors. Session id is only
+ * used as a fallback when no case marker is available, which prevents history
+ * restoration from polluting case-scoped snapshots with older rows from the same
+ * backend session. Request-id matching keeps optimized prompts discoverable when
+ * the optimizer intentionally rewrites away the embedded prompt marker.
  */
 async function getCaseRequestIds(client, config, ownerId, caseId, sessionId = null) {
     const query = `
@@ -62,12 +74,20 @@ async function getCaseRequestIds(client, config, ownerId, caseId, sessionId = nu
         FROM ${tableRef(config, "llm_requests")} AS requests
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC
     `;
-    const result = await client.query(query, [ownerId, casePattern(caseId), sessionId]);
+    const result = await client.query(query, [
+        ownerId,
+        casePattern(caseId),
+        sessionId,
+        caseRequestIdPattern(caseId),
+    ]);
     return result.rows.map(row => row.id);
 }
 
@@ -79,7 +99,10 @@ async function getCaseSessionIds(client, config, ownerId, caseId, sessionId = nu
         WHERE requests.user_id = $1::uuid
           AND requests.session_id IS NOT NULL
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         UNION
@@ -93,7 +116,12 @@ async function getCaseSessionIds(client, config, ownerId, caseId, sessionId = nu
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND messages.session_id = $3::uuid)
           )
     `;
-    const result = await client.query(query, [ownerId, casePattern(caseId), sessionId]);
+    const result = await client.query(query, [
+        ownerId,
+        casePattern(caseId),
+        sessionId,
+        caseRequestIdPattern(caseId),
+    ]);
     return result.rows.map(row => row.session_id).filter(Boolean);
 }
 
@@ -176,14 +204,20 @@ export async function cleanupRunViaDb(pool, config, ownerId, runId) {
             SELECT id::text AS id
             FROM ${tableRef(config, "llm_requests")}
             WHERE user_id = $1::uuid
-              AND COALESCE(prompt_text, '') ILIKE $2
+              AND (
+                  COALESCE(prompt_text, '') ILIKE $2
+                  OR COALESCE(request_id, '') ILIKE $3
+              )
         `;
         const sessionQuery = `
             SELECT DISTINCT session_id::text AS session_id
             FROM ${tableRef(config, "llm_requests")}
             WHERE user_id = $1::uuid
               AND session_id IS NOT NULL
-              AND COALESCE(prompt_text, '') ILIKE $2
+              AND (
+                  COALESCE(prompt_text, '') ILIKE $2
+                  OR COALESCE(request_id, '') ILIKE $3
+              )
             UNION
             SELECT DISTINCT messages.session_id::text AS session_id
             FROM ${tableRef(config, "messages")} AS messages
@@ -193,8 +227,9 @@ export async function cleanupRunViaDb(pool, config, ownerId, runId) {
               AND COALESCE(messages.content, '') ILIKE $2
         `;
 
-        const requestIds = (await client.query(requestQuery, [ownerId, runPattern(runId)])).rows.map(row => row.id);
-        const sessionIds = (await client.query(sessionQuery, [ownerId, runPattern(runId)])).rows.map(row => row.session_id);
+        const queryParams = [ownerId, runPattern(runId), runRequestIdPattern(runId)];
+        const requestIds = (await client.query(requestQuery, queryParams)).rows.map(row => row.id);
+        const sessionIds = (await client.query(sessionQuery, queryParams)).rows.map(row => row.session_id);
 
         if (requestIds.length > 0) {
             await client.query(`
@@ -257,6 +292,7 @@ export async function cleanupRunViaDb(pool, config, ownerId, runId) {
  */
 export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId = null) {
     const pattern = casePattern(caseId);
+    const requestIdPattern = caseRequestIdPattern(caseId);
 
     const requestsQuery = `
         SELECT
@@ -272,7 +308,10 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
         FROM ${tableRef(config, "llm_requests")} AS requests
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC, requests.id ASC
@@ -291,7 +330,10 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
           ON requests.id = responses.llm_request_id
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC, responses.llm_request_id ASC
@@ -311,7 +353,10 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
           ON requests.id = decisions.llm_request_id
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC, decisions.id ASC
@@ -333,7 +378,10 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
           ON requests.id = decisions.llm_request_id
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC, attempts.attempt_number ASC
@@ -354,13 +402,17 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
           ON requests.id = attachments.llm_request_id
         WHERE requests.user_id = $1::uuid
           AND (
-              ($2::text IS NOT NULL AND COALESCE(requests.prompt_text, '') ILIKE $2)
+              ($2::text IS NOT NULL AND (
+                  COALESCE(requests.prompt_text, '') ILIKE $2
+                  OR COALESCE(requests.request_id, '') ILIKE $4
+              ))
               OR ($2::text IS NULL AND $3::uuid IS NOT NULL AND requests.session_id = $3::uuid)
           )
         ORDER BY requests.created_at ASC, attachments.order_index ASC, attachments.id ASC
     `;
 
-    const requests = (await pool.query(requestsQuery, [ownerId, pattern, sessionId])).rows;
+    const queryParams = [ownerId, pattern, sessionId, requestIdPattern];
+    const requests = (await pool.query(requestsQuery, queryParams)).rows;
     const sessionIds = [...new Set(requests.map(row => row.session_id).filter(Boolean))];
 
     let messages = [];
@@ -393,10 +445,10 @@ export async function getCaseSnapshot(pool, config, ownerId, caseId, sessionId =
         sessions = (await pool.query(sessionsQuery, [sessionIds])).rows;
     }
 
-    const responses = (await pool.query(responsesQuery, [ownerId, pattern, sessionId])).rows;
-    const routingDecisions = (await pool.query(decisionsQuery, [ownerId, pattern, sessionId])).rows;
-    const routingAttempts = (await pool.query(attemptsQuery, [ownerId, pattern, sessionId])).rows;
-    const requestAttachments = (await pool.query(requestAttachmentsQuery, [ownerId, pattern, sessionId])).rows;
+    const responses = (await pool.query(responsesQuery, queryParams)).rows;
+    const routingDecisions = (await pool.query(decisionsQuery, queryParams)).rows;
+    const routingAttempts = (await pool.query(attemptsQuery, queryParams)).rows;
+    const requestAttachments = (await pool.query(requestAttachmentsQuery, queryParams)).rows;
 
     return { requests, responses, routingDecisions, routingAttempts, requestAttachments, messages, sessions };
 }

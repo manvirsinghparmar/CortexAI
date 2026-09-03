@@ -7,6 +7,7 @@ import {
 import { getModelPresentation } from "../../config/modelPresentation";
 import { CortexIcon } from "../shared/CortexIcon";
 import { ModelPicker } from "./ModelPicker";
+import { PlanBadge } from "../subscription/PlanBadge";
 import styles from "./CompareSelector.module.css";
 
 interface CompareSelectorProps {
@@ -14,6 +15,12 @@ interface CompareSelectorProps {
   keys: [string, string, string];
   onChange: (index: 0 | 1 | 2, key: string) => void;
   trailingControls?: ReactNode;
+  lockedKeys?: string[];
+  lockedLabels?: Record<string, string>;
+  onLockedModel?: (key: string) => void;
+  maxTargets?: number;
+  thirdTargetPlanLabel?: string;
+  onTargetLimit?: () => void;
 }
 
 export function CompareSelector({
@@ -21,13 +28,20 @@ export function CompareSelector({
   keys,
   onChange,
   trailingControls,
+  lockedKeys = [],
+  lockedLabels = {},
+  onLockedModel,
+  maxTargets = 3,
+  thirdTargetPlanLabel = "Upgrade",
+  onTargetLimit,
 }: CompareSelectorProps) {
   const filledCount = keys.filter(Boolean).length;
   const visibleIndexes = ([0, 1, 2] as const).filter(
     (index) => keys[index] !== "" || index < 2,
   );
   const canRemove = filledCount > 2;
-  const canAdd = filledCount < 3;
+  const canAdd = filledCount < 3 && filledCount < maxTargets;
+  const showTargetLimit = filledCount < 3 && filledCount >= maxTargets;
 
   const handleAddModel = () => {
     const emptyIndex = keys.findIndex((key) => !key) as 0 | 1 | 2;
@@ -60,6 +74,9 @@ export function CompareSelector({
                 onChange(index, key);
               }}
               onRemove={() => handleRemoveModel(index)}
+              lockedKeys={lockedKeys}
+              lockedLabels={lockedLabels}
+              onLockedModel={onLockedModel}
             />
           </span>
         ))}
@@ -75,6 +92,20 @@ export function CompareSelector({
         >
           <CortexIcon name="plus" />
           <span>Add model</span>
+        </button>
+      )}
+
+      {showTargetLimit && (
+        <button
+          id="compareTargetLimitBtn"
+          className={`${styles.addButton} ${styles.limitButton}`}
+          type="button"
+          onClick={onTargetLimit}
+          aria-label="Unlock third comparison model"
+        >
+          <CortexIcon name="plus" />
+          <span>Add third model</span>
+          <PlanBadge label={thirdTargetPlanLabel} tone="required" />
         </button>
       )}
 
@@ -102,6 +133,9 @@ function CompareModelSlot({
   canRemove,
   onSelect,
   onRemove,
+  lockedKeys,
+  lockedLabels,
+  onLockedModel,
 }: {
   index: 0 | 1 | 2;
   models: ModelCatalogItem[];
@@ -109,6 +143,9 @@ function CompareModelSlot({
   canRemove: boolean;
   onSelect: (key: string) => void;
   onRemove: () => void;
+  lockedKeys: string[];
+  lockedLabels: Record<string, string>;
+  onLockedModel?: (key: string) => void;
 }) {
   const selectedKey = keys[index];
   const selectedModel = modelFromKey(selectedKey);
@@ -134,6 +171,9 @@ function CompareModelSlot({
         ariaLabel={`Compare model ${index + 1}`}
         listboxLabel={`Compare model ${index + 1} options`}
         selectedKeys={keys}
+        lockedKeys={lockedKeys}
+        lockedLabels={lockedLabels}
+        onLockedSelect={onLockedModel}
         align={menuAlignment}
         placement="up"
         className={styles.picker}

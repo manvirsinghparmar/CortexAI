@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -20,11 +19,17 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+create_engine: Any
+text: Any
 try:
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine as _create_engine
+    from sqlalchemy import text as _text
+
+    create_engine = _create_engine
+    text = _text
 except Exception:  # pragma: no cover - optional runtime dependency
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
+    create_engine = None
+    text = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -85,17 +90,23 @@ class E2EB2BChecklist:
 
     def _pass(self, name: str, detail: str, start: float) -> None:
         elapsed = time.time() - start
-        self.results.append(CheckOutcome(name=name, status="PASS", detail=detail, duration_s=elapsed))
+        self.results.append(
+            CheckOutcome(name=name, status="PASS", detail=detail, duration_s=elapsed)
+        )
         self._log(f"PASS {name} ({elapsed:.2f}s) - {detail}")
 
     def _fail(self, name: str, detail: str, start: float) -> None:
         elapsed = time.time() - start
-        self.results.append(CheckOutcome(name=name, status="FAIL", detail=detail, duration_s=elapsed))
+        self.results.append(
+            CheckOutcome(name=name, status="FAIL", detail=detail, duration_s=elapsed)
+        )
         self._log(f"FAIL {name} ({elapsed:.2f}s) - {detail}")
 
     def _skip(self, name: str, detail: str, start: float) -> None:
         elapsed = time.time() - start
-        self.results.append(CheckOutcome(name=name, status="SKIP", detail=detail, duration_s=elapsed))
+        self.results.append(
+            CheckOutcome(name=name, status="SKIP", detail=detail, duration_s=elapsed)
+        )
         self._log(f"SKIP {name} ({elapsed:.2f}s) - {detail}")
 
     def _run_check(self, name: str, fn) -> None:
@@ -136,7 +147,9 @@ class E2EB2BChecklist:
         if json_body is not None:
             payload = json.dumps(json_body).encode("utf-8")
 
-        req = urllib.request.Request(url=url, method=method.upper(), data=payload, headers=req_headers)
+        req = urllib.request.Request(
+            url=url, method=method.upper(), data=payload, headers=req_headers
+        )
 
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -144,7 +157,11 @@ class E2EB2BChecklist:
                 text_body = body_bytes.decode("utf-8", errors="replace")
                 parsed_json = None
                 content_type = str(resp.headers.get("Content-Type") or "")
-                if "application/json" in content_type or text_body.strip().startswith("{") or text_body.strip().startswith("["):
+                if (
+                    "application/json" in content_type
+                    or text_body.strip().startswith("{")
+                    or text_body.strip().startswith("[")
+                ):
                     try:
                         parsed_json = json.loads(text_body)
                     except Exception:
@@ -230,7 +247,9 @@ class E2EB2BChecklist:
     def check_openapi_surface(self) -> None:
         res = self._request("GET", "/openapi.json")
         if res.status != 200:
-            raise CheckSkipped(f"/openapi.json unavailable (status={res.status}); skipping surface validation")
+            raise CheckSkipped(
+                f"/openapi.json unavailable (status={res.status}); skipping surface validation"
+            )
 
         body = res.json_body if isinstance(res.json_body, dict) else {}
         paths_obj = body.get("paths")
@@ -264,7 +283,9 @@ class E2EB2BChecklist:
 
     def check_whoami(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         res = self._request("GET", "/v1/whoami")
         self._ensure(
             res.status == 200,
@@ -292,11 +313,13 @@ class E2EB2BChecklist:
             "routing": {"smart_mode": False, "research_mode": False},
         }
         res = self._request("POST", "/v1/chat", json_body=payload)
-        self._ensure(res.status == 200, f"/v1/chat expected 200, got {res.status}: {res.text[:240]}")
+        self._ensure(
+            res.status == 200, f"/v1/chat expected 200, got {res.status}: {res.text[:240]}"
+        )
         body = res.json_body or {}
-        self._ensure(body.get("request_id"), "chat response missing request_id")
-        self._ensure(body.get("provider"), "chat response missing provider")
-        self._ensure(body.get("model"), "chat response missing model")
+        self._ensure(bool(body.get("request_id")), "chat response missing request_id")
+        self._ensure(bool(body.get("provider")), "chat response missing provider")
+        self._ensure(bool(body.get("model")), "chat response missing model")
         self.chat_resp = body
 
     def check_chat_stream(self) -> None:
@@ -320,12 +343,21 @@ class E2EB2BChecklist:
                 {"provider": self.args.compare_provider, "model": self.args.compare_model},
             ],
         }
-        res = self._request("POST", "/v1/compare", json_body=payload, timeout_s=max(self.args.timeout_s, 90.0))
-        self._ensure(res.status == 200, f"/v1/compare expected 200, got {res.status}: {res.text[:240]}")
+        res = self._request(
+            "POST", "/v1/compare", json_body=payload, timeout_s=max(self.args.timeout_s, 90.0)
+        )
+        self._ensure(
+            res.status == 200, f"/v1/compare expected 200, got {res.status}: {res.text[:240]}"
+        )
         body = res.json_body or {}
-        self._ensure(body.get("request_group_id"), "compare response missing request_group_id")
+        self._ensure(
+            bool(body.get("request_group_id")),
+            "compare response missing request_group_id",
+        )
         responses = body.get("responses") or []
-        self._ensure(isinstance(responses, list) and len(responses) >= 2, "compare expected >=2 responses")
+        self._ensure(
+            isinstance(responses, list) and len(responses) >= 2, "compare expected >=2 responses"
+        )
         self.compare_resp = body
 
     def check_compare_stream(self) -> None:
@@ -350,7 +382,9 @@ class E2EB2BChecklist:
 
     def check_admin_failed_attempts(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         request_group_id = self.compare_resp.get("request_group_id")
         if not request_group_id:
             raise CheckFailed("missing compare request_group_id from prior step")
@@ -364,17 +398,24 @@ class E2EB2BChecklist:
             f"/v1/admin/request-groups/{{id}}/failed-attempts expected 200, got {res.status}: {res.text[:240]}",
         )
         body = res.json_body or {}
-        self._ensure(body.get("request_group_id") == request_group_id, "admin response request_group_id mismatch")
+        self._ensure(
+            body.get("request_group_id") == request_group_id,
+            "admin response request_group_id mismatch",
+        )
 
     def check_history(self) -> None:
         res = self._request("GET", "/v1/history", params={"limit": 10})
-        self._ensure(res.status == 200, f"/v1/history expected 200, got {res.status}: {res.text[:200]}")
+        self._ensure(
+            res.status == 200, f"/v1/history expected 200, got {res.status}: {res.text[:200]}"
+        )
         body = res.json_body
         self._ensure(isinstance(body, list), "/v1/history expected list payload")
 
     def check_reporting(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         start_date, end_date = self._today_window()
         usage = self._request(
             "GET",
@@ -388,21 +429,40 @@ class E2EB2BChecklist:
         )
 
         if not self.db_mode:
-            self._ensure(usage.status == 501, f"/v1/usage expected 501 when DB mode is off, got {usage.status}")
-            self._ensure(savings.status == 501, f"/v1/savings expected 501 when DB mode is off, got {savings.status}")
+            self._ensure(
+                usage.status == 501,
+                f"/v1/usage expected 501 when DB mode is off, got {usage.status}",
+            )
+            self._ensure(
+                savings.status == 501,
+                f"/v1/savings expected 501 when DB mode is off, got {savings.status}",
+            )
             raise CheckSkipped("DB mode off; reporting endpoints correctly returned 501")
 
-        self._ensure(usage.status == 200, f"/v1/usage expected 200, got {usage.status}: {usage.text[:200]}")
-        self._ensure(savings.status == 200, f"/v1/savings expected 200, got {savings.status}: {savings.text[:200]}")
+        self._ensure(
+            usage.status == 200, f"/v1/usage expected 200, got {usage.status}: {usage.text[:200]}"
+        )
+        self._ensure(
+            savings.status == 200,
+            f"/v1/savings expected 200, got {savings.status}: {savings.text[:200]}",
+        )
 
         usage_body = usage.json_body or {}
         savings_body = savings.json_body or {}
-        self._ensure("totals" in usage_body and "breakdown" in usage_body, "usage payload missing totals/breakdown")
-        self._ensure("totals" in savings_body and "breakdown" in savings_body, "savings payload missing totals/breakdown")
+        self._ensure(
+            "totals" in usage_body and "breakdown" in usage_body,
+            "usage payload missing totals/breakdown",
+        )
+        self._ensure(
+            "totals" in savings_body and "breakdown" in savings_body,
+            "savings payload missing totals/breakdown",
+        )
 
     def check_exports(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         start_date, end_date = self._today_window()
         usage = self._request(
             "GET",
@@ -418,7 +478,10 @@ class E2EB2BChecklist:
         )
 
         if not self.db_mode:
-            self._ensure(usage.status == 501, f"/v1/usage/export expected 501 when DB mode is off, got {usage.status}")
+            self._ensure(
+                usage.status == 501,
+                f"/v1/usage/export expected 501 when DB mode is off, got {usage.status}",
+            )
             self._ensure(
                 savings.status == 501,
                 f"/v1/savings/export expected 501 when DB mode is off, got {savings.status}",
@@ -426,11 +489,16 @@ class E2EB2BChecklist:
             raise CheckSkipped("DB mode off; export endpoints correctly returned 501")
 
         self._ensure(usage.status == 200, f"/v1/usage/export expected 200, got {usage.status}")
-        self._ensure(savings.status == 200, f"/v1/savings/export expected 200, got {savings.status}")
+        self._ensure(
+            savings.status == 200, f"/v1/savings/export expected 200, got {savings.status}"
+        )
 
         usage_cols = usage.headers.get("x-export-columns")
         savings_cols = savings.headers.get("x-export-columns")
-        self._ensure(usage_cols == "bucket,requests,tokens,cost", f"unexpected usage export columns: {usage_cols}")
+        self._ensure(
+            usage_cols == "bucket,requests,tokens,cost",
+            f"unexpected usage export columns: {usage_cols}",
+        )
         self._ensure(
             savings_cols == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct",
             f"unexpected savings export columns: {savings_cols}",
@@ -440,13 +508,16 @@ class E2EB2BChecklist:
         savings_first_line = (savings.text.splitlines() or [""])[0]
         self._ensure(usage_first_line == "bucket,requests,tokens,cost", "usage CSV header mismatch")
         self._ensure(
-            savings_first_line == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct",
+            savings_first_line
+            == "bucket,requests,actual_cost,baseline_cost,savings_amount,savings_pct",
             "savings CSV header mismatch",
         )
 
     def check_byok_lifecycle(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         if self.args.skip_byok:
             raise CheckSkipped("--skip-byok enabled")
         if not self.db_mode:
@@ -459,7 +530,10 @@ class E2EB2BChecklist:
             "requests_per_minute": max(self.args.expected_min_rpm, 5),
         }
         set_res = self._request("POST", "/v1/byok", json_body=set_payload)
-        self._ensure(set_res.status == 200, f"/v1/byok set expected 200, got {set_res.status}: {set_res.text[:240]}")
+        self._ensure(
+            set_res.status == 200,
+            f"/v1/byok set expected 200, got {set_res.status}: {set_res.text[:240]}",
+        )
 
         status_res = self._request("GET", "/v1/byok/status")
         self._ensure(
@@ -469,7 +543,9 @@ class E2EB2BChecklist:
         status_body = status_res.json_body or {}
         providers = {item.get("provider"): item for item in status_body.get("providers") or []}
         self._ensure("openai" in providers, "BYOK status missing openai provider")
-        self._ensure(self.byok_plain_openai not in status_res.text, "BYOK status leaked plaintext key")
+        self._ensure(
+            self.byok_plain_openai not in status_res.text, "BYOK status leaked plaintext key"
+        )
 
         del_res = self._request("DELETE", "/v1/byok", params={"provider": "openai"})
         self._ensure(
@@ -479,7 +555,9 @@ class E2EB2BChecklist:
 
     def check_rate_limit_behavior(self) -> None:
         if self.missing_b2b_surface:
-            raise CheckSkipped("skipped because B2B route surface is missing on this running server")
+            raise CheckSkipped(
+                "skipped because B2B route surface is missing on this running server"
+            )
         if self.args.skip_rate_limit:
             raise CheckSkipped("--skip-rate-limit enabled")
         if not self.db_mode:
@@ -494,17 +572,32 @@ class E2EB2BChecklist:
         )
 
         try:
-            p = {"prompt": "rate-limit-check", "provider": self.args.chat_provider, "model": self.args.chat_model}
+            p = {
+                "prompt": "rate-limit-check",
+                "provider": self.args.chat_provider,
+                "model": self.args.chat_model,
+            }
             first = self._request("POST", "/v1/chat", json_body=p)
             second = self._request("POST", "/v1/chat", json_body=p)
-            self._ensure(first.status == 200, f"first chat for rate-limit check expected 200, got {first.status}")
-            self._ensure(second.status == 429, f"second chat expected 429, got {second.status}: {second.text[:220]}")
+            self._ensure(
+                first.status == 200,
+                f"first chat for rate-limit check expected 200, got {first.status}",
+            )
+            self._ensure(
+                second.status == 429,
+                f"second chat expected 429, got {second.status}: {second.text[:220]}",
+            )
 
             detail = second.json_body.get("detail") if isinstance(second.json_body, dict) else None
             if isinstance(detail, dict):
-                self._ensure(detail.get("code") == "rate_limited", f"unexpected 429 code payload: {detail}")
+                self._ensure(
+                    detail.get("code") == "rate_limited", f"unexpected 429 code payload: {detail}"
+                )
         finally:
-            restore_payload = {"provider_keys": {}, "requests_per_minute": max(current_rpm, self.args.expected_min_rpm)}
+            restore_payload = {
+                "provider_keys": {},
+                "requests_per_minute": max(current_rpm, self.args.expected_min_rpm),
+            }
             _ = self._request("POST", "/v1/byok", json_body=restore_payload)
 
     def check_db_assertions(self) -> None:
@@ -521,7 +614,11 @@ class E2EB2BChecklist:
 
         chat_request_id = str(self.chat_resp.get("request_id") or "")
         compare_group_id = str(self.compare_resp.get("request_group_id") or "")
-        compare_request_ids = [str(item.get("request_id")) for item in (self.compare_resp.get("responses") or []) if item.get("request_id")]
+        compare_request_ids = [
+            str(item.get("request_id"))
+            for item in (self.compare_resp.get("responses") or [])
+            if item.get("request_id")
+        ]
         user_id = str(self.whoami.get("user_id") or "")
         api_key_id = str(self.whoami.get("api_key_id") or "")
 
@@ -538,25 +635,27 @@ class E2EB2BChecklist:
             self._ensure(int(req_count or 0) >= 1, "llm_requests row missing for chat request_id")
 
             resp_count = conn.execute(
-                text(
-                    f"""
+                text(f"""
                     SELECT COUNT(*)
                     FROM {llm_responses} r
                     JOIN {llm_requests} q ON q.id = r.llm_request_id
                     WHERE q.request_id = :rid
-                    """
-                ),
+                    """),
                 {"rid": chat_request_id},
             ).scalar_one()
             self._ensure(int(resp_count or 0) >= 1, "llm_responses row missing for chat request_id")
 
             for rid in compare_request_ids:
                 group = conn.execute(
-                    text(f"SELECT request_group_id FROM {llm_requests} WHERE request_id = :rid LIMIT 1"),
+                    text(
+                        f"SELECT request_group_id FROM {llm_requests} WHERE request_id = :rid LIMIT 1"
+                    ),
                     {"rid": rid},
                 ).scalar_one_or_none()
                 self._ensure(group is not None, f"compare llm_request missing for request_id={rid}")
-                self._ensure(str(group) == compare_group_id, "compare request_group_id mismatch in DB")
+                self._ensure(
+                    str(group) == compare_group_id, "compare request_group_id mismatch in DB"
+                )
 
             usage_count = conn.execute(
                 text(f"SELECT COUNT(*) FROM {usage_daily} WHERE user_id = :uid"),
@@ -566,13 +665,19 @@ class E2EB2BChecklist:
 
             if not self.args.skip_byok and api_key_id:
                 byok_row = conn.execute(
-                    text(f"SELECT encrypted_key, key_last4 FROM {byok_table} WHERE api_key_id = :kid AND provider = 'openai'"),
+                    text(
+                        f"SELECT encrypted_key, key_last4 FROM {byok_table} WHERE api_key_id = :kid AND provider = 'openai'"
+                    ),
                     {"kid": api_key_id},
                 ).first()
                 if byok_row is not None:
                     enc, last4 = byok_row
-                    self._ensure(str(enc) != self.byok_plain_openai, "BYOK encrypted_key matches plaintext")
-                    self._ensure(str(last4 or "") == self.byok_plain_openai[-4:], "BYOK key_last4 mismatch")
+                    self._ensure(
+                        str(enc) != self.byok_plain_openai, "BYOK encrypted_key matches plaintext"
+                    )
+                    self._ensure(
+                        str(last4 or "") == self.byok_plain_openai[-4:], "BYOK key_last4 mismatch"
+                    )
 
     # ---------- orchestration ----------
     def run(self) -> int:
@@ -617,7 +722,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default=os.getenv("E2E_BASE_URL", "http://127.0.0.1:8000"))
     parser.add_argument(
         "--api-key",
-        default=(os.getenv("E2E_API_KEY") or (os.getenv("API_KEYS", "dev-key-1").split(",")[0].strip())),
+        default=(
+            os.getenv("E2E_API_KEY") or (os.getenv("API_KEYS", "dev-key-1").split(",")[0].strip())
+        ),
     )
     parser.add_argument("--database-url", default=os.getenv("E2E_DATABASE_URL"))
     parser.add_argument("--db-schema", default=os.getenv("E2E_DB_SCHEMA"))
@@ -625,7 +732,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--chat-provider", default=os.getenv("E2E_CHAT_PROVIDER", "openai"))
     parser.add_argument("--chat-model", default=os.getenv("E2E_CHAT_MODEL", "gpt-4o-mini"))
     parser.add_argument("--compare-provider", default=os.getenv("E2E_COMPARE_PROVIDER", "gemini"))
-    parser.add_argument("--compare-model", default=os.getenv("E2E_COMPARE_MODEL", "gemini-2.5-flash-lite"))
+    parser.add_argument(
+        "--compare-model", default=os.getenv("E2E_COMPARE_MODEL", "gemini-2.5-flash-lite")
+    )
     parser.add_argument("--max-stream-events", type=int, default=300)
     parser.add_argument("--expected-min-rpm", type=int, default=10)
     parser.add_argument("--allow-no-db-mode", action="store_true")

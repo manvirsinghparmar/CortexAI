@@ -12,8 +12,8 @@ import hashlib
 import json
 import zlib
 from datetime import date, datetime, timedelta
-from typing import Any
-from uuid import UUID
+from typing import Any, Mapping
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     String,
@@ -61,13 +61,31 @@ ALLOWED_PROMPT_CATEGORIES = {
 
 ALLOWED_RESEARCH_MODES = {"off", "auto", "on"}
 ALLOWED_ROUTING_MODES = {"smart", "cheap", "strong", "explicit", "legacy"}
-ALLOWED_FILE_STATUSES = {"uploaded", "processing", "ready", "failed", "expired", "deleted"}
+ALLOWED_CACHE_REUSE_OPERATIONS = {
+    "research",
+    "prompt_optimization",
+    "cortex_analysis",
+}
+ALLOWED_FILE_STATUSES = {
+    "uploading",
+    "uploaded",
+    "processing",
+    "ready",
+    "failed",
+    "expired",
+    "deleting",
+    "deleted",
+}
 ALLOWED_ATTACHMENT_USAGE_ROLES = {"primary", "reference"}
 ALLOWED_ATTACHMENT_TRANSFORM_MODES = {"auto", "text_only", "vision_pages", "table_summary"}
 ALLOWED_FILE_DELETION_JOB_STATUSES = {"pending", "in_progress", "retry", "succeeded", "failed"}
 SERVICE_AUTH_PROVIDER = "service"
 SERVICE_AUTH_SUBJECT = "api-service"
 SERVICE_AUTH_ISSUER = "cortexai"
+
+
+class CortexAnalysisSchemaUnavailable(RuntimeError):
+    """Raised when the Cortex Analysis persistence migration is not available."""
 
 
 # ============================================================================
@@ -436,7 +454,7 @@ def create_session(
         "mode": mode,
     }
     if session_id is not None and "id" in {col.name for col in sessions.columns}:
-        values["id"] = str(session_id)
+        values["id"] = session_id
 
     stmt = insert(sessions).values(**values).returning(sessions.c.id)
 
@@ -524,7 +542,7 @@ def verify_session_belongs_to_user(db: Session, session_id: UUID, user_id: UUID)
     return result is not None
 
 
-def update_session_timestamp(db: Session, session_id: UUID) -> None:
+def update_session_timestamp(db: Session, session_id: UUID | str) -> None:
     """
     Update sessions.updated_at to current timestamp.
 
@@ -660,6 +678,10 @@ def create_context_snapshot(
     session_id: UUID,
     context_text: str,
     base_message_id: UUID | None = None,
+    *,
+    source_message_range: str | None = None,
+    source_hash: str | None = None,
+    summary_policy_version: str | None = None,
 ) -> UUID:
     """
     Create a new context snapshot (with hash-based deduplication).
@@ -682,18 +704,37 @@ def create_context_snapshot(
 
     context_snapshots = get_table("context_snapshots")
 
-    context_hash = compute_context_hash(context_text)
+    context_hash = compute_context_hash(
+        ":".join(
+            part
+            for part in (
+                source_hash,
+                source_message_range,
+                summary_policy_version,
+            )
+            if part
+        )
+        or context_text
+    )
+    columns = set(context_snapshots.c.keys())
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "base_message_id": base_message_id,
+        "context_hash": context_hash,
+        "context_text": context_text,
+    }
+    if "source_message_range" in columns:
+        values["source_message_range"] = source_message_range
+    if "source_hash" in columns:
+        values["source_hash"] = source_hash
+    if "summary_policy_version" in columns:
+        values["summary_policy_version"] = summary_policy_version
 
     # Use PostgreSQL UPSERT to handle duplicate hash
     stmt = (
         pg_insert(context_snapshots)
-        .values(
-            user_id=user_id,
-            session_id=session_id,
-            base_message_id=base_message_id,
-            context_hash=context_hash,
-            context_text=context_text,
-        )
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["session_id", "context_hash"])
         .returning(context_snapshots.c.id)
     )
@@ -733,11 +774,12 @@ def _normalize_jsonb_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 def create_uploaded_file(
     db: Session,
     *,
+    file_id: UUID | None = None,
     user_id: UUID,
     original_filename: str,
     mime_type: str,
     size_bytes: int,
-    sha256: str,
+    sha256: str | None,
     storage_bucket: str,
     storage_key: str,
     api_key_id: UUID | None = None,
@@ -758,9 +800,7 @@ def create_uploaded_file(
     if int(size_bytes) <= 0:
         raise ValueError("size_bytes must be > 0")
 
-    normalized_sha = str(sha256 or "").strip().lower()
-    if not normalized_sha:
-        raise ValueError("sha256 is required")
+    normalized_sha = str(sha256 or "").strip().lower() or None
 
     uploaded_files = get_table("uploaded_files")
     values: dict[str, Any] = {
@@ -776,6 +816,8 @@ def create_uploaded_file(
         "ingestion_meta": _normalize_jsonb_payload(ingestion_meta),
         "expires_at": expires_at,
     }
+    if file_id is not None:
+        values["id"] = file_id
 
     if not values["mime_type"]:
         raise ValueError("mime_type is required")
@@ -1153,12 +1195,16 @@ def create_llm_request(
     provider: str,
     model: str,
     prompt: str,
-    session_id: UUID | None = None,
+    session_id: UUID | str | None = None,
     request_group_id: UUID | None = None,
     api_key_id: UUID | None = None,
     input_tokens_est: int | None = None,
     store_prompt: bool = False,
     prompt_text_override: str | None = None,
+    response_revision_root_id: UUID | None = None,
+    response_revision: int = 1,
+    requested_model: str | None = None,
+    generation_budget: Mapping[str, Any] | None = None,
 ) -> UUID:
     """
     Insert a row into llm_requests table.
@@ -1177,6 +1223,8 @@ def create_llm_request(
         input_tokens_est: Optional estimated input tokens
         store_prompt: Whether to store prompt text
         prompt_text_override: Optional prompt text value to store when store_prompt=True
+        response_revision_root_id: Original Compare request row when this is a regeneration
+        response_revision: Monotonic version for one logical Compare response slot
 
     Returns:
         UUID: The llm_requests.id of the inserted row
@@ -1199,15 +1247,41 @@ def create_llm_request(
         "prompt_sha256": prompt_sha256,
         "prompt_stored": store_prompt,
         "prompt_text": (
-            prompt_text_override if (store_prompt and prompt_text_override is not None)
+            prompt_text_override
+            if (store_prompt and prompt_text_override is not None)
             else (prompt if store_prompt else None)
         ),
         "input_tokens_est": input_tokens_est,
         "api_key_id": api_key_id,
     }
     column_names = {col.name for col in llm_requests.columns}
+    if "requested_model" in column_names:
+        values["requested_model"] = str(requested_model or model)
     if "request_group_id" in column_names:
-        values["request_group_id"] = str(request_group_id) if request_group_id is not None else None
+        group_column = llm_requests.c.request_group_id
+        values["request_group_id"] = (
+            request_group_id.hex
+            if isinstance(request_group_id, UUID) and isinstance(group_column.type, String)
+            else request_group_id
+        )
+    if "response_revision_root_id" in column_names:
+        values["response_revision_root_id"] = response_revision_root_id
+    if "response_revision" in column_names:
+        values["response_revision"] = max(1, int(response_revision))
+    budget = dict(generation_budget or {})
+    budget_values = {
+        "generation_profile": budget.get("profile"),
+        "requested_max_output_tokens": budget.get("requested_max_output_tokens"),
+        "effective_max_output_tokens": budget.get("effective_max_output_tokens"),
+        "requested_reasoning_mode": budget.get("requested_reasoning_mode"),
+        "effective_reasoning_mode": budget.get("effective_reasoning_mode"),
+        "requested_reasoning_effort": budget.get("requested_reasoning_effort"),
+        "effective_reasoning_effort": budget.get("effective_reasoning_effort"),
+        "generation_policy_version": budget.get("policy_version"),
+    }
+    values.update(
+        {key: value for key, value in budget_values.items() if key in column_names}
+    )
 
     stmt = insert(llm_requests).values(**values).returning(llm_requests.c.id)
 
@@ -1244,18 +1318,40 @@ def create_llm_response(db: Session, llm_request_id: UUID, response: UnifiedResp
         error_type = response.error.code
         error_message = response.error.message
 
-    stmt = insert(llm_responses).values(
-        llm_request_id=llm_request_id,
-        text=response.text,
-        finish_reason=response.finish_reason,
-        latency_ms=response.latency_ms,
-        prompt_tokens=response.token_usage.prompt_tokens,
-        completion_tokens=response.token_usage.completion_tokens,
-        total_tokens=response.token_usage.total_tokens,
-        estimated_cost=response.estimated_cost,
-        error_type=error_type,
-        error_message=error_message,
-    )
+    values: dict[str, Any] = {
+        "llm_request_id": llm_request_id,
+        "text": response.text,
+        "finish_reason": response.finish_reason,
+        "latency_ms": response.latency_ms,
+        "prompt_tokens": response.token_usage.prompt_tokens,
+        "completion_tokens": response.token_usage.completion_tokens,
+        "total_tokens": response.token_usage.total_tokens,
+        "estimated_cost": response.estimated_cost,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    column_names = {column.name for column in llm_responses.columns}
+    audit_values: dict[str, Any] = {
+        "served_model": response.served_model or response.model,
+        "pricing_model": response.pricing_model or response.served_model or response.model,
+        "model_lifecycle_status": response.model_lifecycle_status,
+        "alias_redirected": response.alias_redirected,
+        "replacement_model": response.replacement_model,
+        "model_migration_reason": response.migration_reason,
+        "reasoning_mode": response.reasoning_mode,
+        "cached_input_tokens": response.token_usage.cached_input_tokens,
+        "cache_write_tokens": response.token_usage.cache_write_tokens,
+        "reasoning_tokens": response.token_usage.reasoning_tokens,
+        "pricing_rule_applied": response.pricing_rule_applied,
+        "pricing_version": response.pricing_version,
+        "pricing_unknown": response.pricing_unknown,
+        "pricing_snapshot": dict(response.pricing_snapshot or {}),
+        "completion_status": (response.metadata or {}).get("completion_status", "complete"),
+        "stop_cause": (response.metadata or {}).get("stop_cause", "unknown"),
+    }
+    values.update({key: value for key, value in audit_values.items() if key in column_names})
+
+    stmt = insert(llm_responses).values(**values)
 
     db.execute(stmt)
 
@@ -1561,17 +1657,21 @@ def create_routing_attempts(
             "error_message": error_message,
         }
 
-        stmt = pg_insert(routing_attempts).values(**payload).on_conflict_do_update(
-            index_elements=["routing_decision_id", "attempt_number"],
-            set_={
-                "tier": payload["tier"],
-                "provider": payload["provider"],
-                "model": payload["model"],
-                "validation": payload["validation"],
-                "latency_ms": payload["latency_ms"],
-                "error_type": payload["error_type"],
-                "error_message": payload["error_message"],
-            },
+        stmt = (
+            pg_insert(routing_attempts)
+            .values(**payload)
+            .on_conflict_do_update(
+                index_elements=["routing_decision_id", "attempt_number"],
+                set_={
+                    "tier": payload["tier"],
+                    "provider": payload["provider"],
+                    "model": payload["model"],
+                    "validation": payload["validation"],
+                    "latency_ms": payload["latency_ms"],
+                    "error_type": payload["error_type"],
+                    "error_message": payload["error_message"],
+                },
+            )
         )
 
         db.execute(stmt)
@@ -1624,9 +1724,7 @@ def get_failed_routing_attempts_by_request_group(
         llm_requests.c.created_at if "created_at" in req_cols else llm_requests.c.id
     )
     attempt_number_expr = (
-        routing_attempts.c.attempt_number
-        if "attempt_number" in attempt_cols
-        else literal(0)
+        routing_attempts.c.attempt_number if "attempt_number" in attempt_cols else literal(0)
     )
 
     group_text_expr = func.lower(cast(llm_requests.c.request_group_id, String))
@@ -1640,15 +1738,11 @@ def get_failed_routing_attempts_by_request_group(
             llm_requests.c.request_id.label("request_id"),
             llm_requests.c.request_group_id.label("request_group_id"),
             attempt_number_expr.label("attempt_number"),
-            (
-                routing_attempts.c.tier if "tier" in attempt_cols else literal(None)
-            ).label("tier"),
-            (
-                routing_attempts.c.provider if "provider" in attempt_cols else literal(None)
-            ).label("provider"),
-            (
-                routing_attempts.c.model if "model" in attempt_cols else literal(None)
-            ).label("model"),
+            (routing_attempts.c.tier if "tier" in attempt_cols else literal(None)).label("tier"),
+            (routing_attempts.c.provider if "provider" in attempt_cols else literal(None)).label(
+                "provider"
+            ),
+            (routing_attempts.c.model if "model" in attempt_cols else literal(None)).label("model"),
             (
                 routing_attempts.c.validation if "validation" in attempt_cols else literal(None)
             ).label("validation"),
@@ -1659,7 +1753,9 @@ def get_failed_routing_attempts_by_request_group(
                 routing_attempts.c.error_type if "error_type" in attempt_cols else literal(None)
             ).label("error_type"),
             (
-                routing_attempts.c.error_message if "error_message" in attempt_cols else literal(None)
+                routing_attempts.c.error_message
+                if "error_message" in attempt_cols
+                else literal(None)
             ).label("error_message"),
         )
         .select_from(
@@ -1867,6 +1963,7 @@ def get_api_key_settings(db: Session, api_key_id: UUID) -> dict[str, Any] | None
         return dict(row._mapping)
     return None
 
+
 def upsert_api_key_settings(
     db: Session,
     *,
@@ -1886,14 +1983,18 @@ def upsert_api_key_settings(
         "requests_per_minute": requests_per_minute,
     }
 
-    stmt = pg_insert(api_key_settings).values(**payload).on_conflict_do_update(
-        index_elements=["api_key_id"],
-        set_={
-            "baseline_provider": payload["baseline_provider"],
-            "baseline_model": payload["baseline_model"],
-            "requests_per_minute": payload["requests_per_minute"],
-            "updated_at": func.now(),
-        },
+    stmt = (
+        pg_insert(api_key_settings)
+        .values(**payload)
+        .on_conflict_do_update(
+            index_elements=["api_key_id"],
+            set_={
+                "baseline_provider": payload["baseline_provider"],
+                "baseline_model": payload["baseline_model"],
+                "requests_per_minute": payload["requests_per_minute"],
+                "updated_at": func.now(),
+            },
+        )
     )
     db.execute(stmt)
 
@@ -1919,14 +2020,18 @@ def upsert_byok_provider_key(
         "key_fingerprint": key_fingerprint,
         "key_last4": key_last4,
     }
-    stmt = pg_insert(byok_provider_keys).values(**payload).on_conflict_do_update(
-        index_elements=["api_key_id", "provider"],
-        set_={
-            "encrypted_key": payload["encrypted_key"],
-            "key_fingerprint": payload["key_fingerprint"],
-            "key_last4": payload["key_last4"],
-            "updated_at": func.now(),
-        },
+    stmt = (
+        pg_insert(byok_provider_keys)
+        .values(**payload)
+        .on_conflict_do_update(
+            index_elements=["api_key_id", "provider"],
+            set_={
+                "encrypted_key": payload["encrypted_key"],
+                "key_fingerprint": payload["key_fingerprint"],
+                "key_last4": payload["key_last4"],
+                "updated_at": func.now(),
+            },
+        )
     )
     db.execute(stmt)
 
@@ -1962,9 +2067,7 @@ def list_byok_provider_keys(db: Session, *, api_key_id: UUID) -> list[dict[str, 
     return [dict(row._mapping) for row in rows]
 
 
-def delete_byok_provider_keys(
-    db: Session, *, api_key_id: UUID, provider: str | None = None
-) -> int:
+def delete_byok_provider_keys(db: Session, *, api_key_id: UUID, provider: str | None = None) -> int:
     """Delete BYOK rows for one API key (single provider or all)."""
     from db.tables import get_table
 
@@ -2022,9 +2125,13 @@ def upsert_llm_savings(
     if "error_code" in cols:
         payload["error_code"] = error_code
 
-    stmt = pg_insert(llm_savings).values(**payload).on_conflict_do_update(
-        index_elements=["llm_request_id"],
-        set_={k: v for k, v in payload.items() if k != "llm_request_id"},
+    stmt = (
+        pg_insert(llm_savings)
+        .values(**payload)
+        .on_conflict_do_update(
+            index_elements=["llm_request_id"],
+            set_={k: v for k, v in payload.items() if k != "llm_request_id"},
+        )
     )
     db.execute(stmt)
 
@@ -2069,7 +2176,12 @@ def get_usage_aggregates(
 
     created_col = llm_requests.c.created_at if "created_at" in req_cols else None
     provider_col = llm_requests.c.provider if "provider" in req_cols else None
-    model_col = llm_requests.c.model if "model" in req_cols else None
+    operation_col = llm_requests.c.route_mode if "route_mode" in req_cols else None
+    model_col = (
+        llm_responses.c.served_model
+        if "served_model" in resp_cols
+        else (llm_requests.c.model if "model" in req_cols else None)
+    )
     tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
 
@@ -2078,6 +2190,8 @@ def get_usage_aggregates(
         bucket_expr = provider_col if provider_col is not None else literal("unknown")
     elif group == "model":
         bucket_expr = model_col if model_col is not None else literal("unknown")
+    elif group == "operation":
+        bucket_expr = operation_col if operation_col is not None else literal("unknown")
     else:
         group = "day"
         if created_col is not None:
@@ -2311,20 +2425,23 @@ def _normalize_history_web_source_items(raw_items: Any) -> list[dict[str, str]]:
     return items
 
 
-def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]]:
-    trace_payload: dict[str, Any] | None = None
-
+def _history_routing_trace_payload(routing_trace: Any) -> dict[str, Any]:
     if isinstance(routing_trace, dict):
-        trace_payload = routing_trace
-    elif isinstance(routing_trace, str):
+        return routing_trace
+    if isinstance(routing_trace, str):
         text = routing_trace.strip()
         if text:
             try:
                 decoded = json.loads(text)
                 if isinstance(decoded, dict):
-                    trace_payload = decoded
+                    return decoded
             except Exception:
-                trace_payload = None
+                pass
+    return {}
+
+
+def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]]:
+    trace_payload = _history_routing_trace_payload(routing_trace)
 
     if not trace_payload:
         return []
@@ -2333,6 +2450,34 @@ def _extract_history_web_source_items(routing_trace: Any) -> list[dict[str, str]
     if not isinstance(raw_items, list):
         raw_items = trace_payload.get("sources")
     return _normalize_history_web_source_items(raw_items)
+
+
+def _history_optional_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _extract_history_credit_snapshot(routing_trace: Any) -> dict[str, Any]:
+    trace_payload = _history_routing_trace_payload(routing_trace)
+    ai_credits = _history_optional_nonnegative_int(trace_payload.get("ai_credits"))
+    research_ai_credits = _history_optional_nonnegative_int(
+        trace_payload.get("research_ai_credits")
+    )
+    return {
+        "ai_credits": ai_credits,
+        "credit_usage_estimated": bool(
+            trace_payload.get("credit_usage_estimated", False)
+        ),
+        "research_ai_credits": research_ai_credits,
+        "research_credit_usage_estimated": bool(
+            trace_payload.get("research_credit_usage_estimated", False)
+        ),
+    }
 
 
 def _to_history_timestamp(raw_value: Any) -> str:
@@ -2355,6 +2500,506 @@ def _to_history_timestamp(raw_value: Any) -> str:
     if text.endswith("+00:00"):
         return text.replace("+00:00", "Z")
     return text
+
+
+def _decode_json_value(raw_value: Any, fallback: Any) -> Any:
+    if raw_value is None:
+        return fallback
+    if isinstance(raw_value, (list, dict)):
+        return raw_value
+    if isinstance(raw_value, str):
+        try:
+            return json.loads(raw_value)
+        except Exception:
+            return fallback
+    return fallback
+
+
+def _revision_root_key(payload: dict[str, Any]) -> str:
+    root_id = payload.get("response_revision_root_id")
+    request_pk = payload.get("request_pk")
+    return (
+        str(root_id or request_pk or payload.get("request_id") or "")
+        .strip()
+        .lower()
+        .replace("-", "")
+    )
+
+
+def require_cortex_analysis_schema() -> None:
+    """Fail predictably before provider work when the Cortex migration is missing."""
+    from db.tables import get_table
+
+    try:
+        analysis_runs = get_table("cortex_analysis_runs")
+        llm_requests = get_table("llm_requests")
+    except NoSuchTableError as exc:
+        raise CortexAnalysisSchemaUnavailable(
+            "cortex_analysis_runs is missing; apply "
+            "db/migrations/20260727_add_cortex_analysis_runs.sql"
+        ) from exc
+
+    required_run_columns = {
+        "id",
+        "user_id",
+        "session_id",
+        "request_group_id",
+        "source_fingerprint",
+        "source_snapshot",
+        "recommended_answer",
+        "disagreement_note",
+        "created_at",
+    }
+    run_columns = {column.name for column in analysis_runs.columns}
+    request_columns = {column.name for column in llm_requests.columns}
+    missing_run_columns = sorted(required_run_columns - run_columns)
+    missing_request_columns = sorted(
+        {"response_revision_root_id", "response_revision"} - request_columns
+    )
+    if missing_run_columns or missing_request_columns:
+        missing = ", ".join(missing_run_columns + missing_request_columns)
+        raise CortexAnalysisSchemaUnavailable(
+            f"Cortex Analysis schema is incomplete ({missing}); apply the Cortex migrations "
+            "and restart the API"
+        )
+
+
+def get_compare_response_regeneration_source(
+    db: Session,
+    user_id: UUID,
+    source_request_id: str,
+) -> dict[str, Any] | None:
+    """Resolve an owned Compare response and its next append-only revision."""
+    from db.tables import get_table
+
+    normalized_request_id = str(source_request_id or "").strip()
+    if not normalized_request_id:
+        return None
+
+    llm_requests = get_table("llm_requests")
+    req_cols = {col.name for col in llm_requests.columns}
+    if "request_group_id" not in req_cols:
+        return None
+
+    revision_root_expr = (
+        llm_requests.c.response_revision_root_id
+        if "response_revision_root_id" in req_cols
+        else literal(None)
+    )
+    revision_expr = (
+        llm_requests.c.response_revision if "response_revision" in req_cols else literal(1)
+    )
+    row = db.execute(
+        select(
+            llm_requests.c.id.label("request_pk"),
+            llm_requests.c.request_id.label("request_id"),
+            llm_requests.c.session_id.label("session_id"),
+            llm_requests.c.request_group_id.label("request_group_id"),
+            llm_requests.c.provider.label("provider"),
+            llm_requests.c.model.label("model"),
+            revision_root_expr.label("response_revision_root_id"),
+            revision_expr.label("response_revision"),
+        ).where(
+            and_(
+                llm_requests.c.user_id == user_id,
+                llm_requests.c.request_id == normalized_request_id,
+                llm_requests.c.request_group_id.is_not(None),
+            )
+        )
+    ).fetchone()
+    if row is None:
+        return None
+
+    payload = dict(row._mapping)
+    root_id = payload.get("response_revision_root_id") or payload["request_pk"]
+    next_revision = int(payload.get("response_revision") or 1) + 1
+    if "response_revision_root_id" in req_cols and "response_revision" in req_cols:
+        latest_revision = db.execute(
+            select(func.max(llm_requests.c.response_revision)).where(
+                or_(
+                    llm_requests.c.id == root_id,
+                    llm_requests.c.response_revision_root_id == root_id,
+                )
+            )
+        ).scalar_one_or_none()
+        next_revision = int(latest_revision or 1) + 1
+
+    return {
+        "source_request_pk": payload["request_pk"],
+        "response_revision_root_id": root_id,
+        "response_revision": next_revision,
+        "session_id": payload.get("session_id"),
+        "request_group_id": payload.get("request_group_id"),
+        "provider": str(payload.get("provider") or ""),
+        "model": str(payload.get("model") or ""),
+    }
+
+
+def get_compare_analysis_sources(
+    db: Session,
+    user_id: UUID,
+    request_group_id: UUID,
+) -> dict[str, Any] | None:
+    """Return the latest revision for every response slot in an owned Compare run."""
+    from db.tables import get_table
+
+    llm_requests = get_table("llm_requests")
+    llm_responses = get_table("llm_responses")
+    req_cols = {col.name for col in llm_requests.columns}
+    resp_cols = {col.name for col in llm_responses.columns}
+    if "request_group_id" not in req_cols:
+        return None
+
+    revision_root_expr = (
+        llm_requests.c.response_revision_root_id
+        if "response_revision_root_id" in req_cols
+        else literal(None)
+    )
+    revision_expr = (
+        llm_requests.c.response_revision if "response_revision" in req_cols else literal(1)
+    )
+    response_text_expr = llm_responses.c.text if "text" in resp_cols else literal("")
+    response_error_expr = (
+        llm_responses.c.error_message if "error_message" in resp_cols else literal(None)
+    )
+    created_expr = llm_requests.c.created_at if "created_at" in req_cols else llm_requests.c.id
+    group_text_expr = func.lower(cast(llm_requests.c.request_group_id, String))
+    group_match = or_(
+        group_text_expr == str(request_group_id).lower(),
+        func.replace(group_text_expr, "-", "") == request_group_id.hex.lower(),
+    )
+
+    rows = db.execute(
+        select(
+            llm_requests.c.id.label("request_pk"),
+            llm_requests.c.request_id.label("request_id"),
+            llm_requests.c.session_id.label("session_id"),
+            llm_requests.c.request_group_id.label("request_group_id"),
+            llm_requests.c.prompt_text.label("prompt"),
+            llm_requests.c.provider.label("provider"),
+            llm_requests.c.model.label("model"),
+            revision_root_expr.label("response_revision_root_id"),
+            revision_expr.label("response_revision"),
+            response_text_expr.label("response_text"),
+            response_error_expr.label("error_message"),
+            created_expr.label("created_at"),
+        )
+        .select_from(
+            llm_requests.outerjoin(
+                llm_responses,
+                llm_responses.c.llm_request_id == llm_requests.c.id,
+            )
+        )
+        .where(and_(llm_requests.c.user_id == user_id, group_match))
+        .order_by(desc(created_expr), desc(revision_expr))
+    ).fetchall()
+    if not rows:
+        return None
+
+    current_rows: list[dict[str, Any]] = []
+    seen_roots: set[str] = set()
+    for row in rows:
+        payload = dict(row._mapping)
+        root_key = _revision_root_key(payload)
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        current_rows.append(payload)
+
+    first = current_rows[0]
+    return {
+        "session_id": first.get("session_id"),
+        "request_group_id": first.get("request_group_id"),
+        "question": str(first.get("prompt") or ""),
+        "responses": [
+            {
+                "request_id": str(item.get("request_id") or ""),
+                "response_version": int(item.get("response_revision") or 1),
+                "provider": str(item.get("provider") or "unknown"),
+                "model": str(item.get("model") or "unknown"),
+                "content": str(item.get("response_text") or ""),
+                "error_message": (
+                    str(item["error_message"]) if item.get("error_message") is not None else None
+                ),
+            }
+            for item in reversed(current_rows)
+        ],
+    }
+
+
+def get_prompt_optimization_cache(
+    db: Session,
+    *,
+    user_id: UUID,
+    cache_key: str,
+) -> dict[str, Any] | None:
+    """Return one unexpired shared optimizer result and refresh its usage time."""
+
+    from db.tables import get_table
+
+    cache = get_table("prompt_optimization_cache")
+    row = db.execute(
+        select(cache).where(
+            and_(
+                cache.c.user_id == user_id,
+                cache.c.cache_key == str(cache_key),
+                cache.c.expires_at > func.now(),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    payload = dict(row._mapping)
+    db.execute(
+        update(cache)
+        .where(cache.c.id == payload["id"])
+        .values(last_used_at=func.now())
+    )
+    result = _decode_json_value(payload.get("result"), {})
+    return result if isinstance(result, dict) else None
+
+
+def record_cache_reuse_event(
+    db: Session,
+    *,
+    user_id: UUID,
+    request_id: str,
+    operation_type: str,
+    reused: bool,
+) -> None:
+    """Record one idempotent cache/reuse decision for dashboard rates."""
+
+    from db.tables import get_table
+
+    operation = str(operation_type or "").strip().lower()
+    if operation not in ALLOWED_CACHE_REUSE_OPERATIONS:
+        raise ValueError(f"Unsupported cache reuse operation: {operation_type}")
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        raise ValueError("request_id is required for a cache reuse event")
+    normalized_request_id = normalized_request_id[:255]
+
+    events = get_table("cache_reuse_events")
+    existing = db.execute(
+        select(events.c.id).where(
+            and_(
+                events.c.user_id == user_id,
+                events.c.operation_type == operation,
+                events.c.request_id == normalized_request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.execute(
+            insert(events).values(
+                user_id=user_id,
+                request_id=normalized_request_id,
+                operation_type=operation,
+                reused=bool(reused),
+            )
+        )
+        return
+    db.execute(
+        update(events).where(events.c.id == existing).values(reused=bool(reused))
+    )
+
+
+def store_prompt_optimization_cache(
+    db: Session,
+    *,
+    user_id: UUID,
+    cache_key: str,
+    optimizer_provider: str,
+    optimizer_model: str,
+    prompt_version: str,
+    result: dict[str, Any],
+    expires_at: datetime,
+) -> None:
+    """Persist one successful optimizer result for cross-worker reuse."""
+
+    from db.tables import get_table
+
+    cache = get_table("prompt_optimization_cache")
+    existing = db.execute(
+        select(cache.c.id).where(
+            and_(cache.c.user_id == user_id, cache.c.cache_key == str(cache_key))
+        )
+    ).scalar_one_or_none()
+    values = {
+        "optimizer_provider": str(optimizer_provider),
+        "optimizer_model": str(optimizer_model),
+        "prompt_version": str(prompt_version),
+        "result": dict(result),
+        "last_used_at": func.now(),
+        "expires_at": expires_at,
+    }
+    if existing is None:
+        db.execute(
+            insert(cache).values(
+                id=uuid4(),
+                user_id=user_id,
+                cache_key=str(cache_key),
+                **values,
+            )
+        )
+    else:
+        db.execute(update(cache).where(cache.c.id == existing).values(**values))
+
+
+def create_cortex_analysis_run(
+    db: Session,
+    *,
+    user_id: UUID,
+    session_id: UUID,
+    request_group_id: UUID,
+    model: str,
+    source_fingerprint: str,
+    source_snapshot: list[dict[str, Any]],
+    recommended_answer: str,
+    agreements: list[str],
+    disagreements: list[dict[str, Any]],
+    disagreement_note: str | None,
+    unique_insights: list[dict[str, Any]],
+    confidence_level: str,
+    confidence_reason: str,
+    verify_items: list[str],
+    high_stakes_domain: str | None,
+    combined_response_count: int,
+    failed_response_count: int,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    estimated_cost: float = 0.0,
+    analysis_policy_version: str = "cortex-analysis-v1",
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    pricing_snapshot: dict[str, Any] | None = None,
+    pricing_version: str | None = None,
+) -> UUID:
+    """Append one immutable Cortex Analysis run."""
+    from db.tables import get_table
+
+    analysis_runs = get_table("cortex_analysis_runs")
+    analysis_id = uuid4()
+    db.execute(
+        insert(analysis_runs).values(
+            id=analysis_id,
+            user_id=user_id,
+            session_id=session_id,
+            request_group_id=request_group_id,
+            model=model,
+            source_fingerprint=source_fingerprint,
+            source_snapshot=source_snapshot,
+            recommended_answer=recommended_answer,
+            agreements=agreements,
+            disagreements=disagreements,
+            disagreement_note=disagreement_note,
+            unique_insights=unique_insights,
+            confidence_level=confidence_level,
+            confidence_reason=confidence_reason,
+            verify_items=verify_items,
+            high_stakes_domain=high_stakes_domain,
+            combined_response_count=combined_response_count,
+            failed_response_count=failed_response_count,
+            prompt_tokens=max(0, int(prompt_tokens)),
+            completion_tokens=max(0, int(completion_tokens)),
+            total_tokens=max(0, int(total_tokens)),
+            estimated_cost=max(0.0, float(estimated_cost)),
+            analysis_policy_version=str(analysis_policy_version or "cortex-analysis-v1"),
+            cached_input_tokens=max(0, int(cached_input_tokens)),
+            cache_write_tokens=max(0, int(cache_write_tokens)),
+            reasoning_tokens=max(0, int(reasoning_tokens)),
+            pricing_snapshot=dict(pricing_snapshot or {}),
+            pricing_version=str(pricing_version or "") or None,
+        )
+    )
+    return analysis_id
+
+
+def list_cortex_analysis_runs(
+    db: Session,
+    user_id: UUID,
+    *,
+    request_group_id: UUID | None = None,
+    session_id: UUID | None = None,
+) -> list[dict[str, Any]]:
+    """List immutable Cortex Analysis runs newest-first for one owner."""
+    from db.tables import get_table
+
+    if request_group_id is None and session_id is None:
+        return []
+
+    analysis_runs = get_table("cortex_analysis_runs")
+
+    def uuid_match(column, value: UUID):
+        normalized = str(value).lower()
+        normalized_hex = normalized.replace("-", "")
+        column_text = func.lower(cast(column, String))
+        return or_(
+            column_text == normalized,
+            func.replace(column_text, "-", "") == normalized_hex,
+        )
+
+    filters = [uuid_match(analysis_runs.c.user_id, user_id)]
+    if request_group_id is not None:
+        filters.append(uuid_match(analysis_runs.c.request_group_id, request_group_id))
+    if session_id is not None:
+        filters.append(uuid_match(analysis_runs.c.session_id, session_id))
+
+    rows = db.execute(
+        select(analysis_runs).where(and_(*filters)).order_by(desc(analysis_runs.c.created_at))
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row._mapping)
+        result.append(
+            {
+                "analysis_id": str(payload.get("id") or ""),
+                "request_group_id": str(payload.get("request_group_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "model": str(payload.get("model") or ""),
+                "source_fingerprint": str(payload.get("source_fingerprint") or ""),
+                "analysis_policy_version": str(
+                    payload.get("analysis_policy_version") or ""
+                ),
+                "source_snapshot": _decode_json_value(
+                    payload.get("source_snapshot"),
+                    [],
+                ),
+                "recommended_answer": str(payload.get("recommended_answer") or ""),
+                "agreements": _decode_json_value(payload.get("agreements"), []),
+                "disagreements": _decode_json_value(payload.get("disagreements"), []),
+                "disagreement_note": (
+                    str(payload["disagreement_note"])
+                    if payload.get("disagreement_note") is not None
+                    else None
+                ),
+                "unique_insights": _decode_json_value(
+                    payload.get("unique_insights"),
+                    [],
+                ),
+                "confidence_level": str(payload.get("confidence_level") or "limited"),
+                "confidence_reason": str(payload.get("confidence_reason") or ""),
+                "verify_items": _decode_json_value(payload.get("verify_items"), []),
+                "high_stakes_domain": (
+                    str(payload["high_stakes_domain"])
+                    if payload.get("high_stakes_domain") is not None
+                    else None
+                ),
+                "combined_response_count": int(payload.get("combined_response_count") or 0),
+                "failed_response_count": int(payload.get("failed_response_count") or 0),
+                "cached_input_tokens": int(payload.get("cached_input_tokens") or 0),
+                "cache_write_tokens": int(payload.get("cache_write_tokens") or 0),
+                "reasoning_tokens": int(payload.get("reasoning_tokens") or 0),
+                "pricing_snapshot": _decode_json_value(
+                    payload.get("pricing_snapshot"), {}
+                ),
+                "pricing_version": str(payload.get("pricing_version") or "") or None,
+                "created_at": _to_history_timestamp(payload.get("created_at")),
+            }
+        )
+    return result
 
 
 def get_llm_history_entries(
@@ -2382,7 +3027,9 @@ def get_llm_history_entries(
     req_cols = {col.name for col in llm_requests.columns}
     resp_cols = {col.name for col in llm_responses.columns}
     session_cols = {col.name for col in sessions.columns}
-    routing_cols = {col.name for col in routing_decisions.columns} if routing_decisions is not None else set()
+    routing_cols = (
+        {col.name for col in routing_decisions.columns} if routing_decisions is not None else set()
+    )
 
     req_created_col = llm_requests.c.created_at if "created_at" in req_cols else None
     req_mode_col = llm_requests.c.route_mode if "route_mode" in req_cols else None
@@ -2392,12 +3039,77 @@ def get_llm_history_entries(
     req_group_col = llm_requests.c.request_group_id if "request_group_id" in req_cols else None
     req_provider_col = llm_requests.c.provider if "provider" in req_cols else None
     req_model_col = llm_requests.c.model if "model" in req_cols else None
+    req_requested_model_col = (
+        llm_requests.c.requested_model if "requested_model" in req_cols else req_model_col
+    )
+    req_revision_root_col = (
+        llm_requests.c.response_revision_root_id
+        if "response_revision_root_id" in req_cols
+        else None
+    )
+    req_revision_col = llm_requests.c.response_revision if "response_revision" in req_cols else None
+    req_generation_profile_col = (
+        llm_requests.c.generation_profile if "generation_profile" in req_cols else None
+    )
+    req_effective_max_col = (
+        llm_requests.c.effective_max_output_tokens
+        if "effective_max_output_tokens" in req_cols
+        else None
+    )
+    req_effective_reasoning_mode_col = (
+        llm_requests.c.effective_reasoning_mode
+        if "effective_reasoning_mode" in req_cols
+        else None
+    )
+    req_effective_reasoning_effort_col = (
+        llm_requests.c.effective_reasoning_effort
+        if "effective_reasoning_effort" in req_cols
+        else None
+    )
+    req_generation_policy_version_col = (
+        llm_requests.c.generation_policy_version
+        if "generation_policy_version" in req_cols
+        else None
+    )
 
     resp_text_col = llm_responses.c.text if "text" in resp_cols else None
     resp_latency_col = llm_responses.c.latency_ms if "latency_ms" in resp_cols else None
+    resp_prompt_tokens_col = (
+        llm_responses.c.prompt_tokens if "prompt_tokens" in resp_cols else None
+    )
+    resp_completion_tokens_col = (
+        llm_responses.c.completion_tokens if "completion_tokens" in resp_cols else None
+    )
+    resp_cached_input_tokens_col = (
+        llm_responses.c.cached_input_tokens if "cached_input_tokens" in resp_cols else None
+    )
+    resp_cache_write_tokens_col = (
+        llm_responses.c.cache_write_tokens if "cache_write_tokens" in resp_cols else None
+    )
+    resp_reasoning_tokens_col = (
+        llm_responses.c.reasoning_tokens if "reasoning_tokens" in resp_cols else None
+    )
+    resp_pricing_snapshot_col = (
+        llm_responses.c.pricing_snapshot if "pricing_snapshot" in resp_cols else None
+    )
     resp_tokens_col = llm_responses.c.total_tokens if "total_tokens" in resp_cols else None
     resp_cost_col = llm_responses.c.estimated_cost if "estimated_cost" in resp_cols else None
     resp_error_col = llm_responses.c.error_message if "error_message" in resp_cols else None
+    resp_completion_status_col = (
+        llm_responses.c.completion_status if "completion_status" in resp_cols else None
+    )
+    resp_stop_cause_col = llm_responses.c.stop_cause if "stop_cause" in resp_cols else None
+    resp_served_model_col = (
+        llm_responses.c.served_model if "served_model" in resp_cols else None
+    )
+    resp_pricing_model_col = (
+        llm_responses.c.pricing_model if "pricing_model" in resp_cols else None
+    )
+    resp_lifecycle_col = (
+        llm_responses.c.model_lifecycle_status
+        if "model_lifecycle_status" in resp_cols
+        else None
+    )
     routing_req_col = (
         routing_decisions.c.llm_request_id
         if routing_decisions is not None and "llm_request_id" in routing_cols
@@ -2415,15 +3127,98 @@ def get_llm_history_entries(
     request_group_expr = req_group_col if req_group_col is not None else literal(None)
     provider_expr = req_provider_col if req_provider_col is not None else literal("unknown")
     model_expr = req_model_col if req_model_col is not None else literal("unknown")
+    requested_model_expr = (
+        req_requested_model_col if req_requested_model_col is not None else model_expr
+    )
     mode_expr = req_mode_col if req_mode_col is not None else literal("chat")
     timestamp_expr = req_created_col if req_created_col is not None else literal(None)
     response_text_expr = resp_text_col if resp_text_col is not None else literal("")
     latency_expr = resp_latency_col if resp_latency_col is not None else literal(None)
+    prompt_tokens_expr = (
+        resp_prompt_tokens_col if resp_prompt_tokens_col is not None else literal(None)
+    )
+    completion_tokens_expr = (
+        resp_completion_tokens_col if resp_completion_tokens_col is not None else literal(None)
+    )
+    cached_input_tokens_expr = (
+        resp_cached_input_tokens_col
+        if resp_cached_input_tokens_col is not None
+        else literal(0)
+    )
+    cache_write_tokens_expr = (
+        resp_cache_write_tokens_col
+        if resp_cache_write_tokens_col is not None
+        else literal(0)
+    )
+    reasoning_tokens_expr = (
+        resp_reasoning_tokens_col if resp_reasoning_tokens_col is not None else literal(0)
+    )
+    pricing_snapshot_expr = (
+        resp_pricing_snapshot_col if resp_pricing_snapshot_col is not None else literal(None)
+    )
     tokens_expr = resp_tokens_col if resp_tokens_col is not None else literal(None)
     cost_expr = resp_cost_col if resp_cost_col is not None else literal(None)
     error_expr = resp_error_col if resp_error_col is not None else literal(None)
+    served_model_expr = resp_served_model_col if resp_served_model_col is not None else model_expr
+    pricing_model_expr = (
+        resp_pricing_model_col if resp_pricing_model_col is not None else served_model_expr
+    )
+    lifecycle_expr = resp_lifecycle_col if resp_lifecycle_col is not None else literal(None)
+    alias_redirected_expr = (
+        llm_responses.c.alias_redirected
+        if "alias_redirected" in resp_cols
+        else literal(False)
+    )
+    replacement_model_expr = (
+        llm_responses.c.replacement_model
+        if "replacement_model" in resp_cols
+        else literal(None)
+    )
+    migration_reason_expr = (
+        llm_responses.c.model_migration_reason
+        if "model_migration_reason" in resp_cols
+        else literal(None)
+    )
+    pricing_rule_expr = (
+        llm_responses.c.pricing_rule_applied
+        if "pricing_rule_applied" in resp_cols
+        else literal(None)
+    )
+    pricing_version_expr = (
+        llm_responses.c.pricing_version if "pricing_version" in resp_cols else literal(None)
+    )
+    pricing_unknown_expr = (
+        llm_responses.c.pricing_unknown if "pricing_unknown" in resp_cols else literal(False)
+    )
     routing_trace_expr = routing_trace_col if routing_trace_col is not None else literal(None)
     session_title_expr = sessions.c.title if "title" in session_cols else literal(None)
+    response_revision_root_expr = (
+        req_revision_root_col if req_revision_root_col is not None else literal(None)
+    )
+    response_revision_expr = req_revision_col if req_revision_col is not None else literal(1)
+    generation_profile_expr = (
+        req_generation_profile_col if req_generation_profile_col is not None else literal(None)
+    )
+    effective_max_expr = req_effective_max_col if req_effective_max_col is not None else literal(None)
+    effective_reasoning_mode_expr = (
+        req_effective_reasoning_mode_col
+        if req_effective_reasoning_mode_col is not None
+        else literal(None)
+    )
+    effective_reasoning_effort_expr = (
+        req_effective_reasoning_effort_col
+        if req_effective_reasoning_effort_col is not None
+        else literal(None)
+    )
+    generation_policy_version_expr = (
+        req_generation_policy_version_col
+        if req_generation_policy_version_col is not None
+        else literal(None)
+    )
+    completion_status_expr = (
+        resp_completion_status_col if resp_completion_status_col is not None else literal("complete")
+    )
+    stop_cause_expr = resp_stop_cause_col if resp_stop_cause_col is not None else literal("unknown")
 
     order_col = req_created_col if req_created_col is not None else llm_requests.c.id
     from_clause = llm_requests.outerjoin(
@@ -2450,9 +3245,34 @@ def get_llm_history_entries(
             prompt_hash_expr.label("prompt_hash"),
             provider_expr.label("provider"),
             model_expr.label("model"),
+            requested_model_expr.label("requested_model"),
+            served_model_expr.label("served_model"),
+            pricing_model_expr.label("pricing_model"),
+            lifecycle_expr.label("model_lifecycle_status"),
+            alias_redirected_expr.label("alias_redirected"),
+            replacement_model_expr.label("replacement_model"),
+            migration_reason_expr.label("migration_reason"),
+            pricing_rule_expr.label("pricing_rule_applied"),
+            pricing_version_expr.label("pricing_version"),
+            pricing_unknown_expr.label("pricing_unknown"),
+            response_revision_root_expr.label("response_revision_root_id"),
+            response_revision_expr.label("response_revision"),
+            generation_profile_expr.label("generation_profile"),
+            effective_max_expr.label("effective_max_output_tokens"),
+            effective_reasoning_mode_expr.label("effective_reasoning_mode"),
+            effective_reasoning_effort_expr.label("effective_reasoning_effort"),
+            generation_policy_version_expr.label("generation_policy_version"),
+            completion_status_expr.label("completion_status"),
+            stop_cause_expr.label("stop_cause"),
             timestamp_expr.label("created_at"),
             response_text_expr.label("response_text"),
             latency_expr.label("latency_ms"),
+            prompt_tokens_expr.label("prompt_tokens"),
+            cached_input_tokens_expr.label("cached_input_tokens"),
+            cache_write_tokens_expr.label("cache_write_tokens"),
+            reasoning_tokens_expr.label("reasoning_tokens"),
+            pricing_snapshot_expr.label("pricing_snapshot"),
+            completion_tokens_expr.label("completion_tokens"),
             tokens_expr.label("tokens"),
             cost_expr.label("cost"),
             error_expr.label("error_message"),
@@ -2460,8 +3280,8 @@ def get_llm_history_entries(
         )
         .select_from(from_clause)
         .where(llm_requests.c.user_id == user_id)
-        .order_by(desc(order_col))
-        .limit(max(1, int(limit)))
+        .order_by(desc(order_col), desc(response_revision_expr))
+        .limit(max(1, int(limit)) * 4)
     )
 
     if session_id and req_session_col is not None:
@@ -2480,9 +3300,14 @@ def get_llm_history_entries(
 
     rows = db.execute(stmt).fetchall()
     entries: list[dict[str, Any]] = []
+    seen_revision_roots: set[str] = set()
 
     for row in rows:
         payload = dict(row._mapping)
+        revision_root = _revision_root_key(payload)
+        if revision_root in seen_revision_roots:
+            continue
+        seen_revision_roots.add(revision_root)
         mode = str(payload.get("mode") or "chat").lower()
         if mode == "ask":
             mode = "chat"
@@ -2498,11 +3323,15 @@ def get_llm_history_entries(
         if not response_text and payload.get("error_message"):
             response_text = f"[error] {payload['error_message']}"
         web_source_items = _extract_history_web_source_items(payload.get("routing_trace"))
+        credit_snapshot = _extract_history_credit_snapshot(payload.get("routing_trace"))
 
         entries.append(
             {
                 "id": _history_entry_id(payload.get("request_pk"), payload.get("request_id")),
-                "session_id": str(payload["session_id"]) if payload.get("session_id") is not None else None,
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": (
+                    str(payload["session_id"]) if payload.get("session_id") is not None else None
+                ),
                 "session_title": (
                     str(payload["session_title"])
                     if payload.get("session_title") is not None
@@ -2518,13 +3347,49 @@ def get_llm_history_entries(
                 "prompt": str(prompt_text),
                 "provider": str(payload.get("provider") or "unknown"),
                 "model": str(payload.get("model") or "unknown"),
+                "requested_model": str(
+                    payload.get("requested_model") or payload.get("model") or "unknown"
+                ),
+                "served_model": str(payload.get("served_model") or payload.get("model") or "unknown"),
+                "pricing_model": str(
+                    payload.get("pricing_model")
+                    or payload.get("served_model")
+                    or payload.get("model")
+                    or "unknown"
+                ),
+                "model_lifecycle_status": payload.get("model_lifecycle_status"),
+                "alias_redirected": bool(payload.get("alias_redirected", False)),
+                "replacement_model": payload.get("replacement_model"),
+                "migration_reason": payload.get("migration_reason"),
+                "pricing_rule_applied": payload.get("pricing_rule_applied"),
+                "pricing_version": payload.get("pricing_version"),
+                "pricing_unknown": bool(payload.get("pricing_unknown", False)),
+                "response_version": int(payload.get("response_revision") or 1),
+                "generation_profile": payload.get("generation_profile"),
+                "effective_max_output_tokens": payload.get("effective_max_output_tokens"),
+                "effective_reasoning_mode": payload.get("effective_reasoning_mode"),
+                "effective_reasoning_effort": payload.get("effective_reasoning_effort"),
+                "generation_policy_version": payload.get("generation_policy_version"),
+                "completion_status": str(payload.get("completion_status") or "complete"),
+                "stop_cause": str(payload.get("stop_cause") or "unknown"),
                 "response": str(response_text),
                 "latency_ms": payload.get("latency_ms"),
+                "prompt_tokens": payload.get("prompt_tokens"),
+                "cached_input_tokens": payload.get("cached_input_tokens"),
+                "cache_write_tokens": payload.get("cache_write_tokens"),
+                "reasoning_tokens": payload.get("reasoning_tokens"),
+                "pricing_snapshot": _decode_json_value(
+                    payload.get("pricing_snapshot"), {}
+                ),
+                "completion_tokens": payload.get("completion_tokens"),
                 "tokens": payload.get("tokens"),
                 "cost": float(payload["cost"]) if payload.get("cost") is not None else None,
                 "web_source_items": web_source_items,
+                **credit_snapshot,
             }
         )
+        if len(entries) >= max(1, int(limit)):
+            break
 
     return entries
 
@@ -2562,7 +3427,9 @@ def _find_request_pk_by_history_id(db: Session, user_id: UUID, entry_id: int) ->
     from db.tables import get_table
 
     llm_requests = get_table("llm_requests")
-    stmt = select(llm_requests.c.id, llm_requests.c.request_id).where(llm_requests.c.user_id == user_id)
+    stmt = select(llm_requests.c.id, llm_requests.c.request_id).where(
+        llm_requests.c.user_id == user_id
+    )
     rows = db.execute(stmt).fetchall()
     for row in rows:
         request_pk = row._mapping["id"]
@@ -2582,20 +3449,72 @@ def delete_llm_history_entry(db: Session, user_id: UUID, entry_id: int) -> bool:
     llm_responses = get_table("llm_responses")
     routing_decisions = get_table("routing_decisions")
     routing_attempts = get_table("routing_attempts")
+    cortex_analysis_runs = get_table("cortex_analysis_runs")
 
     request_pk = _find_request_pk_by_history_id(db, user_id, entry_id)
     if request_pk is None:
         return False
 
+    req_cols = {col.name for col in llm_requests.columns}
+    source_row = db.execute(
+        select(
+            llm_requests.c.request_group_id.label("request_group_id"),
+            (
+                llm_requests.c.response_revision_root_id
+                if "response_revision_root_id" in req_cols
+                else literal(None)
+            ).label("response_revision_root_id"),
+        ).where(llm_requests.c.id == request_pk)
+    ).fetchone()
+    source_payload = dict(source_row._mapping) if source_row is not None else {}
+    revision_root = source_payload.get("response_revision_root_id") or request_pk
+    if "response_revision_root_id" in req_cols:
+        request_family_filter = or_(
+            llm_requests.c.id == revision_root,
+            llm_requests.c.response_revision_root_id == revision_root,
+        )
+    else:
+        request_family_filter = llm_requests.c.id == request_pk
+    request_family_ids = select(llm_requests.c.id).where(
+        and_(llm_requests.c.user_id == user_id, request_family_filter)
+    )
+
     decision_ids_subq = select(routing_decisions.c.id).where(
-        routing_decisions.c.llm_request_id == request_pk
+        routing_decisions.c.llm_request_id.in_(request_family_ids)
     )
-    db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
-    db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id == request_pk))
-    db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id == request_pk))
+    db.execute(
+        delete(routing_attempts).where(
+            routing_attempts.c.routing_decision_id.in_(decision_ids_subq)
+        )
+    )
+    db.execute(
+        delete(routing_decisions).where(routing_decisions.c.llm_request_id.in_(request_family_ids))
+    )
+    db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id.in_(request_family_ids)))
     result = db.execute(
-        delete(llm_requests).where(and_(llm_requests.c.id == request_pk, llm_requests.c.user_id == user_id))
+        delete(llm_requests).where(and_(llm_requests.c.user_id == user_id, request_family_filter))
     )
+    request_group_id = source_payload.get("request_group_id")
+    if request_group_id is not None:
+        remaining = db.execute(
+            select(func.count())
+            .select_from(llm_requests)
+            .where(
+                and_(
+                    llm_requests.c.user_id == user_id,
+                    llm_requests.c.request_group_id == request_group_id,
+                )
+            )
+        ).scalar_one()
+        if int(remaining or 0) == 0:
+            db.execute(
+                delete(cortex_analysis_runs).where(
+                    and_(
+                        cortex_analysis_runs.c.user_id == user_id,
+                        cortex_analysis_runs.c.request_group_id == request_group_id,
+                    )
+                )
+            )
     return bool(result.rowcount and result.rowcount > 0)
 
 
@@ -2612,6 +3531,7 @@ def clear_llm_history(db: Session, user_id: UUID, session_id: str | None = None)
     llm_responses = get_table("llm_responses")
     routing_decisions = get_table("routing_decisions")
     routing_attempts = get_table("routing_attempts")
+    cortex_analysis_runs = get_table("cortex_analysis_runs")
 
     filters = [llm_requests.c.user_id == user_id]
     req_cols = {col.name for col in llm_requests.columns}
@@ -2635,9 +3555,23 @@ def clear_llm_history(db: Session, user_id: UUID, session_id: str | None = None)
         routing_decisions.c.llm_request_id.in_(user_request_ids_subq)
     )
 
-    db.execute(delete(routing_attempts).where(routing_attempts.c.routing_decision_id.in_(decision_ids_subq)))
-    db.execute(delete(routing_decisions).where(routing_decisions.c.llm_request_id.in_(user_request_ids_subq)))
-    db.execute(delete(llm_responses).where(llm_responses.c.llm_request_id.in_(user_request_ids_subq)))
+    analysis_filters = [cortex_analysis_runs.c.user_id == user_id]
+    if session_id:
+        analysis_filters.append(cortex_analysis_runs.c.session_id == parsed_session_id)
+    db.execute(delete(cortex_analysis_runs).where(and_(*analysis_filters)))
+    db.execute(
+        delete(routing_attempts).where(
+            routing_attempts.c.routing_decision_id.in_(decision_ids_subq)
+        )
+    )
+    db.execute(
+        delete(routing_decisions).where(
+            routing_decisions.c.llm_request_id.in_(user_request_ids_subq)
+        )
+    )
+    db.execute(
+        delete(llm_responses).where(llm_responses.c.llm_request_id.in_(user_request_ids_subq))
+    )
     deleted = db.execute(delete(llm_requests).where(and_(*filters)))
     return int(deleted.rowcount or 0)
 
@@ -2759,5 +3693,3 @@ def save_compare_summary(
 
     # Save as single assistant message
     return save_message(db, session_id, role="assistant", content=summary)
-
-

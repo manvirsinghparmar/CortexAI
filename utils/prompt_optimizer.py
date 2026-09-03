@@ -1,11 +1,13 @@
 """Prompt optimizer helpers used by orchestrator and API routes."""
 
 import json
+import hashlib
 import os
 import re
 import time
 from typing import Any, Tuple
 
+from config.cache_optimization import OPTIMIZER_PROMPT_VERSION
 from config.provider_catalog import (
     get_provider_api_key_envs,
     get_provider_default_model_envs,
@@ -16,6 +18,30 @@ from models.user_context import UserContext
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def prompt_optimization_cache_key(
+    *,
+    original_prompt: str,
+    relevant_context: str,
+    optimizer_provider: str,
+    optimizer_model: str,
+    prompt_version: str = OPTIMIZER_PROMPT_VERSION,
+) -> str:
+    normalized_prompt = re.sub(r"\s+", " ", str(original_prompt or "").strip())
+    context_hash = hashlib.sha256(
+        str(relevant_context or "").encode("utf-8")
+    ).hexdigest()
+    material = "\n".join(
+        (
+            normalized_prompt,
+            context_hash,
+            str(optimizer_provider or "").strip().lower(),
+            str(optimizer_model or "").strip(),
+            prompt_version,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 _PLAIN_SYSTEM_INSTRUCTION = (
     "You are a prompt optimization expert. "
@@ -145,9 +171,15 @@ class PromptOptimizer:
         api_key: str | None = None,
         client: Any | None = None,
     ):
-        self.provider = (provider or os.getenv("PROMPT_OPTIMIZER_PROVIDER", "gemini")).lower()
-        self.model = model or os.getenv("PROMPT_OPTIMIZER_MODEL") or self._default_model_for_provider(
-            self.provider
+        self.provider = (provider or os.getenv("PROMPT_OPTIMIZER_PROVIDER", "openai")).lower()
+        self.model = (
+            model
+            or os.getenv("PROMPT_OPTIMIZER_MODEL")
+            or (
+                "gpt-4.1-mini"
+                if self.provider == "openai"
+                else self._default_model_for_provider(self.provider)
+            )
         )
         self.max_retries = max_retries or int(os.getenv("PROMPT_OPTIMIZER_MAX_RETRIES", "3"))
         self.max_output_tokens = _env_int(
@@ -294,7 +326,9 @@ class PromptOptimizer:
                 raise ValueError("Invalid JSON from optimizer response") from first_exc
 
         if not isinstance(parsed, dict):
-            raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
+            raise ValueError(
+                "Invalid optimizer response schema: missing or invalid optimized_prompt"
+            )
         return parsed
 
     def _parse_ai_response(self, response_text: str, original_prompt: str) -> dict[str, Any]:
@@ -302,11 +336,15 @@ class PromptOptimizer:
         parsed = self._load_optimizer_json(cleaned)
 
         if not self._is_valid_output(parsed):
-            raise ValueError("Invalid optimizer response schema: missing or invalid optimized_prompt")
+            raise ValueError(
+                "Invalid optimizer response schema: missing or invalid optimized_prompt"
+            )
 
         optimized_prompt = parsed["optimized_prompt"].strip() or original_prompt
         if self._looks_like_answer_instead_of_prompt(original_prompt, optimized_prompt):
-            raise ValueError("Optimizer response appears to answer the prompt instead of rewriting it")
+            raise ValueError(
+                "Optimizer response appears to answer the prompt instead of rewriting it"
+            )
         if self._contains_introduced_placeholder(original_prompt, optimized_prompt):
             raise ValueError("Optimizer response contains unresolved placeholder text")
 
@@ -346,7 +384,11 @@ class PromptOptimizer:
         words = re.findall(r"[a-z0-9_/-]+", compact)
         word_count = len(words)
         has_context = bool(context_hint) or bool(self._compact_context(context))
-        if has_context and word_count <= 8 and any(term in compact for term in ("this", "that", "it")):
+        if (
+            has_context
+            and word_count <= 8
+            and any(term in compact for term in ("this", "that", "it"))
+        ):
             return "reference_dependent"
 
         starts_generic = any(compact.startswith(phrase) for phrase in _WEAK_GENERIC_PHRASES)
@@ -448,7 +490,7 @@ class PromptOptimizer:
         if not messages:
             return ""
 
-        selected = messages[-self._context_message_limit(prompt_quality):]
+        selected = messages[-self._context_message_limit(prompt_quality) :]
         hint = "\n".join(f"- {item['role']}: {item['content']}" for item in selected)
         return hint[: self._context_hint_limit(prompt_quality)].rstrip()
 
@@ -471,8 +513,7 @@ class PromptOptimizer:
 
         if compact_context_hint:
             parts.append(
-                "Conversation context for reference resolution only:\n"
-                f"{compact_context_hint}"
+                "Conversation context for reference resolution only:\n" f"{compact_context_hint}"
             )
 
         parts.append(f"Latest user prompt to rewrite:\n{prompt}")
@@ -585,11 +626,22 @@ class PromptOptimizer:
         attempt_count = 0
         retry_reasons: list[str] = []
         unchanged_retry_used = False
+        billable_usages: list[dict[str, Any]] = []
         next_retry_reason: str | None = None
         completion_kwargs: dict[str, Any] = {
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_output_tokens,
+            "_cache_scope": {
+                "scope_id": hashlib.sha256(
+                    (original_prompt.strip() + "\n" + str(context_hint or "")).encode("utf-8")
+                ).hexdigest(),
+                "mode": "optimize",
+                "stable_context_hash": hashlib.sha256(
+                    _JSON_SYSTEM_INSTRUCTION.encode("utf-8")
+                ).hexdigest(),
+                "retention_policy": "ephemeral",
+            },
         }
         if self.provider == "openai":
             completion_kwargs["response_format"] = {"type": "json_object"}
@@ -621,10 +673,31 @@ class PromptOptimizer:
             next_retry_reason = None
 
             if response.is_error:
-                last_error = response.error.message if response.error else "Optimizer request failed"
+                last_error = (
+                    response.error.message if response.error else "Optimizer request failed"
+                )
                 last_error_code = "optimization_failed"
                 retry_reasons.append("provider_error")
                 continue
+            billable_usages.append(
+                {
+                    "provider": response.provider,
+                    "model": response.requested_model or response.model,
+                    "prompt_tokens": max(0, int(response.token_usage.prompt_tokens)),
+                    "cached_input_tokens": max(
+                        0, int(response.token_usage.cached_input_tokens)
+                    ),
+                    "cache_write_tokens": max(
+                        0, int(response.token_usage.cache_write_tokens)
+                    ),
+                    "output_tokens": max(0, int(response.token_usage.completion_tokens)),
+                    "reasoning_tokens": max(0, int(response.token_usage.reasoning_tokens)),
+                    "output_text": response.text,
+                    "provider_cost_usd": max(0.0, float(response.estimated_cost)),
+                    "pricing_snapshot": dict(response.pricing_snapshot or {}),
+                    "pricing_version": response.pricing_version,
+                }
+            )
 
             try:
                 result = self._parse_ai_response(response.text, original_prompt)
@@ -656,16 +729,22 @@ class PromptOptimizer:
                 last_error_code = "unchanged_after_retry"
                 continue
 
-            if unchanged and prompt_quality == "weak" and (unchanged_retry_used or attempt_count > 1):
+            if (
+                unchanged
+                and prompt_quality == "weak"
+                and (unchanged_retry_used or attempt_count > 1)
+            ):
                 result["fallback_reason"] = "unchanged_after_retry"
 
-            return self._attach_metadata(
+            completed = self._attach_metadata(
                 result,
                 prompt_quality=prompt_quality,
                 attempt_count=attempt_count,
                 retry_reasons=retry_reasons,
                 unchanged_retry_used=unchanged_retry_used,
             )
+            completed["_billable_usages"] = billable_usages
+            return completed
 
         return {
             "optimized_prompt": original_prompt,
@@ -676,6 +755,7 @@ class PromptOptimizer:
             "attempt_count": attempt_count,
             "retry_reasons": retry_reasons,
             "unchanged_retry_used": unchanged_retry_used,
+            "_billable_usages": billable_usages,
             "error": {
                 "code": last_error_code,
                 "message": last_error or "Prompt optimization failed",
@@ -690,9 +770,7 @@ class PromptOptimizer:
             return prompt, False
 
         context = UserContext(
-            conversation_history=[
-                {"role": "system", "content": _PLAIN_SYSTEM_INSTRUCTION}
-            ]
+            conversation_history=[{"role": "system", "content": _PLAIN_SYSTEM_INSTRUCTION}]
         )
 
         try:
@@ -707,9 +785,11 @@ class PromptOptimizer:
             if response.is_error or not response.text:
                 logger.warning(
                     "Prompt optimization failed - using original",
-                    extra={"extra_fields": {
-                        "error": str(response.error) if response.error else "empty_response"
-                    }},
+                    extra={
+                        "extra_fields": {
+                            "error": str(response.error) if response.error else "empty_response"
+                        }
+                    },
                 )
                 return prompt, False
 
@@ -719,11 +799,13 @@ class PromptOptimizer:
 
             logger.info(
                 "Prompt optimized successfully",
-                extra={"extra_fields": {
-                    "original_len": len(prompt),
-                    "optimized_len": len(optimized),
-                    "provider": self.provider,
-                }},
+                extra={
+                    "extra_fields": {
+                        "original_len": len(prompt),
+                        "optimized_len": len(optimized),
+                        "provider": self.provider,
+                    }
+                },
             )
             return optimized, True
 

@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from server.attachment_cleanup import run_cleanup_cycle  # noqa: E402
+from server.attachment_cleanup import run_cleanup_cycle
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

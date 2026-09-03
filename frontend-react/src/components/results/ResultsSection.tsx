@@ -12,17 +12,20 @@ import { getModelPresentation } from "../../config/modelPresentation";
 import { extractSuggestedFollowUps } from "../../followups/suggestedFollowups";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useChat } from "../../hooks/useChat";
+import { useCortexAnalysis } from "../../hooks/useCortexAnalysis";
 import { useChatStore } from "../../store/chatStore";
 import type { ChatTurn } from "../../types";
 import { CortexIcon } from "../shared/CortexIcon";
 import { ProviderLogo } from "../shared/ProviderLogo";
+import { CortexAnalysisZone } from "./CortexAnalysisZone";
 import { ResponseCard } from "./ResponseCard";
 import styles from "./ResultsSection.module.css";
 
 export function ResultsSection() {
   const turns = useChatStore((s) => s.turns);
   const mode = useChatStore((s) => s.mode);
-  const { regenerate, submitFollowUp } = useChat();
+  const { regenerate, retryWithMoreRoom, submitFollowUp } = useChat();
+  const { run: runCortexAnalysis } = useCortexAnalysis();
   const sectionRef = useRef<HTMLElement | null>(null);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const previousTurnsRef = useRef({ count: 0, lastId: "" });
@@ -100,6 +103,8 @@ export function ResultsSection() {
               responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onRetryWithMoreRoom={retryWithMoreRoom}
+              onAnalyze={runCortexAnalysis}
               onSuggestedFollowUp={submitFollowUp}
             />
           ) : (
@@ -110,6 +115,7 @@ export function ResultsSection() {
               responseStartIndex={responseStartIndexForTurn(turns, turnIndex)}
               registerTurn={registerTurn}
               onRegenerate={regenerate}
+              onRetryWithMoreRoom={retryWithMoreRoom}
               onSuggestedFollowUp={submitFollowUp}
               showSuggestedFollowUps={mode === "single" && turn.id === latestTurnId}
             />
@@ -126,7 +132,9 @@ interface TurnProps {
   responseStartIndex: number;
   registerTurn: (turnId: string, node: HTMLElement | null) => void;
   onRegenerate: (turnId: string, responseIndex: number) => Promise<void>;
+  onRetryWithMoreRoom: (turnId: string, responseIndex: number) => Promise<void>;
   onSuggestedFollowUp: (suggestion: string) => Promise<void>;
+  onAnalyze?: (turnId: string) => Promise<void>;
   showSuggestedFollowUps?: boolean;
 }
 
@@ -138,6 +146,7 @@ const SingleTurn = memo(function SingleTurn({
   responseStartIndex,
   registerTurn,
   onRegenerate,
+  onRetryWithMoreRoom,
   onSuggestedFollowUp,
   showSuggestedFollowUps = false,
 }: TurnProps) {
@@ -165,6 +174,7 @@ const SingleTurn = memo(function SingleTurn({
             }
             onSuggestedFollowUp={onSuggestedFollowUp}
             onRegenerate={() => void onRegenerate(turn.id, responseIndex)}
+            onRetryWithMoreRoom={() => void onRetryWithMoreRoom(turn.id, responseIndex)}
           />
         ))}
     </article>
@@ -177,6 +187,8 @@ const CompareTurn = memo(function CompareTurn({
   responseStartIndex,
   registerTurn,
   onRegenerate,
+  onRetryWithMoreRoom,
+  onAnalyze,
 }: TurnProps) {
   const [activeResponseIndex, setActiveResponseIndex] = useState(0);
   const [responseTabsStuck, setResponseTabsStuck] = useState(false);
@@ -255,14 +267,22 @@ const CompareTurn = memo(function CompareTurn({
           <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
             {turn.compareSummary.total_tokens.toLocaleString()} tok
           </span>
-          <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
-            ${turn.compareSummary.total_cost.toFixed(5)}
-          </span>
+          {(turn.compareSummary.total_ai_credits ?? 0) > 0 && (
+            <span className={`${styles.summaryPill} ${styles.summaryMono}`}>
+              {(turn.compareSummary.total_ai_credits ?? 0).toLocaleString()} credits
+            </span>
+          )}
         </div>
       )}
 
       {responsesVisible && turn.responses.length > 0 && (
         <>
+          <div className={styles.responseHeadingRow}>
+            <span>Model responses · {turn.responses.length} models</span>
+            {(turn.analysisRuns?.length ?? 0) > 0 && (
+              <small>Cortex analysis is below — originals stay in place</small>
+            )}
+          </div>
           {hasResponseTabs && (
             <>
               <div
@@ -301,6 +321,21 @@ const CompareTurn = memo(function CompareTurn({
                       className={selected ? styles.mobileResponseTabActive : undefined}
                       style={tabStyle}
                       onClick={() => setActiveResponseIndex(index)}
+                      onKeyDown={(event) => {
+                        const nextIndex = nextResponseTabIndex(
+                          event.key,
+                          index,
+                          turn.responses.length,
+                        );
+                        if (nextIndex === null) return;
+                        event.preventDefault();
+                        setActiveResponseIndex(nextIndex);
+                        window.requestAnimationFrame(() => {
+                          document
+                            .getElementById(`${turn.id}-response-tab-${nextIndex}`)
+                            ?.focus();
+                        });
+                      }}
                     >
                       <span className={styles.mobileResponseTabIcon}>
                         <ProviderLogo
@@ -357,17 +392,34 @@ const CompareTurn = memo(function CompareTurn({
                     researchEnabled={turn.researchEnabled}
                     optimizeEnabled={turn.optimizeEnabled ?? !!turn.optimization}
                     onRegenerate={() => void onRegenerate(turn.id, index)}
+                    onRetryWithMoreRoom={() => void onRetryWithMoreRoom(turn.id, index)}
                     compareHighlights={metricHighlights[index]}
                   />
                 </div>
               );
             })}
           </div>
+          {onAnalyze && (
+            <CortexAnalysisZone turn={turn} onAnalyze={onAnalyze} />
+          )}
         </>
       )}
     </article>
   );
 });
+
+function nextResponseTabIndex(
+  key: string,
+  currentIndex: number,
+  tabCount: number,
+): number | null {
+  if (tabCount < 1) return null;
+  if (key === "ArrowRight") return (currentIndex + 1) % tabCount;
+  if (key === "ArrowLeft") return (currentIndex - 1 + tabCount) % tabCount;
+  if (key === "Home") return 0;
+  if (key === "End") return tabCount - 1;
+  return null;
+}
 
 function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
   const durations = responses.map((response) =>
@@ -375,17 +427,10 @@ function resolveCompareMetricHighlights(responses: ChatTurn["responses"]) {
       ? null
       : responseDurationMs(response),
   );
-  const costs = responses.map((response) =>
-    response.error || response.ui_status === "failed"
-      ? null
-      : positiveNumber(response.estimated_cost),
-  );
   const fastestDuration = minMetric(durations);
-  const cheapestCost = minMetric(costs);
 
   return responses.map((_, index) => ({
     fastest: fastestDuration !== null && durations[index] === fastestDuration,
-    cheapest: cheapestCost !== null && costs[index] === cheapestCost,
   }));
 }
 

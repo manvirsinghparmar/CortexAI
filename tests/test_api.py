@@ -9,9 +9,18 @@ BASE_URL = "http://localhost:8000"
 API_KEY = "dev-key-1"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def require_running_server():
+    """Keep the optional live-server probes out of normal offline test runs."""
+    try:
+        requests.get(f"{BASE_URL}/health", timeout=1)
+    except requests.RequestException:
+        pytest.skip("Live API server is not running on localhost:8000")
+
+
 def test_health():
     print("Testing /health...")
-    r = requests.get(f"{BASE_URL}/health")
+    r = requests.get(f"{BASE_URL}/health", timeout=10)
     print(f"Status: {r.status_code}")
     print(f"Response: {r.json()}\n")
 
@@ -26,6 +35,7 @@ def test_chat():
             "provider": "openai",
             "model": "gpt-4o-mini",
         },
+        timeout=60,
     )
     print(f"Status: {r.status_code}")
     if r.status_code == 200:
@@ -46,6 +56,7 @@ def test_compare():
             "prompt": "What is 2+2?",
             "targets": [{"provider": "openai", "model": "gpt-4o-mini"}, {"provider": "gemini"}],
         },
+        timeout=60,
     )
     print(f"Status: {r.status_code}")
     if r.status_code == 200:
@@ -62,6 +73,7 @@ def test_auth():
         f"{BASE_URL}/v1/chat",
         headers={"X-API-Key": "invalid"},
         json={"prompt": "test", "provider": "openai"},
+        timeout=10,
     )
     print(f"Status: {r.status_code} (should be 401)")
     print(f"Error: {r.json()['detail']}\n")

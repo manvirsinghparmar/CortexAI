@@ -284,6 +284,9 @@ function resolvePlanAction({
   onCheckout: (planCode: SubscriptionPlanCode) => void;
   onPortal: () => void;
 }): PlanAction {
+  if (loggedIn && currentPlanCode === plan.code && (!billingEnabled || !canManage)) {
+    return { label: "Current plan", disabled: true, kind: "secondary" };
+  }
   if (!billingEnabled) return { label: "Unavailable", disabled: true, kind: "secondary" };
   if (!loggedIn) {
     return {
@@ -339,9 +342,7 @@ function planFeatures(plan: PublicBillingPlan): string[] {
         plan.features.custom_mcp_enabled
           ? "Verified connectors and custom MCP servers"
           : "Verified Work connectors",
-        plan.features.action_tools_enabled
-          ? "Approval-gated Work actions"
-          : "Read-only Work tools",
+        plan.features.action_tools_enabled ? "Approval-gated Work actions" : "Read-only Work tools",
       ]
     : ["Core Chat and Compare access"];
   return [

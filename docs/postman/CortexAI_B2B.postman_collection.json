@@ -227,7 +227,7 @@
               }
             ],
             "url": "{{base_url}}/v1/entitlements",
-            "description": "Returns the server-resolved plan, lifecycle state, features, model access categories, server-owned file limits, current period, and unified AI-credit allowance. BILLING_ENABLED=false resolves Free without Stripe."
+            "description": "Returns the server-resolved plan, lifecycle state, features, model access categories, server-owned file limits, current period, and unified AI-credit allowance. BILLING_ENABLED controls Stripe availability. When false, valid Cortex grants resolve Plus/Pro with plan.source=cortex_grant; other users resolve Free. Grant usage resets monthly from its UTC start, clipped at expiry. Grant management is operator CLI only."
           },
           "event": [
             {

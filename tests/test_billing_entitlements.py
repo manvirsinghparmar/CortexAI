@@ -176,9 +176,13 @@ def billing_service_db(monkeypatch):
         Column("metadata", JSON, nullable=False, default=dict),
         Column("created_at", DateTime(timezone=True), nullable=False, default=datetime.now),
     )
+    from tests.billing_schema_helpers import add_subscription_grant_schema
+
+    subscription_grants = add_subscription_grant_schema(metadata)
     tables = {
         table.name: table
         for table in (
+            subscription_grants,
             users,
             billing_accounts,
             subscriptions,

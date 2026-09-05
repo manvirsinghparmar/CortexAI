@@ -52,6 +52,7 @@ TABLE_NAMES = [
     "file_deletion_queue",
     "billing_accounts",
     "subscriptions",
+    "subscription_grants",
     "usage_periods",
     "usage_counters",
     "usage_reservations",

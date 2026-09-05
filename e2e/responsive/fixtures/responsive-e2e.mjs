@@ -32,6 +32,9 @@ export const test = base.extend({
             uploadedFiles: new Map(),
             models: [...MODELS],
             subscriptionPlan: "free",
+            subscriptionSource: null,
+            billingEnabled: true,
+            billingPlans: [],
             maxFilesPerRequest: 1,
             directUploadIntentRequests: [],
             s3UploadRequests: [],
@@ -175,8 +178,8 @@ async function installResponsiveRoutes(page, state) {
             return json(route, {
                 currency: "USD",
                 billing_period: "monthly",
-                billing_enabled: true,
-                plans: [],
+                billing_enabled: state.billingEnabled,
+                plans: state.billingPlans,
             });
         }
         if (url.pathname === "/v1/billing/subscription" && method === "GET") {
@@ -184,15 +187,17 @@ async function installResponsiveRoutes(page, state) {
             return json(route, {
                 plan_code: state.subscriptionPlan,
                 status: paid ? "active" : "free",
-                provider: paid ? "stripe" : null,
+                provider: paid && state.subscriptionSource !== "cortex_grant" ? "stripe" : null,
                 current_period_start: "2026-07-01T00:00:00Z",
                 current_period_end: "2026-08-01T00:00:00Z",
                 cancel_at_period_end: false,
-                can_manage: paid,
+                can_manage: paid && state.subscriptionSource !== "cortex_grant",
             });
         }
         if (url.pathname === "/v1/entitlements" && method === "GET") {
-            return json(route, entitlements(state.subscriptionPlan, state.maxFilesPerRequest));
+            const payload = entitlements(state.subscriptionPlan, state.maxFilesPerRequest);
+            if (state.subscriptionSource) payload.plan.source = state.subscriptionSource;
+            return json(route, payload);
         }
         if (url.pathname === "/v1/tools/catalog" && method === "GET") {
             return json(route, [

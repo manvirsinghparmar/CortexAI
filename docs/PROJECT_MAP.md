@@ -248,3 +248,13 @@ This map is the quick "where do I change X?" reference for the current API-first
 ---
 
 Last updated: 2026-08-20
+
+## Cortex-issued subscription access
+
+- `server/billing/grant_service.py`: existing-user validation, issue/change/revoke, actor/reason/expiry validation, monthly anchor calculation and inspection.
+- `scripts/manage_subscription_grant.py`: trusted operator CLI and single commit/rollback boundary; no HTTP assignment route.
+- `db/billing_repository.py`, `db/tables.py`, `server/billing/schema_preflight.py`: grant persistence, account locking, reflection and mandatory schema checks.
+- `db/migrations/20260905_add_subscription_grants.sql`: additive grant/audit table, period source FK and separate grant period identity.
+- `server/billing/subscription_service.py`: guarded local > enabled valid Stripe > valid grant > Free; existing entitlement, Work and credit services consume the catalogue unchanged.
+- `frontend-react/src/pages/PricingPage.tsx`, `BillingPage.tsx`: granted current-plan display, CortexAI-provided access and usage-reset wording.
+- `docs/runbooks/subscription-grants.md`: operator commands, coordinated deployment and audit policy.

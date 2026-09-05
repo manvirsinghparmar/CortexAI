@@ -10,6 +10,7 @@ const apiProxyTarget = process.env.CORTEX_API_PROXY_TARGET ?? "http://localhost:
 export default defineConfig({
   plugins: [react()],
   server: {
+   allowedHosts: ["kudlo.triobrain.com"],
     port: 5173,
     proxy: {
       "/v1": {
@@ -28,7 +29,10 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+       // Source maps are disabled in production: they consume significant memory
+    // during the build (~2x the bundle size) and expose source code publicly.
+    // Enable locally with: VITE_SOURCEMAP=true npm run build
+    sourcemap: process.env.VITE_SOURCEMAP === "true",
   },
   test: {
     environment: "jsdom",
